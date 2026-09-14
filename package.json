@@ -1,0 +1,27 @@
+{
+  "name": "lifeos",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "description": "LifeOS personal timeline domain foundation",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @lifeos/core && npm run build --workspace @lifeos/api && npm run build --workspace @lifeos/web",
+    "dev": "node scripts/dev.mjs",
+    "backup": "node scripts/backup.mjs",
+    "seed:demo": "node scripts/seed-demo.mjs",
+    "start": "node apps/api/dist/src/main.js",
+    "test": "npm run test --workspace @lifeos/core && npm run test --workspace @lifeos/api",
+    "check": "npm test && npm run typecheck --workspace @lifeos/web",
+    "typecheck": "npm run typecheck --workspace @lifeos/core && npm run typecheck --workspace @lifeos/api && npm run typecheck --workspace @lifeos/web"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

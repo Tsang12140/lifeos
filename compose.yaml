@@ -1,0 +1,19 @@
+services:
+  lifeos:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      LIFEOS_HOST: 0.0.0.0
+      LIFEOS_PORT: 3001
+      LIFEOS_DATA_DIR: /data
+      LIFEOS_PASSWORD: ${LIFEOS_PASSWORD:?Set LIFEOS_PASSWORD before starting LifeOS}
+      # The default HTTP mapping is usable on a trusted local network. Set true behind HTTPS.
+      LIFEOS_COOKIE_SECURE: ${LIFEOS_COOKIE_SECURE:-false}
+      LIFEOS_ALLOWED_ORIGINS: ${LIFEOS_ALLOWED_ORIGINS:-}
+    volumes:
+      - lifeos_data:/data
+    restart: unless-stopped
+
+volumes:
+  lifeos_data:

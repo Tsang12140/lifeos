@@ -1,0 +1,16 @@
+{
+  "name": "@lifeos/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LifeOS self-hosted Node API",
+  "dependencies": {
+    "@lifeos/core": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --pretty false",
+    "start": "node dist/src/main.js",
+    "test": "npm run build && node --test --test-isolation=none dist/test/api.test.js"
+  }
+}
