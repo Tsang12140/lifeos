@@ -59,6 +59,7 @@ import {
 } from "lucide-react";
 import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, SUMMARY_MAX_LENGTH, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, trimSummaryText, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import { clearLogs, copyRecentJson, installDiagnostics, recentLogs, subscribe } from "./diagnostics";
+import { sha256Hex } from "./contentHash";
 import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import {
   apiRequest,
@@ -515,10 +516,32 @@ function MobileNav({ activeView, onNavigate }: { activeView: AppView; onNavigate
  */
 const SHOT_LIMIT = 6;
 
+/**
+ * Uploading a photo ends either in newly stored bytes or in a reuse of bytes
+ * the library already holds. The drop zone reports which, so the owner can
+ * see that nothing was uploaded twice.
+ */
+interface ShotUpload { readonly asset: Asset; readonly reused: boolean; }
+
+interface AssetResolveResponse { readonly matched: boolean; readonly asset?: Asset; }
+
+/**
+ * The library's answer to "do you already hold these exact bytes?". Failing to
+ * ask must never stop an upload, so any error degrades to "no".
+ */
+async function resolveKnownShot(hash: string): Promise<Asset | null> {
+  try {
+    const payload = await apiRequest<AssetResolveResponse>("/api/assets/resolve", { method: "POST", body: JSON.stringify({ algorithm: "sha256", value: hash }) });
+    return payload.matched ? payload.asset ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 interface ShotDropZoneProps {
   readonly shots: readonly AssetLink[];
   readonly onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>;
-  readonly onUpload: (file: File) => Promise<Asset | null>;
+  readonly onUpload: (file: File) => Promise<ShotUpload | null>;
 }
 
 function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
@@ -545,14 +568,26 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
     setNotice(images.length > room ? `一次最多 ${SHOT_LIMIT} 张，先收了前 ${room} 张` : null);
     setUploading((count) => count + batch.length);
     const added: AssetLink[] = [];
+    let reusedCount = 0;
+    let duplicateCount = 0;
+    // Identical bytes resolve to the same asset, so dropping one photo twice
+    // would put two identical assetIds in this list: the React keys would
+    // collide and one ✕ would remove both thumbnails. Keep one per asset.
+    const seen = new Set(shots.map((shot) => shot.assetId));
     for (const file of batch) {
-      const asset = await onUpload(file);
-      if (asset !== null) added.push({ assetId: asset.id, role: assetRoleFor(asset.kind), ...(asset.originalName === undefined ? {} : { label: asset.originalName }) });
+      const upload = await onUpload(file);
+      if (upload === null) continue;
+      if (seen.has(upload.asset.id)) { duplicateCount += 1; continue; }
+      seen.add(upload.asset.id);
+      if (upload.reused) reusedCount += 1;
+      added.push({ assetId: upload.asset.id, role: assetRoleFor(upload.asset.kind), ...(upload.asset.originalName === undefined ? {} : { label: upload.asset.originalName }) });
     }
     setUploading((count) => count - batch.length);
     if (added.length > 0) onShotsChange((current) => [...current, ...added]);
-    const failed = batch.length - added.length;
+    const failed = batch.length - added.length - duplicateCount;
     if (failed > 0) setNotice(`${failed} 张没能传上去，可以重试`);
+    else if (duplicateCount > 0) setNotice(duplicateCount === 1 ? "这张已经加过了" : `这 ${duplicateCount} 张已经加过了`);
+    else if (reusedCount > 0) setNotice(reusedCount === 1 ? "这张图已在库里，直接复用（没有重复上传）" : `${reusedCount} 张已在库里，直接复用（没有重复上传）`);
   };
 
   const remove = (assetId: string) => onShotsChange((current) => current.filter((shot) => shot.assetId !== assetId));
@@ -584,7 +619,7 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
   </div>;
 }
 
-interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<Asset | null>; }
+interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
@@ -2797,16 +2832,26 @@ function App() {
   };
 
   // A dropped photo is uploaded right away, so the thumbnail on screen is the
-  // real asset the entry will point at; saving only writes the link.
-  const uploadComposerShot = async (file: File): Promise<Asset | null> => {
+  // real asset the entry will point at; saving only writes the link. When the
+  // library already holds the same bytes the upload is skipped entirely: the
+  // same photo dropped twice must not become two files on disk.
+  const uploadComposerShot = async (file: File): Promise<ShotUpload | null> => {
     try {
+      const hash = await sha256Hex(file);
+      if (hash !== null) {
+        const known = await resolveKnownShot(hash);
+        if (known !== null) {
+          setAssets((current) => current.some((asset) => asset.id === known.id) ? current : [...current, known]);
+          return { asset: known, reused: true };
+        }
+      }
       const asset = await apiRequest<Asset>(`/api/assets/uploads?name=${encodeURIComponent(file.name)}`, {
         method: "POST",
         headers: { "Content-Type": file.type },
         body: file,
       });
       setAssets((current) => [...current, asset]);
-      return asset;
+      return { asset, reused: false };
     } catch (error) {
       setActionMessage(handleRequestError(error, "照片上传失败，请重试"));
       return null;

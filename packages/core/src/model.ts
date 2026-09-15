@@ -178,6 +178,16 @@ export interface Asset {
   readonly originalName?: string;
   readonly sizeBytes?: number;
   readonly createdAt?: InstantTime;
+  /**
+   * The last time this asset was put to use — currently only set when a
+   * content-hash match reuses an upload instead of storing the bytes again.
+   *
+   * It exists because the orphan collector needs an anchor: re-dropping the
+   * same photo restarts its grace period, so a photo dropped on day six is not
+   * collected on day seven. Absent means "never reused since upload", and the
+   * collector falls back to `createdAt`.
+   */
+  readonly lastUsedAt?: InstantTime;
   readonly storageRefs: readonly StorageReference[];
 }
 
@@ -799,6 +809,9 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
   }
   if (asset.createdAt !== undefined) {
     assertValidInstantTime(asset.createdAt, "asset.createdAt");
+  }
+  if (asset.lastUsedAt !== undefined) {
+    assertValidInstantTime(asset.lastUsedAt, "asset.lastUsedAt");
   }
   arrayValue(asset.storageRefs, "asset.storageRefs").forEach((value, index) => {
     validateStorageReference(value, `asset.storageRefs[${index}]`);

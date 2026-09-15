@@ -1070,6 +1070,24 @@ export class SqliteRecordRepository {
     return items.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   }
 
+  /**
+   * The live asset whose bytes hash to this value, if any.
+   *
+   * Only the `assets` table is searched, so a collected file sitting in the
+   * trash is deliberately invisible: a drag should never silently resurrect
+   * something the owner removed. The scan is linear over every asset, which is
+   * fine at personal scale; a dedicated index table is the obvious next step if
+   * that ever stops being true.
+   */
+  public findAssetByContentHash(algorithm: string, value: string): Asset | null {
+    for (const asset of this.listAssets()) {
+      for (const reference of asset.storageRefs) {
+        if (reference.contentHash?.algorithm === algorithm && reference.contentHash.value === value) return asset;
+      }
+    }
+    return null;
+  }
+
   public findAssetById(id: string): Asset | null {
     const row = this.#db.prepare("SELECT value_json FROM assets WHERE id = ?").get(id);
     if (row === undefined) return null;

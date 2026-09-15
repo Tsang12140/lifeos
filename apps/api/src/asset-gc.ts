@@ -90,9 +90,18 @@ export interface UnreferencedUpload {
   readonly overdue: boolean;
 }
 
-function createdAtOf(asset: Asset): number | null {
-  if (asset.createdAt === undefined) return null;
-  const parsed = Date.parse(asset.createdAt.value);
+/**
+ * When this upload's grace period started counting.
+ *
+ * `lastUsedAt` wins over `createdAt` because a photo re-dropped from identical
+ * bytes is genuinely in use again: without that, the same bytes dropped on day
+ * six would still be collected on day seven, and content-hash reuse would have
+ * quietly shortened a photo's life.
+ */
+function graceAnchorOf(asset: Asset): number | null {
+  const raw = asset.lastUsedAt?.value ?? asset.createdAt?.value;
+  if (raw === undefined) return null;
+  const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -102,7 +111,7 @@ function createdAtOf(asset: Asset): number | null {
  *
  * `referencedAssetIds` must include soft-deleted records: a record sitting in
  * the recycle bin can still be restored, and its photos have to survive that.
- * An asset without a usable `createdAt` is skipped rather than guessed at.
+ * An asset without a usable time to anchor on is skipped rather than guessed at.
  */
 export function planUnreferencedUploads(
   assets: readonly Asset[],
@@ -114,9 +123,9 @@ export function planUnreferencedUploads(
   for (const asset of assets) {
     if (referencedAssetIds.has(asset.id)) continue;
     if (!isCollectableAsset(asset)) continue;
-    const created = createdAtOf(asset);
-    if (created === null) continue;
-    const dueAt = new Date(created + graceDays * MS_PER_DAY);
+    const anchor = graceAnchorOf(asset);
+    if (anchor === null) continue;
+    const dueAt = new Date(anchor + graceDays * MS_PER_DAY);
     const remainingMs = dueAt.getTime() - now.getTime();
     uploads.push({
       asset,

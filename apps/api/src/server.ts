@@ -31,6 +31,7 @@ import {
   type CycleIntimacyEvent,
   type CycleIntimacyEventKind,
   type CycleIntimacyModuleConfig,
+  type ContentHash,
   type Entity,
   type EntityKind,
   type EntityRef,
@@ -2051,8 +2052,12 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
       }
       const originalName = uploadOriginalName(url.searchParams.get("name"));
+      // The hash is computed from the bytes we actually received, never taken
+      // from the request. A client that lied about it could otherwise poison the
+      // index and be handed a different photo back the next time it asked.
+      const contentHash: ContentHash = { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") };
       const uploadRef = coreValidated("storageRefs", () => {
-        const candidate: StorageReference = { sourceId: "local", sourceRef, mediaType };
+        const candidate: StorageReference = { sourceId: "local", sourceRef, mediaType, contentHash };
         assertValidStorageReference(candidate, "storageRefs[0]");
         return candidate;
       });
@@ -2066,6 +2071,31 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       );
       repository.insertAsset(asset);
       setJson(res, 201, asset);
+      return;
+    }
+    // Content-hash reuse: the composer asks this before it spends bandwidth on
+    // bytes the library already holds. A miss is a normal answer, not a
+    // failure, so it is a 200 carrying `matched: false` — a 404 here would
+    // fill the client's diagnostics log with noise on every new photo.
+    if (pathname === "/api/assets/resolve" && req.method === "POST") {
+      requireJsonContentType(req);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["algorithm", "value"]);
+      const algorithm = enumField(input.algorithm, ["sha256"], "algorithm");
+      const value = stringField(input.value, "value");
+      if (!/^[0-9a-f]{64}$/.test(value)) {
+        throw new HttpError(400, "invalid_hash", "value must be a lowercase sha256 hex digest");
+      }
+      const match = repository.findAssetByContentHash(algorithm, value);
+      if (match === null) {
+        setJson(res, 200, { matched: false });
+        return;
+      }
+      // Reusing an upload puts the photo back in use, so the orphan collector's
+      // anchor moves forward and the grace period restarts from now.
+      const reused: Asset = { ...match, lastUsedAt: nowInstant() };
+      repository.updateAsset(reused);
+      setJson(res, 200, { matched: true, asset: reused });
       return;
     }
     // The trash routes have to come before the `:id` matcher below: "trash" is

@@ -3,6 +3,7 @@ import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
 import { readConfig } from "../src/config.js";
@@ -2091,4 +2092,153 @@ test("the collector never touches a photo the owner put into the asset root by h
   equal(harness.app.assetGcScheduler.runOnce(new Date(Date.now() + 400 * 24 * 60 * 60 * 1000))?.collected.length, 0);
   ok(existsSync(join(assetRoot, "holiday.jpg")), "a photo from the owner's own folder is not ours to collect");
   equal((await fetch(`${harness.base}/api/assets/${encodeURIComponent((registered.body as { id: string }).id)}/content`)).status, 200);
+});
+
+test("an uploaded photo carries a server-computed sha256, and resolve hands the same asset back", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-hash-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  const expectedHash = createHash("sha256").update(TINY_PNG).digest("hex");
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=%E7%A7%92%E4%BC%A0.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const asset = upload.body as {
+    id: string;
+    lastUsedAt?: { value: string };
+    storageRefs: Array<{ sourceRef: string; contentHash?: { algorithm: string; value: string } }>;
+  };
+  // The bytes actually received decide the hash; the client never gets a vote.
+  equal(asset.storageRefs[0]?.contentHash?.algorithm, "sha256");
+  equal(asset.storageRefs[0]?.contentHash?.value, expectedHash);
+  equal(asset.lastUsedAt, undefined, "a plain upload has not been reused yet");
+
+  // Nothing is known yet, and a miss is a normal answer rather than a failure.
+  const miss = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "sha256", value: "0".repeat(64) }),
+  });
+  equal(miss.response.status, 200);
+  deepEqual(miss.body, { matched: false });
+
+  // The second drop of the same photo is answered without storing it twice.
+  const hit = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "sha256", value: expectedHash }),
+  });
+  equal(hit.response.status, 200);
+  const hitBody = hit.body as { matched: boolean; asset?: { id: string; lastUsedAt?: { value: string } } };
+  equal(hitBody.matched, true);
+  equal(hitBody.asset?.id, asset.id);
+  ok(hitBody.asset?.lastUsedAt !== undefined, "a reuse is stamped so the grace period can move");
+
+  // One asset, one file on disk: the bytes were never written a second time.
+  const library = await request(harness.base, "/api/assets", { method: "GET" });
+  const libraryBody = library.body as { items: Array<{ id: string; storageRefs: Array<{ sourceRef: string }> }> };
+  equal(libraryBody.items.length, 1);
+  equal(libraryBody.items[0]?.id, asset.id);
+  equal(libraryBody.items[0]?.storageRefs.length, 1);
+  const singleRef = libraryBody.items[0]?.storageRefs[0]?.sourceRef ?? "";
+  ok(existsSync(join(assetRoot, ...singleRef.split("/"))), "the single file should still be there");
+
+  // A digest that is not sha256, or not a digest at all, is a client bug.
+  const badAlgorithm = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "md5", value: expectedHash }),
+  });
+  equal(badAlgorithm.response.status, 400);
+  const badValue = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "sha256", value: "NOT A DIGEST" }),
+  });
+  equal(badValue.response.status, 400);
+  equal((badValue.body as { error: string }).error, "invalid_hash");
+});
+
+test("reusing an upload restarts its orphan grace period instead of letting it be collected", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-reuse-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const hash = createHash("sha256").update(TINY_PNG).digest("hex");
+  const upload = await request(harness.base, "/api/assets/uploads?name=old.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const assetId = (upload.body as { id: string }).id;
+
+  // Move the upload eight days into the past: it is now due for collection.
+  const stored = harness.app.repository.findAssetById(assetId)!;
+  harness.app.repository.updateAsset({
+    ...stored,
+    createdAt: createInstant(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()),
+  });
+
+  const due = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  const dueBody = due.body as { pending: Array<{ asset: { id: string }; overdue: boolean; daysRemaining: number }> };
+  equal(dueBody.pending.length, 1);
+  equal(dueBody.pending[0]?.overdue, true);
+  equal(dueBody.pending[0]?.daysRemaining, 0);
+
+  // Dropping the same photo again counts as a fresh use, so the timer restarts.
+  const hit = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "sha256", value: hash }),
+  });
+  equal((hit.body as { matched: boolean }).matched, true);
+
+  const safe = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  const safeBody = safe.body as { pending: Array<{ asset: { id: string }; overdue: boolean; daysRemaining: number }> };
+  equal(safeBody.pending.length, 1);
+  equal(safeBody.pending[0]?.overdue, false);
+  equal(safeBody.pending[0]?.daysRemaining, 7);
+  equal(harness.app.assetGcScheduler.runOnce(new Date())?.collected.length, 0);
+
+  // A reprieve is a full window, not immortality.
+  deepEqual(harness.app.assetGcScheduler.runOnce(new Date(Date.now() + 8 * 24 * 60 * 60 * 1000))?.collected, [assetId]);
+});
+
+test("a collected photo is invisible to resolve, and comes back only once restored", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-trash-hash-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const hash = createHash("sha256").update(TINY_PNG).digest("hex");
+  const upload = await request(harness.base, "/api/assets/uploads?name=bye-again.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const assetId = (upload.body as { id: string }).id;
+
+  const removed = await request(harness.base, `/api/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+  equal(removed.response.status, 204);
+
+  // The bytes are still on disk, but the asset left the register: a drag must
+  // never quietly undo the owner's delete.
+  const afterDelete = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "sha256", value: hash }),
+  });
+  deepEqual(afterDelete.body, { matched: false });
+
+  const restored = await request(harness.base, `/api/assets/trash/${encodeURIComponent(assetId)}/restore`, { method: "POST" });
+  equal(restored.response.status, 204);
+  const afterRestore = await request(harness.base, "/api/assets/resolve", {
+    method: "POST",
+    ...json({ algorithm: "sha256", value: hash }),
+  });
+  const restoredBody = afterRestore.body as { matched: boolean; asset?: { id: string } };
+  equal(restoredBody.matched, true);
+  equal(restoredBody.asset?.id, assetId);
 });

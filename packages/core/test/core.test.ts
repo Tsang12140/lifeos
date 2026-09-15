@@ -308,6 +308,42 @@ test("asset links reject URI schemes and unsafe paths", () => {
   );
 });
 
+test("asset lastUsedAt accepts a real instant and rejects a malformed one", () => {
+  const reusable: Asset = {
+    ...assets[2]!,
+    lastUsedAt: createInstant("2026-09-14T20:00:00+08:00", "Asia/Shanghai"),
+  };
+  // A stamped reuse travels through export like any other asset field.
+  createExportBundle({
+    exportedAt: createInstant("2026-09-15T12:00:00+08:00", "Asia/Shanghai"),
+    records: [taskRecord],
+    entities,
+    assets: [reusable],
+  });
+  const wrongKind = { ...reusable, lastUsedAt: { kind: "date", value: "2026-09-14" } };
+  throws(
+    () =>
+      createExportBundle({
+        exportedAt: createInstant("2026-09-15T12:00:00+08:00", "Asia/Shanghai"),
+        records: [taskRecord],
+        entities,
+        assets: [wrongKind as unknown as Asset],
+      }),
+    /asset\.lastUsedAt must be an instant/,
+  );
+  const badInstant = { ...reusable, lastUsedAt: { kind: "instant", value: "2026-09-14" } };
+  throws(
+    () =>
+      createExportBundle({
+        exportedAt: createInstant("2026-09-15T12:00:00+08:00", "Asia/Shanghai"),
+        records: [taskRecord],
+        entities,
+        assets: [badInstant as unknown as Asset],
+      }),
+    /Invalid instant/,
+  );
+});
+
 test("Markdown path escaping protects angle-bracket destinations", () => {
   equal(escapeMarkdownPath("C:\\照片\\a<b> (1).jpg\nnext"), "C:\\\\照片\\\\a\\<b\\> (1).jpg%0Anext");
 });
