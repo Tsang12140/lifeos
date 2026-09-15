@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -54,6 +54,7 @@ import {
   Type,
   Trash2,
   Upload,
+  Eraser,
   User,
   UsersRound,
   X,
@@ -554,12 +555,20 @@ interface ShotDropZoneProps {
    *  line of its own: a paragraph of status text under a hand of cards reads as
    *  a defect in the panel. Anything that has to be said is said as a toast. */
   readonly onNotify: (message: string, tone?: "ok" | "warn") => void;
+  /** Clearing the hand is one tap on a phone and one hover away on a desktop, so
+   *  it has to be undoable. The zone hands the undo back to whoever owns the
+   *  toast: it can put the photos back, but only the shell can offer the button. */
+  readonly onCleared: (cleared: readonly AssetLink[], restore: () => void) => void;
 }
 
-function ShotDropZone({ shots, onShotsChange, onUpload, onNotify }: ShotDropZoneProps) {
+function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: ShotDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(0);
+  // Clearing is revealed by a hover on a desktop and by a tap on the panel
+  // itself on a phone — where there is no hover to reveal anything with. One
+  // flag drives both: a tap sets it, a pointer leaving clears it.
+  const [clearArmed, setClearArmed] = useState(false);
   // dragenter/dragleave fire again for every child element, so only a depth
   // counter can tell whether the pointer really left the zone.
   const dragDepth = useRef(0);
@@ -600,53 +609,123 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify }: ShotDropZone
   };
 
   const remove = (assetId: string) => onShotsChange((current) => current.filter((shot) => shot.assetId !== assetId));
+
+  const clearAll = () => {
+    if (shots.length === 0) return;
+    const cleared = [...shots];
+    onShotsChange([]);
+    setClearArmed(false);
+    onCleared(cleared, () => onShotsChange((current) => [...cleared, ...current]));
+  };
+
   const busy = uploading > 0;
   const empty = shots.length === 0;
 
   // Newest first. Rank 0 is the card the owner just added, and it stays upright
   // so the newest photo is always shown whole.
   const hand = [...shots].reverse();
+  // The grid reads the other way round: it is a wall of pictures, not a hand, so
+  // it keeps the order the owner added them in.
+  const wall = shots;
 
-  return <div
-    className={`composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"}`}
-    onDragEnter={(event) => { event.preventDefault(); dragDepth.current += 1; setDragging(true); }}
-    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
-    onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragging(false); }}
-    onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void takeFiles(Array.from(event.dataTransfer.files)); }}
-  >
-    {empty
-      ? <button className="shot-drop-button" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
-          <ImageIcon size={18} strokeWidth={1.7} aria-hidden="true" />
-          <strong>{dragging ? "松手放下" : "拖照片进来"}</strong>
-          <span>或点击选择</span>
-        </button>
-      : <div className="shot-hand">
-          {/* One fan, one axis. Every card is turned a little further than the
-              one before it and each exposes a strip a little thinner than the
-              last, so the hand opens as a single arc — older photos fade into
-              the deck behind instead of forming a second cluster. */}
-          <ul className="shot-list" data-count={shots.length}>{hand.map((shot, rank) => <li className="shot-item" key={shot.assetId} data-rank={rank}>
-            <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
-            {rank === 0
-              ? <span className="shot-count" aria-label={`已添加 ${shots.length} 张`}>{shots.length}</span>
-              : null}
-            <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={11} strokeWidth={2.2} aria-hidden="true" /></button>
-          </li>)}</ul>
-          {/* The add control is a bare plus parked in the panel's top corner,
-              clear of the cards: the fan never grows under a button that way. */}
-          <button className="shot-add" type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={15} strokeWidth={2.1} aria-hidden="true" /></button>
-          {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
-        </div>}
-    <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />
-  </div>;
+  const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"} ${hand.length === 1 ? "is-single" : ""} ${clearArmed ? "is-armed" : ""}`;
+  const zoneHandlers = {
+    onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current += 1; setDragging(true); },
+    onDragOver: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy" as const; },
+    onDragLeave: () => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragging(false); },
+    onDrop: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void takeFiles(Array.from(event.dataTransfer.files)); },
+  };
+  // On a touch screen there is no pointer entering, so a tap on the panel is the
+  // reveal. The first tap only arms; it never reaches `clearAll`.
+  const armOnTap = (event: ReactMouseEvent<HTMLDivElement>) => { if (event.target instanceof HTMLElement && event.target.closest("button") === null) setClearArmed((armed) => !armed); };
+
+  const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />;
+
+  /** Both controls, top-right of the panel, stacked: the plus is what the owner
+   *  reaches for constantly, so it keeps the corner, and the broom appears just
+   *  under it only once there is a hand to sweep. */
+  const controls = <>
+    <button className="shot-add" type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={15} strokeWidth={2.1} aria-hidden="true" /></button>
+    <button className="shot-clear" type="button" onClick={clearAll} aria-label="清空全部照片"><Eraser size={14} strokeWidth={2} aria-hidden="true" /></button>
+    {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
+  </>;
+
+  return <>
+    {/*
+     * Desktop: a fan of cards held beside the writing. It never appears on a
+     * phone — see the narrow block below, which hides it whole. Two entirely
+     * separate renderings are cheaper to reason about than one layout bent into
+     * two shapes, and neither the fan's arcs nor the grid's column count can be
+     * expressed by the other.
+     */}
+    <div className={`${zoneClass} shot-fan`} {...zoneHandlers}
+      onPointerEnter={() => setClearArmed(true)}
+      onPointerLeave={() => { if (dragDepth.current === 0) setClearArmed(false); }}
+      onClick={armOnTap}
+    >
+      {empty
+        ? <button className="shot-drop-button" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
+            <ImageIcon size={18} strokeWidth={1.7} aria-hidden="true" />
+            <strong>{dragging ? "松手放下" : "拖照片进来"}</strong>
+            <span>或点击选择</span>
+          </button>
+        : <div className="shot-hand">
+            {/* One fan, one axis. Every card is turned a little further than the
+                one before it and each exposes a strip a little thinner than the
+                last, so the hand opens as a single arc — older photos fade into
+                the deck behind instead of forming a second cluster. */}
+            <ul className="shot-list" data-count={shots.length}>{hand.map((shot, rank) => <li className="shot-item" key={shot.assetId} data-rank={rank}>
+              <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
+              {rank === 0
+                ? <span className="shot-count" aria-label={`已添加 ${shots.length} 张`}>{shots.length}</span>
+                : null}
+              <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={10} strokeWidth={2.6} aria-hidden="true" /></button>
+            </li>)}</ul>
+            {controls}
+          </div>}
+      {fileInput}
+    </div>
+
+    {/*
+     * Mobile: no fan, and no photo area at all until there is a photo. The panel
+     * starts as a single image button, so an empty composer on a phone is just
+     * writing and one control. Once a picture lands, the area opens above it and
+     * the photos sit in a plain square grid — the arrangement 朋友圈 uses, and
+     * the one everybody already knows how to read. The count rides on the last
+     * tile, which is where a grid's "and N more" belongs.
+     */}
+    <div className={`${zoneClass} shot-grid`} {...zoneHandlers} onClick={armOnTap}>
+      {empty
+        ? <button className="shot-grid-empty" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
+            <ImageIcon size={19} strokeWidth={1.7} aria-hidden="true" />
+            <span>{dragging ? "松手放下" : "照片"}</span>
+          </button>
+        : <>
+            <div className="shot-grid-head">
+              <span className="shot-grid-tally">已选 {shots.length} 张</span>
+              {controls}
+            </div>
+            <ul className="shot-wall" data-count={shots.length}>
+              {wall.map((shot) => <li className="shot-tile" key={shot.assetId}>
+                <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
+                <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
+              </li>)}
+              <li className="shot-tile shot-tile-add">
+                <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={18} strokeWidth={2} aria-hidden="true" /></button>
+              </li>
+            </ul>
+          </>}
+      {fileInput}
+    </div>
+  </>;
 }
 
-interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; }
+interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify }: ComposerProps) {
+function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
@@ -829,8 +908,13 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
       {dismissible ? <button className="icon-button compact-icon-button composer-close" type="button" onClick={onClose} aria-label="关闭记录编辑器"><X size={17} strokeWidth={1.9} aria-hidden="true" /></button> : null}
     </div>
     <div className="composer-entry">
-    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
-      <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} />
+    {/* Three collapsed rows, not two. The write-up field is where most entries
+        actually get written, and the photo hand beside it needs the height: a
+        deep fan is paid for in height as well as width, because a turned square
+        grows its box by about 1.3x. Half again the old two rows is the number
+        the owner asked for, and it lands the panel at roughly 121px. */}
+    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={3} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
+      <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
     </div>
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
@@ -2518,7 +2602,10 @@ function App() {
   const shotsDraftChecked = useRef(false);
   const [saving, setSaving] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
-  const [actionMessage, setActionMessage] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
+  const [actionMessage, setActionMessage] = useState<{ text: string; tone: "ok" | "warn"; undo?: () => void } | null>(null);
+  /** Held outside React state so clearing a toast can cancel its own timer. A
+   *  toast that outlives its welcome leaves a dead "撤销" on screen. */
+  const toastTimer = useRef<number | null>(null);
   const [authState, setAuthState] = useState<AuthState>({ required: false, authenticated: true });
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -2798,7 +2885,25 @@ function App() {
   const navigate = (view: AppView) => { setActiveView(view); setMobileMenuOpen(false); if (view !== "timeline") setEntityFilterId(null); if (view === "tasks") setComposerKind("task"); if (view === "notes") setComposerKind("note"); };
   /** A calendar cell is a way back into the day it stands for. */
   const openDay = (date: string) => { setSelectedDate(date); setActiveView("today"); setMobileMenuOpen(false); };
-  const showToast = (message: string, tone: "ok" | "warn" = "ok") => { setActionMessage({ text: message, tone }); window.setTimeout(() => setActionMessage(null), tone === "warn" ? 3600 : 2600); };
+  /**
+   * One line of feedback, bottom right. With an `undo` it also carries a way
+   * back: clearing a hand of photos is a single tap, so the tap has to be
+   * reversible for as long as the toast is up. An undoable toast stays longer
+   * than a plain one — the point of it is to be caught, not just noticed.
+   */
+  const showToast = (message: string, tone: "ok" | "warn" = "ok", undo?: () => void) => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setActionMessage({ text: message, tone, ...(undo === undefined ? {} : { undo }) });
+    toastTimer.current = window.setTimeout(() => { setActionMessage(null); toastTimer.current = null; }, undo !== undefined ? 6000 : tone === "warn" ? 3600 : 2600);
+  };
+  const dismissToast = () => { if (toastTimer.current !== null) window.clearTimeout(toastTimer.current); toastTimer.current = null; setActionMessage(null); };
+
+  /**
+   * The drop zone already emptied itself; this only says so, and holds the undo.
+   * The photos are assets on disk, so putting them back is a list operation, not
+   * a re-upload — which is exactly why the clear can be this casual.
+   */
+  const handleShotsCleared = (cleared: readonly AssetLink[], restore: () => void) => showToast(`已清空 ${cleared.length} 张照片`, "ok", () => { restore(); showToast(`已恢复 ${cleared.length} 张照片`); });
 
   // An unsent drop is worth keeping: the files are already on disk, so losing
   // the draft would leave nothing behind but orphans.
@@ -3112,13 +3217,13 @@ function App() {
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onNotify={showToast} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer onShotsCleared={handleShotsCleared} kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onNotify={showToast} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
        ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"
         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
-      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}{actionMessage.text}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
+      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
 }
 
 export default App;

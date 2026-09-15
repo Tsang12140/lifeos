@@ -1605,6 +1605,34 @@ h2 {
   background: #fdf6ee;
 }
 
+.action-toast-text {
+  flex: 1 1 auto;
+}
+
+/* The way back. Outlined rather than filled: an undo is an offer, not the
+   action the toast is asking for, and a solid button here would compete with
+   the message it belongs to. */
+.action-toast-undo {
+  flex: 0 0 auto;
+  min-height: 26px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  opacity: 0.85;
+  transition: opacity 160ms ease, background-color 160ms ease;
+}
+
+.action-toast-undo:hover {
+  background: rgb(255 255 255 / 0.6);
+  opacity: 1;
+}
+
 .auth-screen {
   display: grid;
   place-items: center;
@@ -2308,8 +2336,15 @@ h2 {
   flex: 0 0 auto;
 }
 
-.composer-input {
-  min-height: 116px;
+/* The textarea's own height is set inline by MentionBox from its line count, so
+   this rule cannot grow it — `min-height` is reset with !important there, on
+   purpose, so the collapse animation has something to animate between. The
+   height the owner sees comes from `autoGrowRows` on the composer's MentionBox.
+   What this rule does is give the two rooms a floor to share: the drop zone is a
+   grid sibling, so when it needs more height than two lines of text the entry
+   box grows with it rather than the hand spilling over its own frame. */
+.composer-entry {
+  min-height: 174px;
 }
 
 /*
@@ -2350,10 +2385,15 @@ h2 {
   box-shadow: var(--shadow-focus);
 }
 
-/* The right room. Only its left edge is drawn, and drawn dashed: that one
-   line is the wall between writing and dropping. The corner radius matches the
-   frame it sits in, so a drag highlight cannot square the outer corner off. */
-.composer-shots {
+/* The grid rendering exists only for narrow screens; the fan rendering only for
+   wide ones. Each is hidden where the other belongs, so no rule has to make one
+   layout pretend to be the other. Kept in one place, above the breakpoint, so
+   the pair is impossible to separate by accident. */
+.shot-grid {
+  display: none;
+}
+
+.shot-fan {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -2368,6 +2408,27 @@ h2 {
 .composer-shots.is-empty {
   align-items: stretch;
   justify-content: center;
+}
+
+/* One photo in the panel is not a hand, it is a picture on a wall: centred, so
+   it does not look stranded against the dashed edge. Two or more become a hand
+   and hold to the left, because a fan that shifts left as it grows looks
+   unstable.
+
+   The centring is done on the *hand*, and the hand's own padding-right — the
+   lane it keeps clear for the corner controls — is cancelled by an equal
+   padding-left. Without that, `margin: 0 auto` would centre the padded box and
+   push the visible card half the lane to the right, which is exactly the 21px
+   the probe caught. Both paddings equal means the card, not the lane, is what
+   ends up centred. */
+.composer-shots.is-single {
+  align-items: center;
+}
+
+.composer-shots.is-single .shot-hand {
+  width: auto;
+  margin: 0 auto;
+  padding-left: 34px;
 }
 
 /* Keeps the dashed edge while a photo hovers over it — the dashes are what
@@ -2422,15 +2483,9 @@ h2 {
    *shrinks* as the deck gets deeper. That is what keeps nine cards a single
    continuous arc. Give every card the same strip instead and the later ones
    march sideways off the panel — which reads as a second fan starting, not as
-   a deeper one. */
-.shot-hand {
-  position: relative;
-  /* Room for the plus in the top corner. It is a sibling of the hand, not part
-     of it, so without this the deepest cards slide under the button. */
-  padding-right: 30px;
-}
+   a deeper one.
 
-/* The hand is anchored to the top of the panel and sized so its own deepest card
+   The hand is anchored to the top of the panel and sized so its own deepest card
    still fits the panel's height. A card turned about its centre grows its box
    both up and down, so the box is ~1.3x the square at 21.5°; the hand is given
    the panel's full height and the card is derived from it, which keeps the
@@ -2444,9 +2499,11 @@ h2 {
      inside. 1 / 1.297 is where a 21.5° turn stops fitting; 70% leaves a little
      air rather than sitting exactly on the edge. */
   --shot-card: clamp(30px, 70%, 50px);
-  /* Room for the plus in the top corner. It is a sibling of the hand, not part
-     of it, so without this the deepest cards slide under the button. */
-  padding-right: 30px;
+  /* Room for the two controls stacked in the top corner — the plus, and the
+     broom that appears under it once there is a hand to sweep. They are
+     siblings of the hand, not part of it, so without this the deepest cards
+     slide underneath them. */
+  padding-right: 34px;
 }
 
 .shot-list {
@@ -2591,11 +2648,20 @@ h2 {
   place-items: center;
   width: 16px;
   height: 16px;
+  /* Zeroed explicitly. A generic button rule upstream hands every button a
+     horizontal padding, and inside a 16px dot that padding shoves the icon
+     3.5px off centre — which is exactly what "the ✕ sits wrong in its circle"
+     turned out to be. `place-items: center` cannot save a box that is already
+     lopsided. */
+  padding: 0;
   border: 0;
   border-radius: 999px;
   color: #fff;
   background: rgb(20 26 38 / 0.62);
   cursor: pointer;
+  /* The icon is line art, so it centres on its glyph box; without this the
+     inline baseline adds a sliver of descender space below it. */
+  line-height: 0;
 }
 
 .shot-remove:hover {
@@ -2636,6 +2702,44 @@ h2 {
 .shot-add:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Sweeping the whole hand away, parked directly under the plus. It stays out of
+   sight until it is wanted: on a desktop a hover anywhere on the panel reveals
+   it, and on a touch screen a tap on the panel does the same, because there is
+   no hover to reveal anything with. The slight downward shift keeps it feeling
+   like it slides out from behind the plus rather than blinking into existence. */
+.shot-clear {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.composer-shots.is-armed .shot-clear,
+.composer-shots:hover .shot-clear,
+.composer-shots:focus-within .shot-clear {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.shot-clear:hover {
+  border-color: #e0b4a4;
+  color: #a83c28;
 }
 
 .shot-busy {
@@ -3280,31 +3384,209 @@ button.relation-chip {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .composer-shots {
-    min-height: 96px;
-    border-left: 0;
-    border-top: 1px dashed var(--line-strong);
-    border-radius: 0 0 13px 13px;
+  /* Swap renderings. On a phone there is no room for a fan and no pointer to
+     hover one with, so the cards are replaced wholesale by the grid below. */
+  .shot-fan {
+    display: none;
   }
 
-  /* A narrow panel cannot hold nine cards plus their travel. The hand keeps the
-     same taper but pulls in harder, so nine cards still resolve as one arc
-     instead of running off the edge. */
-  .shot-hand {
-    --shot-card: clamp(28px, 56%, 42px);
+  .shot-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 2px 2px;
   }
 
-  .shot-item[data-rank="1"] { --shot-rotate: 3.5deg; --shot-drop: 2px; --shot-step: 12px; }
-  .shot-item[data-rank="2"] { --shot-rotate: 7deg; --shot-drop: 3.5px; --shot-step: 10.5px; }
-  .shot-item[data-rank="3"] { --shot-rotate: 10deg; --shot-drop: 5px; --shot-step: 9px; }
-  .shot-item[data-rank="4"] { --shot-rotate: 12.5deg; --shot-drop: 6.5px; --shot-step: 7.5px; }
-  .shot-item[data-rank="5"] { --shot-rotate: 14.5deg; --shot-drop: 8px; --shot-step: 6px; }
-  .shot-item[data-rank="6"] { --shot-rotate: 16deg; --shot-drop: 9px; --shot-step: 5px; }
-  .shot-item[data-rank="7"] { --shot-rotate: 17deg; --shot-drop: 9.5px; --shot-step: 4.5px; }
-  .shot-item[data-rank="8"] { --shot-rotate: 18deg; --shot-drop: 10px; --shot-step: 4px; }
+  /* Nothing here yet: one image button, and no photo area at all. An empty
+     drop zone on a phone was a dashed box with nothing in it — a room for
+     pictures that had not arrived. The button is what a phone can use. */
+  .shot-grid-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    color: var(--muted);
+    background: var(--surface);
+    cursor: pointer;
+    font-size: 0.84rem;
+    font-weight: 650;
+    transition: border-color 160ms ease, color 160ms ease;
+  }
 
-  .shot-count {
-    font-size: 1rem;
+  .shot-grid-empty:hover:not(:disabled),
+  .shot-grid-empty:active:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .shot-grid.is-dragging .shot-grid-empty {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--primary-soft);
+  }
+
+  .shot-grid-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 24px;
+  }
+
+  .shot-grid-tally {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 650;
+  }
+
+  /* The controls are static here, not parked in a corner: on a phone the panel
+     is the whole width, so a corner would put them an arm's length from the
+     photos. They sit in a header row and the hand-in-corner trick is dropped. */
+  .shot-grid-head .shot-add,
+  .shot-grid-head .shot-clear,
+  .shot-grid-head .shot-busy {
+    position: static;
+  }
+
+  .shot-grid-head .shot-clear {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .shot-grid-head .shot-add,
+  .shot-grid-head .shot-clear {
+    width: 28px;
+    height: 28px;
+  }
+
+  .shot-grid-head .shot-busy {
+    margin-left: 6px;
+  }
+
+  /* 朋友圈's arrangement, which is the one everybody already knows how to
+     read: one square on its own, 2–3 in a row of two, 4 to a 2×2, and 5+ to a
+     3-wide wall. Every tile is a square, because a wall of mixed rectangles
+     looks like a mistake rather than a design.
+
+     The 2–3 case is a two-column grid rather than a bank of `auto` columns:
+     with `auto`, three photos would sit left-packed in a row of their own
+     widths and the row would not line up. Two fixed columns means 2 photos fill
+     the row and 3 wrap, both flush to the same edges. */
+  .shot-wall {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .shot-wall[data-count="1"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shot-wall[data-count="2"],
+  .shot-wall[data-count="3"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shot-wall[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shot-tile {
+    position: relative;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 10px;
+    background: #eef1f6;
+    box-shadow: 0 1px 2px rgb(20 26 38 / 0.14), 0 0 0 1px rgb(20 26 38 / 0.06);
+  }
+
+  .shot-tile img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* A single photo gets a bigger square and sits centred. 朋友圈 does the same,
+     and it keeps the one-tile case from looking like a shifted grid. It is
+     capped so a tall phone does not turn one photo into a wall — but it stays a
+     square, because a wall of mixed rectangles looks like a mistake. */
+  .shot-wall[data-count="1"] .shot-tile {
+    width: min(58%, 200px);
+    aspect-ratio: 1;
+    margin: 0 auto;
+    border-radius: 12px;
+  }
+
+  .shot-wall[data-count="1"] .shot-tile-add {
+    width: min(58%, 200px);
+    margin: 0 auto;
+  }
+
+  /* On three-wide rows the tile is small enough that a 16px dot covers a
+     quarter of the picture, so the ✕ is trimmed to what a finger can still
+     hit without hiding the photo. */
+  .shot-tile-remove {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    color: #fff;
+    background: rgb(20 26 38 / 0.6);
+    cursor: pointer;
+    line-height: 0;
+  }
+
+  .shot-wall[data-count="1"] .shot-tile-remove {
+    width: 26px;
+    height: 26px;
+    top: 6px;
+    right: 6px;
+  }
+
+  /* 朋友圈 draws this tile last, so the newest photo lands where the eye
+     already is and the wall grows from the same corner every time. */
+  .shot-tile-add {
+    display: grid;
+    place-items: center;
+    background: var(--surface-soft);
+    box-shadow: none;
+    border: 1px dashed var(--line-strong);
+  }
+
+  .shot-tile-add button {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    color: var(--muted);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .shot-tile-add button:hover:not(:disabled) {
+    color: var(--primary);
+  }
+
+  .shot-tile-add button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .composer-fields {
