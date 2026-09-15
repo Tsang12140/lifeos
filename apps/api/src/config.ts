@@ -28,6 +28,12 @@ export interface ApiConfig {
   readonly allowedOrigins: readonly string[];
   readonly cookieSecure: boolean;
   readonly bodyLimitBytes: number;
+  /**
+   * Photos dropped onto the composer are copied into the asset root, so they
+   * need a limit of their own: a JPEG is orders of magnitude larger than any
+   * JSON body this API accepts.
+   */
+  readonly assetUploadLimitBytes: number;
   readonly backupDirectory?: string;
   readonly backupS3?: BackupS3Config;
   /**
@@ -48,6 +54,7 @@ export interface ApiConfig {
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3001;
 const DEFAULT_BODY_LIMIT = 1024 * 1024;
+const DEFAULT_ASSET_UPLOAD_LIMIT = 25 * 1024 * 1024;
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-flash";
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_QWEATHER_HOST = "devapi.qweather.com";
@@ -124,6 +131,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     allowedOrigins: splitOrigins(env.LIFEOS_ALLOWED_ORIGINS, host),
     cookieSecure,
     bodyLimitBytes: parsePositiveInt(env.LIFEOS_BODY_LIMIT_BYTES, DEFAULT_BODY_LIMIT, "LIFEOS_BODY_LIMIT_BYTES"),
+    assetUploadLimitBytes: parsePositiveInt(env.LIFEOS_ASSET_UPLOAD_LIMIT_BYTES, DEFAULT_ASSET_UPLOAD_LIMIT, "LIFEOS_ASSET_UPLOAD_LIMIT_BYTES"),
     backupDirectory,
     ...(backupS3 === undefined ? {} : { backupS3 }),
     ...(deepseekApiKey === undefined || deepseekApiKey === "" ? {} : { deepseekApiKey }),

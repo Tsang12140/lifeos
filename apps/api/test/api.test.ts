@@ -1,6 +1,6 @@
 import test from "node:test";
 import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -64,7 +64,7 @@ interface Harness {
   readonly stop: (remove?: boolean) => Promise<void>;
 }
 
-async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, existingRoot?: string, assetRoot?: string): Promise<Harness> {
+async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, existingRoot?: string, assetRoot?: string, assetUploadLimitBytes = 25 * 1024 * 1024): Promise<Harness> {
   const root = existingRoot ?? mkdtempSync(join(tmpdir(), "lifeos-api-"));
   const config = {
     host: "127.0.0.1",
@@ -76,6 +76,7 @@ async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, exi
     allowedOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"],
     cookieSecure: false,
     bodyLimitBytes,
+    assetUploadLimitBytes,
     deepseekModel: "deepseek-flash",
     deepseekBaseUrl: "https://api.deepseek.com",
     qweatherHost: "devapi.qweather.com",
@@ -679,6 +680,7 @@ test("scheduler runOnce claims the supplied Shanghai slot instead of tomorrow", 
     allowedOrigins: [],
     cookieSecure: false,
     bodyLimitBytes: 1024 * 1024,
+    assetUploadLimitBytes: 25 * 1024 * 1024,
     deepseekModel: "deepseek-flash",
     deepseekBaseUrl: "https://api.deepseek.com",
     qweatherHost: "devapi.qweather.com",
@@ -1444,6 +1446,123 @@ test("relations stay symmetric and local originals are served read-only", async 
   const bare = await request(bareHarness.base, "/api/assets/demo-asset-bare/content");
   equal(bare.response.status, 404);
   equal((bare.body as { error: string }).error, "asset_root_not_configured");
+});
+
+// One real 1x1 PNG. A genuine file matters here: the sniffer must accept a
+// photo someone actually dropped, not just any bytes with the right prefix.
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8QAAAkAAQGjJSbCAAAAAElFTkSuQmCC",
+  "base64",
+);
+
+test("a dropped photo is written into the asset root, served back, and linked to a record", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-uploads-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, `/api/assets/uploads?name=${encodeURIComponent("阳台的花.png")}`, {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const asset = upload.body as {
+    id: string;
+    kind: string;
+    originalName?: string;
+    mediaType?: string;
+    sizeBytes?: number;
+    storageRefs: Array<{ sourceId: string; sourceRef: string; mediaType?: string }>;
+  };
+  equal(asset.kind, "photo");
+  equal(asset.originalName, "阳台的花.png");
+  equal(asset.mediaType, "image/png");
+  equal(asset.sizeBytes, TINY_PNG.length);
+  equal(asset.storageRefs.length, 1);
+  equal(asset.storageRefs[0]?.sourceId, "local");
+  // The stored name is generated, never taken from the request.
+  const sourceRef = asset.storageRefs[0]?.sourceRef ?? "";
+  ok(/^uploads\/\d{4}\/\d{2}\/[0-9a-f-]{36}\.png$/.test(sourceRef), `unexpected stored path: ${sourceRef}`);
+  ok(existsSync(join(assetRoot, ...sourceRef.split("/"))), "the photo should be on disk");
+
+  const content = await fetch(`${harness.base}/api/assets/${encodeURIComponent(asset.id)}/content`);
+  equal(content.status, 200);
+  equal(content.headers.get("content-type"), "image/png");
+  equal((await content.arrayBuffer()).byteLength, TINY_PNG.length);
+
+  // The composer links the upload to the entry it was dropped on.
+  const record = await request(harness.base, "/api/records", {
+    method: "POST",
+    ...json({ kind: "journal", content: "阳台的花开了", assetRefs: [{ assetId: asset.id, role: "photo", label: "阳台的花.png" }] }),
+  });
+  equal(record.response.status, 201);
+  const recordBody = record.body as { assetRefs: Array<{ assetId: string; role: string }> };
+  equal(recordBody.assetRefs.length, 1);
+  equal(recordBody.assetRefs[0]?.assetId, asset.id);
+
+  // A referenced asset cannot be deleted out from under its record.
+  const busy = await request(harness.base, `/api/assets/${encodeURIComponent(asset.id)}`, { method: "DELETE" });
+  equal(busy.response.status, 409);
+});
+
+test("uploads refuse anything that is not a real photo", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-uploads-reject-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  const wrongType = await request(harness.base, "/api/assets/uploads", {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: "just some notes",
+  });
+  equal(wrongType.response.status, 415);
+
+  // Declaring a photo is not enough: the bytes have to agree.
+  const lying = await request(harness.base, "/api/assets/uploads", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(Buffer.from("this is plainly not a png")),
+  });
+  equal(lying.response.status, 415);
+  equal((lying.body as { error: string }).error, "content_type_mismatch");
+
+  const empty = await request(harness.base, "/api/assets/uploads", { method: "POST", headers: { "content-type": "image/png" } });
+  equal(empty.response.status, 400);
+  equal((empty.body as { error: string }).error, "empty_upload");
+
+  // A hostile original name never reaches the path, and never breaks the upload.
+  const sneaky = await request(harness.base, `/api/assets/uploads?name=${encodeURIComponent("../../etc/passwd.png")}`, {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(sneaky.response.status, 201);
+  const sneakyRef = (sneaky.body as { storageRefs: Array<{ sourceRef: string }> }).storageRefs[0]?.sourceRef ?? "";
+  equal(sneakyRef.includes(".."), false);
+  equal(existsSync(join(assetRoot, ...sneakyRef.split("/"))), true);
+
+  // The photo limit is its own knob, far above the JSON body limit.
+  const tinyLimit = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 32);
+  t.after(async () => tinyLimit.stop());
+  const tooLarge = await request(tinyLimit.base, "/api/assets/uploads", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(tooLarge.response.status, 413);
+
+  // Without an asset root there is nowhere to put the file, so nothing is stored.
+  const bareHarness = await startHarness();
+  t.after(async () => bareHarness.stop());
+  const noRoot = await request(bareHarness.base, "/api/assets/uploads", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(noRoot.response.status, 404);
+  equal((noRoot.body as { error: string }).error, "asset_root_not_configured");
 });
 
 test("privacy records persist, stay in raw timeline/export data, and leave calendar summaries out", async (t) => {

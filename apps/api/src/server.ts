@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, realpathSync, statSync, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
@@ -326,7 +326,13 @@ function decodeStaticPathname(pathname: string): string {
   }
 }
 
-async function readBody(req: IncomingMessage, limit: number): Promise<unknown> {
+/**
+ * Reads the request body as raw bytes. Every caller shares one size guard: the
+ * declared Content-Length is rejected before a single byte is buffered, and the
+ * streamed size is checked again so a chunked request cannot lie its way past
+ * the limit.
+ */
+async function readRawBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   const contentLength = req.headers["content-length"];
   if (contentLength !== undefined) {
     const length = Number(contentLength);
@@ -341,10 +347,14 @@ async function readBody(req: IncomingMessage, limit: number): Promise<unknown> {
     if (size > limit) throw new HttpError(413, "body_too_large", "Request body is too large");
     chunks.push(buffer);
   }
-  if (size === 0) return {};
-  const raw = Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+async function readBody(req: IncomingMessage, limit: number): Promise<unknown> {
+  const raw = await readRawBody(req, limit);
+  if (raw.length === 0) return {};
   try {
-    return JSON.parse(raw) as unknown;
+    return JSON.parse(raw.toString("utf8")) as unknown;
   } catch {
     throw new HttpError(400, "invalid_json", "Request body must be valid JSON");
   }
@@ -1106,6 +1116,53 @@ const ASSET_MEDIA_TYPES: Readonly<Record<string, string>> = {
   ".mp4": "video/mp4",
   ".webm": "video/webm",
 };
+
+/**
+ * Accepted photo types for uploads. The declared media type picks the stored
+ * extension; a sniff of the leading bytes then has to agree with it, so a text
+ * file renamed to `.jpg` never reaches the disk. HEIC is deliberately absent:
+ * browsers cannot render it, and a thumbnail nobody can see is worse than a
+ * clear rejection.
+ */
+const ASSET_UPLOAD_FORMATS: Readonly<Record<string, { readonly extension: string; readonly matches: (bytes: Buffer) => boolean }>> = {
+  "image/jpeg": { extension: ".jpg", matches: (bytes) => bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff },
+  "image/png": { extension: ".png", matches: (bytes) => bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  "image/webp": { extension: ".webp", matches: (bytes) => bytes.length >= 12 && bytes.toString("latin1", 0, 4) === "RIFF" && bytes.toString("latin1", 8, 12) === "WEBP" },
+  "image/gif": { extension: ".gif", matches: (bytes) => bytes.length >= 6 && (bytes.toString("latin1", 0, 6) === "GIF87a" || bytes.toString("latin1", 0, 6) === "GIF89a") },
+  "image/avif": { extension: ".avif", matches: (bytes) => bytes.length >= 12 && bytes.toString("latin1", 4, 8) === "ftyp" && (bytes.toString("latin1", 8, 12) === "avif" || bytes.toString("latin1", 8, 12) === "avis") },
+};
+
+/** `image/jpeg; charset=binary` still means `image/jpeg`. */
+function baseMediaType(value: string | undefined): string {
+  return (value ?? "").split(";")[0]!.trim().toLowerCase();
+}
+
+/**
+ * Keeps the name a person recognises, minus anything that could steer a path.
+ * The stored file is named by UUID; this is metadata for display only.
+ */
+function uploadOriginalName(raw: string | null): string | undefined {
+  if (raw === null) return undefined;
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, "").replace(/[\\/]/g, "").trim();
+  return cleaned.length === 0 ? undefined : Array.from(cleaned).slice(0, 120).join("");
+}
+
+/**
+ * Writes one dropped photo under `<assetRoot>/uploads/YYYY/MM/`, dated in
+ * Shanghai so a photo taken late at night lands in the folder its owner
+ * expects. The file name is a fresh UUID, which is what makes a hostile
+ * original name harmless: nothing from the request reaches the path.
+ */
+function storeUploadedPhoto(root: string, bytes: Buffer, format: { readonly extension: string }): string {
+  const day = shanghaiDateKey(new Date());
+  const relativeDirectory = `uploads/${day.slice(0, 4)}/${day.slice(5, 7)}`;
+  const directory = resolve(root, relativeDirectory);
+  mkdirSync(directory, { recursive: true });
+  // `wx` refuses to overwrite: a UUID collision must fail loudly, not eat a photo.
+  const fileName = `${randomUUID()}${format.extension}`;
+  writeFileSync(resolve(directory, fileName), bytes, { flag: "wx" });
+  return `${relativeDirectory}/${fileName}`;
+}
 
 /**
  * Resolves an asset reference inside the configured asset root. Both sides are
@@ -1945,6 +2002,47 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       const id = input.id === undefined ? `asset_${randomUUID()}` : stringField(input.id, "id", { nonEmpty: true });
       if (repository.findAssetById(id) !== null) throw new HttpError(409, "asset_exists", `Asset already exists: ${id}`);
       const asset = buildAsset(input, id, storageRefsField(input.storageRefs));
+      repository.insertAsset(asset);
+      setJson(res, 201, asset);
+      return;
+    }
+    // A photo dropped onto the composer arrives as raw bytes, not JSON, so it
+    // gets its own route with its own size limit. Everything else about assets
+    // stays reference-based: this route is the only place LifeOS writes a file.
+    if (pathname === "/api/assets/uploads" && req.method === "POST") {
+      if (config.assetRoot === undefined) {
+        throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to store local originals");
+      }
+      const mediaType = baseMediaType(req.headers["content-type"]);
+      const format = ASSET_UPLOAD_FORMATS[mediaType];
+      if (format === undefined) {
+        throw new HttpError(415, "unsupported_media_type", "Only JPEG, PNG, WebP, GIF and AVIF photos can be uploaded");
+      }
+      const bytes = await readRawBody(req, config.assetUploadLimitBytes);
+      if (bytes.length === 0) throw new HttpError(400, "empty_upload", "The uploaded photo is empty");
+      if (!format.matches(bytes)) {
+        throw new HttpError(415, "content_type_mismatch", "The uploaded bytes are not the declared image type");
+      }
+      let sourceRef: string;
+      try {
+        sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format);
+      } catch {
+        throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
+      }
+      const originalName = uploadOriginalName(url.searchParams.get("name"));
+      const uploadRef = coreValidated("storageRefs", () => {
+        const candidate: StorageReference = { sourceId: "local", sourceRef, mediaType };
+        assertValidStorageReference(candidate, "storageRefs[0]");
+        return candidate;
+      });
+      // One dropped photo is one photo asset. The record links to it when the
+      // entry is saved; until then it is an unreferenced upload that
+      // DELETE /api/assets/:id still accepts.
+      const asset = buildAsset(
+        { kind: "photo", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
+        `asset_${randomUUID()}`,
+        [uploadRef],
+      );
       repository.insertAsset(asset);
       setJson(res, 201, asset);
       return;
