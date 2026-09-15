@@ -5,7 +5,8 @@
   "type": "module",
   "description": "LifeOS self-hosted Node API",
   "dependencies": {
-    "@lifeos/core": "0.1.0"
+    "@lifeos/core": "0.1.0",
+    "sharp": "^0.35.4"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

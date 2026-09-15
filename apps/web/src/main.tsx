@@ -610,7 +610,7 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
           <span>或点击选择</span>
         </button>
       : <><ul className="shot-list">{shots.map((shot) => <li className="shot-item" key={shot.assetId}>
-            <img src={assetContentUrl(shot.assetId)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
+            <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
             <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.2} aria-hidden="true" /></button>
           </li>)}</ul>
           <button className="shot-add" type="button" onClick={() => inputRef.current?.click()} disabled={busy}><Plus size={14} strokeWidth={2} aria-hidden="true" /><span>加照片</span></button>
@@ -1169,8 +1169,27 @@ function recordsByDate(dates: readonly string[], records: readonly RecordView[])
   return buckets;
 }
 
+/** The original bytes. Only the zoom viewer wants these now. */
 function assetContentUrl(assetId: string): string {
   return `/api/assets/${encodeURIComponent(assetId)}/content`;
+}
+
+/** The two derived widths the API keeps: enough for a grid square on a 3x screen, and
+ *  enough for a full-card background. Mirrors THUMBNAIL_WIDTHS on the server. */
+type ThumbnailWidth = 400 | 1200;
+
+/**
+ * The derived thumbnail covering `width` px of paint. The API builds it from the
+ * original on first request and files it under the data directory, which is what stops
+ * a 130px square from costing a whole 3.9 MB original — and the same picture also backs
+ * the week-card and calendar backgrounds.
+ *
+ * Note the scorer in `photoScore.ts` fetches the *same* URL the month cell renders, so
+ * the browser still downloads each photo once and shares it between the <img> and the
+ * score instead of paying for it twice at two different sizes.
+ */
+function assetThumbUrl(assetId: string, width: ThumbnailWidth): string {
+  return `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=${width}`;
 }
 
 /**
@@ -1217,7 +1236,7 @@ function monthCellPhoto(candidates: readonly { assetId: string; story: number }[
   let bestId = candidates[0].assetId;
   let bestScore = -Infinity;
   for (const candidate of candidates) {
-    const measured = peekScore(assetContentUrl(candidate.assetId));
+    const measured = peekScore(assetThumbUrl(candidate.assetId, 1200));
     if (measured === undefined || measured < 0) continue;
     const total = measured + candidate.story;
     if (total > bestScore) {
@@ -1320,7 +1339,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
     (async () => {
       for (const date of dates) {
         for (const candidate of dayPhotoCandidates(buckets.get(date) ?? [])) {
-          await scorePhoto(assetContentUrl(candidate.assetId));
+          await scorePhoto(assetThumbUrl(candidate.assetId, 1200));
           if (cancelled) return;
           setPhotoTick((tick) => tick + 1);
         }
@@ -1359,7 +1378,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
           <CalendarDayMarkers date={date} today={today} module={cycleModule} />
           {photoIds.length > 0 ? <span className={`week-card-art bands-${photoIds.length}`} aria-hidden="true">
             {photoIds.map((assetId, index) => <span className="week-card-band" key={`${assetId}-${index}`} style={{ top: `calc(${(index * 100) / photoIds.length}% - 16px)`, height: `calc(${100 / photoIds.length}% + 17px)` }}>
-              <img src={`/api/assets/${encodeURIComponent(assetId)}/content`} alt="" loading="lazy" decoding="async" />
+              <img src={assetThumbUrl(assetId, 1200)} alt="" loading="lazy" decoding="async" />
             </span>)}
             <span className="week-card-veil" />
           </span> : null}
@@ -1379,7 +1398,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
         const weatherLabel = weather === undefined ? "" : `天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`;
         const titleParts = [holidayLabel, dayInfo.solarTerm ? `节气：${dayInfo.solarTerm}` : "", weatherLabel, summaryText === "" ? "" : `${summaryText}（${summary?.status === "generated" ? `AI · ${summary?.provider}` : "规则生成"}）`].filter(Boolean);
         return <button className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${items.length === 0 ? "is-empty" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`} title={titleParts.length > 0 ? titleParts.join(" · ") : undefined}>
-          {cellPhoto !== undefined ? <span className="month-cell-art" aria-hidden="true"><img src={assetContentUrl(cellPhoto)} alt="" loading="lazy" decoding="async" /><span className="month-cell-veil" /></span> : null}
+          {cellPhoto !== undefined ? <span className="month-cell-art" aria-hidden="true"><img src={assetThumbUrl(cellPhoto, 1200)} alt="" loading="lazy" decoding="async" /><span className="month-cell-veil" /></span> : null}
           <span className="month-cell-head"><span className="month-day-number">{Number(date.slice(8, 10))}</span><span className="month-day-meta">{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{items.length > 0 ? <span className="month-day-count">{items.length}</span> : null}{weather !== undefined ? <span className="month-day-weather" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null}</span></span>
           {summaryText !== "" ? <span className={`month-day-summary ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}
           {dayInfo.solarTerm ? <span className="month-day-solar" aria-label={`节气：${dayInfo.solarTerm}`}>{dayInfo.solarTerm}</span> : null}
@@ -1469,7 +1488,9 @@ function AssetPreview({ assetIds, index, assets, onClose, onIndexChange }: { ass
     {many && index > 0 ? <button className="asset-preview-nav asset-preview-nav-prev" type="button" onClick={(event) => { event.stopPropagation(); step(-1); }} aria-label="上一张"><ChevronLeft size={22} strokeWidth={1.8} aria-hidden="true" /></button> : null}
     {many && index < assetIds.length - 1 ? <button className="asset-preview-nav asset-preview-nav-next" type="button" onClick={(event) => { event.stopPropagation(); step(1); }} aria-label="下一张"><ChevronRight size={22} strokeWidth={1.8} aria-hidden="true" /></button> : null}
     <figure className="asset-preview-figure" onClick={(event) => event.stopPropagation()}>
-      <img src={`/api/assets/${encodeURIComponent(assetId)}/content`} alt={asset?.originalName ?? "照片"} />
+      {/* Deliberately the original, not a thumbnail: this is the one place the owner
+          asked to see the picture, and it is opened one photo at a time. */}
+      <img src={assetContentUrl(assetId)} alt={asset?.originalName ?? "照片"} />
       {asset?.originalName === undefined && !many ? null : <figcaption>{many ? `${index + 1} / ${assetIds.length}${asset?.originalName === undefined ? "" : " · "}` : ""}{asset?.originalName}</figcaption>}
     </figure>
   </div>;
@@ -1509,7 +1530,7 @@ function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: readonly s
   const hidden = assetIds.length - shown.length;
   return <div className="record-photo-grid" data-shown={shown.length}>
     {shown.map((assetId, index) => { const asset = assets.find((candidate) => candidate.id === assetId); return <button className="record-photo-cell" key={assetId} type="button" onClick={() => onPreview(assetIds, index)} aria-label={`放大查看 ${asset?.originalName ?? assetId}`}>
-      <img src={`/api/assets/${encodeURIComponent(assetId)}/content`} alt="" loading="lazy" decoding="async" />
+      <img src={assetThumbUrl(assetId, 400)} alt="" loading="lazy" decoding="async" />
       {hidden > 0 && index === shown.length - 1 ? <span className="record-photo-more">+{hidden}</span> : null}
     </button>; })}
   </div>;
@@ -2252,6 +2273,14 @@ interface AssetTrashView {
   readonly trashed: readonly AssetTrashItem[];
 }
 
+/** The derived-thumbnail cache: how much of it there is, and where it lives. */
+interface AssetThumbnailCacheView {
+  readonly count: number;
+  readonly bytes: number;
+  readonly widths: readonly number[];
+  readonly directory: string;
+}
+
 const ASSET_TRASH_ORIGIN_LABELS: Record<AssetTrashItem["origin"], string> = { "orphan-scan": "自动清理", "asset-delete": "手动删除" };
 
 function assetTrashName(asset: Asset): string {
@@ -2337,13 +2366,77 @@ function AssetTrashSettingsCard({ onAssetsChanged }: { readonly onAssetsChanged:
       </div>
       <div className="settings-asset-trash-group">
         <p className="settings-asset-trash-group-head">待清理<span>没人引用，到期即收走</span></p>
-        {pending.length === 0 ? <p className="settings-asset-trash-note">没有等着过期的照片。</p> : <ul className="settings-asset-trash-list" data-asset-trash-pending>{pending.map((item) => <li className="settings-asset-trash-row" key={item.asset.id}><img src={assetContentUrl(item.asset.id)} alt="" loading="lazy" decoding="async" /><span className="settings-asset-trash-meta"><strong>{assetTrashName(item.asset)}</strong><small>{formatBytes(item.asset.sizeBytes) ?? "尺寸未知"}{item.asset.createdAt === undefined ? "" : ` · ${assetTrashMoment(item.asset.createdAt.value)} 上传`}</small></span><span className={`settings-asset-trash-days ${item.overdue ? "is-overdue" : ""}`}>{assetTrashRemaining(item.daysRemaining)}</span></li>)}</ul>}
+        {pending.length === 0 ? <p className="settings-asset-trash-note">没有等着过期的照片。</p> : <ul className="settings-asset-trash-list" data-asset-trash-pending>{pending.map((item) => <li className="settings-asset-trash-row" key={item.asset.id}><img src={assetThumbUrl(item.asset.id, 400)} alt="" loading="lazy" decoding="async" /><span className="settings-asset-trash-meta"><strong>{assetTrashName(item.asset)}</strong><small>{formatBytes(item.asset.sizeBytes) ?? "尺寸未知"}{item.asset.createdAt === undefined ? "" : ` · ${assetTrashMoment(item.asset.createdAt.value)} 上传`}</small></span><span className={`settings-asset-trash-days ${item.overdue ? "is-overdue" : ""}`}>{assetTrashRemaining(item.daysRemaining)}</span></li>)}</ul>}
       </div>
       <div className="settings-asset-trash-group">
         <p className="settings-asset-trash-group-head">回收站<span>可以恢复，也可以立即删掉</span></p>
         {trashed.length === 0 ? <p className="settings-asset-trash-note">回收站是空的。</p> : <ul className="settings-asset-trash-list" data-asset-trash-trashed>{trashed.map((item) => <li className="settings-asset-trash-row" key={item.asset.id}><img src={`/api/assets/trash/${encodeURIComponent(item.asset.id)}/content`} alt="" loading="lazy" decoding="async" /><span className="settings-asset-trash-meta"><strong>{assetTrashName(item.asset)}</strong><small>{ASSET_TRASH_ORIGIN_LABELS[item.origin]} · {formatBytes(item.asset.sizeBytes) ?? "尺寸未知"} · {assetTrashMoment(item.trashedAt)} 收走</small></span><span className="settings-asset-trash-days">{assetTrashRemaining(item.daysRemaining)}</span><span className="settings-asset-trash-actions"><button className="icon-text-button" type="button" data-asset-trash-restore disabled={busyId !== null} onClick={() => void act(item.asset.id, `/api/assets/trash/${encodeURIComponent(item.asset.id)}/restore`, "POST", `已恢复「${assetTrashName(item.asset)}」`)}><RotateCcw size={14} aria-hidden="true" /><span>恢复</span></button><button className={`danger-button settings-asset-trash-purge ${confirmId === item.asset.id ? "is-armed" : ""}`} type="button" data-asset-trash-purge disabled={busyId !== null} onClick={() => { if (confirmId !== item.asset.id) { setConfirmId(item.asset.id); setMessage(null); return; } void act(item.asset.id, `/api/assets/trash/${encodeURIComponent(item.asset.id)}`, "DELETE", `已永久删除「${assetTrashName(item.asset)}」`); }}>{busyId === item.asset.id ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}<span>{confirmId === item.asset.id ? "再点一次真删" : "立即删除"}</span></button></span></li>)}</ul>}
       </div>
     </>}
+    {message !== null ? <p className="settings-inline-success" role="status">{message}</p> : null}
+    {error !== null ? <p className="settings-inline-error" role="alert">{error}</p> : null}
+  </div>;
+}
+
+/**
+ * The derived-thumbnail cache, made visible for the same reason the trash panel is:
+ * it is LifeOS's own copy of the owner's photos, it grows without being asked, and the
+ * one thing the owner needs to know is that deleting it costs nothing. So the card
+ * states the two facts that matter — how much disk it holds, and that it rebuilds —
+ * and offers a single button to empty it.
+ */
+function ThumbnailCacheSettingsCard() {
+  const [view, setView] = useState<AssetThumbnailCacheView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    apiRequest<AssetThumbnailCacheView>("/api/assets/thumbnails", { signal: controller.signal })
+      .then((payload) => { if (!controller.signal.aborted) setView(payload); })
+      .catch((cause) => { if (!controller.signal.aborted) setError(errorMessage(cause, "缩略图缓存暂不可用")); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [reload]);
+
+  // Same two-step as deleting a photo for good: the first click only arms.
+  const clear = async () => {
+    if (busy) return;
+    if (!armed) { setArmed(true); setMessage(null); return; }
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const cleared = await apiRequest<{ readonly removed: number; readonly freedBytes: number }>("/api/assets/thumbnails", { method: "DELETE" });
+      setArmed(false);
+      setReload((current) => current + 1);
+      setMessage(cleared.removed === 0 ? "本来就没有缩略图。" : `已清掉 ${cleared.removed} 张缩略图，腾出 ${formatBytes(cleared.freedBytes) ?? "0 B"}；下次显示会自动重建。`);
+    } catch (cause) {
+      setError(errorMessage(cause, "清空失败，请重试"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="settings-asset-trash-card" data-thumb-cache>
+    <div className="settings-asset-trash-overview">
+      <div className="settings-card-icon"><ImageIcon size={18} aria-hidden="true" /></div>
+      <div className="settings-card-copy"><strong>缩略图缓存</strong><small>时间轴、照片底纹和投放区显示的都是 {view === null || view.widths.length === 0 ? "400 / 1200" : view.widths.join(" / ")} px 的派生小图，由服务端从原图生成、按原图内容命名。它只是缓存：删掉不影响任何照片，下次显示会自动重建。</small></div>
+      <button className="icon-text-button" type="button" onClick={() => setReload((current) => current + 1)} disabled={loading}>{loading ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <RotateCcw size={15} aria-hidden="true" />}<span>{loading ? "读取中" : "刷新"}</span></button>
+    </div>
+    <div className="settings-asset-trash-stats">
+      <div><small>缩略图</small><strong data-thumb-cache-count>{view === null ? "—" : `${view.count} 张`}</strong></div>
+      <div><small>占用</small><strong data-thumb-cache-bytes>{view === null ? "—" : formatBytes(view.bytes) ?? "0 B"}</strong></div>
+    </div>
+    {view === null ? null : <p className="settings-asset-trash-note">存放在 <code data-thumb-cache-directory>{view.directory}</code></p>}
+    <div className="settings-asset-trash-actions">
+      <button className={`danger-button settings-asset-trash-purge ${armed ? "is-armed" : ""}`} type="button" data-thumb-cache-clear disabled={busy || view === null} onClick={() => void clear()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}<span>{armed ? "再点一次清空" : "清空缩略图缓存"}</span></button>
+    </div>
     {message !== null ? <p className="settings-inline-success" role="status">{message}</p> : null}
     {error !== null ? <p className="settings-inline-error" role="alert">{error}</p> : null}
   </div>;
@@ -2361,7 +2454,7 @@ function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, 
       <section className="settings-section"><div className="settings-section-heading"><h3>数据</h3></div><div className="settings-card settings-data-grid"><div className="settings-card-icon"><FileJson size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>备份与导出</strong></div><div className="settings-card-actions"><button className="secondary-button" type="button" onClick={onImport}><Upload size={15} aria-hidden="true" /><span>导入 JSON</span></button><a className="secondary-button" href="/api/export?format=json" download><FileJson size={15} aria-hidden="true" /><span>导出 JSON</span></a><a className="secondary-button" href="/api/export?format=markdown" download><FileText size={15} aria-hidden="true" /><span>导出 Markdown</span></a></div></div></section>
       <section className="settings-section settings-demo-section"><div className="settings-section-heading"><h3>演示数据</h3></div><div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>备份</h3></div><BackupSettingsCard backupStatus={backupStatus} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} /></section>
-      <section className="settings-section"><div className="settings-section-heading"><h3>照片</h3></div><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /></section>
+      <section className="settings-section"><div className="settings-section-heading"><h3>照片</h3></div><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>天气</h3></div><WeatherSettingsCard status={weatherStatus} profiles={weatherProfiles} activeProfileId={weatherActiveProfileId} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>模块</h3></div><MovieSettingsCard status={movieStatus} onChanged={onMovieStatusChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>AI 助手</h3></div><AiSettingsCard status={aiStatus} open={openAiConfig} onChanged={onAiStatusChange} /></section>

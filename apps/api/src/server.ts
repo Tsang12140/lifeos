@@ -64,6 +64,7 @@ import { listWeatherProfiles, publicWeatherConfig, readRuntimeWeatherConfig, rea
 import { WeatherArchiveScheduler, WEATHER_ARCHIVE_TIME_ZONE } from "./weather-archive-scheduler.js";
 import { publicMovieConfig, readRuntimeMovieConfig, saveRuntimeMovieConfig } from "./movie-config.js";
 import { MovieModuleError, resolveMovies, testMovieConfig, type MovieCandidate } from "./movie.js";
+import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, createThumbnailCache, parseThumbnailWidth } from "./derived-thumbs.js";
 
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
@@ -1084,6 +1085,15 @@ const SERVABLE_ASSET_EXTENSIONS = new Set([
 ]);
 
 /**
+ * What a thumbnail can actually be built from. Narrower than what can be served:
+ * HEIC is excluded because sharp's prebuilt libvips ships without libheif's HEIC
+ * decoder, and a 500 on the timeline is worse than a large-but-working image.
+ * Everything else here is a raster format libvips reads, GIF included — the first
+ * frame is what a still thumbnail of an animation should be anyway.
+ */
+const THUMBNAILABLE_ASSET_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif"]);
+
+/**
  * One JSONL line per request, written to logs/api-YYYY-MM-DD.log next to the
  * data directory. Errors carry the reason; everything else is just
  * method/path/status/duration, so the file stays small and greppable.
@@ -1210,6 +1220,22 @@ function resolveLocalAsset(root: string, sourceRef: string): { file: string; med
   return { file: realFile, mediaType: ASSET_MEDIA_TYPES[extension] ?? "application/octet-stream" };
 }
 
+/**
+ * The local original behind an asset id, or the reason there is none. Both the
+ * content route and the thumbnail route need exactly this chain, and the errors are
+ * the same either way: no root configured, no local reference, file gone.
+ */
+function resolveAssetOriginal(config: ApiConfig, repository: SqliteRecordRepository, id: string): { readonly reference: StorageReference; readonly file: string; readonly mediaType: string } {
+  const asset = repository.findAssetById(id);
+  if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
+  if (config.assetRoot === undefined) {
+    throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to serve local originals");
+  }
+  const reference = asset.storageRefs.find((ref) => ref.sourceId === "local");
+  if (reference === undefined) throw new HttpError(404, "not_a_local_asset", "Asset has no local reference");
+  return { reference, ...resolveLocalAsset(config.assetRoot, reference.sourceRef) };
+}
+
 export interface LifeosApp {
   readonly repository: SqliteRecordRepository;
   readonly backupScheduler: BackupScheduler;
@@ -1242,6 +1268,10 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
   // One provider for the process: it holds no per-request state, and the summaries
   // it produces are cached per day, so a month view does not re-ask on every open.
   const daySummaryProvider = createDaySummaryProvider(config);
+  // Derived thumbnails live under the data directory and are rebuilt on demand, so
+  // nothing has to be migrated, migrated back, or backed up: deleting the directory
+  // is a supported operation, not a repair.
+  const thumbnails = createThumbnailCache(config.dataDirectory);
 
   function authenticated(req: IncomingMessage): boolean {
     if (config.password === undefined) return true;
@@ -2098,6 +2128,24 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       setJson(res, 200, { matched: true, asset: reused });
       return;
     }
+    // The derived-thumbnail bookkeeping answers without an asset root: reporting an
+    // empty cache is the honest reply when there is nowhere to keep one, and the
+    // settings card should show that rather than an error.
+    if (pathname === "/api/assets/thumbnails" && req.method === "GET") {
+      const stats = thumbnails.stats();
+      setJson(res, 200, {
+        count: stats.count,
+        bytes: stats.bytes,
+        widths: [...THUMBNAIL_WIDTHS],
+        directory: stats.directory,
+      });
+      return;
+    }
+    if (pathname === "/api/assets/thumbnails" && req.method === "DELETE") {
+      const cleared = thumbnails.clear();
+      setJson(res, 200, { removed: cleared.removed, freedBytes: cleared.freedBytes });
+      return;
+    }
     // The trash routes have to come before the `:id` matcher below: "trash" is
     // a perfectly good asset id as far as that pattern is concerned.
     if (pathname === "/api/assets/trash" && req.method === "GET") {
@@ -2233,15 +2281,7 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     }
     const assetContentMatch = /^\/api\/assets\/([^/]+)\/content$/.exec(pathname);
     if (assetContentMatch !== null && req.method === "GET") {
-      const id = decodeSegment(assetContentMatch[1]!);
-      const asset = repository.findAssetById(id);
-      if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
-      if (config.assetRoot === undefined) {
-        throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to serve local originals");
-      }
-      const localRef = asset.storageRefs.find((ref) => ref.sourceId === "local");
-      if (localRef === undefined) throw new HttpError(404, "not_a_local_asset", "Asset has no local reference");
-      const resolved = resolveLocalAsset(config.assetRoot, localRef.sourceRef);
+      const resolved = resolveAssetOriginal(config, repository, decodeSegment(assetContentMatch[1]!));
       res.writeHead(200, {
         "content-type": resolved.mediaType,
         "content-length": String(statSync(resolved.file).size),
@@ -2249,6 +2289,35 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         "content-disposition": "inline",
       });
       res.end(readFileSync(resolved.file));
+      return;
+    }
+    // The derived thumbnail: the timeline grid, the composer tray and the week-card
+    // backgrounds were all pulling whole originals for a few hundred pixels of paint.
+    // Same URL shape as the original so the client has one helper with one optional
+    // width, and the same short private lifetime — the file on disk is the cache.
+    const assetThumbnailMatch = /^\/api\/assets\/([^/]+)\/thumbnail$/.exec(pathname);
+    if (assetThumbnailMatch !== null && req.method === "GET") {
+      const width = parseThumbnailWidth(url.searchParams.get("w"));
+      if (width === null) {
+        throw new HttpError(400, "unsupported_thumbnail_width", `w must be one of ${THUMBNAIL_WIDTHS.join(", ")}`);
+      }
+      const original = resolveAssetOriginal(config, repository, decodeSegment(assetThumbnailMatch[1]!));
+      if (!THUMBNAILABLE_ASSET_EXTENSIONS.has(extname(original.file).toLowerCase())) {
+        throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
+      }
+      let file: string;
+      try {
+        file = await thumbnails.ensure(original.reference, original.file, width);
+      } catch {
+        throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original");
+      }
+      res.writeHead(200, {
+        "content-type": `image/${THUMBNAIL_FORMAT}`,
+        "content-length": String(statSync(file).size),
+        "cache-control": "private, max-age=300",
+        "content-disposition": "inline",
+      });
+      res.end(readFileSync(file));
       return;
     }
     // A collected file no longer lives at its original path, so the thumbnail

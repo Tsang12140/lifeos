@@ -1,6 +1,6 @@
 import test from "node:test";
 import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -14,6 +14,7 @@ import { SqliteRecordRepository } from "../src/repository.js";
 import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
 import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
 import { createInstant, type Asset } from "@lifeos/core";
+import sharp from "sharp";
 
 // WHATWG fetch rejects a small set of historically reserved ports even when
 // Node's HTTP server can bind them.  Windows can hand one of those ports out
@@ -2241,4 +2242,129 @@ test("a collected photo is invisible to resolve, and comes back only once restor
   const restoredBody = afterRestore.body as { matched: boolean; asset?: { id: string } };
   equal(restoredBody.matched, true);
   equal(restoredBody.asset?.id, assetId);
+});
+
+/**
+ * A real photo to derive from, built with sharp so the suite needs no binary fixture.
+ * 1600x1200 in two flat halves: the assertions are about the thumbnail's dimensions and
+ * identity, and a 1x1 PNG could not tell a resize from a passthrough.
+ */
+async function photoJpeg(orientation?: number): Promise<Buffer> {
+  const pipeline = sharp({ create: { width: 1600, height: 1200, channels: 3, background: { r: 47, g: 111, b: 143 } } })
+    .composite([{ input: { create: { width: 800, height: 1200, channels: 3, background: { r: 240, g: 192, b: 96 } } }, left: 0, top: 0 }]);
+  return (orientation === undefined ? pipeline : pipeline.withMetadata({ orientation })).jpeg({ quality: 92 }).toBuffer();
+}
+
+async function sizeOf(bytes: Buffer): Promise<{ readonly width: number | undefined; readonly height: number | undefined; readonly format: string | undefined }> {
+  const meta = await sharp(bytes).metadata();
+  return { width: meta.width, height: meta.height, format: meta.format };
+}
+
+test("a thumbnail is derived once, filed under the data directory, and rebuilt after being cleared", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-thumbs-root-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  const original = await photoJpeg();
+  const upload = await request(harness.base, "/api/assets/uploads?name=hill.jpg", {
+    method: "POST",
+    headers: { "content-type": "image/jpeg" },
+    body: new Uint8Array(original),
+  });
+  equal(upload.response.status, 201);
+  const assetId = (upload.body as { id: string }).id;
+  const thumbPath = (width: number) => `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=${width}`;
+  const thumbsDirectory = join(harness.root, "derived", "thumbs");
+
+  const first = await fetch(`${harness.base}${thumbPath(400)}`);
+  equal(first.status, 200);
+  equal(first.headers.get("content-type"), "image/webp");
+  const firstBytes = Buffer.from(await first.arrayBuffer());
+  const firstSize = await sizeOf(firstBytes);
+  equal(firstSize.format, "webp");
+  equal(firstSize.width, 400);
+  equal(firstSize.height, 300, "the aspect ratio of the original has to survive");
+  ok(firstBytes.length < original.length, `a 400px thumbnail (${firstBytes.length}B) must be smaller than the original (${original.length}B)`);
+  equal(readdirSync(thumbsDirectory).length, 1);
+
+  // Asking twice must not encode twice: the file on disk is the answer.
+  const second = await fetch(`${harness.base}${thumbPath(400)}`);
+  equal(second.status, 200);
+  ok(Buffer.from(await second.arrayBuffer()).equals(firstBytes), "the second request is served from the derived file, byte for byte");
+  equal(readdirSync(thumbsDirectory).length, 1);
+
+  // The other width is a second file, not a rescale of the first.
+  const wide = await fetch(`${harness.base}${thumbPath(1200)}`);
+  equal(wide.status, 200);
+  equal((await sizeOf(Buffer.from(await wide.arrayBuffer()))).width, 1200);
+  equal(readdirSync(thumbsDirectory).length, 2);
+
+  // Widths outside the pair are refused rather than rounded: a stray value would
+  // otherwise fill the cache with a size nothing will ever request again.
+  const stray = await request(harness.base, thumbPath(500));
+  equal(stray.response.status, 400);
+  equal((stray.body as { error: string }).error, "unsupported_thumbnail_width");
+
+  // The cache lives beside the database, never inside the owner's photo library.
+  ok(!existsSync(join(assetRoot, "derived")), "the asset root is the owner's library, not a cache directory");
+
+  const stats = await request(harness.base, "/api/assets/thumbnails");
+  equal(stats.response.status, 200);
+  const statsBody = stats.body as { count: number; bytes: number; widths: number[]; directory: string };
+  equal(statsBody.count, 2);
+  equal(statsBody.widths.join(","), "400,1200");
+  equal(statsBody.directory, thumbsDirectory);
+  ok(statsBody.bytes > 0, "the reported size must come from the files, not from a guess");
+
+  // Clearing is a supported operation, not a repair: it must leave anything that is
+  // not ours alone, and the next request must rebuild what it needs.
+  writeFileSync(join(thumbsDirectory, "keep.txt"), "not ours");
+  const cleared = await request(harness.base, "/api/assets/thumbnails", { method: "DELETE" });
+  equal(cleared.response.status, 200);
+  const clearedBody = cleared.body as { removed: number; freedBytes: number };
+  equal(clearedBody.removed, 2);
+  equal(clearedBody.freedBytes, statsBody.bytes);
+  deepEqual(readdirSync(thumbsDirectory), ["keep.txt"]);
+
+  const rebuilt = await fetch(`${harness.base}${thumbPath(400)}`);
+  equal(rebuilt.status, 200);
+  equal((await sizeOf(Buffer.from(await rebuilt.arrayBuffer()))).width, 400);
+  const afterRebuild = await request(harness.base, "/api/assets/thumbnails");
+  equal((afterRebuild.body as { count: number }).count, 1, "only the width that was actually asked for came back");
+});
+
+test("a thumbnail is rotated upright from EXIF, and an audio original is refused", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-thumbs-exif-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  // Orientation 6 means "stored landscape, display rotated a quarter turn". The
+  // browser paints the original upright, so a thumbnail that skipped `.rotate()` would
+  // come out sideways beside it — and 400x533 instead of 400x300 is how that shows.
+  const upload = await request(harness.base, "/api/assets/uploads?name=sideways.jpg", {
+    method: "POST",
+    headers: { "content-type": "image/jpeg" },
+    body: new Uint8Array(await photoJpeg(6)),
+  });
+  equal(upload.response.status, 201);
+  const assetId = (upload.body as { id: string }).id;
+  const thumbnail = await fetch(`${harness.base}/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=400`);
+  equal(thumbnail.status, 200);
+  const size = await sizeOf(Buffer.from(await thumbnail.arrayBuffer()));
+  equal(size.width, 400);
+  equal(size.height, 533, "the thumbnail has to be portrait, the way the original displays");
+
+  // sharp cannot decode audio, so the route has to refuse before it gets there.
+  writeFileSync(join(assetRoot, "voice.mp3"), Buffer.from([0x49, 0x44, 0x33, 0x03]));
+  const registered = await request(harness.base, "/api/assets", {
+    method: "POST",
+    ...json({ kind: "audio", originalName: "voice.mp3", storageRefs: [{ sourceId: "local", sourceRef: "voice.mp3" }] }),
+  });
+  equal(registered.response.status, 201);
+  const audioId = (registered.body as { id: string }).id;
+  const refused = await request(harness.base, `/api/assets/${encodeURIComponent(audioId)}/thumbnail?w=400`);
+  equal(refused.response.status, 415);
+  equal((refused.body as { error: string }).error, "unsupported_thumbnail_type");
 });

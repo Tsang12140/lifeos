@@ -7843,6 +7843,18 @@ button.relation-chip {
   color: var(--danger);
 }
 
+/* The thumbnail cache reuses the trash card's shell but has two figures, not three:
+   the shared three-column stat grid would leave an empty third slot. */
+[data-thumb-cache] .settings-asset-trash-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+[data-thumb-cache] code {
+  font-family: "Maple Mono Normal CN", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  word-break: break-all;
+}
+
 @media (max-width: 720px) {
   .settings-asset-trash-stats {
     grid-template-columns: minmax(0, 1fr);
