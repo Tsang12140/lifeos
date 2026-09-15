@@ -842,26 +842,29 @@ h2 {
   background: var(--primary-soft);
 }
 
+/* The left room: it no longer owns a frame, a radius or a colour of its own.
+   The entry box above supplies all three, which is exactly what makes the pair
+   read as one room instead of two cards. Motion lives on that frame. */
 .composer-input {
   display: block;
   width: 100%;
   min-height: 0;
   resize: none;
   padding: 14px 15px;
-  border: 1px solid #d1dce9;
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   outline: none;
   color: var(--ink);
-  background: #f7f9fc;
+  background: transparent;
   font-size: 1rem;
   line-height: 1.65;
-  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
+/* Focus is the room's, not the textarea's: the frame draws the ring. */
 .composer-input:focus {
-  border-color: #bdcbfa;
-  background: #fff;
-  box-shadow: var(--shadow-focus);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .composer-input::placeholder {
@@ -2279,22 +2282,42 @@ h2 {
 .composer-entry {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--composer-shot-width);
-  gap: 12px;
+  /* No gap and no per-child frame: the two columns share one room, and the wall
+     between them is the drop zone's own left border. */
+  gap: 0;
   margin-top: 14px;
+  /* The only frame in the pair. `overflow: hidden` is deliberately absent: the
+     slash-command list is absolutely positioned inside the left column and is
+     meant to hang below this box, so clipping here would eat it. */
+  border: 1px solid #d1dce9;
+  border-radius: 14px;
+  background: #f7f9fc;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
   /* The zone stretches to whatever height the box currently needs, which is
      what "a slice of the input's right edge" means in practice: one line of
      text gives a slim strip, a longer entry a taller one. */
   align-items: stretch;
 }
 
+/* One focus ring for both rooms: the writer is inside the same box whether the
+   caret is in the text or the pointer is over the photo tray. */
+.composer-entry:focus-within {
+  border-color: #bdcbfa;
+  background: #fff;
+  box-shadow: var(--shadow-focus);
+}
+
+/* The right room. Only its left edge is drawn, and drawn dashed: that one
+   line is the wall between writing and dropping. The corner radius matches the
+   frame it sits in, so a drag highlight cannot square the outer corner off. */
 .composer-shots {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 14px;
-  background: var(--surface-soft);
+  border-left: 1px dashed var(--line-strong);
+  border-radius: 0 13px 13px 0;
+  background: transparent;
   transition: border-color 180ms ease, background-color 180ms ease;
 }
 
@@ -2306,8 +2329,12 @@ h2 {
 /* Keeps the dashed edge while a photo hovers over it — the dashes are what
    says "you can drop here", so only the colour changes. */
 .composer-shots.is-dragging {
-  border-color: var(--primary);
+  border-left-color: var(--primary);
   background: var(--primary-soft);
+}
+
+.composer-shots.is-dragging .shot-drop-button {
+  border-color: var(--primary);
 }
 
 .shot-drop-button {
@@ -2318,13 +2345,16 @@ h2 {
   gap: 3px;
   width: 100%;
   height: 100%;
-  padding: 2px;
-  border: 0;
+  padding: 6px;
+  /* A dashed tray inside the dashed wall: the inner outline is what reads as
+     "put something here", the outer one as "these are two rooms". */
+  border: 1px dashed var(--line-strong);
   border-radius: 10px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
   text-align: center;
+  transition: border-color 180ms ease, color 180ms ease;
 }
 
 .shot-drop-button strong {
@@ -2343,6 +2373,10 @@ h2 {
 .shot-drop-button:hover:not(:disabled) strong,
 .shot-drop-button:hover:not(:disabled) {
   color: var(--primary);
+}
+
+.shot-drop-button:hover:not(:disabled) {
+  border-color: var(--primary);
 }
 
 .shot-list {
@@ -3053,6 +3087,9 @@ button.relation-chip {
 
   .composer-shots {
     min-height: 96px;
+    border-left: 0;
+    border-top: 1px dashed var(--line-strong);
+    border-radius: 0 0 13px 13px;
   }
 
   .composer-fields {
