@@ -1596,6 +1596,15 @@ h2 {
   animation: toast-in 180ms ease both;
 }
 
+/* The same toast, in the colour of a thing that did not happen. Green is a
+   confirmation; telling someone their tenth photo was refused in it reads as a
+   lie. */
+.action-toast.is-warning {
+  border-color: #eed3b4;
+  color: #96551a;
+  background: #fdf6ee;
+}
+
 .auth-screen {
   display: grid;
   place-items: center;
@@ -2347,6 +2356,7 @@ h2 {
 .composer-shots {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 6px;
   padding: 8px;
   border-left: 1px dashed var(--line-strong);
@@ -2404,27 +2414,46 @@ h2 {
   color: var(--primary);
 }
 
-/* The fan. A hand of cards held face-up: the newest card lies flat and
-   grabbable, the older ones fan out to its lower right, each one turned a
-   little further so a strip of it stays visible.
-   
-   The overlap is done with a negative margin rather than a transform, because a
-   transform does not shrink the box: nine cards would still claim nine cards of
-   width and march out through the wall of the zone, while a negative margin
-   makes the row genuinely narrower so it can be kept inside. */
+/* One fan. A hand of cards held face-up: the newest card lies flat and whole,
+   the older ones fan away to its right, each turned a little further and each
+   exposing a little less than the one before it.
+
+   The whole design rests on one idea: the strip of card that stays visible
+   *shrinks* as the deck gets deeper. That is what keeps nine cards a single
+   continuous arc. Give every card the same strip instead and the later ones
+   march sideways off the panel — which reads as a second fan starting, not as
+   a deeper one. */
+.shot-hand {
+  position: relative;
+  /* Room for the plus in the top corner. It is a sibling of the hand, not part
+     of it, so without this the deepest cards slide under the button. */
+  padding-right: 30px;
+}
+
+/* The hand is anchored to the top of the panel and sized so its own deepest card
+   still fits the panel's height. A card turned about its centre grows its box
+   both up and down, so the box is ~1.3x the square at 21.5°; the hand is given
+   the panel's full height and the card is derived from it, which keeps the
+   deepest turn inside no matter how tall the entry box beside it happens to be. */
+.shot-hand {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  /* The card is derived from this height, so the deepest turn always lands
+     inside. 1 / 1.297 is where a 21.5° turn stops fitting; 70% leaves a little
+     air rather than sitting exactly on the edge. */
+  --shot-card: clamp(30px, 70%, 50px);
+  /* Room for the plus in the top corner. It is a sibling of the hand, not part
+     of it, so without this the deepest cards slide under the button. */
+  padding-right: 30px;
+}
+
 .shot-list {
   position: relative;
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
-  /* The strip of each covered card that stays visible. Nine cards must fit the
-     zone's width, so this is small: a bigger strip is prettier but pushes the
-     last cards out through the wall. */
-  --shot-step: 13px;
-  /* How much wider a card draws once it is turned. A rotated box is
-     w·|cos| + h·|sin| on screen, and that extra width has to be reserved or the
-     rightmost card crosses the wall even though its layout box fits. */
-  --shot-overhang: 8px;
+  align-items: center;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -2433,68 +2462,98 @@ h2 {
 .shot-item {
   --shot-rotate: 0deg;
   --shot-drop: 0px;
-  /* One card's width, used by both the size rule and the overlap rule below.
-     They must agree: written against two different numbers, nine cards collapse
-     onto a single spot. The row holds nine cards — the first full width plus
-     eight steps — and the rotation overhang is reserved up front, so the clamp
-     never has to guess. */
-  --shot-card: clamp(30px, calc(100% - 8 * var(--shot-step) - var(--shot-overhang)), 46px);
+  /* The older the card, the thinner its visible strip. Rank 0 lies whole; each
+     step after that peels off a little less than the previous step did, so the
+     hand tapers instead of running straight. */
+  --shot-step: var(--shot-step-base, 15px);
   position: relative;
   flex: 0 0 auto;
+  width: var(--shot-card, 40px);
   width: var(--shot-card);
   aspect-ratio: 1;
   overflow: hidden;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #eef1f6;
-  box-shadow: 0 1px 2px rgb(20 26 38 / 0.16), 0 0 0 1px rgb(20 26 38 / 0.06);
+  box-shadow: 0 1px 2px rgb(20 26 38 / 0.18), 0 0 0 1px rgb(20 26 38 / 0.07);
   transform: rotate(var(--shot-rotate)) translateY(var(--shot-drop));
-  transform-origin: 50% 100%;
+  /* Turned about its centre, not its bottom edge. Either reads the same in a
+     hand of cards, but centring keeps the growing box symmetric: a bottom-edge
+     origin swings the whole extra height upward, which then has to be paid for
+     twice over in padding. */
+  transform-origin: 50% 50%;
   transition: transform 180ms ease;
 }
 
-/* Every card after the newest slides left over its neighbour, so the row's own
-   width is what the zone has to hold — not the sum of nine full cards. */
+/* Every card after the newest slides left to sit over its neighbour, leaving
+   exactly its own strip exposed. */
 .shot-item + .shot-item {
   margin-left: calc(var(--shot-step) - var(--shot-card));
 }
 
-/* The newest card is rank 0 and stays upright: nothing is turned, nothing is
-   dropped. It is also the only card that can be removed — its ✕ is the one
-   thing in the fan the owner can actually read. */
+/* The taper. Later ranks turn further and separate less, so the arc curls
+   instead of stretching: rank 8 lands only a whisker past rank 7. */
 .shot-item[data-rank="0"] {
-  z-index: 9;
+  z-index: 20;
 }
 
 .shot-item[data-rank="1"] {
-  --shot-rotate: 5deg;
-  --shot-drop: 2.5px;
-  z-index: 8;
+  --shot-rotate: 4deg;
+  --shot-drop: 2px;
+  --shot-step: 14px;
+  z-index: 19;
 }
 
 .shot-item[data-rank="2"] {
-  --shot-rotate: 10deg;
-  --shot-drop: 5px;
-  z-index: 7;
+  --shot-rotate: 8deg;
+  --shot-drop: 4px;
+  --shot-step: 12.5px;
+  z-index: 18;
 }
 
 .shot-item[data-rank="3"] {
-  --shot-rotate: 15deg;
-  --shot-drop: 7.5px;
-  z-index: 6;
+  --shot-rotate: 11.5deg;
+  --shot-drop: 6px;
+  --shot-step: 11px;
+  z-index: 17;
 }
 
 .shot-item[data-rank="4"] {
-  --shot-rotate: 20deg;
-  --shot-drop: 10px;
-  z-index: 5;
+  --shot-rotate: 14.5deg;
+  --shot-drop: 8px;
+  --shot-step: 9.5px;
+  z-index: 16;
 }
 
-/* Past the visible hand the cards stop fanning and gather behind the fifth
-   slot, so a ninth photo does not push the row off the panel. */
-.shot-item[data-fanned="false"] {
-  --shot-rotate: 20deg;
-  --shot-drop: 10px;
-  z-index: 4;
+.shot-item[data-rank="5"] {
+  --shot-rotate: 17deg;
+  --shot-drop: 9.5px;
+  --shot-step: 8px;
+  z-index: 15;
+}
+
+.shot-item[data-rank="6"] {
+  --shot-rotate: 19deg;
+  --shot-drop: 10.5px;
+  --shot-step: 6.5px;
+  z-index: 14;
+}
+
+.shot-item[data-rank="7"] {
+  --shot-rotate: 20.5deg;
+  --shot-drop: 11px;
+  --shot-step: 5.5px;
+  z-index: 13;
+}
+
+/* The last two steps have to descend too. They are the most turned cards, so
+   their boxes are the widest on screen — hold the step and the *measured* gap
+   grows instead of shrinking, which breaks the taper exactly where the eye is
+   looking for it to close. */
+.shot-item[data-rank="8"] {
+  --shot-rotate: 21.5deg;
+  --shot-drop: 11.5px;
+  --shot-step: 4px;
+  z-index: 12;
 }
 
 .shot-item img {
@@ -2504,10 +2563,30 @@ h2 {
   object-fit: cover;
 }
 
+/* How many photos are in the hand. It sits on the newest card — the card that
+   is always whole and always on top — in a soft, translucent white so it reads
+   as a count over a photo rather than as a sticker pasted onto it. The digits
+   are the heaviest thing in the panel on purpose: with nine overlapping cards
+   the number is the only thing that can answer "how many are in here?". */
+.shot-count {
+  position: absolute;
+  inset: auto 0 3px 0;
+  text-align: center;
+  color: rgb(255 255 255 / 0.92);
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgb(20 26 38 / 0.55);
+  pointer-events: none;
+}
+
 .shot-remove {
   position: absolute;
+  /* Top-left, because the top-right corner belongs to the add button and the
+     two must never be mistaken for each other. */
   top: 2px;
-  right: 2px;
+  left: 2px;
   display: grid;
   place-items: center;
   width: 16px;
@@ -2523,25 +2602,30 @@ h2 {
   background: rgb(20 26 38 / 0.85);
 }
 
-/* Only the newest card offers its ✕: the covered cards would show a button
-   floating over a neighbour's photo. */
+/* Only the newest card offers its ✕: a button on a covered card would float
+   over a neighbour's photo. */
 .shot-item:not([data-rank="0"]) .shot-remove {
   display: none;
 }
 
+/* A bare plus, parked in the panel's top corner. It used to be a wide dashed
+   bar under the cards, which the fan then grew over — the button and the photos
+   fought for the same strip. Up here it is out of the hand's way entirely. */
 .shot-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  width: 100%;
-  min-height: 28px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 9px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   color: var(--muted);
-  background: transparent;
+  background: var(--surface);
   cursor: pointer;
-  font-size: 0.76rem;
+  transition: border-color 160ms ease, color 160ms ease;
 }
 
 .shot-add:hover:not(:disabled) {
@@ -2549,17 +2633,18 @@ h2 {
   color: var(--primary);
 }
 
-.shot-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.72rem;
+.shot-add:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-.shot-status.is-warning {
-  color: #a3581c;
+.shot-busy {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
 }
 
 .shot-file-input {
@@ -3202,33 +3287,24 @@ button.relation-chip {
     border-radius: 0 0 13px 13px;
   }
 
-  /* A narrow panel cannot hold nine cards plus their travel. The hand shrinks
-     to three readable cards, set closer together and turned less, so the fan
-     stays a fan instead of degenerating into a smear. */
-  .shot-list {
-    --shot-step: 11px;
-    --shot-overhang: 6px;
+  /* A narrow panel cannot hold nine cards plus their travel. The hand keeps the
+     same taper but pulls in harder, so nine cards still resolve as one arc
+     instead of running off the edge. */
+  .shot-hand {
+    --shot-card: clamp(28px, 56%, 42px);
   }
 
-  .shot-item {
-    --shot-card: clamp(26px, calc(100% - 8 * var(--shot-step) - var(--shot-overhang)), 40px);
-  }
+  .shot-item[data-rank="1"] { --shot-rotate: 3.5deg; --shot-drop: 2px; --shot-step: 12px; }
+  .shot-item[data-rank="2"] { --shot-rotate: 7deg; --shot-drop: 3.5px; --shot-step: 10.5px; }
+  .shot-item[data-rank="3"] { --shot-rotate: 10deg; --shot-drop: 5px; --shot-step: 9px; }
+  .shot-item[data-rank="4"] { --shot-rotate: 12.5deg; --shot-drop: 6.5px; --shot-step: 7.5px; }
+  .shot-item[data-rank="5"] { --shot-rotate: 14.5deg; --shot-drop: 8px; --shot-step: 6px; }
+  .shot-item[data-rank="6"] { --shot-rotate: 16deg; --shot-drop: 9px; --shot-step: 5px; }
+  .shot-item[data-rank="7"] { --shot-rotate: 17deg; --shot-drop: 9.5px; --shot-step: 4.5px; }
+  .shot-item[data-rank="8"] { --shot-rotate: 18deg; --shot-drop: 10px; --shot-step: 4px; }
 
-  .shot-item[data-rank="1"] {
-    --shot-rotate: 4deg;
-    --shot-drop: 2px;
-  }
-
-  .shot-item[data-rank="2"] {
-    --shot-rotate: 8deg;
-    --shot-drop: 4px;
-  }
-
-  .shot-item[data-rank="3"],
-  .shot-item[data-rank="4"],
-  .shot-item[data-fanned="false"] {
-    --shot-rotate: 12deg;
-    --shot-drop: 6px;
+  .shot-count {
+    font-size: 1rem;
   }
 
   .composer-fields {

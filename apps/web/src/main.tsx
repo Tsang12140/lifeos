@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  AlertCircle,
   Bot,
   BookOpen,
   BriefcaseBusiness,
@@ -524,13 +525,6 @@ function MobileNav({ activeView, onNavigate }: { activeView: AppView; onNavigate
 const SHOT_LIMIT = 9;
 
 /**
- * How many cards of the fan stay legible. A hand of cards reads because the
- * newest card lies flat and the older ones only peek out from underneath;
- * past five the peeks get thinner than the eye can tell apart.
- */
-const SHOT_FAN_VISIBLE = 5;
-
-/**
  * Uploading a photo ends either in newly stored bytes or in a reuse of bytes
  * the library already holds. The drop zone reports which, so the owner can
  * see that nothing was uploaded twice.
@@ -556,13 +550,16 @@ interface ShotDropZoneProps {
   readonly shots: readonly AssetLink[];
   readonly onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>;
   readonly onUpload: (file: File) => Promise<ShotUpload | null>;
+  /** Says things the drop zone itself no longer says. The zone keeps no message
+   *  line of its own: a paragraph of status text under a hand of cards reads as
+   *  a defect in the panel. Anything that has to be said is said as a toast. */
+  readonly onNotify: (message: string, tone?: "ok" | "warn") => void;
 }
 
-function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
+function ShotDropZone({ shots, onShotsChange, onUpload, onNotify }: ShotDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
   // dragenter/dragleave fire again for every child element, so only a depth
   // counter can tell whether the pointer really left the zone.
   const dragDepth = useRef(0);
@@ -570,43 +567,45 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
   const takeFiles = async (files: readonly File[]) => {
     const images = files.filter((file) => file.type.startsWith("image/"));
     if (images.length === 0) {
-      setNotice("只接受图片文件");
+      onNotify("只接受图片文件", "warn");
       return;
     }
     const room = SHOT_LIMIT - shots.length;
     if (room <= 0) {
-      setNotice(`已经 ${SHOT_LIMIT} 张了，时间轴一屏放不下，先删一张再加`);
+      onNotify(`已经 ${SHOT_LIMIT} 张了，时间轴一屏放不下，先删一张再加`, "warn");
       return;
     }
     const batch = images.slice(0, room);
-    setNotice(images.length > room ? `一次最多收到 ${SHOT_LIMIT} 张，先收了前 ${room} 张` : null);
+    if (images.length > room) onNotify(`一次最多 ${SHOT_LIMIT} 张，只收下了前 ${room} 张`, "warn");
     setUploading((count) => count + batch.length);
     const added: AssetLink[] = [];
-    let reusedCount = 0;
-    let duplicateCount = 0;
+    let failedCount = 0;
     // Identical bytes resolve to the same asset, so dropping one photo twice
     // would put two identical assetIds in this list: the React keys would
     // collide and one ✕ would remove both thumbnails. Keep one per asset.
     const seen = new Set(shots.map((shot) => shot.assetId));
     for (const file of batch) {
       const upload = await onUpload(file);
-      if (upload === null) continue;
-      if (seen.has(upload.asset.id)) { duplicateCount += 1; continue; }
+      if (upload === null) { failedCount += 1; continue; }
+      if (seen.has(upload.asset.id)) continue;
       seen.add(upload.asset.id);
-      if (upload.reused) reusedCount += 1;
       added.push({ assetId: upload.asset.id, role: assetRoleFor(upload.asset.kind), ...(upload.asset.originalName === undefined ? {} : { label: upload.asset.originalName }) });
     }
     setUploading((count) => count - batch.length);
     if (added.length > 0) onShotsChange((current) => [...current, ...added]);
-    const failed = batch.length - added.length - duplicateCount;
-    if (failed > 0) setNotice(`${failed} 张没能传上去，可以重试`);
-    else if (duplicateCount > 0) setNotice(duplicateCount === 1 ? "这张已经加过了" : `这 ${duplicateCount} 张已经加过了`);
-    else if (reusedCount > 0) setNotice(reusedCount === 1 ? "这张图已在库里，直接复用（没有重复上传）" : `${reusedCount} 张已在库里，直接复用（没有重复上传）`);
+    // Reuse and duplicates are both silent on purpose: whether the bytes were
+    // already in the library is the library's business, not the owner's. A photo
+    // landing in the hand is the whole confirmation.
+    if (failedCount > 0) onNotify(`${failedCount} 张没能传上去，可以重试`, "warn");
   };
 
   const remove = (assetId: string) => onShotsChange((current) => current.filter((shot) => shot.assetId !== assetId));
   const busy = uploading > 0;
   const empty = shots.length === 0;
+
+  // Newest first. Rank 0 is the card the owner just added, and it stays upright
+  // so the newest photo is always shown whole.
+  const hand = [...shots].reverse();
 
   return <div
     className={`composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"}`}
@@ -621,24 +620,33 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
           <strong>{dragging ? "松手放下" : "拖照片进来"}</strong>
           <span>或点击选择</span>
         </button>
-      : <><ul className="shot-list" data-count={shots.length}>{[...shots].reverse().map((shot, rank) => <li className="shot-item" key={shot.assetId} data-rank={rank} data-fanned={rank < SHOT_FAN_VISIBLE ? "true" : "false"}>
+      : <div className="shot-hand">
+          {/* One fan, one axis. Every card is turned a little further than the
+              one before it and each exposes a strip a little thinner than the
+              last, so the hand opens as a single arc — older photos fade into
+              the deck behind instead of forming a second cluster. */}
+          <ul className="shot-list" data-count={shots.length}>{hand.map((shot, rank) => <li className="shot-item" key={shot.assetId} data-rank={rank}>
             <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
-            <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.2} aria-hidden="true" /></button>
+            {rank === 0
+              ? <span className="shot-count" aria-label={`已添加 ${shots.length} 张`}>{shots.length}</span>
+              : null}
+            <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={11} strokeWidth={2.2} aria-hidden="true" /></button>
           </li>)}</ul>
-          <button className="shot-add" type="button" onClick={() => inputRef.current?.click()} disabled={busy}><Plus size={14} strokeWidth={2} aria-hidden="true" /><span>加照片</span></button>
-        </>}
-    {busy ? <p className="shot-status" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" />正在上传 {uploading} 张</p> : null}
-    {notice !== null ? <p className="shot-status is-warning" role="status">{notice}</p> : null}
+          {/* The add control is a bare plus parked in the panel's top corner,
+              clear of the cards: the fan never grows under a button that way. */}
+          <button className="shot-add" type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={15} strokeWidth={2.1} aria-hidden="true" /></button>
+          {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
+        </div>}
     <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />
   </div>;
 }
 
-interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; }
+interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot }: ComposerProps) {
+function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
@@ -822,7 +830,7 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
     </div>
     <div className="composer-entry">
     <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
-      <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} />
+      <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} />
     </div>
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
@@ -2510,7 +2518,7 @@ function App() {
   const shotsDraftChecked = useRef(false);
   const [saving, setSaving] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
   const [authState, setAuthState] = useState<AuthState>({ required: false, authenticated: true });
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -2790,7 +2798,7 @@ function App() {
   const navigate = (view: AppView) => { setActiveView(view); setMobileMenuOpen(false); if (view !== "timeline") setEntityFilterId(null); if (view === "tasks") setComposerKind("task"); if (view === "notes") setComposerKind("note"); };
   /** A calendar cell is a way back into the day it stands for. */
   const openDay = (date: string) => { setSelectedDate(date); setActiveView("today"); setMobileMenuOpen(false); };
-  const showToast = (message: string) => { setActionMessage(message); window.setTimeout(() => setActionMessage(null), 2600); };
+  const showToast = (message: string, tone: "ok" | "warn" = "ok") => { setActionMessage({ text: message, tone }); window.setTimeout(() => setActionMessage(null), tone === "warn" ? 3600 : 2600); };
 
   // An unsent drop is worth keeping: the files are already on disk, so losing
   // the draft would leave nothing behind but orphans.
@@ -2840,7 +2848,7 @@ function App() {
       setRecords((current) => current === null ? current : current.map((item) => item.id === updated.id ? updated : item));
       showToast("影片已添加到记录");
     } catch (error) {
-      setActionMessage(handleRequestError(error, "影片关联失败，请稍后重试"));
+      showToast(handleRequestError(error, "影片关联失败，请稍后重试"), "warn");
     }
   };
   const handleBackup = async (action: "local" | "s3" | "test" | "dual") => {
@@ -2860,7 +2868,7 @@ function App() {
             : "本地备份已完成");
     } catch (error) {
       try { setBackupStatus(await apiRequest<BackupStatus>("/api/backup/status")); } catch { /* keep the existing status when the follow-up read also fails */ }
-      setActionMessage(handleRequestError(error, action === "test" ? "对象存储连接失败" : action === "dual" ? "双备份失败，请查看本地结果" : "备份失败，请检查配置"));
+      showToast(handleRequestError(error, action === "test" ? "对象存储连接失败" : action === "dual" ? "双备份失败，请查看本地结果" : "备份失败，请检查配置"), "warn");
     } finally {
       setBackupBusy(false);
     }
@@ -2901,7 +2909,7 @@ function App() {
       showToast(`已新建${ENTITY_META[type].label}「${name}」`);
       return entity;
     } catch (error) {
-      setActionMessage(handleRequestError(error, "新建关联对象失败，请重试"));
+      showToast(handleRequestError(error, "新建关联对象失败，请重试"), "warn");
       return null;
     }
   };
@@ -2912,7 +2920,7 @@ function App() {
       showToast(`${updated.type === "place" ? "地点" : "联系人"}「${updated.name}」已更新`);
       return updated;
     } catch (error) {
-      setActionMessage(handleRequestError(error, "人物资料保存失败，请重试"));
+      showToast(handleRequestError(error, "人物资料保存失败，请重试"), "warn");
       return null;
     }
   };
@@ -2960,7 +2968,7 @@ function App() {
       showToast("预置记录已删除，你写的内容不受影响");
       refresh();
     } catch (error) {
-      setActionMessage(handleRequestError(error, "删除预置记录失败，请重试"));
+      showToast(handleRequestError(error, "删除预置记录失败，请重试"), "warn");
     } finally {
       setDemoBusy(false);
     }
@@ -2975,7 +2983,7 @@ function App() {
       setComposerWeather(result.weather);
       showToast(`已记录${result.weather.text}天气`);
     } catch (error) {
-      setActionMessage(handleRequestError(error, "实时天气读取失败，请检查天气配置"));
+      showToast(handleRequestError(error, "实时天气读取失败，请检查天气配置"), "warn");
     } finally {
       setComposerWeatherBusy(false);
     }
@@ -3003,7 +3011,7 @@ function App() {
       setAssets((current) => [...current, asset]);
       return { asset, reused: false };
     } catch (error) {
-      setActionMessage(handleRequestError(error, "照片上传失败，请重试"));
+      showToast(handleRequestError(error, "照片上传失败，请重试"), "warn");
       return null;
     }
   };
@@ -3016,11 +3024,11 @@ function App() {
     // path; clearing it means "no explicit time" and falls back to the entry moment.
     const occurred = occurredAt ? instantFromInput(occurredAt) : isTodaySelection ? undefined : dateOnly(selectedDate);
     const due = dueAt ? instantFromInput(dueAt) : undefined;
-    if ((occurredAt && !occurred) || (dueAt && !due)) { setActionMessage("请检查时间格式后再保存"); return; }
+    if ((occurredAt && !occurred) || (dueAt && !due)) { showToast("请检查时间格式后再保存", "warn"); return; }
     const payload: RecordWritePayload = { kind: composerKind, content, ...(occurred ? { occurredAt: occurred } : {}), ...(composerKind === "task" && dueAt && due ? { dueAt: due } : {}), ...(composerPrivate ? { isPrivate: true } : {}), ...(composerBackfill && !isTodaySelection ? { isBackfill: true } : {}), ...(composerWeather === null ? {} : { weather: composerWeather }), ...(composerMovieRefs.length === 0 ? {} : { entityRefs: composerMovieRefs }), ...(composerShots.length === 0 ? {} : { assetRefs: composerShots }) };
     setSaving(true);
     setActionMessage(null);
-    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); setComposerContent(""); setComposerMovieRefs([]); setComposerShots([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { setActionMessage(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
+    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); setComposerContent(""); setComposerMovieRefs([]); setComposerShots([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { showToast(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
   };
 
   const handleDemo = async () => {
@@ -3028,7 +3036,7 @@ function App() {
     setCreatingDemo(true);
     setActionMessage(null);
     const examples: readonly { kind: ComposerKind; content: string; hour: string; dueHour?: string }[] = [{ kind: "journal", content: "今天先把生活记录从一句话开始。", hour: "09:10" }, { kind: "note", content: "把值得回看的想法留在自己的时间轴里。", hour: "12:40" }, { kind: "task", content: "晚间整理今天的三条记录", hour: "16:20", dueHour: "19:00" }];
-    try { for (const example of examples) { const occurred = instantFromInput(`${selectedDate}T${example.hour}`); const due = example.dueHour ? instantFromInput(`${selectedDate}T${example.dueHour}`) : undefined; if (!occurred) throw new Error("预置记录时间无效"); const payload: RecordWritePayload = { kind: example.kind, content: example.content, occurredAt: occurred, isDemo: true, ...(due ? { dueAt: due } : {}) }; await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); } showToast("已加入 3 条预置记录，可随时删除"); refresh(); } catch (error) { setActionMessage(handleRequestError(error, "预置记录创建失败，请重试")); } finally { setCreatingDemo(false); }
+    try { for (const example of examples) { const occurred = instantFromInput(`${selectedDate}T${example.hour}`); const due = example.dueHour ? instantFromInput(`${selectedDate}T${example.dueHour}`) : undefined; if (!occurred) throw new Error("预置记录时间无效"); const payload: RecordWritePayload = { kind: example.kind, content: example.content, occurredAt: occurred, isDemo: true, ...(due ? { dueAt: due } : {}) }; await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); } showToast("已加入 3 条预置记录，可随时删除"); refresh(); } catch (error) { showToast(handleRequestError(error, "预置记录创建失败，请重试")); } finally { setCreatingDemo(false); }
   };
 
   const handleEdit = (record: RecordView) => { setEditError(null); setEditingRecord(record); };
@@ -3069,7 +3077,7 @@ function App() {
       if (options?.feedback !== false) showToast(status === "done" ? "任务已完成" : status === "cancelled" ? "任务已取消" : "任务已恢复");
       return updated;
     } catch (error) {
-      setActionMessage(errorStatus(error) === 409 ? "任务版本已变化，请刷新后再操作" : handleRequestError(error, "任务状态更新失败"));
+      showToast(errorStatus(error) === 409 ? "任务版本已变化，请刷新后再操作" : handleRequestError(error, "任务状态更新失败"));
       return null;
     }
   };
@@ -3084,7 +3092,7 @@ function App() {
   const handleLogout = async () => {
     if (logoutBusy) return;
     setLogoutBusy(true);
-    try { await apiRequest<unknown>("/api/auth/logout", { method: "POST" }); const nextAuth: AuthState = { required: true, authenticated: false }; authRef.current = nextAuth; setRecords(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); setMobileMenuOpen(false); } catch (error) { setActionMessage(handleRequestError(error, "退出失败，请重试")); } finally { setLogoutBusy(false); }
+    try { await apiRequest<unknown>("/api/auth/logout", { method: "POST" }); const nextAuth: AuthState = { required: true, authenticated: false }; authRef.current = nextAuth; setRecords(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); setMobileMenuOpen(false); } catch (error) { showToast(handleRequestError(error, "退出失败，请重试")); } finally { setLogoutBusy(false); }
   };
 
   const handleLogin = async (password: string) => {
@@ -3104,13 +3112,13 @@ function App() {
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onNotify={showToast} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
        ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"
         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
-      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className="action-toast" role="status"><Check size={16} strokeWidth={2} aria-hidden="true" />{actionMessage}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
+      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}{actionMessage.text}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
 }
 
 export default App;
