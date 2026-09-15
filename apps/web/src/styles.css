@@ -624,10 +624,20 @@ textarea:focus-visible {
   box-shadow: 0 4px 13px rgb(24 36 61 / 0.07);
 }
 
+/*
+ * Focus used to add a 3px blue halo *outside* the pill, and on the white header that
+ * reads as a stray box drawn around the search bar — which is what the owner pointed
+ * at. The halo is gone; focus instead firms up the bar's own border, so the state is
+ * still unmistakable without anything new being painted outside the bar.
+ *
+ * A `:has(input:focus-visible)` guard was the first idea and it does not work: Chrome
+ * matches `:focus-visible` on a text input for a plain mouse click too (measured, see
+ * .review/probe-search-click.mjs), so it would not have separated click from Tab.
+ */
 .search-form:focus-within {
-  border-color: #aab9d2;
+  border-color: #8fa0bf;
   background: #fff;
-  box-shadow: 0 0 0 3px rgb(49 93 250 / 0.1), 0 4px 14px rgb(24 36 61 / 0.08);
+  box-shadow: 0 4px 14px rgb(24 36 61 / 0.08);
 }
 
 .search-leading-icon {
@@ -1079,6 +1089,11 @@ h2 {
 .timeline-content {
   min-width: 0;
   padding: 0 0 30px 2px;
+  /* One line of .timeline-text (0.98rem × 1.65 = 25.872px). The photo grid is sized in
+     these units — a grid square is five lines tall and a lone photo nine — so "five
+     lines" survives a change to the body type scale instead of drifting silently.
+     Kept as a plain length, not a calc(), so `calc(5 * var(--record-line))` stays valid. */
+  --record-line: 1.617rem;
 }
 
 .timeline-meta {
@@ -5226,6 +5241,13 @@ button.relation-chip {
     font-size: 0.93rem;
   }
 
+  /* The photo grid is measured in lines of text, so when the body type shrinks the
+     unit has to shrink with it (0.93rem × 1.65 = 1.5345rem) — otherwise "five lines"
+     quietly becomes five and a half on a phone. */
+  .timeline-content {
+    --record-line: 1.5345rem;
+  }
+
   .timeline-state {
     min-height: 134px;
     padding: 20px 17px;
@@ -6167,26 +6189,39 @@ button.relation-chip {
 /*
  * A record's photos, laid out the way Moments lays out a post: one large, two and
  * four as a pair, three across from three up. The filename is gone — `image_225.png`
- * told the owner nothing and stole the room the thumbnail needed. The same 610px
- * ceiling the record text uses keeps the grid from outrunning the column.
+ * told the owner nothing and stole the room the thumbnail needed.
+ *
+ * Size comes from the record text, not from the column: a grid square is five lines
+ * tall, a lone photo nine. That is the proportions Moments lands on, and it keeps the
+ * grid from swallowing the whole screen the way a column-filling grid did.
  */
 .record-photo-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, calc(5 * var(--record-line, 1.617rem))));
   gap: 6px;
+  width: fit-content;
+  max-width: 100%;
   margin-top: 10px;
-  max-width: 610px;
 }
 
 .record-photo-grid[data-shown="2"],
 .record-photo-grid[data-shown="4"] {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, calc(5 * var(--record-line, 1.617rem))));
 }
 
-/* A lone photo keeps its own proportions and is simply allowed to be big. */
+/*
+ * A lone photo keeps its own proportions and is capped at nine lines tall. The cell
+ * has to shrink to the picture instead of stretching to the column: a block-level
+ * button is 669px wide behind a 175px portrait, and it paints its grey placeholder as
+ * a band beside the image — after which the hover outline draws a box around the band.
+ * `width: fit-content` on the cell is what makes it follow the image. A percentage
+ * max-width on the image cannot do the same job, because the cell's shrink-to-fit
+ * width would be derived from that very image.
+ */
 .record-photo-grid[data-shown="1"] {
   display: block;
-  max-width: 380px;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .record-photo-cell {
@@ -6203,6 +6238,8 @@ button.relation-chip {
 }
 
 .record-photo-grid[data-shown="1"] .record-photo-cell {
+  width: fit-content;
+  max-width: 100%;
   aspect-ratio: auto;
   border-radius: 10px;
 }
@@ -6220,14 +6257,15 @@ button.relation-chip {
   object-fit: cover;
 }
 
-/* Scaled to fit, never cropped: a tall portrait must not run the column off screen. */
+/* Scaled to fit, never cropped and never enlarged: a tall portrait does not run the
+   column off screen, and a photo smaller than nine lines stays at its natural size,
+   because blowing it up would only make it soft. */
 .record-photo-grid[data-shown="1"] .record-photo-cell img {
   display: block;
   width: auto;
   height: auto;
   max-width: 100%;
-  max-height: 520px;
-  margin: 0 auto;
+  max-height: calc(9 * var(--record-line, 1.617rem));
 }
 
 /* The ninth square says how many it is standing in for. */
