@@ -621,103 +621,67 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
   const busy = uploading > 0;
   const empty = shots.length === 0;
 
-  // Newest first. Rank 0 is the card the owner just added, and it stays upright
-  // so the newest photo is always shown whole.
-  const hand = [...shots].reverse();
-  // The grid reads the other way round: it is a wall of pictures, not a hand, so
-  // it keeps the order the owner added them in.
-  const wall = shots;
+  // Reading order is the order they were added in. There is no rank, no arc and
+  // no stacking: the strip is a set of pictures, and the only thing it has to
+  // say is which ones are in it.
+  const strip = shots;
 
-  const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"} ${hand.length === 1 ? "is-single" : ""} ${clearArmed ? "is-armed" : ""}`;
+  const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"} ${clearArmed ? "is-armed" : ""}`;
   const zoneHandlers = {
     onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current += 1; setDragging(true); },
     onDragOver: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy" as const; },
     onDragLeave: () => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragging(false); },
     onDrop: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void takeFiles(Array.from(event.dataTransfer.files)); },
   };
-  // On a touch screen there is no pointer entering, so a tap on the panel is the
+  // On a touch screen there is no pointer entering, so a tap on the strip is the
   // reveal. The first tap only arms; it never reaches `clearAll`.
   const armOnTap = (event: ReactMouseEvent<HTMLDivElement>) => { if (event.target instanceof HTMLElement && event.target.closest("button") === null) setClearArmed((armed) => !armed); };
 
   const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />;
 
-  /** Both controls, top-right of the panel, stacked: the plus is what the owner
-   *  reaches for constantly, so it keeps the corner, and the broom appears just
-   *  under it only once there is a hand to sweep. */
-  const controls = <>
-    <button className="shot-add" type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={15} strokeWidth={2.1} aria-hidden="true" /></button>
-    <button className="shot-clear" type="button" onClick={clearAll} aria-label="清空全部照片"><Eraser size={14} strokeWidth={2} aria-hidden="true" /></button>
-    {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
-  </>;
-
-  return <>
-    {/*
-     * Desktop: a fan of cards held beside the writing. It never appears on a
-     * phone — see the narrow block below, which hides it whole. Two entirely
-     * separate renderings are cheaper to reason about than one layout bent into
-     * two shapes, and neither the fan's arcs nor the grid's column count can be
-     * expressed by the other.
-     */}
-    <div className={`${zoneClass} shot-fan`} {...zoneHandlers}
-      onPointerEnter={() => setClearArmed(true)}
-      onPointerLeave={() => { if (dragDepth.current === 0) setClearArmed(false); }}
-      onClick={armOnTap}
-    >
-      {empty
-        ? <button className="shot-drop-button" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
-            <ImageIcon size={18} strokeWidth={1.7} aria-hidden="true" />
-            <strong>{dragging ? "松手放下" : "拖照片进来"}</strong>
-            <span>或点击选择</span>
-          </button>
-        : <div className="shot-hand">
-            {/* One fan, one axis. Every card is turned a little further than the
-                one before it and each exposes a strip a little thinner than the
-                last, so the hand opens as a single arc — older photos fade into
-                the deck behind instead of forming a second cluster. */}
-            <ul className="shot-list" data-count={shots.length}>{hand.map((shot, rank) => <li className="shot-item" key={shot.assetId} data-rank={rank}>
+  /**
+   * One strip, two widths. Every photo is the same square and they run in the
+   * order they were added, with the add control as the last tile in the row —
+   * which is where 微信, 微博 and 小红书 all put it, and therefore where nobody
+   * has to look for it.
+   *
+   * A desk gets one row of nine. A phone cannot fit nine across, so the same row
+   * is allowed to wrap into 朋友圈's grid; the tiles never change size or shape,
+   * only the number that fits per line. That is the whole responsive story — no
+   * second rendering, no second set of rules, and nothing that has to be kept in
+   * sync with the other one.
+   */
+  return <div className={zoneClass} {...zoneHandlers}
+    onPointerEnter={() => setClearArmed(true)}
+    onPointerLeave={() => { if (dragDepth.current === 0) setClearArmed(false); }}
+    onClick={armOnTap}
+  >
+    {empty
+      ? <button className="shot-drop-button" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
+          <ImageIcon size={18} strokeWidth={1.7} aria-hidden="true" />
+          <strong>{dragging ? "松手放下" : "加照片"}</strong>
+        </button>
+      : <>
+          <ul className="shot-strip" data-count={shots.length}>
+            {strip.map((shot) => <li className="shot-tile" key={shot.assetId}>
               <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
-              {rank === 0
-                ? <span className="shot-count" aria-label={`已添加 ${shots.length} 张`}>{shots.length}</span>
-                : null}
-              <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={10} strokeWidth={2.6} aria-hidden="true" /></button>
-            </li>)}</ul>
-            {controls}
-          </div>}
-      {fileInput}
-    </div>
-
-    {/*
-     * Mobile: no fan, and no photo area at all until there is a photo. The panel
-     * starts as a single image button, so an empty composer on a phone is just
-     * writing and one control. Once a picture lands, the area opens above it and
-     * the photos sit in a plain square grid — the arrangement 朋友圈 uses, and
-     * the one everybody already knows how to read. The count rides on the last
-     * tile, which is where a grid's "and N more" belongs.
-     */}
-    <div className={`${zoneClass} shot-grid`} {...zoneHandlers} onClick={armOnTap}>
-      {empty
-        ? <button className="shot-grid-empty" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
-            <ImageIcon size={19} strokeWidth={1.7} aria-hidden="true" />
-            <span>{dragging ? "松手放下" : "照片"}</span>
-          </button>
-        : <>
-            <div className="shot-grid-head">
-              <span className="shot-grid-tally">已选 {shots.length} 张</span>
-              {controls}
-            </div>
-            <ul className="shot-wall" data-count={shots.length}>
-              {wall.map((shot) => <li className="shot-tile" key={shot.assetId}>
-                <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
-                <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
-              </li>)}
-              <li className="shot-tile shot-tile-add">
-                <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={18} strokeWidth={2} aria-hidden="true" /></button>
-              </li>
-            </ul>
-          </>}
-      {fileInput}
-    </div>
-  </>;
+              <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
+            </li>)}
+            <li className="shot-tile shot-tile-add">
+              <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={18} strokeWidth={2} aria-hidden="true" /></button>
+            </li>
+          </ul>
+          {/* The two things that are about the strip rather than in it. They sit
+              at the far end, quiet, and only surface when the strip is being
+              looked at — on a desk that means a hover, on a phone a tap. */}
+          <div className="shot-strip-meta">
+            <span className="shot-strip-tally">{shots.length}/{SHOT_LIMIT}</span>
+            <button className="shot-clear" type="button" onClick={clearAll} aria-label="清空全部照片"><Eraser size={13} strokeWidth={2} aria-hidden="true" /><span>清空</span></button>
+            {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
+          </div>
+        </>}
+    {fileInput}
+  </div>;
 }
 
 interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
@@ -908,12 +872,12 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
       {dismissible ? <button className="icon-button compact-icon-button composer-close" type="button" onClick={onClose} aria-label="关闭记录编辑器"><X size={17} strokeWidth={1.9} aria-hidden="true" /></button> : null}
     </div>
     <div className="composer-entry">
-    {/* Three collapsed rows, not two. The write-up field is where most entries
-        actually get written, and the photo hand beside it needs the height: a
-        deep fan is paid for in height as well as width, because a turned square
-        grows its box by about 1.3x. Half again the old two rows is the number
-        the owner asked for, and it lands the panel at roughly 121px. */}
-    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={3} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
+    {/* Two collapsed rows. The fan used to be the reason for three — a turned
+        square grows its box by about 1.3x, so a deep hand was paid for in height
+        as well as width. The strip below is a flat 44px row and needs none of
+        that, so the field goes back to two rows (about 81px) and the band adds
+        its own height underneath. */}
+    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
       <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
     </div>
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
