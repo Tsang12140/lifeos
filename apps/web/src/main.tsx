@@ -1468,7 +1468,7 @@ function TimelineEntityChip({ refItem, entity, relationKind, onOpenEntity }: { r
   const KindIcon = movie ? Film : relationKind === undefined ? (ENTITY_META[refItem.entityType]?.icon ?? Tag) : RELATION_META[relationKind].icon;
   const label = movie ? `《${entity.name}》` : refItem.label ?? refItem.entityId;
   const className = `relation-chip ${entity?.type === "person" ? "relation-chip-person" : ""} ${movie ? "relation-chip-movie" : ""} ${relationKind === undefined ? "relation-kind-none" : `relation-kind-${relationKind}`}`.trim();
-  const content = <><KindIcon size={12} strokeWidth={1.9} aria-hidden="true" /><span>{label}</span>{relationKind === undefined ? null : <small className="relation-kind">{RELATION_META[relationKind].label}</small>}</>;
+  const content = <><KindIcon size={12} strokeWidth={1.9} aria-hidden="true" /><span>{label}</span></>;
   if (entity?.type !== "person" && !movie) return <span className={className}>{content}</span>;
   return <button className={className} type="button" onClick={() => onOpenEntity(movie ? asCoreEntity(entity) : entity)} aria-label={movie ? `查看${entity.name}的电影卡片` : `查看${entity.name}的人物卡片`}>{content}</button>;
 }

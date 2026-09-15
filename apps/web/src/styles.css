@@ -2619,7 +2619,10 @@ h2 {
 }
 
 button.relation-chip {
-  font: inherit;
+  /* Only the family is inherited. The `font:` shorthand also resets font-size,
+     which silently inflated the person chip to the inherited 16px while the
+     place / topic / photo chips beside it kept `.relation-chip`'s 0.75rem. */
+  font-family: inherit;
   cursor: pointer;
 }
 
@@ -6805,8 +6808,10 @@ button.relation-chip {
   border-radius: 999px;
 }
 
+/* No `font:` shorthand here: the family is already inherited from
+   `button.relation-chip`, and repeating the shorthand would put the size back
+   up to 16px. */
 .relation-row .relation-chip-person {
-  font: inherit;
   cursor: pointer;
 }
 
