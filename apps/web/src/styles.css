@@ -7500,7 +7500,9 @@ button.relation-chip {
   color: #6b5436;
   background: #fff8ed;
   cursor: pointer;
-  font: inherit;
+  /* font-family only: the `font:` shorthand would also reset font-size and blow
+     this chip up to the inherited 16px. See button.relation-chip. */
+  font-family: inherit;
 }
 
 .relation-chip-movie:hover {
