@@ -625,17 +625,26 @@ textarea:focus-visible {
 }
 
 /*
- * Focus used to add a 3px blue halo *outside* the pill, and on the white header that
- * reads as a stray box drawn around the search bar — which is what the owner pointed
- * at. The halo is gone; focus instead firms up the bar's own border, so the state is
- * still unmistakable without anything new being painted outside the bar.
+ * The box the owner kept seeing was never drawn by the bar. The global
+ * `button/a/input/textarea:focus-visible` rule near the top of this file paints
+ * `--shadow-focus` (a 3px ring with no offset) on any focused input, and the input in
+ * here is a bare rectangle (radius 0) sitting inside a 999px pill — so a click produced
+ * a SQUARE ring inside a rounded bar. The first pass took the halo off the bar and
+ * stopped there, and its pixel check only ever asked whether anything painted *outside*
+ * the bar, which is exactly where the inner square is not. That blind spot is closed in
+ * .review/probe-search-click.mjs, which now measures the collar of pixels hugging the
+ * field itself.
+ *
+ * So: the field paints nothing at all, and focus shows up on the bar's own outline —
+ * which follows the pill's curve because it *is* the pill's border. That is the owner's
+ * own suggestion, and it adds no new shape to the header.
  *
  * A `:has(input:focus-visible)` guard was the first idea and it does not work: Chrome
- * matches `:focus-visible` on a text input for a plain mouse click too (measured, see
- * .review/probe-search-click.mjs), so it would not have separated click from Tab.
+ * matches `:focus-visible` on a text input for a plain mouse click too (measured), so it
+ * would not have separated click from Tab.
  */
 .search-form:focus-within {
-  border-color: #8fa0bf;
+  border-color: var(--primary);
   background: #fff;
   box-shadow: 0 4px 14px rgb(24 36 61 / 0.08);
 }
@@ -656,6 +665,16 @@ textarea:focus-visible {
   background: transparent;
   font-size: 0.9rem;
   line-height: 1.2;
+}
+
+/*
+ * `outline: none` above was never enough: it silences the native ring, but the global
+ * `:focus-visible` rule sets `box-shadow` as well, and that one kept landing on this
+ * rectangle. Same specificity as `input:focus-visible`, later in the file, so this wins.
+ */
+.search-form input:focus,
+.search-form input:focus-visible {
+  box-shadow: none;
 }
 
 .search-form input::placeholder {
@@ -4870,7 +4889,7 @@ button.relation-chip {
 }
 
 .search-dialog-input:focus-within {
-  border-color: #bdcbfa;
+  border-color: var(--primary);
   background: #fff;
   box-shadow: var(--shadow-focus);
 }
@@ -4883,6 +4902,15 @@ button.relation-chip {
   color: var(--ink);
   background: transparent;
   font-size: 1rem;
+}
+
+/*
+ * Same leak as the header's field: the global `:focus-visible` rule would ring this
+ * bare rectangle inside the rounded label. The label's own outline carries the state.
+ */
+.search-dialog-input input:focus,
+.search-dialog-input input:focus-visible {
+  box-shadow: none;
 }
 
 .mobile-menu-dialog {
