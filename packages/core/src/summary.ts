@@ -1,10 +1,11 @@
 import type { InstantTime, RecordId } from "./model.js";
 
 /**
- * A day's one-line note on the month grid. Five characters is the budget the
- * grid gives a day, so both the AI and the offline fallback are clamped to it.
+ * A day's short note on the month grid. The grid has room for about sixteen
+ * CJK code points across two lines; the final two slots are reserved for the
+ * literal `..` marker when the source is longer.
  */
-export const SUMMARY_MAX_LENGTH = 5;
+export const SUMMARY_MAX_LENGTH = 16;
 
 /**
  * One record as the summariser sees it: identity, version, and the text that is
@@ -47,10 +48,19 @@ export interface DaySummary {
 const TAG_PREFIX = /^(?:\s*【[^】]{0,12}】\s*)+/;
 const NOISE = /[\s\u3000，。、；：！？…—～·「」『』（）()[\]【】“”‘’"'`~!?;:,./\\|<>*#_+-]/g;
 
-/** Strips markers and punctuation, then keeps at most `max` characters. */
+/**
+ * Strips markers and punctuation, then keeps at most `max` Unicode code
+ * points. If text was clipped, `..` replaces the omitted tail. `Array.from`
+ * is intentional: a JavaScript UTF-16 code unit must never split an emoji or
+ * another astral code point in the middle.
+ */
 export function trimSummaryText(text: string, max: number = SUMMARY_MAX_LENGTH): string {
   const cleaned = text.replace(TAG_PREFIX, "").split("@").join("").replace(NOISE, "");
-  return [...cleaned].slice(0, max).join("");
+  const limit = Number.isFinite(max) ? Math.max(0, Math.floor(max)) : SUMMARY_MAX_LENGTH;
+  const codePoints = Array.from(cleaned);
+  if (codePoints.length <= limit) return cleaned;
+  if (limit <= 2) return ".".repeat(limit);
+  return `${codePoints.slice(0, limit - 2).join("")}..`;
 }
 
 /**

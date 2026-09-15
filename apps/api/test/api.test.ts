@@ -3,12 +3,12 @@ import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
 import { BackupScheduler, backupScheduleRunKey, nextDailyBackupAt } from "../src/backup-scheduler.js";
+import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, describeBackupRetention, planBackupRetention, retentionHorizonDays } from "../src/backup-retention.js";
 import { SqliteRecordRepository } from "../src/repository.js";
 
 // WHATWG fetch rejects a small set of historically reserved ports even when
@@ -60,6 +60,7 @@ async function listenOnFetchablePort(server: ReturnType<typeof createServer>, ho
 interface Harness {
   readonly root: string;
   readonly base: string;
+  readonly app: ReturnType<typeof createHttpServer>["app"];
   readonly stop: (remove?: boolean) => Promise<void>;
 }
 
@@ -81,12 +82,13 @@ async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, exi
     ...(password === undefined ? {} : { password }),
     ...(assetRoot === undefined ? {} : { assetRoot }),
   } as const;
-  const { server } = createHttpServer(config);
+  const { server, app } = createHttpServer(config);
   const port = await listenOnFetchablePort(server, config.host);
   const base = `http://${config.host}:${port}`;
   return {
     root,
     base,
+    app,
     stop: async (remove = true) => {
       if (server.listening) {
         server.close();
@@ -550,12 +552,29 @@ test("dual backup records local success before an unconfigured remote skip", asy
 });
 
 test("dual backup uploads the same SQLite artifact to a configured object store", async (t) => {
+  const received: { readonly method: string; readonly url: string; readonly authorization: string; readonly body: Buffer }[] = [];
+  const remote = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.once("end", () => {
+      received.push({ method: req.method ?? "", url: req.url ?? "", authorization: String(req.headers.authorization ?? ""), body: Buffer.concat(chunks) });
+      res.writeHead(200, { "content-type": "application/xml" });
+      res.end("");
+    });
+  });
+  const port = await listenOnFetchablePort(remote, "127.0.0.1");
+  t.after(async () => {
+    if (remote.listening) {
+      remote.close();
+      await once(remote, "close");
+    }
+  });
+
   const harness = await startHarness();
   t.after(async () => harness.stop());
-  const objectRoot = join(harness.root, "object-store");
   const configured = await request(harness.base, "/api/backup/config", {
     method: "POST",
-    ...json({ enabled: true, endpoint: pathToFileURL(objectRoot).toString(), region: "local", bucket: "lifeos", prefix: "daily", forcePathStyle: true, accessKeyId: "test-access", secretAccessKey: "test-secret" }),
+    ...json({ enabled: true, endpoint: `http://127.0.0.1:${port}`, region: "local", bucket: "lifeos", prefix: "daily", forcePathStyle: true, accessKeyId: "test-access", secretAccessKey: "test-secret" }),
   });
   equal(configured.response.status, 200);
 
@@ -565,10 +584,16 @@ test("dual backup uploads the same SQLite artifact to a configured object store"
   equal(body.status, "success");
   equal(body.local.status, "success");
   equal(body.s3.status, "success");
-  const localBytes = readFileSync(body.local.location);
-  const remotePath = join(objectRoot, "lifeos", "daily", body.local.fileName);
-  equal(body.s3.location, pathToFileURL(remotePath).toString());
-  deepEqual(readFileSync(remotePath), localBytes);
+  // The remote half has to be a signed HTTP PUT that carries the exact local
+  // bytes; a local pseudo-bucket would make this assertion meaningless.
+  // The prune that runs afterwards lists the recycle bin too, so count PUTs only.
+  equal(received.filter((item) => item.method === "PUT").length, 1);
+  // The prune that runs afterwards lists the recycle bin too, so pick the PUT.
+  const put = received.find((item) => item.method === "PUT")!;
+  equal(put.url, `/lifeos/daily/${body.local.fileName}`);
+  ok(put.authorization.startsWith("AWS4-HMAC-SHA256 Credential=test-access/"));
+  equal(body.s3.location, `http://127.0.0.1:${port}/lifeos/daily/${body.local.fileName}`);
+  deepEqual(received[0]!.body, readFileSync(body.local.location));
 });
 
 test("dual backup keeps the local success visible when the remote upload fails", async (t) => {
@@ -678,11 +703,21 @@ test("object storage config saves encrypted credentials and exposes only public 
     ...json({ enabled: true, endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false, accessKeyId: "test-access", secretAccessKey: "test-secret" }),
   });
   equal(saved.response.status, 200);
-  const savedStatus = (saved.body as { s3: { configured: boolean; enabled: boolean; endpoint: string; region: string; bucket: string; prefix: string; forcePathStyle: boolean; keySource: string } }).s3;
-  deepEqual(savedStatus, { configured: true, enabled: true, endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false, keySource: "file" });
+  const savedStatus = (saved.body as { s3: { configured: boolean; enabled: boolean; endpoint: string; region: string; bucket: string; prefix: string; forcePathStyle: boolean; keySource: string; transport: string } }).s3;
+  deepEqual(savedStatus, { configured: true, enabled: true, endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false, keySource: "file", transport: "http" });
   const persisted = readFileSync(join(harness.root, "backup-config.json"), "utf8");
   ok(!persisted.includes("test-access"));
   ok(!persisted.includes("test-secret"));
+
+  // A file:// endpoint writes the backup into a local directory instead of
+  // uploading it, so saving one has to be refused unless the deployment
+  // explicitly opts in with LIFEOS_ALLOW_FILE_BACKUP=1.
+  const rejected = await request(harness.base, "/api/backup/config", {
+    method: "POST",
+    ...json({ enabled: true, endpoint: "file:///tmp/lifeos-pseudo-bucket", region: "local", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: true, accessKeyId: "test-access", secretAccessKey: "test-secret" }),
+  });
+  equal(rejected.response.status, 400);
+  ok(JSON.stringify(rejected.body).includes("LIFEOS_ALLOW_FILE_BACKUP"));
 
   const status = await request(harness.base, "/api/backup/status");
   equal(status.response.status, 200);
@@ -695,12 +730,13 @@ test("places carry role and period, and # mentions attach place refs on write", 
 
   const created = await request(harness.base, "/api/entities", {
     method: "POST",
-    ...json({ type: "place", name: "爸妈家", aliases: ["父母家"], role: "home", period: { from: "2024-03" } }),
+    ...json({ type: "place", name: "爸妈家", aliases: ["父母家"], role: "home", period: { from: "2024-03" }, address: "广东省佛山市南海区桂城街道 1 号" }),
   });
   equal(created.response.status, 201);
-  const placeBody = created.body as { id: string; role: string; period: { from: string } };
+  const placeBody = created.body as { id: string; role: string; period: { from: string }; address: string };
   equal(placeBody.role, "home");
   equal(placeBody.period.from, "2024-03");
+  equal(placeBody.address, "广东省佛山市南海区桂城街道 1 号");
 
   const patched = await request(harness.base, `/api/entities/${encodeURIComponent(placeBody.id)}`, {
     method: "PATCH",
@@ -709,10 +745,19 @@ test("places carry role and period, and # mentions attach place refs on write", 
   equal(patched.response.status, 200);
   equal((patched.body as { period: { until: string } }).period.until, "2025-08");
 
+  const addressCleared = await request(harness.base, `/api/entities/${encodeURIComponent(placeBody.id)}`, {
+    method: "PATCH",
+    ...json({ address: null }),
+  });
+  equal(addressCleared.response.status, 200);
+  equal((addressCleared.body as { address?: string }).address, undefined);
+
   const badRole = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "x", role: "cafe" }) });
   equal(badRole.response.status, 400);
   const roleOnPerson = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "人", role: "home" }) });
   equal(roleOnPerson.response.status, 400);
+  const addressOnPerson = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "人", address: "某街道" }) });
+  equal(addressOnPerson.response.status, 400);
   const periodOnPerson = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "人", period: { from: "2024-01" } }) });
   equal(periodOnPerson.response.status, 400);
   const badPeriod = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "x", period: { from: "2026-13" } }) });
@@ -1212,6 +1257,81 @@ test("weather uses a device location, archives daily snapshots, and pins live we
   }
 });
 
+test("historical weather archive hits SQLite before any external location or forecast request", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const status = await request(harness.base, "/api/weather/status");
+  const deviceCookie = (status.response.headers.get("set-cookie") ?? "").match(/lifeos_weather_device=[^;]+/)?.[0] ?? "";
+  const headers = { "content-type": "application/json", cookie: deviceCookie };
+  const saved = await request(harness.base, "/api/weather/config", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ enabled: true, locationId: "101280601", city: "佛山南海区", apiHost: "devapi.qweather.com", apiKey: "archive-key" }),
+  });
+  equal(saved.response.status, 200);
+  const day = { fxDate: "2026-09-14", textDay: "中雨", tempMax: "30", tempMin: "25", iconDay: "306", windDirDay: "东南风", windScaleDay: "2" };
+  const location = { id: "101280601", name: "佛山南海区", adm2: "佛山市", adm1: "广东省" };
+  harness.app.repository.saveWeatherDayCache("2026-09-14", "101280601", "101280601", "佛山南海区", { weatherSnapshot: { today: day, tomorrow: day, days: [day] }, location }, new Date().toISOString(), true);
+  harness.app.repository.saveWeatherDayCache("2026-09-14", "other-location", "other-location", "其他城市", { weatherSnapshot: { today: { ...day, textDay: "晴", iconDay: "100" }, tomorrow: day, days: [day] }, location: { ...location, id: "other-location", name: "其他城市" } }, new Date().toISOString(), true);
+  const batch = await request(harness.base, "/api/weather/archive?from=2026-09-01&to=2026-09-30", { headers: { cookie: deviceCookie } });
+  equal(batch.response.status, 200);
+  equal((batch.body as { items: unknown[] }).items.length, 1);
+  equal((batch.body as { items: Array<{ locationKey: string }> }).items[0]?.locationKey, "101280601");
+  const originalFetch = globalThis.fetch;
+  let externalCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("https://")) {
+      externalCalls += 1;
+      throw new Error("historical archive should not call an external API");
+    }
+    return originalFetch(input, init);
+  };
+  try {
+    const response = await request(harness.base, "/api/weather?date=2026-09-14", { headers: { cookie: deviceCookie } });
+    equal(response.response.status, 200);
+    equal((response.body as { weatherSnapshot: { today: { textDay: string; iconDay: string } } }).weatherSnapshot.today.textDay, "中雨");
+    equal((response.body as { weatherSnapshot: { today: { iconDay: string } } }).weatherSnapshot.today.iconDay, "306");
+    equal(externalCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("daily weather scheduler archives the final Shanghai day once and reuses its local row", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const saved = await request(harness.base, "/api/weather/config", {
+    method: "POST",
+    ...json({ enabled: true, locationId: "101280601", city: "佛山南海区", apiHost: "devapi.qweather.com", apiKey: "scheduler-key" }),
+  });
+  equal(saved.response.status, 200);
+
+  const originalFetch = globalThis.fetch;
+  let externalCalls = 0;
+  const location = { id: "101280601", name: "佛山南海区", adm2: "佛山市", adm1: "广东省" };
+  const weatherDay = (fxDate: string) => ({ fxDate, textDay: "中雨", tempMax: "30", tempMin: "25", iconDay: "306", windDirDay: "东南风", windScaleDay: "2" });
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("https://")) externalCalls += 1;
+    if (url.includes("geoapi.qweather.com")) return new Response(JSON.stringify({ code: "200", location: [location] }), { status: 200 });
+    if (url.includes("/v7/weather/7d")) return new Response(JSON.stringify({ code: "200", daily: [weatherDay("2026-09-14"), weatherDay("2026-09-15"), weatherDay("2026-09-16")] }), { status: 200 });
+    throw new Error(`unexpected scheduler fetch: ${url}`);
+  };
+  try {
+    const afterFinalTime = new Date("2026-09-15T15:56:00.000Z"); // 23:56 in Shanghai.
+    equal(await harness.app.weatherArchiveScheduler.runOnce(afterFinalTime), true);
+    const archived = harness.app.repository.getWeatherDayCache("2026-09-15", "101280601");
+    equal(archived?.archived, true);
+    const callsAfterFirstRun = externalCalls;
+    equal(callsAfterFirstRun > 0, true);
+    equal(await harness.app.weatherArchiveScheduler.runOnce(afterFinalTime), true);
+    equal(externalCalls, callsAfterFirstRun, "an archived day is never fetched a second time");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("relations stay symmetric and local originals are served read-only", async (t) => {
   const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-assets-"));
   const outsideRoot = mkdtempSync(join(tmpdir(), "lifeos-outside-"));
@@ -1409,4 +1529,228 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
   const removed = await request(harness.base, `/api/modules/cycle-intimacy/events/${encodeURIComponent(eventId)}`, { method: "DELETE" });
   equal(removed.response.status, 200);
   equal((removed.body as { events: unknown[] }).events.length, 2);
+});
+
+test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and upserts refs", async (t) => {
+  const harness = await startHarness();
+  const restored = await startHarness();
+  t.after(async () => harness.stop());
+  t.after(async () => restored.stop());
+
+  const initial = await request(harness.base, "/api/movie/status");
+  equal(initial.response.status, 200);
+  deepEqual(initial.body, {
+    enabled: false,
+    configured: false,
+    hasKey: false,
+    source: "none",
+    apiBaseUrl: "https://api.themoviedb.org/3",
+  });
+  let externalCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (!url.startsWith("https://api.themoviedb.org/3")) return originalFetch(input, init);
+    externalCalls += 1;
+    equal(new URL(url).searchParams.get("api_key"), "movie-test-key");
+    if (url.includes("/find/")) {
+      return new Response(JSON.stringify({ movie_results: [{ id: 111, title: "霸王别姬", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: "/poster.jpg", overview: "一段故事" }] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ results: [
+      { id: 111, title: "霸王别姬", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: "/poster.jpg", overview: "一段故事" },
+      { id: 222, title: "霸王别姬（修复版）", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: null, overview: "另一个候选" },
+    ] }), { status: 200 });
+  };
+  try {
+    const disabled = await request(harness.base, "/api/movie/resolve", { method: "POST", ...json({ query: "霸王别姬" }) });
+    equal(disabled.response.status, 409);
+    equal((disabled.body as { error: string }).error, "movie_module_disabled");
+    equal(externalCalls, 0);
+    const disabledImport = await request(harness.base, "/api/movie/import", { method: "POST", ...json({ movie: { name: "不应写入", externalIds: { tmdb: 999 } } }) });
+    equal(disabledImport.response.status, 409);
+    equal((disabledImport.body as { error: string }).error, "movie_module_disabled");
+
+    const configured = await request(harness.base, "/api/movie/config", { method: "POST", ...json({ enabled: true, apiKey: "movie-test-key" }) });
+    equal(configured.response.status, 200);
+    equal((configured.body as { enabled: boolean; hasKey: boolean }).enabled, true);
+    equal((configured.body as { hasKey: boolean }).hasKey, true);
+    equal(JSON.stringify(configured.body).includes("movie-test-key"), false);
+    const stored = readFileSync(join(harness.root, "movie-config.json"), "utf8");
+    equal(stored.includes("movie-test-key"), false);
+    equal(stored.includes("encryptedApiKey"), true);
+
+    const resolved = await request(harness.base, "/api/movie/resolve", { method: "POST", ...json({ title: "霸王别姬" }) });
+    equal(resolved.response.status, 200);
+    const candidates = (resolved.body as { candidates: Array<{ tmdbId: number; name: string; posterUrl?: string }> }).candidates;
+    equal(candidates.length, 2);
+    equal(candidates[0]?.tmdbId, 111);
+    equal(candidates[0]?.posterUrl, "https://image.tmdb.org/t/p/w500/poster.jpg");
+
+    const imported = await request(harness.base, "/api/movie/import", {
+      method: "POST",
+      ...json({ movie: { ...candidates[0], personalRating: 9.5, personalReview: "值得重看", watchedAt: "2026-09-15" } }),
+    });
+    equal(imported.response.status, 201);
+    const importedEntity = (imported.body as { created: boolean; entity: { id: string; type: string; externalIds: { tmdb: string }; personalRating: number } }).entity;
+    equal((imported.body as { created: boolean }).created, true);
+    equal(importedEntity.type, "movie");
+    equal(importedEntity.externalIds.tmdb, "111");
+    equal(importedEntity.personalRating, 9.5);
+
+    const duplicate = await request(harness.base, "/api/movie/upsert", {
+      method: "POST",
+      ...json({ name: "Farewell My Concubine", externalIds: { tmdb: 111 }, personalRating: 8.5 }),
+    });
+    equal(duplicate.response.status, 200);
+    equal((duplicate.body as { created: boolean }).created, false);
+    equal((duplicate.body as { entity: { id: string } }).entity.id, importedEntity.id);
+    equal((duplicate.body as { entity: { name: string } }).entity.name, "霸王别姬");
+    equal((duplicate.body as { entity: { personalReview?: string } }).entity.personalReview, "值得重看");
+    const clearedRating = await request(harness.base, `/api/entities/${encodeURIComponent(importedEntity.id)}`, {
+      method: "PATCH",
+      ...json({ personalRating: null }),
+    });
+    equal(clearedRating.response.status, 200);
+    equal((clearedRating.body as { personalRating?: number }).personalRating, undefined);
+
+    const linked = await request(harness.base, "/api/records", { method: "POST", ...json({ kind: "note", content: "重看霸王别姬", entityRefs: [{ entityType: "movie", entityId: importedEntity.id }] }) });
+    equal(linked.response.status, 201);
+    const movies = await request(harness.base, "/api/entities?type=movie&q=Farewell");
+    equal(movies.response.status, 200);
+    equal((movies.body as { items: unknown[] }).items.length, 1);
+
+    const invalidRating = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "movie", name: "坏评分", personalRating: 8.25 }) });
+    equal(invalidRating.response.status, 400);
+    const exported = await request(harness.base, "/api/export");
+    equal(exported.response.status, 200);
+    const bundle = exported.body as { entities: Array<{ type: string }>; records: unknown[] };
+    equal(bundle.entities.some((entity) => entity.type === "movie"), true);
+    const restoredImport = await request(restored.base, "/api/import", { method: "POST", ...json({ bundle }) });
+    equal(restoredImport.response.status, 201);
+    equal((await request(restored.base, "/api/entities?type=movie")).response.status, 200);
+
+    const imdb = await request(harness.base, "/api/movie/resolve", { method: "POST", ...json({ query: "https://www.imdb.com/title/tt0106332/" }) });
+    equal(imdb.response.status, 200);
+    equal((imdb.body as { candidates: Array<{ externalIds: { imdb?: string } }> }).candidates[0]?.externalIds.imdb, "tt0106332");
+    const beforeDouban = externalCalls;
+    const doubanOnly = await request(harness.base, "/api/movie/resolve", { method: "POST", ...json({ doubanId: "1295644" }) });
+    equal(doubanOnly.response.status, 400);
+    equal((doubanOnly.body as { error: string }).error, "douban_title_required");
+    equal(externalCalls, beforeDouban);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Backup retention
+// ---------------------------------------------------------------------------
+
+const RETENTION_NOW = new Date("2026-09-15T04:00:00.000Z"); // 2026-09-15 12:00 Asia/Shanghai
+
+test("retention keeps one snapshot per day inside the daily window", () => {
+  const planned = planBackupRetention([
+    { startedAt: "2026-09-15T02:00:00.000Z", name: "today" },
+    { startedAt: "2026-09-14T02:00:00.000Z", name: "yesterday-newest" },
+    { startedAt: "2026-09-14T01:00:00.000Z", name: "yesterday-older" },
+  ], { dailyDays: 7, weeklyWeeks: 0, monthlyMonths: 0, trashDays: 30 }, RETENTION_NOW);
+  const byName = new Map(planned.map((entry) => [entry.name, entry]));
+  equal(byName.get("today")!.keep, true);
+  equal(byName.get("today")!.tier, "daily");
+  equal(byName.get("yesterday-newest")!.keep, true);
+  // A second snapshot on an already-claimed day has no slot of its own.
+  equal(byName.get("yesterday-older")!.keep, false);
+  equal(byName.get("yesterday-older")!.tier, "none");
+});
+
+test("retention falls back to the weekly and monthly tiers for older snapshots", () => {
+  const policy = { dailyDays: 7, weeklyWeeks: 8, monthlyMonths: 12, trashDays: 30 };
+  const planned = planBackupRetention([
+    { startedAt: "2026-09-15T02:00:00.000Z", name: "today" },
+    { startedAt: "2026-09-02T02:00:00.000Z", name: "two-weeks-ago" },
+    { startedAt: "2026-06-10T02:00:00.000Z", name: "three-months-ago" },
+    { startedAt: "2026-06-01T02:00:00.000Z", name: "oldest-in-that-month" },
+  ], policy, RETENTION_NOW);
+  const byName = new Map(planned.map((entry) => [entry.name, entry]));
+  equal(byName.get("today")!.tier, "daily");
+  equal(byName.get("two-weeks-ago")!.tier, "weekly");
+  equal(byName.get("three-months-ago")!.tier, "monthly");
+  // Same month as the one already kept, so no second slot.
+  equal(byName.get("oldest-in-that-month")!.keep, false);
+});
+
+test("retention never drops the newest snapshot, whatever the policy says", () => {
+  const planned = planBackupRetention([{ startedAt: "2020-01-01T00:00:00.000Z" }], { dailyDays: 1, weeklyWeeks: 0, monthlyMonths: 0, trashDays: 30 }, RETENTION_NOW);
+  equal(planned.length, 1);
+  equal(planned[0]!.keep, true);
+  equal(planned[0]!.tier, "newest");
+});
+
+test("retention excludes connection-test objects and validates its policy", () => {
+  const planned = planBackupRetention([
+    { startedAt: "2026-09-15T02:00:00.000Z", name: "backup" },
+    { startedAt: "2026-09-15T03:00:00.000Z", name: "connection-test", isConnectionTest: true },
+  ], DEFAULT_BACKUP_RETENTION, RETENTION_NOW);
+  const byName = new Map(planned.map((entry) => [entry.name, entry]));
+  // Newer than the backup, yet still refused a slot: it is not a backup.
+  equal(byName.get("connection-test")!.keep, false);
+  equal(byName.get("backup")!.keep, true);
+
+  throws(() => assertValidBackupRetention({ dailyDays: 0, weeklyWeeks: 1, monthlyMonths: 1, trashDays: 30 }));
+  throws(() => assertValidBackupRetention({ dailyDays: 7, weeklyWeeks: -1, monthlyMonths: 1, trashDays: 30 }));
+  throws(() => assertValidBackupRetention({ dailyDays: 7, weeklyWeeks: 1, monthlyMonths: 999, trashDays: 30 }));
+  throws(() => planBackupRetention([], { dailyDays: 1.5, weeklyWeeks: 1, monthlyMonths: 1, trashDays: 30 }, RETENTION_NOW));
+  equal(planBackupRetention([], DEFAULT_BACKUP_RETENTION, RETENTION_NOW).length, 0);
+  ok(describeBackupRetention(DEFAULT_BACKUP_RETENTION).every((line) => typeof line === "string" && line.length > 0));
+  equal(retentionHorizonDays({ dailyDays: 7, weeklyWeeks: 8, monthlyMonths: 12, trashDays: 30 }), 372);
+});
+
+test("backup retention endpoint exposes the plan and saves changes", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+
+  const initial = await request(harness.base, "/api/backup/retention");
+  equal(initial.response.status, 200);
+  const initialBody = initial.body as {
+    policy: unknown;
+    described: readonly string[];
+    entries: readonly unknown[];
+    summary: { keepCount: number; deleteCount: number };
+    cleanupScope: { local: boolean; remote: boolean; recycleBin: { local: boolean; remote: boolean } };
+    trashed: readonly unknown[];
+    cleanupScheduled: boolean;
+  };
+  deepEqual(initialBody.policy, DEFAULT_BACKUP_RETENTION);
+  ok(Array.isArray(initialBody.described) && initialBody.described.length >= 3);
+  ok(Array.isArray(initialBody.entries));
+  // Cleaned snapshots go to LifeOS's own recycle bin first, so both halves are
+  // pruned and the API says exactly that.
+  equal(initialBody.cleanupScope.local, true);
+  equal(initialBody.cleanupScope.remote, true);
+  equal(initialBody.cleanupScope.recycleBin.local, true);
+  equal(initialBody.cleanupScope.recycleBin.remote, true);
+  ok(Array.isArray(initialBody.trashed));
+  equal(typeof initialBody.summary.keepCount, "number");
+
+  const saved = await request(harness.base, "/api/backup/retention", {
+    method: "POST",
+    ...json({ dailyDays: 3, weeklyWeeks: 2, monthlyMonths: 6, trashDays: 14 }),
+  });
+  equal(saved.response.status, 200);
+  deepEqual((saved.body as { policy: unknown }).policy, { dailyDays: 3, weeklyWeeks: 2, monthlyMonths: 6, trashDays: 14 });
+
+  const status = await request(harness.base, "/api/backup/status");
+  deepEqual((status.body as { retention: { policy: unknown } }).retention.policy, { dailyDays: 3, weeklyWeeks: 2, monthlyMonths: 6, trashDays: 14 });
+
+  const invalid = await request(harness.base, "/api/backup/retention", {
+    method: "POST",
+    ...json({ dailyDays: 0, weeklyWeeks: 2, monthlyMonths: 6, trashDays: 14 }),
+  });
+  equal(invalid.response.status, 400);
+
+  const unknownKey = await request(harness.base, "/api/backup/retention", {
+    method: "POST",
+    ...json({ dailyDays: 3, weeklyWeeks: 2, monthlyMonths: 6, trashDays: 14, extra: 1 }),
+  });
+  equal(unknownKey.response.status, 400);
 });

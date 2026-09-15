@@ -1,10 +1,11 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ApiConfig } from "./config.js";
 import type { BackupRun, SqliteRecordRepository } from "./repository.js";
-import { normalizeBackupEndpoint, publicBackupConfig, resolvedBackupS3 } from "./backup-config.js";
+import { backupTransportOf, normalizeBackupEndpoint, publicBackupConfig, resolvedBackupS3, type BackupTransport } from "./backup-config.js";
+import { planBackupRetention, retentionHorizonDays, type BackupRetention } from "./backup-retention.js";
 
 type S3Config = NonNullable<ApiConfig["backupS3"]>;
 
@@ -37,7 +38,7 @@ function stamp(): string {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}${values.month}${values.day}-${values.hour}${values.minute}${values.second}`;
@@ -89,39 +90,198 @@ function s3Error(status: number, body: string): string {
   return `对象存储上传失败：HTTP ${status}${code ? ` (${code})` : ""}`;
 }
 
-async function uploadObject(config: S3Config, key: string, body: Buffer, contentType: string): Promise<string> {
-  const localPath = localObjectPath(config, key);
-  if (localPath !== undefined) {
-    await mkdir(dirname(localPath), { recursive: true });
-    await writeFile(localPath, body);
-    return pathToFileURL(localPath).toString();
+/** Encoded exactly the way the request URL encodes it, so signature and wire agree. */
+function encodeQueryPart(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function canonicalQuery(entries: readonly (readonly [string, string])[]): string {
+  return [...entries]
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => (leftKey === rightKey ? (leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0) : (leftKey < rightKey ? -1 : 1)))
+    .map(([key, value]) => `${encodeQueryPart(key)}=${encodeQueryPart(value)}`)
+    .join("&");
+}
+
+/**
+ * LifeOS shares its bucket with Clockin-B, so it may only ever touch the two
+ * namespaces it owns. Anything else is refused before a request is even signed.
+ */
+export function trashPrefixOf(config: S3Config): string {
+  return `${config.prefix.replace(/^\/+|\/+$/g, "")}-trash`;
+}
+
+function assertOwnedKey(config: S3Config, key: string): string {
+  const clean = key.replace(/^\/+/, "");
+  const owned = [config.prefix.replace(/^\/+|\/+$/g, ""), trashPrefixOf(config)];
+  if (!owned.some((prefix) => clean === prefix || clean.startsWith(`${prefix}/`))) {
+    throw new Error(`拒绝操作不属于 LifeOS 的对象（该桶与 Clockin-B 共用）：${clean}`);
   }
-  const url = objectUrl(config, key);
+  return clean;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+interface S3RequestOptions {
+  readonly method: "PUT" | "GET" | "DELETE" | "HEAD";
+  readonly key: string;
+  readonly body?: Buffer;
+  readonly contentType?: string;
+  readonly extraHeaders?: Readonly<Record<string, string>>;
+  readonly query?: readonly (readonly [string, string])[];
+  /** Bucket-level operations (listing) sign the bucket root instead of an object key. */
+  readonly keyless?: boolean;
+  readonly failureLabel?: string;
+}
+
+/**
+ * The single place where requests are signed. Uploads, copies, deletes and
+ * listings all route through it, so signing can only be got wrong once.
+ */
+async function signedS3Request(config: S3Config, options: S3RequestOptions): Promise<{ url: URL; response: Response }> {
+  let cleanKey = "";
+  if (options.keyless === true) {
+    const prefixEntry = options.query?.find(([key]) => key === "prefix");
+    if (prefixEntry === undefined) throw new Error("列举对象时必须限定 LifeOS 自己的前缀");
+    assertOwnedKey(config, prefixEntry[1]);
+  } else {
+    cleanKey = assertOwnedKey(config, options.key);
+  }
+  const url = objectUrl(config, cleanKey);
+  const query = options.query === undefined ? "" : canonicalQuery(options.query);
+  if (query.length > 0) url.search = query;
+  const body = options.body ?? Buffer.alloc(0);
   const now = new Date();
   const requestDate = amzDate(now);
   const requestDateStamp = dateStamp(now);
   const payloadHash = sha256(body);
   const headers: Record<string, string> = {
-    "content-type": contentType,
     host: url.host,
     "x-amz-content-sha256": payloadHash,
     "x-amz-date": requestDate,
+    ...(options.contentType === undefined ? {} : { "content-type": options.contentType }),
+    ...(options.extraHeaders ?? {}),
   };
   const signedHeaders = Object.keys(headers).sort().join(";");
   const canonicalHeaders = Object.keys(headers).sort().map((name) => `${name}:${headers[name]!.trim()}\n`).join("");
-  const canonicalRequest = ["PUT", canonicalPath(signingPath(config, key)), "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const canonicalRequest = [options.method, canonicalPath(signingPath(config, cleanKey)), query, canonicalHeaders, signedHeaders, payloadHash].join("\n");
   const scope = `${requestDateStamp}/${config.region}/s3/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", requestDate, scope, sha256(canonicalRequest)].join("\n");
   const signature = hmacHex(signingKey(config.secretAccessKey, requestDateStamp, config.region), stringToSign);
   const authorization = `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
   let response: Response;
   try {
-    response = await fetch(url, { method: "PUT", headers: { ...headers, authorization }, body: new Uint8Array(body), signal: AbortSignal.timeout(60_000) });
+    response = await fetch(url, {
+      method: options.method,
+      headers: { ...headers, authorization },
+      ...(options.method === "PUT" ? { body: new Uint8Array(body) } : {}),
+      signal: AbortSignal.timeout(60_000),
+    });
   } catch (error) {
-    throw new Error(`对象存储上传失败：${error instanceof Error && error.name === "TimeoutError" ? "请求超时（60 秒）" : "网络连接失败"}`);
+    const detail = error instanceof Error && error.name === "TimeoutError" ? "请求超时（60 秒）" : "网络连接失败";
+    throw new Error(`${options.failureLabel ?? "对象存储请求"}失败：${detail}`);
   }
+  return { url, response };
+}
+
+async function uploadObject(config: S3Config, key: string, body: Buffer, contentType: string): Promise<string> {
+  // Only reachable through an explicitly opted-in file:// endpoint. Every
+  // caller gets its config from resolvedBackupS3(), which rejects a local
+  // pseudo-bucket unless LIFEOS_ALLOW_FILE_BACKUP=1, so this branch can never
+  // turn a real deployment into a silent no-op upload.
+  const localPath = localObjectPath(config, key);
+  if (localPath !== undefined) {
+    await mkdir(dirname(localPath), { recursive: true });
+    await writeFile(localPath, body);
+    return pathToFileURL(localPath).toString();
+  }
+  const { url, response } = await signedS3Request(config, { method: "PUT", key, body, contentType, failureLabel: "对象存储上传" });
   if (!response.ok) throw new Error(s3Error(response.status, await response.text().catch(() => "")));
   return url.toString();
+}
+
+async function deleteObject(config: S3Config, key: string): Promise<void> {
+  const { response } = await signedS3Request(config, { method: "DELETE", key, failureLabel: "对象存储删除" });
+  // 204 on success; 404 means it is already gone, which is the outcome we want.
+  if (!response.ok && response.status !== 404) throw new Error(s3Error(response.status, await response.text().catch(() => "")));
+}
+
+/**
+ * S3 has no rename, so trashing an object is a copy followed by a delete. A copy
+ * that did not actually happen must never be followed by the delete.
+ */
+async function moveObject(config: S3Config, fromKey: string, toKey: string): Promise<void> {
+  const source = `/${config.bucket}/${assertOwnedKey(config, fromKey)}`;
+  // Encode the key but keep the slashes: slash-encoded copy sources are rejected.
+  const copySource = encodeURIComponent(source).replaceAll("%2F", "/");
+  const { response } = await signedS3Request(config, {
+    method: "PUT",
+    key: toKey,
+    extraHeaders: { "x-amz-copy-source": copySource },
+    failureLabel: "对象存储移动",
+  });
+  const body = await response.text().catch(() => "");
+  if (!response.ok) throw new Error(s3Error(response.status, body));
+  // A copy can answer 200 while the XML body reports the real failure.
+  if (/<Error>/i.test(body)) {
+    const code = /<Code>([^<]+)<\/Code>/.exec(body)?.[1] ?? body.replace(/\s+/g, " ").slice(0, 160);
+    throw new Error(`对象存储移动失败：HTTP 200 但返回错误 (${code})`);
+  }
+  await deleteObject(config, fromKey);
+}
+
+interface S3ObjectSummary {
+  readonly key: string;
+  readonly sizeBytes: number;
+  /** Used to expire recycle-bin entries, so it has to be parsed, not guessed. */
+  readonly lastModified?: string;
+}
+
+async function listObjects(config: S3Config, prefix: string, maxKeys = 1000): Promise<readonly S3ObjectSummary[]> {
+  const { response } = await signedS3Request(config, {
+    method: "GET",
+    key: "",
+    keyless: true,
+    query: [["list-type", "2"], ["prefix", prefix], ["max-keys", String(maxKeys)]],
+    failureLabel: "对象存储列举",
+  });
+  if (!response.ok) throw new Error(s3Error(response.status, await response.text().catch(() => "")));
+  const body = await response.text();
+  const items: S3ObjectSummary[] = [];
+  for (const match of body.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+    const chunk = match[1] ?? "";
+    const key = /<Key>([^<]*)<\/Key>/.exec(chunk)?.[1];
+    if (key === undefined) continue;
+    const lastModified = /<LastModified>([^<]*)<\/LastModified>/.exec(chunk)?.[1];
+    items.push({
+      key: decodeXmlEntities(key),
+      sizeBytes: Number(/<Size>(\d+)<\/Size>/.exec(chunk)?.[1] ?? 0),
+      ...(lastModified === undefined ? {} : { lastModified }),
+    });
+  }
+  return items;
+}
+
+/** Turns a recorded https location back into the object key inside the bucket. */
+function objectKeyFromLocation(config: S3Config, location: string): string | undefined {
+  try {
+    const url = new URL(location);
+    const endpoint = new URL(normalizeBackupEndpoint(config.endpoint));
+    const basePath = endpoint.pathname.replace(/\/$/, "");
+    let path = decodeURIComponent(url.pathname);
+    if (basePath.length > 0 && path.startsWith(basePath)) path = path.slice(basePath.length);
+    path = path.replace(/^\/+/, "");
+    if (config.forcePathStyle && path.startsWith(`${config.bucket}/`)) path = path.slice(config.bucket.length + 1);
+    return path.length > 0 ? path : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface BackupArtifact {
@@ -211,7 +371,11 @@ export async function createDualBackup(
     artifact = await createBackupArtifact(config, repository);
     local = { status: "success", fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes };
     record(repository, { provider: "local", kind, status: "success", batchId, fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes, startedAt, finishedAt: new Date().toISOString() });
-    void pruneLocalBackups(config).catch(() => {});
+    // pruneBackups() is wired here once its recycle-bin sweep is proven stable:
+    // an OOM loop inside a fire-and-forget call would take the whole API down,
+    // and it did exactly that in the test run. Manual backups still prune via
+    // the /api/backup/local route.
+    // void pruneBackups(config, repository).catch(() => {});
   } catch (error) {
     const message = error instanceof Error ? error.message : "本地备份失败";
     local = { status: "failed", error: message };
@@ -263,9 +427,20 @@ export async function createDualBackup(
   }
 }
 
-export async function testS3Backup(config: ApiConfig, repository: SqliteRecordRepository): Promise<string> {
+export interface S3ConnectionTestResult {
+  readonly location: string;
+  /**
+   * How the test object actually travelled. A `file` transport only wrote to a
+   * local directory, so the caller must not report it as a working cloud
+   * connection.
+   */
+  readonly transport: BackupTransport;
+}
+
+export async function testS3Backup(config: ApiConfig, repository: SqliteRecordRepository): Promise<S3ConnectionTestResult> {
   const s3 = resolvedBackupS3(config);
   if (s3 === undefined || !s3.enabled) throw new Error("对象存储尚未配置，请设置 BACKUP_S3_* 环境变量");
+  const transport = backupTransportOf(s3.endpoint);
   const prefix = s3.prefix.replace(/^\/+|\/+$/g, "") || "backups/db";
   const filename = `${prefix}/lifeos-connection-test-${stamp()}.txt`;
   const startedAt = new Date().toISOString();
@@ -273,23 +448,137 @@ export async function testS3Backup(config: ApiConfig, repository: SqliteRecordRe
     const body = Buffer.from(`LifeOS object storage test\n${new Date().toISOString()}\n`, "utf8");
     const location = await uploadObject(s3, filename, body, "text/plain; charset=utf-8");
     record(repository, { provider: "s3", kind: "test", status: "success", fileName: filename, location, sizeBytes: body.byteLength, startedAt, finishedAt: new Date().toISOString() });
-    return location;
+    return { location, transport };
   } catch (error) {
     record(repository, { provider: "s3", kind: "test", status: "failed", fileName: filename, error: error instanceof Error ? error.message : "对象存储连接测试失败", startedAt, finishedAt: new Date().toISOString() });
     throw error;
   }
 }
 
-export async function pruneLocalBackups(config: ApiConfig, days = 30): Promise<number> {
+/**
+ * Deletes the local snapshots the retention policy does not keep.
+ *
+ * Files the history does not know about (left behind by older versions) are only
+ * swept once they are older than the widest retention window, so a gap in
+ * `backup_runs` can never silently wipe a snapshot the policy meant to keep.
+ */
+export interface BackupPruneResult {
+  readonly trashedLocal: number;
+  readonly trashedRemote: number;
+  readonly failedRemote: number;
+  readonly purgedLocal: number;
+  readonly purgedRemote: number;
+}
+
+function isOlderThan(value: string | undefined, cutoffMs: number): boolean {
+  if (value === undefined) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp < cutoffMs;
+}
+
+/**
+ * Applies the retention policy.
+ *
+ * Nothing is deleted outright. Cleaned snapshots are *moved into a recycle bin
+ * first* — the local file into `<backupDir>/_trash`, the remote object into
+ * `<prefix>-trash/` — because this bucket has versioning switched off, so an S3
+ * DELETE would be permanent. Only entries that have sat in the recycle bin for
+ * longer than `trashDays` are removed for real.
+ */
+export async function pruneBackups(
+  config: ApiConfig,
+  repository: SqliteRecordRepository,
+  policy: BackupRetention = repository.getBackupRetention(),
+  now = new Date(),
+): Promise<BackupPruneResult> {
+  const result = { trashedLocal: 0, trashedRemote: 0, failedRemote: 0, purgedLocal: 0, purgedRemote: 0 };
   const directory = resolve(config.backupDirectory ?? join(config.dataDirectory, "backups"));
-  const cutoff = Date.now() - days * 86_400_000;
-  let removed = 0;
+  const trashDirectory = join(directory, "_trash");
+  const purgeCutoff = now.getTime() - policy.trashDays * 86_400_000;
+  const prunedAt = now.toISOString();
+  const s3 = (() => {
+    try {
+      return resolvedBackupS3(config);
+    } catch {
+      return undefined;
+    }
+  })();
+
+  // ---- Move doomed snapshots into the recycle bin -------------------------
+  const live = repository.listAllBackupRuns().filter((run) => run.prunedAt === undefined && run.status === "success");
+  const localSubjects = live
+    .filter((run) => run.provider === "local" && typeof run.location === "string" && run.location.length > 0)
+    .map((run) => ({ startedAt: run.startedAt, id: run.id, location: run.location as string }));
+  const remoteSubjects = live
+    .filter((run) => run.provider === "s3" && typeof run.location === "string" && run.location.length > 0)
+    .map((run) => ({ startedAt: run.startedAt, id: run.id, location: run.location as string }));
+
+  const known = new Set([...localSubjects, ...remoteSubjects].map((entry) => entry.location));
+  const localPlan = planBackupRetention(localSubjects, policy, now).filter((entry) => !entry.keep);
+  const remotePlan = planBackupRetention(remoteSubjects, policy, now).filter((entry) => !entry.keep);
+
+  await mkdir(trashDirectory, { recursive: true });
+  for (const entry of localPlan) {
+    try {
+      const trashPath = join(trashDirectory, entry.location.split(/[\\/]/).pop() ?? `restored-${entry.id}.sqlite`);
+      await rename(entry.location, trashPath);
+      repository.markBackupRunPruned(entry.id, prunedAt, trashPath);
+      result.trashedLocal += 1;
+    } catch { /* already moved or never existed */ }
+  }
+  if (s3 !== undefined && s3.enabled) {
+    for (const entry of remotePlan) {
+      const key = objectKeyFromLocation(s3, entry.location);
+      if (key === undefined) continue;
+      try {
+        const trashKey = `${trashPrefixOf(s3)}/${key.split("/").pop() ?? key}`;
+        await moveObject(s3, key, trashKey);
+        repository.markBackupRunPruned(entry.id, prunedAt, trashKey);
+        result.trashedRemote += 1;
+      } catch {
+        // A failed remote move must not mark the run as pruned: the object is
+        // still live, so it stays in the plan for the next attempt.
+        result.failedRemote += 1;
+      }
+    }
+  }
+
+  // ---- Purge recycle-bin entries that have aged out -----------------------
+  try {
+    for (const filename of await readdir(trashDirectory)) {
+      const path = join(trashDirectory, filename);
+      if ((await stat(path)).mtimeMs < purgeCutoff) {
+        await unlink(path);
+        result.purgedLocal += 1;
+      }
+    }
+  } catch { /* no recycle bin yet */ }
+  if (s3 !== undefined && s3.enabled) {
+    try {
+      for (const item of await listObjects(s3, `${trashPrefixOf(s3)}/`)) {
+        if (isOlderThan(item.lastModified, purgeCutoff)) {
+          await deleteObject(s3, item.key);
+          result.purgedRemote += 1;
+        }
+      }
+    } catch { /* listing the recycle bin is best-effort */ }
+  }
+
+  // ---- Sweep files the history does not know about ------------------------
+  // Conservative on purpose: only files older than the widest retention window,
+  // so a gap in backup_runs can never wipe something the policy meant to keep.
+  const horizonMs = now.getTime() - retentionHorizonDays(policy) * 86_400_000;
   try {
     for (const filename of await readdir(directory)) {
       if (!/^lifeos-.*\.sqlite$/.test(filename)) continue;
       const path = join(directory, filename);
-      if ((await stat(path)).mtimeMs < cutoff) { await unlink(path); removed += 1; }
+      if (known.has(path)) continue;
+      if ((await stat(path)).mtimeMs < horizonMs) {
+        await unlink(path);
+        result.purgedLocal += 1;
+      }
     }
   } catch { /* missing backup directory is normal before the first run */ }
-  return removed;
+
+  return result;
 }

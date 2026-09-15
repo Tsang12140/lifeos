@@ -406,6 +406,8 @@ test("places carry role and period; other kinds reject them", () => {
   throws(() => assertValidEntity({ ...place, role: "cafe" }), /unsupported value/);
   throws(() => assertValidEntity({ type: "person", id: "p1", name: "人", role: "home" }), /only allowed on a place/);
   throws(() => assertValidEntity({ type: "person", id: "p1", name: "人", period: { from: "2024-01" } }), /only allowed on a place/);
+  assertValidEntity({ ...place, address: "广东省佛山市南海区桂城街道 1 号" });
+  throws(() => assertValidEntity({ type: "person", id: "p1", name: "人", address: "某街道" }), /only allowed on a place/);
 });
 
 test("entity names and aliases may not start with a mention marker", () => {
@@ -448,13 +450,16 @@ test("aliases must be non-empty strings when an entity is validated", () => {
   );
 });
 
-test("summary text drops markers, tags, and punctuation, then clamps to five characters", () => {
-  equal(trimSummaryText("【预置】今天和@阿彬 去了巷口面馆。"), "今天和阿彬");
-  equal(trimSummaryText("地铁上站着，把@LifeOS 的想法理了一遍。"), "地铁上站着");
+test("summary text drops markers, sanitizes to a 16-code-point budget, and uses literal dots", () => {
+  equal(trimSummaryText("【预置】今天和@阿彬 去了巷口面馆。"), "今天和阿彬去了巷口面馆");
+  equal(trimSummaryText("地铁上站着，把@LifeOS 的想法理了一遍。"), "地铁上站着把LifeOS的想..");
   equal(trimSummaryText("只有两个字"), "只有两个字");
   equal(trimSummaryText(""), "");
-  // A caller with a bigger budget gets exactly that many characters, not one fewer.
-  equal(trimSummaryText("今天和@阿彬 去了巷口面馆。", 8), "今天和阿彬去了巷");
+  equal(trimSummaryText("今天和@阿彬 去了巷口面馆。", 8), "今天和阿彬去..");
+  const emoji = trimSummaryText("😀".repeat(17), 16);
+  equal(emoji, `${"😀".repeat(14)}..`);
+  equal([...emoji].length, 16);
+  ok(!/[\uD800-\uDFFF]/.test(emoji.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")));
 });
 
 test("the offline summary prefers a theme the day returns to", () => {
@@ -468,7 +473,7 @@ test("the offline summary prefers a theme the day returns to", () => {
     { id: "r1", revision: 1, text: "去江边走了一段", labels: ["江边"] },
     { id: "r2", revision: 1, text: "读了十页书", labels: ["读书"] },
   ];
-  equal(ruleSummaryText(oneOff), "去江边走了");
+  equal(ruleSummaryText(oneOff), "去江边走了一段");
   equal(ruleSummaryText([]), "");
   // A label seen twice inside one record is still only one record about it.
   equal(ruleSummaryText([{ id: "r1", revision: 1, text: "小雨小雨", labels: ["小雨", "小雨"] }]), "小雨小雨");
@@ -484,4 +489,29 @@ test("the fingerprint tracks record versions, not insertion order", () => {
   // Zero records is a real input — a day can be emptied by edits — so the empty
   // key is pinned: the djb2 seed survives a loop that never runs, making it a constant.
   equal(summaryFingerprint([]), "0:45h");
+});
+
+test("movie entities validate, round-trip through export, and never become mentions", () => {
+  const movie: Entity = {
+    type: "movie",
+    id: "movie-1",
+    name: "霸王别姬",
+    aliases: ["Farewell My Concubine"],
+    originalTitle: "覇王別姫",
+    releaseYear: 1993,
+    posterUrl: "https://image.tmdb.org/t/p/w500/poster.jpg",
+    overview: "一段故事",
+    externalIds: { tmdb: 111, imdb: "tt0106332", douban: "1295644" },
+    doubanRating: 9.6,
+    personalRating: 9.5,
+    personalReview: "值得重看",
+    watchedAt: "2026-09-15",
+  };
+  assertValidEntity(movie);
+  const bundle = createExportBundle({ exportedAt: createInstant("2026-09-15T12:00:00+08:00"), records: [], entities: [movie], assets: [] });
+  const restored = parseExportJson(serializeExportJson(bundle));
+  deepStrictEqual(restored.entities[0], movie);
+  equal(findEntityMentions("看了霸王别姬", [movie]).length, 0);
+  throws(() => assertValidEntity({ ...movie, personalRating: 9.25 }), /0\.5 increments/);
+  throws(() => assertValidEntity({ type: "person", id: "p", name: "人", originalTitle: "误用" }), /only allowed on a movie/);
 });

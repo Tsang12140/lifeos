@@ -41,6 +41,8 @@ export interface ApiConfig {
   readonly qweatherLocation?: string;
   readonly qweatherCity?: string;
   readonly qweatherHost: string;
+  /** Optional TMDb key used only by the opt-in movie module. */
+  readonly tmdbApiKey?: string;
 }
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -94,6 +96,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const cookieSecure = env.LIFEOS_COOKIE_SECURE === "1" || env.LIFEOS_COOKIE_SECURE?.toLowerCase() === "true";
   const deepseekApiKey = env.LIFEOS_DEEPSEEK_API_KEY?.trim();
   const qweatherApiKey = env.QWEATHER_KEY?.trim();
+  const tmdbApiKey = (env.LIFEOS_TMDB_API_KEY?.trim() || env.TMDB_API_KEY?.trim()) || undefined;
   const backupDirectory = resolve(env.LIFEOS_BACKUP_DIR?.trim() || env.BACKUP_DIR?.trim() || `${dataDirectory}/backups`);
   const backupBucket = env.BACKUP_S3_BUCKET?.trim() || "";
   const backupAccessKeyId = env.BACKUP_S3_ACCESS_KEY_ID?.trim() || "";
@@ -130,6 +133,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     ...(env.QWEATHER_LOCATION?.trim() ? { qweatherLocation: env.QWEATHER_LOCATION.trim() } : {}),
     ...(env.QWEATHER_CITY?.trim() ? { qweatherCity: env.QWEATHER_CITY.trim() } : {}),
     qweatherHost: (env.QWEATHER_HOST?.trim() || DEFAULT_QWEATHER_HOST).replace(/^https?:\/\//, "").replace(/\/+$/, ""),
+    ...(tmdbApiKey === undefined || tmdbApiKey === "" ? {} : { tmdbApiKey }),
   };
 }
 

@@ -11,8 +11,13 @@ if (build.status !== 0) process.exit(build.status ?? 1);
 const apiBuild = runNpm(["run", "build", "--workspace", "@lifeos/api"]);
 if (apiBuild.status !== 0) process.exit(apiBuild.status ?? 1);
 
+// `.env` holds local settings such as BACKUP_S3_* credentials. Node loads it
+// itself; a missing file is fine, so both `npm run dev` and `npm start` read the
+// same file and no dotenv dependency is needed.
+const envFile = resolve(".env");
+
 const children = [
-  spawn(process.execPath, ["apps/api/dist/src/main.js"], { stdio: "inherit", env: process.env }),
+  spawn(process.execPath, [`--env-file-if-exists=${envFile}`, "apps/api/dist/src/main.js"], { stdio: "inherit", env: process.env }),
   spawn(process.execPath, [
     resolve("node_modules/vite/bin/vite.js"),
     "--host",

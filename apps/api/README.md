@@ -26,6 +26,10 @@ Bitiful S4 的 `cdnb` 示例：Endpoint `https://s3.bitiful.net`、Region `cn-ea
 
 可以直接在设置页填写 API Key、位置 ID（例如 `101280601`）和城市名备用值。也可以通过环境变量配置：`QWEATHER_KEY`、`QWEATHER_LOCATION`、`QWEATHER_CITY`、`QWEATHER_HOST`；默认 API Host 是 `devapi.qweather.com`。如需固定加密口令，可设置 `LIFEOS_WEATHER_CONFIG_SECRET`。未配置有效 Key 时，表头只显示“天气未配置”，不会伪造天气数据。
 
+## 观影模块（TMDb）
+
+观影模块默认关闭。启用后，设置页可通过 `POST /api/movie/config` 保存 `{ "enabled": true, "apiKey": "..." }`；API Key 只以 AES-256-GCM 加密写入数据目录的 `movie-config.json`，`GET /api/movie/status` 永不回传密钥。也可以在启动环境中提供 `LIFEOS_TMDB_API_KEY`（或 `TMDB_API_KEY`），并用 `LIFEOS_MOVIE_CONFIG_SECRET` 指定配置加密口令。`POST /api/movie/resolve` 只调用 TMDb 官方 `/find`、`/search/movie` 或 `/movie` 接口返回候选，不抓取豆瓣页面；`POST /api/movie/import`（或 `/upsert`）在模块启用后保存去重的电影实体。关闭模块只停止识别和录入，不删除已保存的电影或记录引用。
+
 ## AI 助手
 
 设置页可以配置 DeepSeek 的服务地址、模型、思考开关、推理强度和 API Key。Key 只在 API 服务端使用，并以 AES-256-GCM 加密写入数据目录下的 `ai-config.json`；状态接口不会回传密钥。助手只读取非隐私记录、任务和实体，未配置 Key 或请求失败时回退到本地规则回答。真实 AI 请求仍会把所选非隐私上下文发送到配置的服务商，请先确认其数据保留和费用策略。

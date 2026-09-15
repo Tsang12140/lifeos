@@ -21,6 +21,7 @@ import {
   createExportBundle,
   exportRecordMarkdown,
   findEntityMentions,
+  normalizeEntitySearchTerm,
   parseExportJson,
   serializeExportJson,
   type Asset,
@@ -34,6 +35,8 @@ import {
   type EntityKind,
   type EntityRef,
   type EntityRelation,
+  type Movie,
+  type MovieExternalIds,
   type LifeTime,
   type PlacePeriod,
   type PlaceRole,
@@ -45,22 +48,26 @@ import {
   type WeatherAttachment,
 } from "@lifeos/core";
 import { isLoopbackHost, type ApiConfig } from "./config.js";
-import { ConflictError, SqliteRecordRepository, type BackupRun, type RecordView } from "./repository.js";
+import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
 import { createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
 import { answerLifeosAssistant, type AssistantHistoryItem } from "./assistant.js";
-import { createDualBackup, createLocalBackup, pruneLocalBackups, testS3Backup, uploadS3Backup } from "./backup.js";
+import { createDualBackup, createLocalBackup, pruneBackups, testS3Backup, uploadS3Backup } from "./backup.js";
 import { BackupScheduler, BACKUP_TIME_ZONE, publicNextBackupAt, shanghaiDateKey } from "./backup-scheduler.js";
 import { publicBackupConfig, saveRuntimeBackupConfig } from "./backup-config.js";
+import { BACKUP_RETENTION_LIMITS, buildBackupRetentionView, DEFAULT_BACKUP_RETENTION, describeBackupRetention, type BackupRetention } from "./backup-retention.js";
 import { AI_REASONING_EFFORTS, publicAiConfig, saveRuntimeAiConfig, testRuntimeAiConfig } from "./ai-config.js";
 import { clearWeatherCache, fetchRealtimeWeather, fetchWeatherSnapshot, verifyWeatherLocation } from "./weather.js";
-import { listWeatherProfiles, publicWeatherConfig, readWeatherProfile, saveRuntimeWeatherConfig, saveWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
+import { listWeatherProfiles, publicWeatherConfig, readRuntimeWeatherConfig, readWeatherProfile, saveRuntimeWeatherConfig, saveWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
+import { WeatherArchiveScheduler, WEATHER_ARCHIVE_TIME_ZONE } from "./weather-archive-scheduler.js";
+import { publicMovieConfig, readRuntimeMovieConfig, saveRuntimeMovieConfig } from "./movie-config.js";
+import { MovieModuleError, resolveMovies, testMovieConfig, type MovieCandidate } from "./movie.js";
 
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const RECORD_KINDS: readonly RecordKind[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
-const ENTITY_KINDS: readonly EntityKind[] = ["person", "project", "place", "topic"];
+const ENTITY_KINDS: readonly EntityKind[] = ["person", "project", "place", "topic", "movie"];
 const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
 const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
 const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "period_start", "period_end"];
@@ -98,6 +105,37 @@ function latestDualBackup(runs: readonly BackupRun[]): {
         ? "local_only"
         : "partial";
   return { batchId: local.batchId, status, local, s3 };
+}
+
+/**
+ * Shapes the retention state for the settings UI: the policy in plain language,
+ * one row per backup with its verdict and the reason behind it, and when the
+ * cleanup will next run. Cleanup happens after each backup, so "next cleanup" is
+ * simply the next scheduled backup.
+ */
+function backupRetentionPayload(repository: SqliteRecordRepository, config: ApiConfig, schedule: BackupSchedule) {
+  const policy = repository.getBackupRetention();
+  // The whole history: a truncated list would hide older snapshots from the plan.
+  const runs = repository.listAllBackupRuns();
+  const view = buildBackupRetentionView(runs, policy, new Date());
+  return {
+    policy,
+    limits: BACKUP_RETENTION_LIMITS,
+    defaults: DEFAULT_BACKUP_RETENTION,
+    described: describeBackupRetention(policy),
+    cleanupTrigger: "每次备份完成后自动清理",
+    // Cleaned snapshots are moved into LifeOS's own recycle bin first, because
+    // the bucket has versioning off — a plain S3 DELETE would be permanent.
+    cleanupScope: { local: true, remote: true, recycleBin: { local: true, remote: true } },
+    cleanupScheduled: schedule.enabled,
+    nextCleanupAt: publicNextBackupAt(schedule),
+    localDirectory: config.backupDirectory ?? null,
+    entries: view.entries,
+    summary: view.summary,
+    trashed: view.trashed,
+    connectionTestCount: view.connectionTestCount,
+    connectionTestBytes: view.connectionTestBytes,
+  };
 }
 
 type JsonObject = Record<string, unknown>;
@@ -639,6 +677,97 @@ function aliasesField(value: unknown): readonly string[] {
   return unique;
 }
 
+const MOVIE_FIELD_NAMES = [
+  "originalTitle",
+  "releaseYear",
+  "posterUrl",
+  "overview",
+  "externalIds",
+  "doubanRating",
+  "personalRating",
+  "personalReview",
+  "watchedAt",
+] as const;
+
+function movieScoreField(value: unknown, name: string, halfStep: boolean): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 10 || (halfStep && !Number.isInteger(value * 2))) {
+    throw new HttpError(400, "invalid_field", `${name} must be between 0 and 10${halfStep ? " in 0.5 increments" : ""}`);
+  }
+  return value;
+}
+
+function movieExternalIdsField(value: unknown): MovieExternalIds {
+  const input = jsonObject(value, "externalIds");
+  hasOnlyKeys(input, ["tmdb", "imdb", "douban"]);
+  const ids: { tmdb?: string; imdb?: string; douban?: string } = {};
+  if (input.tmdb !== undefined) ids.tmdb = String(boundedIntegerField(typeof input.tmdb === "string" && /^\d+$/.test(input.tmdb) ? Number(input.tmdb) : input.tmdb, "externalIds.tmdb", 1, Number.MAX_SAFE_INTEGER));
+  if (input.imdb !== undefined) {
+    const imdb = stringField(input.imdb, "externalIds.imdb", { nonEmpty: true }).trim().toLowerCase();
+    if (!/^tt\d+$/.test(imdb)) throw new HttpError(400, "invalid_field", "externalIds.imdb must look like tt1234567");
+    ids.imdb = imdb;
+  }
+  if (input.douban !== undefined) {
+    const raw = typeof input.douban === "number" ? String(input.douban) : stringField(input.douban, "externalIds.douban", { nonEmpty: true }).trim();
+    const douban = raw.match(/^https?:\/\/(?:www\.)?(?:movie\.)?douban\.com\/subject\/(\d+)\/?$/i)?.[1] ?? raw;
+    if (!/^\d+$/.test(douban) || douban.length === 0 || !Number.isSafeInteger(Number(douban)) || Number(douban) <= 0) {
+      throw new HttpError(400, "invalid_field", "externalIds.douban must be a numeric subject id or Douban subject URL");
+    }
+    ids.douban = douban;
+  }
+  return ids;
+}
+
+function movieReleaseYearField(value: unknown): number {
+  return boundedIntegerField(value, "releaseYear", 1, 9999);
+}
+
+function movieWatchedAtField(value: unknown): string {
+  const parsed = parseDateQuery(stringField(value, "watchedAt"), "watchedAt");
+  if (parsed === undefined) throw new HttpError(400, "invalid_date", "watchedAt must use YYYY-MM-DD");
+  return parsed;
+}
+
+/** Parse movie-only fields, with null accepted only for PATCH-style clearing. */
+function movieFieldsField(input: JsonObject, allowNull: boolean): JsonObject {
+  const output: JsonObject = {};
+  for (const field of MOVIE_FIELD_NAMES) {
+    if (!Object.hasOwn(input, field)) continue;
+    const value = input[field];
+    if (value === null) {
+      if (!allowNull) throw new HttpError(400, "invalid_field", `${field} cannot be null`);
+      output[field] = null;
+      continue;
+    }
+    if (field === "originalTitle" || field === "posterUrl" || field === "overview" || field === "personalReview") {
+      output[field] = stringField(value, field);
+    } else if (field === "releaseYear") {
+      output[field] = movieReleaseYearField(value);
+    } else if (field === "externalIds") {
+      output[field] = movieExternalIdsField(value);
+    } else if (field === "doubanRating") {
+      output[field] = movieScoreField(value, field, false);
+    } else if (field === "personalRating") {
+      output[field] = movieScoreField(value, field, true);
+    } else if (field === "watchedAt") {
+      output[field] = movieWatchedAtField(value);
+    }
+  }
+  return output;
+}
+
+function assertMovieOnlyFields(type: EntityKind, input: JsonObject): void {
+  if (type !== "movie" && MOVIE_FIELD_NAMES.some((field) => Object.hasOwn(input, field))) {
+    throw new HttpError(400, "invalid_field", "Movie fields are only allowed on a movie entity");
+  }
+}
+
+function addressField(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const address = stringField(value, "address").trim();
+  if (address.length > 500) throw new HttpError(400, "invalid_field", "address is too long");
+  return address.length === 0 ? undefined : address;
+}
+
 function placeRoleField(value: unknown): PlaceRole {
   if (typeof value !== "string" || !PLACE_ROLES.includes(value as PlaceRole)) {
     throw new HttpError(400, "invalid_field", `role must be one of: ${PLACE_ROLES.join(", ")}`);
@@ -673,9 +802,9 @@ function placePeriodField(value: unknown): PlacePeriod {
 }
 
 /** Role and period live on places only; anything else carrying them is a client bug. */
-function placeOnlyFields(type: EntityKind, role: PlaceRole | undefined, period: PlacePeriod | undefined): void {
-  if (type !== "place" && (role !== undefined || period !== undefined)) {
-    throw new HttpError(400, "invalid_field", "role and period are only allowed on a place");
+function placeOnlyFields(type: EntityKind, role: PlaceRole | undefined, period: PlacePeriod | undefined, address: string | null | undefined = undefined): void {
+  if (type !== "place" && (role !== undefined || period !== undefined || (address !== undefined && address !== null))) {
+    throw new HttpError(400, "invalid_field", "role, period and address are only allowed on a place");
   }
 }
 
@@ -725,7 +854,7 @@ function buildAsset(input: JsonObject, id: string, storageRefs: readonly Storage
  */
 function withEntityEdits(
   entity: Entity,
-  edits: { readonly name?: string; readonly aliases?: readonly string[]; readonly description?: string; readonly role?: PlaceRole; readonly period?: PlacePeriod },
+  edits: { readonly name?: string; readonly aliases?: readonly string[]; readonly description?: string; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string | null },
 ): Entity {
   const candidate: unknown = {
     ...entity,
@@ -734,9 +863,176 @@ function withEntityEdits(
     ...(edits.description === undefined ? {} : { description: edits.description }),
     ...(edits.role === undefined ? {} : { role: edits.role }),
     ...(edits.period === undefined ? {} : { period: edits.period }),
+    ...(edits.address === undefined ? {} : { address: edits.address === null ? undefined : edits.address }),
   };
   assertValidEntity(candidate);
   return candidate;
+}
+
+function withMovieEdits(entity: Entity, edits: JsonObject): Entity {
+  if (entity.type !== "movie" || Object.keys(edits).length === 0) return entity;
+  const candidate: JsonObject = { ...entity };
+  for (const field of MOVIE_FIELD_NAMES) {
+    if (!Object.hasOwn(edits, field)) continue;
+    const value = edits[field];
+    if (value === null) delete candidate[field];
+    else candidate[field] = value;
+  }
+  assertValidEntity(candidate);
+  return candidate as Movie;
+}
+
+const MOVIE_INPUT_KEYS = [
+  "id",
+  "type",
+  "name",
+  "title",
+  "query",
+  "aliases",
+  "description",
+  "originalTitle",
+  "releaseYear",
+  "posterUrl",
+  "overview",
+  "externalIds",
+  "tmdbId",
+  "imdbId",
+  "doubanId",
+  "doubanUrl",
+  "doubanRating",
+  "personalRating",
+  "personalReview",
+  "watchedAt",
+] as const;
+
+function moviePayload(input: JsonObject): JsonObject {
+  if (Object.hasOwn(input, "movie")) return jsonObject(input.movie, "movie");
+  if (Object.hasOwn(input, "candidate")) return jsonObject(input.candidate, "candidate");
+  return input;
+}
+
+function movieIdentifierField(value: unknown, name: string): string {
+  const id = stringField(value, name, { nonEmpty: true }).trim();
+  if (!/^\d+$/.test(id)) throw new HttpError(400, "invalid_field", `${name} must be numeric`);
+  return id;
+}
+
+function movieInputEntity(input: JsonObject, idOverride?: string): Movie {
+  hasOnlyKeys(input, MOVIE_INPUT_KEYS);
+  if (input.type !== undefined && input.type !== "movie") throw new HttpError(400, "invalid_field", "movie.type must be movie");
+  const nameValue = input.name ?? input.title;
+  const name = stringField(nameValue, "name", { nonEmpty: true });
+  const aliases = input.aliases === undefined ? undefined : aliasesField(input.aliases);
+  const description = input.description === undefined ? undefined : stringField(input.description, "description");
+  const fields = movieFieldsField(input, false);
+  const parsedExternal = fields.externalIds as MovieExternalIds | undefined;
+  const externalIds: { tmdb?: string; imdb?: string; douban?: string } = {
+    ...(parsedExternal?.tmdb === undefined ? {} : { tmdb: String(parsedExternal.tmdb) }),
+    ...(parsedExternal?.imdb === undefined ? {} : { imdb: parsedExternal.imdb }),
+    ...(parsedExternal?.douban === undefined ? {} : { douban: String(parsedExternal.douban) }),
+  };
+  if (input.tmdbId !== undefined) externalIds.tmdb = String(boundedIntegerField(typeof input.tmdbId === "string" && /^\d+$/.test(input.tmdbId) ? Number(input.tmdbId) : input.tmdbId, "tmdbId", 1, Number.MAX_SAFE_INTEGER));
+  if (input.imdbId !== undefined) {
+    const imdb = stringField(input.imdbId, "imdbId", { nonEmpty: true }).trim().toLowerCase();
+    if (!/^tt\d+$/.test(imdb)) throw new HttpError(400, "invalid_field", "imdbId must look like tt1234567");
+    externalIds.imdb = imdb;
+  }
+  const doubanInput = input.doubanId ?? input.doubanUrl;
+  if (doubanInput !== undefined) {
+    const raw = input.doubanUrl === undefined && typeof doubanInput === "number"
+      ? String(doubanInput)
+      : stringField(doubanInput, input.doubanUrl !== undefined ? "doubanUrl" : "doubanId", { nonEmpty: true });
+    const match = input.doubanUrl === undefined ? raw : raw.match(/(?:movie\.)?douban\.com\/subject\/(\d+)/i)?.[1];
+    if (match === undefined) throw new HttpError(400, "invalid_field", "doubanUrl must contain a subject id");
+    externalIds.douban = match;
+  }
+  const hasExternalIds = Object.keys(externalIds).length > 0;
+  const suppliedId = input.id === undefined ? undefined : stringField(input.id, "id", { nonEmpty: true });
+  const providerId = externalIds.tmdb ?? (externalIds.imdb === undefined ? externalIds.douban : externalIds.imdb);
+  const providerIdLooksLikeInternal = suppliedId !== undefined && providerId !== undefined && suppliedId === providerId;
+  const generatedId = providerId === undefined
+    ? `movie_${randomUUID()}`
+    : externalIds.tmdb !== undefined
+      ? `movie_tmdb_${externalIds.tmdb}`
+      : externalIds.imdb !== undefined
+        ? `movie_imdb_${externalIds.imdb}`
+        : `movie_douban_${externalIds.douban}`;
+  const candidate: JsonObject = {
+    type: "movie",
+    id: idOverride ?? (providerIdLooksLikeInternal ? generatedId : suppliedId ?? generatedId),
+    name,
+    createdAt: nowInstant(),
+    ...(aliases === undefined ? {} : { aliases }),
+    ...(description === undefined ? {} : { description }),
+    ...fields,
+    ...(hasExternalIds ? { externalIds } : {}),
+  };
+  assertValidEntity(candidate);
+  return candidate as Movie;
+}
+
+function movieExternalId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
+  if (typeof value === "string" && value.trim().length > 0) {
+    const trimmed = value.trim();
+    return trimmed.match(/^https?:\/\/(?:www\.)?(?:movie\.)?douban\.com\/subject\/(\d+)\/?$/i)?.[1] ?? trimmed;
+  }
+  return undefined;
+}
+
+function movieTitleMatches(left: Movie, right: Movie): boolean {
+  const terms = new Set([left.name, ...(left.aliases ?? [])].map((term) => normalizeEntitySearchTerm(term)));
+  return [right.name, ...(right.aliases ?? [])].some((term) => terms.has(normalizeEntitySearchTerm(term)));
+}
+
+function movieMatch(repository: SqliteRecordRepository, candidate: Movie): Movie | null {
+  const incoming = candidate.externalIds ?? {};
+  const movies = repository.listEntities({ type: "movie" }) as readonly Movie[];
+  const tmdb = movieExternalId(incoming.tmdb);
+  if (tmdb !== undefined) {
+    const match = movies.find((movie) => movieExternalId(movie.externalIds?.tmdb) === tmdb);
+    if (match !== undefined) return match;
+  }
+  const imdb = movieExternalId(incoming.imdb)?.toLowerCase();
+  if (imdb !== undefined) {
+    const match = movies.find((movie) => movieExternalIdsMatch(movie, "imdb", imdb));
+    if (match !== undefined) return match;
+  }
+  const douban = movieExternalId(incoming.douban);
+  if (douban !== undefined) {
+    const match = movies.find((movie) => movieExternalIdsMatch(movie, "douban", douban) && movieTitleMatches(movie, candidate));
+    if (match !== undefined) return match;
+  }
+  // A caller may be editing a manually-created movie that has no provider ID;
+  // its explicit LifeOS id is still a safe final upsert key.
+  const byId = movies.find((movie) => movie.id === candidate.id);
+  return byId ?? null;
+}
+
+function movieExternalIdsMatch(movie: Movie, key: "imdb" | "douban", expected: string): boolean {
+  const actual = movieExternalId(movie.externalIds?.[key]);
+  return actual !== undefined && actual.toLowerCase() === expected.toLowerCase();
+}
+
+function movieNameHasCjk(value: string): boolean {
+  return /[\u3400-\u9fff]/u.test(value);
+}
+
+function mergeMovie(existing: Movie, incoming: Movie): Movie {
+  const name = movieNameHasCjk(incoming.name) || !movieNameHasCjk(existing.name) ? incoming.name : existing.name;
+  const aliases = [...new Set([existing.name, incoming.name, ...(existing.aliases ?? []), ...(incoming.aliases ?? [])])].filter((alias) => alias !== name);
+  const externalIds = { ...(existing.externalIds ?? {}), ...(incoming.externalIds ?? {}) };
+  const candidate: JsonObject = {
+    ...existing,
+    ...incoming,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    name,
+    ...(aliases.length === 0 ? {} : { aliases }),
+    ...(Object.keys(externalIds).length === 0 ? {} : { externalIds }),
+  };
+  assertValidEntity(candidate);
+  return candidate as Movie;
 }
 
 function withRelation(entity: Entity, relation: EntityRelation): Entity {
@@ -845,6 +1141,7 @@ function resolveLocalAsset(root: string, sourceRef: string): { file: string; med
 export interface LifeosApp {
   readonly repository: SqliteRecordRepository;
   readonly backupScheduler: BackupScheduler;
+  readonly weatherArchiveScheduler: WeatherArchiveScheduler;
   readonly handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   readonly close: () => void;
 }
@@ -857,6 +1154,12 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     onError: (error) => console.error("[backup-scheduler] scheduled backup failed:", error),
   });
   backupScheduler.start();
+  const weatherArchiveScheduler = new WeatherArchiveScheduler({
+    repository,
+    config,
+    onError: (error) => console.error("[weather-archive] daily archive failed:", error),
+  });
+  weatherArchiveScheduler.start();
   // One provider for the process: it holds no per-request state, and the summaries
   // it produces are cached per day, so a month view does not re-ask on every open.
   const daySummaryProvider = createDaySummaryProvider(config);
@@ -943,8 +1246,31 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
           ...(latestScheduled?.finishedAt === undefined ? {} : { lastRunAt: latestScheduled.finishedAt }),
         },
         lastDualBackup: latestDualBackup(runs),
+        retention: { policy: repository.getBackupRetention(), described: describeBackupRetention(repository.getBackupRetention()) },
         runs,
       });
+      return;
+    }
+    if (pathname === "/api/backup/retention" && req.method === "GET") {
+      setJson(res, 200, backupRetentionPayload(repository, config, backupScheduler.schedule));
+      return;
+    }
+    if (pathname === "/api/backup/retention" && req.method === "POST") {
+      requireJsonContentType(req, true);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["dailyDays", "weeklyWeeks", "monthlyMonths", "trashDays"]);
+      try {
+        const policy: BackupRetention = {
+          dailyDays: boundedIntegerField(input.dailyDays, "dailyDays", BACKUP_RETENTION_LIMITS.dailyDays.min, BACKUP_RETENTION_LIMITS.dailyDays.max),
+          weeklyWeeks: boundedIntegerField(input.weeklyWeeks, "weeklyWeeks", BACKUP_RETENTION_LIMITS.weeklyWeeks.min, BACKUP_RETENTION_LIMITS.weeklyWeeks.max),
+          monthlyMonths: boundedIntegerField(input.monthlyMonths, "monthlyMonths", BACKUP_RETENTION_LIMITS.monthlyMonths.min, BACKUP_RETENTION_LIMITS.monthlyMonths.max),
+          trashDays: boundedIntegerField(input.trashDays, "trashDays", BACKUP_RETENTION_LIMITS.trashDays.min, BACKUP_RETENTION_LIMITS.trashDays.max),
+        };
+        repository.saveBackupRetention(policy);
+        setJson(res, 200, backupRetentionPayload(repository, config, backupScheduler.schedule));
+      } catch (error) {
+        throw new HttpError(400, "invalid_backup_retention", error instanceof Error ? error.message : "保留策略无效");
+      }
       return;
     }
     if (pathname === "/api/backup/runs" && req.method === "GET") {
@@ -1028,8 +1354,8 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       requireJsonContentType(req, true);
       try {
         const artifact = await createLocalBackup(config, repository);
-        const pruned = await pruneLocalBackups(config);
-        setJson(res, 201, { ok: true, provider: "local", fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes, pruned });
+        const pruned = await pruneBackups(config, repository);
+        setJson(res, 201, { ok: true, provider: "local", fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes, pruned: pruned.trashedLocal + pruned.purgedLocal, prune: pruned });
       } catch (error) {
         throw backupHttpError(error);
       }
@@ -1048,8 +1374,8 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     if (pathname === "/api/backup/s3/test" && req.method === "POST") {
       requireJsonContentType(req, true);
       try {
-        const location = await testS3Backup(config, repository);
-        setJson(res, 200, { ok: true, location });
+        const result = await testS3Backup(config, repository);
+        setJson(res, 200, { ok: true, location: result.location, transport: result.transport, ...(result.transport === "file" ? { warning: "当前对象存储 Endpoint 是本机目录（file://），连接测试只写入了本机文件，不能证明可以联网上传。" } : {}) });
       } catch (error) {
         throw backupHttpError(error);
       }
@@ -1091,6 +1417,92 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         setJson(res, 200, { ok: true, message });
       } catch (error) {
         throw new HttpError(502, "ai_config_test_failed", error instanceof Error ? error.message : "AI 服务连接失败");
+      }
+      return;
+    }
+    const movieStatusPath = pathname === "/api/movie/status" || pathname === "/api/movies/status";
+    const movieConfigPath = pathname === "/api/movie/config" || pathname === "/api/movies/config";
+    const movieConfigTestPath = pathname === "/api/movie/config/test" || pathname === "/api/movies/config/test";
+    const movieResolvePath = pathname === "/api/movie/resolve" || pathname === "/api/movies/resolve";
+    const movieImportPath = pathname === "/api/movie/import" || pathname === "/api/movies/import";
+    const movieUpsertPath = pathname === "/api/movie/upsert" || pathname === "/api/movies/upsert";
+    if (movieStatusPath && req.method === "GET") {
+      setJson(res, 200, publicMovieConfig(config));
+      return;
+    }
+    if (movieConfigPath && req.method === "POST") {
+      requireJsonContentType(req, true);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["enabled", "apiKey", "clearApiKey"]);
+      const current = readRuntimeMovieConfig(config);
+      try {
+        const status = saveRuntimeMovieConfig(config, {
+          enabled: input.enabled === undefined ? current.enabled : booleanField(input.enabled, "enabled"),
+          ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
+          ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
+        });
+        setJson(res, 200, status);
+      } catch (error) {
+        throw new HttpError(400, "invalid_movie_config", error instanceof Error ? error.message : "观影配置无效");
+      }
+      return;
+    }
+    if (movieConfigTestPath && req.method === "POST") {
+      requireJsonContentType(req, true);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["apiKey"]);
+      const message = await testMovieConfig(config, input.apiKey === undefined ? undefined : stringField(input.apiKey, "apiKey"));
+      setJson(res, 200, { ok: true, message });
+      return;
+    }
+    if (movieResolvePath && req.method === "POST") {
+      requireJsonContentType(req);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["query", "title", "imdbId", "tmdbId", "doubanId", "doubanUrl"]);
+      const queryParts = [
+        input.query === undefined ? undefined : stringField(input.query, "query"),
+        input.doubanUrl === undefined ? undefined : stringField(input.doubanUrl, "doubanUrl"),
+      ].filter((value): value is string => value !== undefined && value.trim().length > 0);
+      const query = queryParts.length === 0 ? undefined : queryParts.join(" ");
+      const result = await resolveMovies(config, {
+        ...(query === undefined ? {} : { query }),
+        ...(input.title === undefined ? {} : { title: stringField(input.title, "title") }),
+        ...(input.imdbId === undefined ? {} : { imdbId: stringField(input.imdbId, "imdbId") }),
+        ...(input.tmdbId === undefined ? {} : { tmdbId: typeof input.tmdbId === "number" ? input.tmdbId : stringField(input.tmdbId, "tmdbId") }),
+        ...(input.doubanId === undefined ? {} : { doubanId: typeof input.doubanId === "number" ? input.doubanId : stringField(input.doubanId, "doubanId") }),
+      });
+      setJson(res, 200, result);
+      return;
+    }
+    if ((movieImportPath || movieUpsertPath) && req.method === "POST") {
+      requireJsonContentType(req);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      if (!readRuntimeMovieConfig(config).enabled) throw new MovieModuleError(409, "movie_module_disabled", "观影模块未启用；请先在设置中启用");
+      if (Object.hasOwn(input, "movie") || Object.hasOwn(input, "candidate")) hasOnlyKeys(input, ["movie", "candidate"]);
+      let source = moviePayload(input);
+      if (source.name === undefined && source.title === undefined) {
+        const lookup: JsonObject = {};
+        for (const key of ["query", "title", "imdbId", "tmdbId", "doubanId", "doubanUrl"] as const) {
+          if (source[key] !== undefined) lookup[key] = source[key];
+        }
+        if (source.doubanUrl !== undefined) {
+          const doubanUrl = stringField(source.doubanUrl, "doubanUrl");
+          lookup.query = lookup.query === undefined ? doubanUrl : `${String(lookup.query)} ${doubanUrl}`;
+        }
+        const resolved = await resolveMovies(config, lookup);
+        if (resolved.candidates.length === 0) throw new HttpError(404, "movie_not_found", "TMDb 没有找到影片");
+        if (resolved.candidates.length > 1) throw new HttpError(409, "movie_candidate_required", "匹配到多部影片，请先选择候选项");
+        source = { ...resolved.candidates[0], ...source };
+      }
+      const movie = movieInputEntity(source);
+      const existing = movieMatch(repository, movie);
+      if (existing === null) {
+        repository.insertEntity(movie);
+        setJson(res, 201, { created: true, entity: movie });
+      } else {
+        const updated = mergeMovie(existing, movie);
+        repository.updateEntity(updated);
+        setJson(res, 200, { created: false, entity: updated });
       }
       return;
     }
@@ -1221,6 +1633,31 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       } catch (error) {
         throw new HttpError(502, "weather_config_test_failed", error instanceof Error ? error.message : "天气 API 连接失败");
       }
+      return;
+    }
+    if (pathname === "/api/weather/archive" && req.method === "GET") {
+      const from = parseDateQuery(url.searchParams.get("from"), "from");
+      const to = parseDateQuery(url.searchParams.get("to"), "to");
+      if (from === undefined || to === undefined) throw new HttpError(400, "invalid_range", "from and to are required");
+      if (from > to) throw new HttpError(400, "invalid_range", "from must not be after to");
+      const start = Date.parse(`${from}T00:00:00Z`);
+      const end = Date.parse(`${to}T00:00:00Z`);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || (end - start) / 86_400_000 > 62) {
+        throw new HttpError(400, "invalid_range", "天气归档最多查询 63 天");
+      }
+      const deviceId = weatherDeviceId(req, res, config);
+      const deviceLocation = repository.getWeatherDeviceLocation(deviceId);
+      // Read only the currently active device/profile location. Do not union
+      // stale device keys with the profile key: a same-day row from another
+      // city must never leak into this device's month view.
+      const activeOverride = deviceLocation === null ? undefined : weatherLocationOverride(config, deviceLocation);
+      const runtime = activeOverride === undefined ? readRuntimeWeatherConfig(config) : activeOverride;
+      const locationKeys = new Set<string>();
+      if (runtime.locationId) locationKeys.add(runtime.locationId);
+      if (runtime.city) locationKeys.add(runtime.city);
+      const rows = [...locationKeys].flatMap((locationKey) => repository.listWeatherDayCache(from, to, locationKey));
+      const unique = new Map(rows.map((row) => [`${row.date}|${row.locationKey}`, row]));
+      setJson(res, 200, { from, to, timeZone: WEATHER_ARCHIVE_TIME_ZONE, items: [...unique.values()].sort((left, right) => left.date.localeCompare(right.date) || left.locationKey.localeCompare(right.locationKey)) });
       return;
     }
     if (pathname === "/api/modules/cycle-intimacy" && req.method === "GET") {
@@ -1421,15 +1858,19 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     if (pathname === "/api/entities" && req.method === "POST") {
       requireJsonContentType(req);
       const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["id", "type", "name", "aliases", "description", "role", "period"]);
+      hasOnlyKeys(input, ["id", "type", "name", "aliases", "description", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
       const type = enumField(input.type, ENTITY_KINDS, "type");
+      if (type === "movie" && !readRuntimeMovieConfig(config).enabled) throw new MovieModuleError(409, "movie_module_disabled", "观影模块未启用；请先在设置中启用");
+      assertMovieOnlyFields(type, input);
       const rawName = stringField(input.name, "name", { nonEmpty: true });
       const name = type === "person" ? canonicalPersonName(rawName) : rawName;
       const description = input.description === undefined ? undefined : stringField(input.description, "description");
       const aliases = input.aliases === undefined ? undefined : aliasesField(input.aliases);
       const role = input.role === undefined ? undefined : placeRoleField(input.role);
       const period = input.period === undefined ? undefined : placePeriodField(input.period);
-      placeOnlyFields(type, role, period);
+      const address = addressField(input.address);
+      const movieFields = movieFieldsField(input, false);
+      placeOnlyFields(type, role, period, address);
       // An explicit id keeps seeded or imported objects addressable and predictable.
       const id = input.id === undefined ? `${type}_${randomUUID()}` : stringField(input.id, "id", { nonEmpty: true });
       if (repository.findEntityById(id) !== null) throw new HttpError(409, "entity_exists", `Entity already exists: ${id}`);
@@ -1442,6 +1883,8 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         ...(description === undefined ? {} : { description }),
         ...(role === undefined ? {} : { role }),
         ...(period === undefined ? {} : { period }),
+        ...(address === undefined ? {} : { address }),
+        ...movieFields,
       };
       assertValidEntity(entity);
       repository.insertEntity(entity);
@@ -1466,21 +1909,27 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         setEmpty(res, 204);
         return;
       }
+      if (existing.type === "movie" && !readRuntimeMovieConfig(config).enabled) throw new MovieModuleError(409, "movie_module_disabled", "观影模块未启用；请先在设置中启用");
       requireJsonContentType(req);
       const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["name", "aliases", "description", "role", "period"]);
+      hasOnlyKeys(input, ["name", "aliases", "description", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
+      assertMovieOnlyFields(existing.type, input);
       const role = input.role === undefined ? undefined : placeRoleField(input.role);
       const period = input.period === undefined ? undefined : placePeriodField(input.period);
-      placeOnlyFields(existing.type, role, period);
+      const address = input.address === undefined ? undefined : input.address === null ? null : addressField(input.address);
+      const movieFields = movieFieldsField(input, true);
+      placeOnlyFields(existing.type, role, period, address);
       const updated = withEntityEdits(existing, {
         ...(input.name === undefined ? {} : { name: existing.type === "person" ? canonicalPersonName(stringField(input.name, "name", { nonEmpty: true })) : stringField(input.name, "name", { nonEmpty: true }) }),
         ...(input.aliases === undefined ? {} : { aliases: aliasesField(input.aliases) }),
         ...(input.description === undefined ? {} : { description: stringField(input.description, "description") }),
         ...(role === undefined ? {} : { role }),
         ...(period === undefined ? {} : { period }),
+        ...(address === undefined ? {} : { address }),
       });
-      repository.updateEntity(updated);
-      setJson(res, 200, updated);
+      const movieUpdated = withMovieEdits(updated, movieFields);
+      repository.updateEntity(movieUpdated);
+      setJson(res, 200, movieUpdated);
       return;
     }
     if (pathname === "/api/assets" && req.method === "GET") {
@@ -1631,9 +2080,11 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     res.end(readFileSync(file));
   }
 
+  let closed = false;
   const app: LifeosApp = {
     repository,
     backupScheduler,
+    weatherArchiveScheduler,
     handler: async function handler(req, res): Promise<void> {
       const startedAt = Date.now();
       try {
@@ -1660,6 +2111,8 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         }
         const httpError = error instanceof HttpError
           ? error
+          : error instanceof MovieModuleError
+            ? new HttpError(error.status, error.code, error.message)
           : error instanceof SyntaxError
             ? new HttpError(400, "invalid_json", "Invalid request")
             : new HttpError(500, "internal_error", "Internal server error");
@@ -1669,7 +2122,13 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       }
       requestLog(res.statusCode, req.method ?? "?", rawPathname(req), startedAt);
     },
-    close: () => { backupScheduler.stop(); repository.close(); },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      backupScheduler.stop();
+      weatherArchiveScheduler.stop();
+      repository.close();
+    },
   };
   return app;
 }

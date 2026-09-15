@@ -16,8 +16,10 @@ import {
   CloudSun,
   ContactRound,
   Download,
+  Archive,
   Edit3,
   ExternalLink,
+  Film,
   FileJson,
   FileText,
   FolderKanban,
@@ -55,7 +57,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, type PlacePeriod, type PlaceRole } from "@lifeos/core";
+import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, SUMMARY_MAX_LENGTH, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, trimSummaryText, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import { clearLogs, copyRecentJson, installDiagnostics, recentLogs, subscribe } from "./diagnostics";
 import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import {
@@ -64,13 +66,18 @@ import {
   type AiStatus,
   type AuthState,
   type BackupStatus,
+  type BackupRetentionPolicy,
+  type BackupRetentionView,
   type EntitiesResponse,
+  type MovieEntity,
+  type MovieModuleStatus,
   type RecordView,
   type RecordsResponse,
   type RecordWritePayload,
   type SummariesResponse,
   type TaskRecordView,
   type WeatherCurrentResponse,
+  type WeatherArchiveResponse,
   type WeatherProfilesResponse,
   type WeatherStatus,
 } from "./api";
@@ -79,7 +86,7 @@ import { calendarDayInfo } from "./calendarData";
 import { peekScore, scorePhoto, storyWeight } from "./photoScore";
 import { WeatherHeader } from "./WeatherHeader";
 import { BackupCalendar } from "./BackupCalendar";
-import type { WeatherProfile } from "./weather";
+import { getWeatherEmoji, type WeatherDay, type WeatherProfile } from "./weather";
 import {
   dateKeyForRecord,
   dateOnly,
@@ -100,21 +107,23 @@ import {
   weekdayShort,
 } from "./time";
 import { registerWebMcp } from "./webmcp";
+import { enabledModuleCommands, fetchMovieModuleStatus, movieRef, MovieAddPanel, MovieCardDialog, MoviePrompt, MovieSettingsCard, type ModuleCommand } from "./movie";
 import "./styles.css";
 
-type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "settings";
+type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "entities" | "settings";
 type CalendarMode = "week" | "month";
 type ComposerKind = Extract<RecordKind, "journal" | "task" | "event" | "note">;
 /** Everything the create form can collect in one shot. */
-interface EntityCreateRequest { readonly type: "person" | "place"; readonly name: string; readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod; }
-type CreateEntity = (type: EntityKind, name: string, extras?: { readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod }) => Promise<Entity | null>;
+interface EntityCreateRequest { readonly type: "person" | "place"; readonly name: string; readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string; }
+type CreateEntity = (type: EntityKind, name: string, extras?: { readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string }) => Promise<Entity | null>;
 
 const DEMO_ID_PREFIX = "demo-";
 const DEMO_HIDDEN_STORAGE_KEY = "lifeos.hideDemo";
+const MOVIE_PROMPT_HIDDEN_STORAGE_KEY = "lifeos.moviePromptHidden";
 const UI_FONT_STORAGE_KEY = "lifeos.uiFont";
 type UiFontId = "misans" | "source-han-sans" | "harmonyos-sans";
 const UI_FONT_OPTIONS: readonly { id: UiFontId; label: string; stack: string }[] = [
-  { id: "misans", label: "MiSans", stack: '"MiSans", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+  { id: "misans", label: "MiSans", stack: '"LifeOS MiSans", "MiSans", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
   { id: "source-han-sans", label: "思源黑体 / Source Han Sans", stack: '"Source Han Sans SC", "Source Han Sans SC VF", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
   { id: "harmonyos-sans", label: "HarmonyOS Sans", stack: '"HarmonyOS Sans SC", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
 ];
@@ -138,11 +147,12 @@ const COMPOSER_META: Record<ComposerKind, { label: string; placeholder: string; 
   note: { label: "笔记", placeholder: "把想法留在这里……", icon: BookOpen },
 };
 
-const ENTITY_META: Record<EntityKind, { label: string; icon: LucideIcon }> = {
+const ENTITY_META: Record<string, { label: string; icon: LucideIcon }> = {
   person: { label: "人物", icon: User },
   project: { label: "项目", icon: FolderKanban },
   place: { label: "地点", icon: MapPin },
   topic: { label: "主题", icon: Tag },
+  movie: { label: "电影", icon: Film },
 };
 
 const ENTITY_KIND_ORDER: readonly EntityKind[] = ["person", "place", "project", "topic"];
@@ -162,6 +172,21 @@ const RELATION_META: Record<RelationKind, { label: string; icon: LucideIcon }> =
  * "I" am; without that entity they simply show no kind.
  */
 const SELF_ENTITY_ID = "self";
+
+/** Movie is supplied by an optional backend module and may be one deploy
+ * revision ahead of the shared core package. Keep the runtime guard local so
+ * the rest of the UI can render historical movie refs during that window. */
+function isMovieEntity(value: unknown): value is MovieEntity {
+  return typeof value === "object" && value !== null && (value as { readonly type?: unknown }).type === "movie" && typeof (value as { readonly id?: unknown }).id === "string";
+}
+
+function isMovieRef(value: EntityRef): boolean {
+  return (value.entityType as string) === "movie";
+}
+
+function asCoreEntity(value: MovieEntity): Entity {
+  return value as unknown as Entity;
+}
 
 function relationKindFor(entityId: string, entities: readonly Entity[]): RelationKind | undefined {
   const self = entities.find((entity) => entity.id === SELF_ENTITY_ID);
@@ -205,6 +230,7 @@ function refAsEntity(ref: EntityRef): Entity {
   if (ref.entityType === "person") return { ...base, type: "person" };
   if (ref.entityType === "place") return { ...base, type: "place" };
   if (ref.entityType === "project") return { ...base, type: "project" };
+  if ((ref.entityType as string) === "movie") return { ...base, type: "movie" } as unknown as Entity;
   return { ...base, type: "topic" };
 }
 
@@ -243,6 +269,9 @@ const PLACE_ROLE_LABELS: Record<(typeof PLACE_ROLES)[number], string> = { home: 
  * whether it contains people or places, so repeating "人物/地点" is noise.
  */
 function entityHint(entity: Entity, entities: readonly Entity[] = []): string {
+  if (isMovieEntity(entity)) {
+    return [entity.originalTitle, entity.releaseYear === undefined ? undefined : String(entity.releaseYear), entity.doubanRating === undefined ? undefined : `豆瓣 ${entity.doubanRating}`].filter(Boolean).join(" · ");
+  }
   const parts: string[] = [];
   if (entity.type === "person") {
     const relation = relationLabelFor(entity.id, entities);
@@ -306,12 +335,39 @@ function hasKnownMentionPrefix(entities: readonly Entity[], marker: string, quer
     .some((entity) => entitySearchTerms(entity).some((term) => normalizedQuery.startsWith(normalizeEntitySearchTerm(term))));
 }
 
+interface SlashQuery {
+  readonly query: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+/** A slash only becomes a command trigger at the start of a token. This keeps
+ * URLs, paths, and ordinary prose untouched while allowing Chinese IME input
+ * to continue through the same native textarea. */
+function slashQueryAt(value: string, caret: number): SlashQuery | null {
+  const upto = value.slice(0, caret);
+  const slash = upto.lastIndexOf("/");
+  if (slash < 0) return null;
+  const previous = upto[slash - 1];
+  if (previous !== undefined && !/\s/u.test(previous)) return null;
+  const query = upto.slice(slash + 1);
+  if (/\s|[@#]/u.test(query) || query.length > 24) return null;
+  return { query, start: slash, end: caret };
+}
+
+function slashSuggestions(commands: readonly ModuleCommand[], query: string): readonly ModuleCommand[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (needle.length === 0) return commands;
+  return commands.filter((command) => [command.label, ...command.aliases].some((term) => term.toLocaleLowerCase().startsWith(needle)));
+}
+
 const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
   { id: "today", label: "今天", icon: Sun },
   { id: "timeline", label: "时间轴", icon: CalendarDays },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "tasks", label: "任务", icon: ListChecks },
   { id: "notes", label: "笔记", icon: NotebookPen },
+  { id: "entities", label: "联系人与地点", icon: ContactRound },
 ];
 
 const SETTINGS_NAV_ITEM: { id: AppView; label: string; icon: LucideIcon } = { id: "settings", label: "设置", icon: Settings };
@@ -408,12 +464,12 @@ function MobileNav({ activeView, onNavigate }: { activeView: AppView; onNavigate
   return <nav className="mobile-nav" aria-label="移动端导航">{NAV_ITEMS.map((item) => { const Icon = item.icon; return <button className={`mobile-nav-item ${activeView === item.id ? "is-active" : ""}`} key={item.id} type="button" onClick={() => onNavigate(item.id)} aria-current={activeView === item.id ? "page" : undefined}><Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{item.label}</span></button>; })}</nav>;
 }
 
-interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; }
+interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose }: ComposerProps) {
+function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
@@ -421,6 +477,7 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
   const [createOpen, setCreateOpen] = useState(false);
   const [smartMentionPrompt, setSmartMentionPrompt] = useState<SmartMentionPrompt | null>(null);
   const [smartHintVisible, setSmartHintVisible] = useState(false);
+  const [moviePanelOpen, setMoviePanelOpen] = useState(false);
   const composerRef = useRef<HTMLElement>(null);
   const smartHintTimerRef = useRef<number | null>(null);
   const selectionRef = useRef<ComposerSelection | null>(null);
@@ -555,6 +612,7 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
       ...(request.aliases === undefined ? {} : { aliases: request.aliases }),
       ...(request.role === undefined ? {} : { role: request.role }),
       ...(request.period === undefined ? {} : { period: request.period }),
+      ...(request.address === undefined ? {} : { address: request.address }),
     });
     if (entity === null) return false;
     const selection = selectionRef.current;
@@ -576,6 +634,13 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
         : smartChoices.length > 0
           ? `「${smartSelectionText}」匹配到多个关联对象`
           : `把「${smartSelectionText}」存成？`;
+  const moduleCommands = useMemo(() => enabledModuleCommands(movieEnabled), [movieEnabled]);
+  const attachMovie = (movie: MovieEntity) => {
+    const ref = movieRef(movie) as unknown as EntityRef;
+    onMovieRefsChange([...movieRefs.filter((item) => !isMovieRef(item)), ref]);
+    onMovieEntity(movie);
+  };
+  const removeMovie = (id: string) => onMovieRefsChange(movieRefs.filter((item) => !(isMovieRef(item) && item.entityId === id)));
   return <section ref={composerRef} className="composer surface" aria-label="记录编辑器">
     <div className="composer-toolbar">
       <div className="kind-switcher" role="tablist" aria-label="记录类型">
@@ -586,7 +651,9 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
       </div>
       {dismissible ? <button className="icon-button compact-icon-button composer-close" type="button" onClick={onClose} aria-label="关闭记录编辑器"><X size={17} strokeWidth={1.9} aria-hidden="true" /></button> : null}
     </div>
-    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} />
+    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
+    {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
+    {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
     <div className="composer-footer">
       <div className="composer-fields">
         <div className="place-anchor">
@@ -601,7 +668,7 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
         {kind === "task" ? <label className="composer-date-control" title="截止时间"><CalendarDays size={15} aria-hidden="true" /><input className="field-input" type="datetime-local" value={dueAt} onChange={(event) => onDueAtChange(event.target.value)} aria-label="截止时间" /></label> : null}
         {isBackfillDate ? <label className={`backfill-toggle ${isBackfill ? "is-on" : ""}`} title="将这条记录标记为补记"><input type="checkbox" checked={isBackfill} onChange={(event) => onBackfillChange(event.target.checked)} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label> : null}
         <label className={`privacy-toggle ${isPrivate ? "is-on" : ""}`} title="隐私记录"><input type="checkbox" checked={isPrivate} onChange={(event) => onPrivateChange(event.target.checked)} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私</span></label>
-        <button className={`weather-pin-toggle ${weather ? "is-on" : ""}`} type="button" onClick={weather ? onClearWeather : onCaptureWeather} disabled={weatherBusy} title={weather ? "取消钉住现场天气" : "读取当前天气并钉在这条记录上"}>{weatherBusy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CloudSun size={14} aria-hidden="true" />}<span>{weatherBusy ? "读取中" : weather ? `现场 · ${weather.text}` : "钉住天气"}</span></button>
+        <button className={`weather-pin-toggle ${weather ? "is-on" : ""}`} type="button" onClick={weather ? onClearWeather : onCaptureWeather} disabled={weatherBusy} title={weather ? "取消天气" : "读取当前天气"} aria-label={weather ? `天气 · ${weather.text}，点击取消` : "天气，点击读取当前天气"}>{weatherBusy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CloudSun size={14} aria-hidden="true" />}<span>{weatherBusy ? "读取中" : weather ? `天气 · ${weather.text}` : "天气"}</span></button>
       </div>
       <button className="primary-button" type="button" disabled={!content.trim() || saving} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : "保存记录"}</span></button>
     </div>
@@ -621,6 +688,8 @@ interface MentionBoxProps {
   readonly autoFocus?: boolean;
   readonly autoGrow?: boolean;
   readonly autoGrowRows?: number;
+  readonly moduleCommands?: readonly ModuleCommand[];
+  readonly onSlashCommand?: (command: ModuleCommand) => void;
 }
 
 /**
@@ -636,6 +705,7 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
   const [role, setRole] = useState<PlaceRole>("home");
   const [from, setFrom] = useState("");
   const [until, setUntil] = useState("");
+  const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const cleanName = name.replace(/[@#]/g, "").trim();
   const submit = async () => {
@@ -648,6 +718,7 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
       ...(aliasList.length > 0 ? { aliases: aliasList } : {}),
       ...(type === "place" ? { role } : {}),
       ...(type === "place" && (from !== "" || until !== "") ? { period: { ...(from === "" ? {} : { from }), ...(until === "" ? {} : { until }) } } : {}),
+      ...(type === "place" && address.trim() ? { address: address.trim() } : {}),
     });
     setBusy(false);
     if (created) onCancel();
@@ -681,6 +752,10 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
         <span className="entity-create-label">至</span>
         <input className="entity-create-input entity-create-month" type="month" value={until} onChange={(event) => setUntil(event.target.value)} aria-label="结束年月，留空表示至今" />
       </div>
+      <div className="entity-create-row">
+        <span className="entity-create-label">详细地址</span>
+        <input className="entity-create-input" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="可选；平时不会展开" />
+      </div>
     </> : null}
     <div className="entity-create-actions">
       <button type="button" className="text-button" onClick={onCancel}>取消</button>
@@ -699,12 +774,14 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
  * Unknown names are never rewritten, which is what keeps e-mail addresses,
  * passwords, and hex colours safe.
  */
-function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows }: MentionBoxProps) {
+function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand }: MentionBoxProps) {
   const localRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? localRef;
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [createFormOpen, setCreateFormOpen] = useState(false);
+  const [slash, setSlash] = useState<SlashQuery | null>(null);
+  const slashOptions = useMemo(() => slash === null ? [] : slashSuggestions(moduleCommands, slash.query), [moduleCommands, slash]);
   const suggestions = useMemo(() => (mention === null || createFormOpen ? [] : mentionSuggestions(entities, mention.marker, mention.query)), [entities, mention, createFormOpen]);
   const trimmedQuery = mention?.query.trim() ?? "";
   const hasKnownPrefix = mention !== null && hasKnownMentionPrefix(entities, mention.marker, mention.query);
@@ -719,11 +796,22 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
     (CJK_PATTERN.test(trimmedQuery) && Array.from(trimmedQuery).length <= MAX_IMPLICIT_CJK_MENTION_NAME_LENGTH && !suggestions.some((entity) => entitySearchTerms(entity).some((term) => normalizeEntitySearchTerm(term) === normalizeEntitySearchTerm(trimmedQuery)))));
   const optionCount = createFormOpen ? 0 : (mention?.forceNew === true ? 0 : suggestions.length) + (wantsNew ? 1 : 0);
 
-  useEffect(() => { setActiveIndex(0); }, [mention?.start, mention?.query]);
+  useEffect(() => { setActiveIndex(0); }, [mention?.start, mention?.query, slash?.start, slash?.query]);
 
   const syncMention = (element: HTMLTextAreaElement) => {
     setMention(mentionQueryAt(element.value, element.selectionStart ?? element.value.length));
+    setSlash(slashQueryAt(element.value, element.selectionStart ?? element.value.length));
   };
+
+  useEffect(() => {
+    if (slash === null) return undefined;
+    const handleOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || ref.current?.parentElement?.contains(target) !== true) setSlash(null);
+    };
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
+  }, [slash]);
 
   const insert = (name: string, markerOverride?: string) => {
     if (mention === null) return;
@@ -747,6 +835,7 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
       ...(request.aliases === undefined ? {} : { aliases: request.aliases }),
       ...(request.role === undefined ? {} : { role: request.role }),
       ...(request.period === undefined ? {} : { period: request.period }),
+      ...(request.address === undefined ? {} : { address: request.address }),
     });
     if (entity === null) return false;
     // The form decides the kind last — a ## trigger that was switched to a
@@ -756,6 +845,34 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (slash !== null) {
+      if (slashOptions.length === 0) {
+        if (event.key === "Escape") { event.preventDefault(); setSlash(null); }
+      } else {
+        if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((current) => (current + 1) % slashOptions.length); return; }
+        if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((current) => (current - 1 + slashOptions.length) % slashOptions.length); return; }
+        if (event.key === "Escape") { event.preventDefault(); setSlash(null); return; }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          const command = slashOptions[activeIndex];
+          if (command) {
+            const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`;
+            onChange(next);
+            setSlash(null);
+            setMention(null);
+            onSlashCommand?.(command);
+            window.requestAnimationFrame(() => {
+              const element = ref.current;
+              if (!element) return;
+              element.focus();
+              element.setSelectionRange(slash.start, slash.start);
+            });
+          }
+          return;
+        }
+      }
+    }
     if (mention === null || optionCount === 0) return;
     if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((current) => (current + 1) % optionCount); return; }
     if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((current) => (current - 1 + optionCount) % optionCount); return; }
@@ -789,14 +906,12 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
     const element = ref.current;
     if (element === null || collapsedRef.current === 0) return;
     const collapsed = collapsedRef.current;
-    // The height transition would make scrollHeight read the animating value,
-    // so measurement happens with transitions off, then animates to the target.
-    const previousHeight = element.style.height;
-    element.style.transition = "none";
-    element.style.height = "0px";
-    // A textarea's rows attribute is a minimum height. Measure a hidden,
-    // same-width copy instead, so that empty two-row composers are not
-    // mistaken for content that already needs the expanded height.
+    // Content height comes from a hidden, same-width copy, so the live element
+    // never has to change height for a measurement. Touching the live height
+    // here used to make the box bounce on every keystroke: reading
+    // clientWidth flushes style, a transient "0px" got snapshotted as the
+    // computed value, and restoring the height then re-ran the 260ms height
+    // transition from zero on every keystroke.
     const measurement = element.cloneNode(false) as HTMLTextAreaElement;
     measurement.value = element.value;
     measurement.rows = 1;
@@ -810,14 +925,13 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
     document.body.appendChild(measurement);
     const contentHeight = measurement.scrollHeight;
     measurement.remove();
-    element.style.transition = "";
-    element.style.height = previousHeight;
     const target = contentHeight > collapsed * 0.9 ? collapsed * 2 : collapsed;
     element.style.height = `${target}px`;
   }, [autoGrow, value, ref]);
 
   return <div className="mention-box">
     <textarea ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onChange={(event) => { onChange(event.target.value); syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
+    {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")} · ` : ""}{command.description}</small></button>)}</div> : null}
     {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={`创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">
       {suggestions.map((entity, index) => <button className={`mention-option ${index === activeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name)}>{(() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
@@ -868,11 +982,11 @@ function groupRecords(records: readonly RecordView[], fallbackDate: string): rea
   return [...groups.entries()].map(([date, items]) => ({ date, records: items }));
 }
 
-function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetId: string) => void; onOpenEntity: (entity: Entity) => void }) {
+function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetId: string) => void; onOpenEntity: (entity: Entity) => void }) {
   const title = timelineHeading(activeView);
   const empty = emptyCopy(activeView, selectedDate, Boolean(searchQuery));
   const groups = records ? groupRecords(records, selectedDate) : [];
-  return <section className="timeline-section" aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} />)}</div>)}</div> : null}</section>;
+  return <section className="timeline-section" aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} />)}</div>)}</div> : null}</section>;
 }
 
 const WEEKDAY_LABELS: readonly string[] = ["一", "二", "三", "四", "五", "六", "日"];
@@ -1008,7 +1122,28 @@ function CalendarDayMarkers({ date, today, module }: { readonly date: string; re
   return <span className="calendar-day-markers" aria-label={visible.map((marker) => marker.label).join("，")}>{visible.map((marker, index) => <span className="calendar-day-marker" key={marker.id} style={{ gridColumnStart: 5 - visible.length + index }}>{marker.content}</span>)}</span>;
 }
 
-function CalendarView({ mode, onModeChange, anchor, today, records, summaries, aiEnabled, loading, error, cycleModule, onOpenCycleModule, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; onOpenCycleModule: () => void; onRetry: () => void; onOpenDay: (date: string) => void }) {
+interface CalendarWeather {
+  readonly text: string;
+  readonly icon: string;
+  readonly tempMin: string;
+  readonly tempMax: string;
+}
+
+function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const snapshot = (value as { readonly weatherSnapshot?: unknown }).weatherSnapshot;
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return undefined;
+  const candidate = snapshot as { readonly today?: unknown; readonly days?: unknown };
+  const days = Array.isArray(candidate.days) ? candidate.days : [];
+  const all = [candidate.today, ...days];
+  const day = all.find((item) => typeof item === "object" && item !== null && !Array.isArray(item) && (item as { readonly fxDate?: unknown }).fxDate === date) ?? all.find((item) => typeof item === "object" && item !== null && !Array.isArray(item));
+  if (typeof day !== "object" || day === null || Array.isArray(day)) return undefined;
+  const item = day as Partial<WeatherDay>;
+  if (typeof item.textDay !== "string" || typeof item.iconDay !== "string") return undefined;
+  return { text: item.textDay, icon: item.iconDay, tempMin: typeof item.tempMin === "string" ? item.tempMin : "—", tempMax: typeof item.tempMax === "string" ? item.tempMax : "—" };
+}
+
+function CalendarView({ mode, onModeChange, anchor, today, records, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, onOpenCycleModule, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; onOpenCycleModule: () => void; onRetry: () => void; onOpenDay: (date: string) => void }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
   const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
   const buckets = useMemo(() => recordsByDate(dates, publicRecords), [dates, publicRecords]);
@@ -1075,15 +1210,18 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];
         const summary = summaries.get(date);
+        const weather = weatherByDate.get(date);
         const dayInfo = calendarDayInfo(date);
         const inMonth = date.slice(0, 7) === anchor.slice(0, 7);
         const cellPhoto = inMonth ? monthCellPhoto(dayPhotoCandidates(items)) : undefined;
+        const summaryText = summary === undefined ? "" : trimSummaryText(summary.text, SUMMARY_MAX_LENGTH);
         const holidayLabel = dayInfo.holiday === undefined ? "" : `${dayInfo.holiday.name} · ${dayInfo.holiday.kind === "holiday" ? "休息日" : "调休上班"}`;
-        const titleParts = [holidayLabel, dayInfo.solarTerm ? `节气：${dayInfo.solarTerm}` : "", summary === undefined ? "" : `${summary.text}（${summary.status === "generated" ? `AI · ${summary.provider}` : "规则生成"}）`].filter(Boolean);
+        const weatherLabel = weather === undefined ? "" : `天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`;
+        const titleParts = [holidayLabel, dayInfo.solarTerm ? `节气：${dayInfo.solarTerm}` : "", weatherLabel, summaryText === "" ? "" : `${summaryText}（${summary?.status === "generated" ? `AI · ${summary?.provider}` : "规则生成"}）`].filter(Boolean);
         return <button className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${items.length === 0 ? "is-empty" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`} title={titleParts.length > 0 ? titleParts.join(" · ") : undefined}>
           {cellPhoto !== undefined ? <span className="month-cell-art" aria-hidden="true"><img src={assetContentUrl(cellPhoto)} alt="" loading="lazy" decoding="async" /><span className="month-cell-veil" /></span> : null}
-          <span className="month-cell-head"><span className="month-day-number">{Number(date.slice(8, 10))}</span><span className="month-day-meta">{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{items.length > 0 ? <span className="month-day-count">{items.length}</span> : null}</span></span>
-          {summary !== undefined ? <span className={`month-day-summary ${summary.status === "fallback" ? "is-fallback" : ""}`}>{summary.text}</span> : null}
+          <span className="month-cell-head"><span className="month-day-number">{Number(date.slice(8, 10))}</span><span className="month-day-meta">{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{items.length > 0 ? <span className="month-day-count">{items.length}</span> : null}{weather !== undefined ? <span className="month-day-weather" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null}</span></span>
+          {summaryText !== "" ? <span className={`month-day-summary ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}
           {dayInfo.solarTerm ? <span className="month-day-solar" aria-label={`节气：${dayInfo.solarTerm}`}>{dayInfo.solarTerm}</span> : null}
           <CalendarDayMarkers date={date} today={today} module={cycleModule} />
         </button>;
@@ -1168,15 +1306,16 @@ function PrivacyMask({ onReveal, className = "" }: { onReveal: () => void; class
 }
 
 function TimelineEntityChip({ refItem, entity, relationKind, onOpenEntity }: { refItem: EntityRef; entity: Entity | undefined; relationKind: RelationKind | undefined; onOpenEntity: (entity: Entity) => void }) {
-  const KindIcon = relationKind === undefined ? ENTITY_META[refItem.entityType].icon : RELATION_META[relationKind].icon;
-  const label = refItem.label ?? refItem.entityId;
-  const className = `relation-chip ${entity?.type === "person" ? "relation-chip-person" : ""} ${relationKind === undefined ? "relation-kind-none" : `relation-kind-${relationKind}`}`.trim();
+  const movie = isMovieEntity(entity);
+  const KindIcon = movie ? Film : relationKind === undefined ? (ENTITY_META[refItem.entityType]?.icon ?? Tag) : RELATION_META[relationKind].icon;
+  const label = movie ? `《${entity.name}》` : refItem.label ?? refItem.entityId;
+  const className = `relation-chip ${entity?.type === "person" ? "relation-chip-person" : ""} ${movie ? "relation-chip-movie" : ""} ${relationKind === undefined ? "relation-kind-none" : `relation-kind-${relationKind}`}`.trim();
   const content = <><KindIcon size={12} strokeWidth={1.9} aria-hidden="true" /><span>{label}</span>{relationKind === undefined ? null : <small className="relation-kind">{RELATION_META[relationKind].label}</small>}</>;
-  if (entity?.type !== "person") return <span className={className}>{content}</span>;
-  return <button className={className} type="button" onClick={() => onOpenEntity(entity)} aria-label={`查看${entity.name}的人物卡片`}>{content}</button>;
+  if (entity?.type !== "person" && !movie) return <span className={className}>{content}</span>;
+  return <button className={className} type="button" onClick={() => onOpenEntity(movie ? asCoreEntity(entity) : entity)} aria-label={movie ? `查看${entity.name}的电影卡片` : `查看${entity.name}的人物卡片`}>{content}</button>;
 }
 
-function TimelineItem({ record, assets, entities, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetId: string) => void; onOpenEntity: (entity: Entity) => void }) {
+function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetId: string) => void; onOpenEntity: (entity: Entity) => void }) {
   const Icon = COMPOSER_META[record.kind].icon;
   const task = isTaskRecord(record) ? record : undefined;
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
@@ -1185,11 +1324,12 @@ function TimelineItem({ record, assets, entities, onEdit, onDelete, onTaskStatus
   const nextStatus: TaskStatus = task?.task.status === "done" ? "todo" : "done";
   const relationCount = record.entityRefs.length + record.relatedRecordIds.length + record.assetRefs.length;
   const vocabulary = useMemo(() => mentionVocabulary(record, entities), [record, entities]);
+  const showMoviePrompt = !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && recordText(record).includes("电影") && !record.entityRefs.some(isMovieRef);
   const relationLine = relationCount > 0 ? masked
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{record.assetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); const local = isLocalAsset(asset); return <span className={`relation-chip ${local ? "relation-chip-media" : ""}`} key={`asset-${ref.assetId}`}>{local ? <button className="asset-thumb-button" type="button" onClick={() => onPreviewAsset(ref.assetId)} aria-label={`放大查看 ${asset?.originalName ?? ref.assetId}`}><img className="asset-thumb" src={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} /></button> : <ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />}{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{record.weather.city}</small></span></div>;
-  return <article className="timeline-item"><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <RecordText text={recordText(record)} entities={vocabulary} />}</p>{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
+  return <article className="timeline-item"><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
 }
 
 interface TaskUndoEntry { readonly task: TaskRecordView; readonly previousStatus: TaskStatus; }
@@ -1309,6 +1449,7 @@ function RelationPanel({ entities, assets, candidates, draft, onChange, onCreate
   const [createKind, setCreateKind] = useState<EntityKind>("person");
   const [createName, setCreateName] = useState("");
   const [createAliases, setCreateAliases] = useState("");
+  const [createAddress, setCreateAddress] = useState("");
   const [creating, setCreating] = useState(false);
   const selectedEntityIds = useMemo(() => new Set(draft.entityRefs.map((ref) => ref.entityId)), [draft.entityRefs]);
   const selectedAssetIds = useMemo(() => new Set(draft.assetRefs.map((ref) => ref.assetId)), [draft.assetRefs]);
@@ -1330,11 +1471,12 @@ function RelationPanel({ entities, assets, candidates, draft, onChange, onCreate
     const aliases = createAliases.split(/[,，、\s]+/).map((alias) => alias.trim()).filter((alias) => alias.length > 0);
     setCreating(true);
     try {
-      const entity = await onCreateEntity(createKind, name, { ...(aliases.length > 0 ? { aliases } : {}) });
+      const entity = await onCreateEntity(createKind, name, { ...(aliases.length > 0 ? { aliases } : {}), ...(createKind === "place" && createAddress.trim() ? { address: createAddress.trim() } : {}) });
       if (entity) {
         onChange({ entityRefs: [...draft.entityRefs, { entityType: entity.type, entityId: entity.id, label: entity.name }] });
         setCreateName("");
         setCreateAliases("");
+        setCreateAddress("");
       }
     } finally {
       setCreating(false);
@@ -1360,6 +1502,7 @@ function RelationPanel({ entities, assets, candidates, draft, onChange, onCreate
       <select value={createKind} onChange={(event) => setCreateKind(event.target.value as EntityKind)} aria-label="要新建的关联对象类型">{ENTITY_KIND_ORDER.map((kind) => <option value={kind} key={kind}>{ENTITY_META[kind].label}</option>)}</select>
       <input value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="名称" aria-label="新关联对象名称" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
       <input value={createAliases} onChange={(event) => setCreateAliases(event.target.value)} placeholder="别名（可选，逗号分隔）" aria-label="新关联对象别名" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
+      {createKind === "place" ? <input value={createAddress} onChange={(event) => setCreateAddress(event.target.value)} placeholder="详细地址（可选）" aria-label="新地点详细地址" /> : null}
       <button className="secondary-button relation-create-button" type="button" onClick={() => void submitEntity()} disabled={!createName.trim() || creating}>{creating ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}<span>新建并关联</span></button>
     </div>
 
@@ -1395,10 +1538,11 @@ function ConfirmDialog({ record, busy, error, onClose, onConfirm }: { record: Re
   return <dialog ref={dialogRef} className="modal-dialog confirm-dialog" aria-labelledby="delete-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">删除记录</p><h2 id="delete-title">确定要删除这条记录吗？</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={17} aria-hidden="true" /></button></div><p className="confirm-copy">原文会从时间轴移除。导出的备份不会被修改。</p><div className="confirm-preview">{recordText(record)}</div>{error ? <p className="dialog-error" role="alert"><CircleHelp size={17} aria-hidden="true" />{error}</p> : null}<div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>保留</button><button className="danger-button" type="button" onClick={onConfirm} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Trash2 size={17} aria-hidden="true" />}<span>{busy ? "删除中" : "删除记录"}</span></button></div></dialog>;
 }
 
-function PersonCardDialog({ entity, entities, onClose, onEdit, onViewRecords }: { entity: Entity | null; entities: readonly Entity[]; onClose: () => void; onEdit: (entity: Entity) => void; onViewRecords: (entity: Entity) => void }) {
+function PersonCardDialog({ entity, entities, onClose, onEdit, onViewRecords, onMovieSaved }: { entity: Entity | null; entities: readonly Entity[]; onClose: () => void; onEdit: (entity: Entity) => void; onViewRecords: (entity: Entity) => void; onMovieSaved: (movie: MovieEntity) => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (entity && !dialog.open) dialog.showModal(); if (!entity && dialog.open) dialog.close(); }, [entity]);
   if (entity === null) return <dialog ref={dialogRef} className="modal-dialog" />;
+  if (isMovieEntity(entity)) return <MovieCardDialog entity={entity} onClose={onClose} onSaved={onMovieSaved} />;
   const relationKind = relationKindFor(entity.id, entities);
   const relationItems = (entity.relations ?? []).filter((relation) => relation.entityId !== SELF_ENTITY_ID).map((relation) => ({ relation, target: entities.find((candidate) => candidate.id === relation.entityId) })).filter((item) => item.target !== undefined);
   return <dialog ref={dialogRef} className="modal-dialog person-card-dialog" aria-labelledby="person-card-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
@@ -1412,24 +1556,78 @@ function PersonCardDialog({ entity, entities, onClose, onEdit, onViewRecords }: 
   </dialog>;
 }
 
-function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity | null; onClose: () => void; onSave: (entity: Entity, patch: { name: string; aliases: readonly string[]; description?: string }) => Promise<Entity | null> }) {
+function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity | null; onClose: () => void; onSave: (entity: Entity, patch: { name: string; aliases: readonly string[]; description?: string; address?: string | null }) => Promise<Entity | null> }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
   const [description, setDescription] = useState("");
+  const [address, setAddress] = useState("");
   const [saving, setSaving] = useState(false);
-  useEffect(() => { if (entity) { setName(entity.name); setAliases(entity.aliases?.join("，") ?? ""); setDescription(entity.description ?? ""); } }, [entity?.id]);
+  useEffect(() => { if (entity) { setName(entity.name); setAliases(entity.aliases?.join("，") ?? ""); setDescription(entity.description ?? ""); setAddress(entity.type === "place" ? entity.address ?? "" : ""); } }, [entity?.id]);
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (entity && !dialog.open) dialog.showModal(); if (!entity && dialog.open) dialog.close(); }, [entity]);
   if (entity === null) return <dialog ref={dialogRef} className="modal-dialog" />;
   const submit = async () => {
     const nextName = name.trim();
     if (!nextName || saving) return;
     setSaving(true);
-    const result = await onSave(entity, { name: nextName, aliases: aliases.split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean), description: description.trim() });
+    const result = await onSave(entity, { name: nextName, aliases: aliases.split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean), description: description.trim(), ...(entity.type === "place" ? { address: address.trim() || null } : {}) });
     setSaving(false);
     if (result) onClose();
   };
-  return <dialog ref={dialogRef} className="modal-dialog entity-edit-dialog" aria-labelledby="entity-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">人物资料</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭人物编辑"><X size={17} aria-hidden="true" /></button></div><div className="entity-edit-body"><label className="dialog-field"><span>姓名</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="dialog-field"><span>别名</span><input value={aliases} onChange={(event) => setAliases(event.target.value)} placeholder="多个别名用逗号分隔" /></label><label className="dialog-field"><span>备注</span><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="写下这个人的一些背景" /></label></div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => void submit()} disabled={!name.trim() || saving}>{saving ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{saving ? "保存中" : "保存人物"}</span></button></div></dialog>;
+  return <dialog ref={dialogRef} className="modal-dialog entity-edit-dialog" aria-labelledby="entity-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">{entity.type === "place" ? "地点资料" : "联系人资料"}</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="entity-edit-body"><label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="dialog-field"><span>别名</span><input value={aliases} onChange={(event) => setAliases(event.target.value)} placeholder="多个别名用逗号分隔" /></label>{entity.type === "place" ? <label className="dialog-field"><span>详细地址</span><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="可选；平时不会展开" /></label> : null}<label className="dialog-field"><span>备注</span><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={entity.type === "place" ? "写下这个地点的一些背景" : "写下这个人的一些背景"} /></label></div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => void submit()} disabled={!name.trim() || saving}>{saving ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button></div></dialog>;
+}
+
+function entityRelatedRecords(entity: Entity, records: readonly RecordView[]): readonly RecordView[] {
+  return records.filter((record) => record.entityRefs.some((ref) => ref.entityId === entity.id)).slice(0, 3);
+}
+
+function locationSearchUrl(address: string): string {
+  return `https://www.openstreetmap.org/search?query=${encodeURIComponent(address)}`;
+}
+
+function entityPeriodLabel(entity: Entity): string | null {
+  if (entity.type !== "place" || entity.period === undefined) return null;
+  const from = entity.period.from ?? "更早";
+  const until = entity.period.until ?? "至今";
+  return `${from}—${until}`;
+}
+
+function EntitiesView({ entities, records, onCreateEntity, onEdit, onViewRecords }: { readonly entities: readonly Entity[]; readonly records: readonly RecordView[]; readonly onCreateEntity: CreateEntity; readonly onEdit: (entity: Entity) => void; readonly onViewRecords: (entity: Entity) => void }) {
+  const [tab, setTab] = useState<"person" | "place">("person");
+  const [createOpen, setCreateOpen] = useState(false);
+  const items = entities.filter((entity) => entity.type === tab);
+  const create = async (request: EntityCreateRequest): Promise<boolean> => {
+    const entity = await onCreateEntity(request.type, request.name, {
+      ...(request.aliases === undefined ? {} : { aliases: request.aliases }),
+      ...(request.role === undefined ? {} : { role: request.role }),
+      ...(request.period === undefined ? {} : { period: request.period }),
+      ...(request.address === undefined ? {} : { address: request.address }),
+    });
+    if (entity !== null) setCreateOpen(false);
+    return entity !== null;
+  };
+  return <section className="entities-section" aria-labelledby="entities-title">
+    <div className="page-heading entities-heading"><div><p className="eyebrow">关联对象</p><h1 id="entities-title">联系人与地点</h1><p>集中管理会出现在时间轴里的联系人与地点。</p></div><button className="primary-button" type="button" onClick={() => setCreateOpen((current) => !current)}><Plus size={16} aria-hidden="true" /><span>新建{tab === "person" ? "联系人" : "地点"}</span></button></div>
+    {createOpen ? <div className="entities-create-panel"><EntityCreateForm defaultType={tab} defaultName="" onCreate={create} onCancel={() => setCreateOpen(false)} submitLabel={`创建${tab === "person" ? "联系人" : "地点"}`} /></div> : null}
+    <div className="entities-tabs" role="tablist" aria-label="联系人与地点分类">
+      <button type="button" role="tab" aria-selected={tab === "person"} className={`entities-tab ${tab === "person" ? "is-active" : ""}`} onClick={() => { setTab("person"); setCreateOpen(false); }}><User size={16} aria-hidden="true" />联系人<span>{entities.filter((entity) => entity.type === "person").length}</span></button>
+      <button type="button" role="tab" aria-selected={tab === "place"} className={`entities-tab ${tab === "place" ? "is-active" : ""}`} onClick={() => { setTab("place"); setCreateOpen(false); }}><MapPin size={16} aria-hidden="true" />地点<span>{entities.filter((entity) => entity.type === "place").length}</span></button>
+    </div>
+    <div className="entities-grid" role="tabpanel" aria-label={tab === "person" ? "联系人" : "地点"}>
+      {items.length === 0 ? <div className="entities-empty"><ContactRound size={24} aria-hidden="true" /><strong>还没有{tab === "person" ? "联系人" : "地点"}</strong><span>从右上角新建一个，之后可以在记录中用 {tab === "person" ? "@" : "#"} 提及。</span></div> : items.map((entity) => {
+        const recent = entityRelatedRecords(entity, records);
+        const relation = entity.type === "person" ? relationLabelFor(entity.id, entities) : undefined;
+        const period = entityPeriodLabel(entity);
+        return <article className={`entity-library-card entity-library-card--${entity.type}`} key={entity.id} data-entity-card={entity.id}>
+          <div className="entity-library-card-head"><div className="entity-library-icon" aria-hidden="true">{entity.type === "person" ? <User size={18} /> : <MapPin size={18} />}</div><div><h2>{entity.name}</h2>{relation ? <span className="entity-library-role">{relation}</span> : entity.type === "place" && entity.role ? <span className="entity-library-role">{PLACE_ROLE_LABELS[entity.role]}</span> : null}</div><button className="icon-button compact-icon-button" type="button" onClick={() => onEdit(entity)} aria-label={`编辑${entity.type === "person" ? "联系人" : "地点"}${entity.name}`}><Edit3 size={15} aria-hidden="true" /></button></div>
+          <div className="entity-library-meta">{entity.aliases && entity.aliases.length > 0 ? <span>别名：{entity.aliases.join("、")}</span> : null}{period ? <span>时期：{period}</span> : null}</div>
+          {entity.type === "place" && entity.address ? <div className="entity-library-address"><a href={locationSearchUrl(entity.address)} target="_blank" rel="noreferrer" aria-label={`一键定位${entity.name}`}>一键定位</a><details><summary>查看详细地址</summary><span>{entity.address}</span></details></div> : null}
+          <div className="entity-library-recent"><small>最近关联记录</small>{recent.length > 0 ? recent.map((record) => <button type="button" className="entity-library-record" key={record.id} onClick={() => onViewRecords(entity)}><time>{shortDate(lifeTimeDate(record.occurredAt ?? record.createdAt) ?? "")}</time><span>{record.isPrivate ? "隐私记录" : recordText(record).slice(0, 32)}</span></button>) : <span className="entity-library-muted">暂无关联记录</span>}</div>
+          <button className="entity-library-view" type="button" onClick={() => onViewRecords(entity)}>查看全部关联记录 <ExternalLink size={13} aria-hidden="true" /></button>
+        </article>;
+      })}
+    </div>
+  </section>;
 }
 
 function SearchDialog({ open, initialQuery, onClose, onSearch }: { open: boolean; initialQuery: string; onClose: () => void; onSearch: (query: string) => void }) {
@@ -1548,15 +1746,33 @@ function AiSettingsCard({ status, open, onChanged }: { readonly status: AiStatus
   </div>;
 }
 
+/**
+ * Everything a Bitiful cdnb bucket needs except the key pair. Kept in one place
+ * so the form can offer a one-click fill instead of making the owner retype six
+ * fields whose values are already fixed by the provider.
+ */
+const BITIFUL_PRESET = { endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false } as const;
+
+/** Shown until the server answers; mirrors apps/api's documented defaults. */
+const DEFAULT_RETENTION_DRAFT: BackupRetentionPolicy = { dailyDays: 7, weeklyWeeks: 8, monthlyMonths: 12, trashDays: 30 };
+
+const RETENTION_TIER_LABELS: Record<BackupRetentionView["entries"][number]["tier"], string> = {
+  daily: "日备",
+  weekly: "周备",
+  monthly: "月备",
+  newest: "最新",
+  none: "将清理",
+};
+
 function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: { readonly backupStatus: BackupStatus; readonly backupBusy: boolean; readonly onBackup: (action: "local" | "s3" | "test" | "dual") => void; readonly onChanged: (status: BackupStatus) => void }) {
   const s3 = backupStatus.s3;
-  const isLocalPreview = s3.endpoint.startsWith("file:");
+  const localTransport = s3.transport === "file" || s3.endpoint.startsWith("file:");
   const [enabled, setEnabled] = useState(s3.enabled);
-  const [endpoint, setEndpoint] = useState(isLocalPreview ? "https://s3.bitiful.net" : s3.endpoint || "https://s3.bitiful.net");
-  const [region, setRegion] = useState(isLocalPreview ? "cn-east-1" : s3.region || "cn-east-1");
-  const [bucket, setBucket] = useState(isLocalPreview ? "cdnb" : s3.bucket || "cdnb");
-  const [prefix, setPrefix] = useState(isLocalPreview ? "product-backup/lifeos" : s3.prefix || "product-backup/lifeos");
-  const [forcePathStyle, setForcePathStyle] = useState(isLocalPreview ? false : s3.forcePathStyle);
+  const [endpoint, setEndpoint] = useState(s3.endpoint || "https://s3.bitiful.net");
+  const [region, setRegion] = useState(s3.region || "cn-east-1");
+  const [bucket, setBucket] = useState(s3.bucket || "cdnb");
+  const [prefix, setPrefix] = useState(s3.prefix || "product-backup/lifeos");
+  const [forcePathStyle, setForcePathStyle] = useState(s3.forcePathStyle);
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1567,14 +1783,53 @@ function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: {
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The credential form is useless while hidden, so keep it expanded whenever
+  // there is no usable cloud target yet — nobody should have to hunt for where
+  // the Endpoint / keys are typed.
+  const needsConfiguring = !s3.configured || localTransport;
+  const [detailsOpen, setDetailsOpen] = useState(needsConfiguring);
+  useEffect(() => {
+    if (needsConfiguring) setDetailsOpen(true);
+  }, [needsConfiguring]);
+  const [retention, setRetention] = useState<BackupRetentionView | null>(null);
+  const [retentionOpen, setRetentionOpen] = useState(false);
+  const [retentionDraft, setRetentionDraft] = useState<BackupRetentionPolicy>(DEFAULT_RETENTION_DRAFT);
+  const [retentionSaving, setRetentionSaving] = useState(false);
+  const [retentionMessage, setRetentionMessage] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    apiRequest<BackupRetentionView>("/api/backup/retention", { signal: controller.signal })
+      .then((view) => {
+        if (controller.signal.aborted) return;
+        setRetention(view);
+        setRetentionDraft(view.policy);
+      })
+      .catch(() => { /* the panel stays hidden while the endpoint is unavailable */ });
+    return () => controller.abort();
+  }, [backupStatus.runs]);
+  const saveRetention = async () => {
+    if (retentionSaving) return;
+    setRetentionSaving(true);
+    setRetentionMessage(null);
+    try {
+      const view = await apiRequest<BackupRetentionView>("/api/backup/retention", { method: "POST", body: JSON.stringify(retentionDraft) });
+      setRetention(view);
+      setRetentionDraft(view.policy);
+      setRetentionMessage("保留策略已保存，下一次备份完成后按新策略清理");
+    } catch (cause) {
+      setRetentionMessage(errorMessage(cause, "保存保留策略失败"));
+    } finally {
+      setRetentionSaving(false);
+    }
+  };
   useEffect(() => {
     setEnabled(s3.enabled);
-    setEndpoint(isLocalPreview ? "https://s3.bitiful.net" : s3.endpoint || "https://s3.bitiful.net");
-    setRegion(isLocalPreview ? "cn-east-1" : s3.region || "cn-east-1");
-    setBucket(isLocalPreview ? "cdnb" : s3.bucket || "cdnb");
-    setPrefix(isLocalPreview ? "product-backup/lifeos" : s3.prefix || "product-backup/lifeos");
-    setForcePathStyle(isLocalPreview ? false : s3.forcePathStyle);
-  }, [isLocalPreview, s3.enabled, s3.endpoint, s3.region, s3.bucket, s3.prefix, s3.forcePathStyle]);
+    setEndpoint(s3.endpoint || "https://s3.bitiful.net");
+    setRegion(s3.region || "cn-east-1");
+    setBucket(s3.bucket || "cdnb");
+    setPrefix(s3.prefix || "product-backup/lifeos");
+    setForcePathStyle(s3.forcePathStyle);
+  }, [s3.enabled, s3.endpoint, s3.region, s3.bucket, s3.prefix, s3.forcePathStyle]);
   useEffect(() => {
     setScheduleEnabled(backupStatus.schedule.enabled);
     setScheduleHour(backupStatus.schedule.hour);
@@ -1583,6 +1838,7 @@ function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: {
   const latestRun = (provider: "local" | "s3") => backupStatus.runs.find((run) => run.provider === provider && run.kind !== "test");
   const localRun = latestRun("local");
   const s3Run = latestRun("s3");
+  const s3RunWroteLocally = s3Run?.location?.startsWith("file:") ?? false;
   const formatRun = (run: typeof localRun) => {
     if (!run) return "从未备份";
     if (run.status === "skipped") return `已跳过 · ${run.error ?? "未配置"}`;
@@ -1590,8 +1846,22 @@ function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: {
     return run.finishedAt ? new Date(run.finishedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "已完成";
   };
   const formatBytes = (size: number | undefined) => size === undefined ? "" : size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
+  const formatWhen = (value: string) => new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  const formatTotal = (count: number, bytes: number) => count === 0 ? "0 份" : `${count} 份 · ${formatBytes(bytes)}`;
   const dual = backupStatus.lastDualBackup;
-  const dualLabel = dual === null ? "尚未执行" : dual.status === "success" ? "本地与对象存储均成功" : dual.status === "local_only" ? "本地成功 · 远端已跳过" : dual.status === "partial" ? "本地成功 · 远端失败" : "本地失败 · 未上传远端";
+  const dualWroteLocally = dual?.s3.location?.startsWith("file:") ?? false;
+  const dualLabel = dual === null ? "尚未执行" : dual.status === "success" ? dualWroteLocally ? "本地与「本机目录模拟」均已写入" : "本地与对象存储均成功" : dual.status === "local_only" ? "本地成功 · 远端已跳过" : dual.status === "partial" ? "本地成功 · 远端失败" : "本地失败 · 未上传远端";
+  const s3BadgeLabel = localTransport ? (s3.configured && s3.enabled ? "本机目录模拟 · 未联网" : "仅本地备份") : s3.configured && s3.enabled ? "对象存储已启用" : "仅本地备份";
+  const s3BadgeClass = localTransport ? "is-blocked" : s3.configured && s3.enabled ? "is-ready" : "";
+  const applyPreset = () => {
+    setEndpoint(BITIFUL_PRESET.endpoint);
+    setRegion(BITIFUL_PRESET.region);
+    setBucket(BITIFUL_PRESET.bucket);
+    setPrefix(BITIFUL_PRESET.prefix);
+    setForcePathStyle(BITIFUL_PRESET.forcePathStyle);
+    setError(null);
+    setMessage("已填入 Bitiful（cdnb）预设，只剩 Access Key 和 Secret Key 需要粘贴");
+  };
   const save = async () => {
     if (saving) return;
     setSaving(true); setMessage(null); setError(null);
@@ -1619,12 +1889,28 @@ function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: {
     }
   };
   return <div className="settings-backup-card">
-    <div className="settings-backup-overview"><div className="settings-backup-icon"><CloudUpload size={19} aria-hidden="true" /></div><div className="settings-card-copy"><strong>数据备份</strong></div><span className={`settings-status ${s3.configured && s3.enabled ? "is-ready" : ""}`}>{s3.configured && s3.enabled ? "对象存储已启用" : "仅本地备份"}</span></div>
-    <div className="settings-backup-stats"><div><small>最近本地结果</small><strong>{formatRun(localRun)}{localRun?.status === "success" && localRun.sizeBytes === undefined ? "" : localRun?.status === "success" && localRun.sizeBytes !== undefined ? ` · ${formatBytes(localRun.sizeBytes)}` : ""}</strong></div><div><small>最近对象存储结果</small><strong>{formatRun(s3Run)}{s3Run?.status === "success" && s3Run.sizeBytes !== undefined ? ` · ${formatBytes(s3Run.sizeBytes)}` : ""}</strong></div></div>
+    <div className="settings-backup-overview"><div className="settings-backup-icon"><CloudUpload size={19} aria-hidden="true" /></div><div className="settings-card-copy"><strong>数据备份</strong></div><span className={`settings-status ${s3BadgeClass}`}>{s3BadgeLabel}</span></div>
+    {localTransport ? <p className="settings-backup-warning" data-backup-local-transport>{s3.warning ?? "当前对象存储 Endpoint 是本机目录（file://），备份不会联网上传。"}</p> : null}
+    <div className="settings-backup-stats"><div><small>最近本地结果</small><strong>{formatRun(localRun)}{localRun?.status === "success" && localRun.sizeBytes === undefined ? "" : localRun?.status === "success" && localRun.sizeBytes !== undefined ? ` · ${formatBytes(localRun.sizeBytes)}` : ""}</strong></div><div><small>最近对象存储结果</small><strong>{formatRun(s3Run)}{s3Run?.status === "success" && s3Run.sizeBytes !== undefined ? ` · ${formatBytes(s3Run.sizeBytes)}` : ""}{s3RunWroteLocally ? " · 本机目录" : ""}</strong></div></div>
     <div className="settings-backup-dual" data-backup-dual-status><div><span>双备份结果</span><strong className={`is-${dual?.status ?? "empty"}`}>{dualLabel}</strong>{dual?.s3.status === "skipped" || dual?.s3.status === "failed" ? <small>{dual.s3.error ?? "远端没有成功"}</small> : null}</div><button className="primary-button" data-backup-action="dual" type="button" onClick={() => onBackup("dual")} disabled={backupBusy || saving}>{backupBusy ? "执行中…" : "立即双备份"}</button></div>
     <div className="settings-backup-actions"><button className="secondary-button" type="button" onClick={() => onBackup("local")} disabled={backupBusy || saving}><HardDrive size={15} aria-hidden="true" /><span>{backupBusy ? "备份中" : "备份到本地"}</span></button><button className="primary-button" type="button" onClick={() => onBackup("s3")} disabled={backupBusy || saving || !s3.configured || !s3.enabled}><CloudUpload size={15} aria-hidden="true" /><span>备份到对象存储</span></button><button className="icon-text-button" type="button" onClick={() => onBackup("test")} disabled={backupBusy || saving || !s3.configured || !s3.enabled}><PlugZap size={15} aria-hidden="true" /><span>测试连接</span></button></div>
     <div className="settings-backup-schedule" data-backup-schedule><div className="settings-backup-schedule-head"><div><span>定时双备份</span><small>服务端执行 · Asia/Shanghai</small></div><label className="settings-switch"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /><span aria-hidden="true" /></label></div><div className="settings-backup-schedule-controls"><label><span>每天</span><select value={scheduleHour} onChange={(event) => setScheduleHour(Number(event.target.value))}>{Array.from({ length: 24 }, (_, hour) => <option value={hour} key={hour}>{String(hour).padStart(2, "0")}</option>)}</select></label><b>:</b><label><span>时刻</span><select value={scheduleMinute} onChange={(event) => setScheduleMinute(Number(event.target.value))}>{[0, 15, 30, 45].map((minute) => <option value={minute} key={minute}>{String(minute).padStart(2, "0")}</option>)}</select></label><button className="secondary-button" type="button" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? "保存中…" : "保存排程"}</button></div><div className="settings-backup-schedule-next">{scheduleEnabled && backupStatus.schedule.nextRunAt ? `即将执行：${new Date(backupStatus.schedule.nextRunAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}` : "定时双备份未启用"}{scheduleMessage ? <span role="status"> · {scheduleMessage}</span> : null}</div></div>
-    <details className="settings-backup-details"><summary><FolderOpen size={15} aria-hidden="true" /><span>对象存储配置与本地目录</span><ChevronDown size={15} aria-hidden="true" /></summary><div className="settings-backup-details-body"><div><small>本地目录</small><code>{backupStatus.localDirectory ?? "未配置"}</code></div><div><small>当前 Endpoint</small><code>{s3.endpoint || "未配置"}</code></div><div><small>当前 Bucket / Prefix</small><code>{s3.configured ? `${s3.bucket} / ${s3.prefix}` : "尚未保存云端配置"}</code></div><div className="settings-backup-form"><label><span>Endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://s3.bitiful.net" /></label><div className="settings-backup-form-row"><label><span>Region</span><input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="cn-east-1" /></label><label><span>Bucket</span><input value={bucket} onChange={(event) => setBucket(event.target.value)} placeholder="cdnb" /></label></div><label><span>Prefix / 文件夹</span><input value={prefix} onChange={(event) => setPrefix(event.target.value)} placeholder="product-backup/lifeos" /></label><div className="settings-backup-form-row"><label><span>Access Key</span><input value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} autoComplete="off" placeholder={s3.configured ? "已保存，留空不变" : "填写 Access Key"} /></label><label><span>Secret Key</span><input value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} type="password" autoComplete="new-password" placeholder={s3.configured ? "已保存，留空不变" : "填写 Secret Key"} /></label></div><label className="settings-backup-checkbox"><input type="checkbox" checked={forcePathStyle} onChange={(event) => setForcePathStyle(event.target.checked)} /><span>使用 Path-style URL（MinIO / 自建 S3 时开启；cdnb 保持关闭）</span></label><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用对象存储自动备份</span></label><div className="settings-backup-form-actions"><button className="primary-button" type="button" onClick={() => void save()} disabled={saving || !endpoint.trim() || !region.trim() || !bucket.trim()}>{saving ? "保存中…" : "保存对象存储配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}<p className="settings-backup-note">密钥只提交给 API 服务端并加密保存，不会进入浏览器本地存储或 SQLite 备份。保存后再点上方“测试连接”，确认 cdnb 真实可写。</p></div></div></details>
+    {retention === null ? null : <details className="settings-backup-retention" data-backup-retention open={retentionOpen} onToggle={(event) => setRetentionOpen(event.currentTarget.open)}><summary><Archive size={15} aria-hidden="true" /><span>保留策略：日备 {retention.policy.dailyDays} 天 · 周备 {retention.policy.weeklyWeeks} 周 · 月备 {retention.policy.monthlyMonths} 个月</span><span className="settings-backup-retention-count" data-backup-retention-count>{retention.summary.keepCount} 份保留 · {retention.summary.deleteCount} 份待清理</span><ChevronDown size={15} aria-hidden="true" /></summary>
+      <div className="settings-backup-retention-body">
+        <ul className="settings-backup-retention-rules" data-backup-retention-rules>{retention.described.map((line) => <li key={line}>{line}</li>)}</ul>
+        <div className="settings-backup-retention-stats">
+          <div><small>当前保留</small><strong>{formatTotal(retention.summary.keepCount, retention.summary.keepBytes)}</strong></div>
+          <div><small>待清理</small><strong>{formatTotal(retention.summary.deleteCount, retention.summary.deleteBytes)}</strong></div>
+          <div><small>下次清理</small><strong>{retention.cleanupScheduled && retention.nextCleanupAt ? formatWhen(retention.nextCleanupAt) : "定时备份未启用"}</strong></div>
+        </div>
+        <p className="settings-backup-retention-scope" data-backup-retention-scope>清理不会直接删掉：本地副本移入备份目录下的 <code>_trash</code>，云端对象移入 <code>{(s3.prefix || "product-backup/lifeos") + "-trash"}</code>，在回收站留满 {retention.policy.trashDays} 天后才真正删除。{retention.cleanupTrigger}</p>
+        <div className="settings-backup-retention-list">{retention.entries.length === 0 ? <p className="settings-backup-retention-note">还没有备份。</p> : retention.entries.slice(0, 12).map((entry) => <div className={`settings-backup-retention-row ${entry.keep ? "is-keep" : "is-drop"}`} key={entry.fileName} data-backup-retention-row={entry.keep ? "keep" : "drop"}><span className={`settings-backup-retention-tier is-${entry.tier}`}>{RETENTION_TIER_LABELS[entry.tier]}</span><span className="settings-backup-retention-when">{formatWhen(entry.startedAt)}{entry.sizeBytes === undefined ? "" : ` · ${formatBytes(entry.sizeBytes)}`}</span><span className="settings-backup-retention-why">{entry.reason}</span></div>)}{retention.entries.length > 12 ? <p className="settings-backup-retention-note">仅显示最近 12 份，共 {retention.entries.length} 份。</p> : null}</div>
+        {retention.trashed.length > 0 ? <div className="settings-backup-retention-trashed" data-backup-retention-trashed><p className="settings-backup-retention-note">已清理 {retention.trashed.length} 份，仍在回收站里（可以拿回来）。最近几份：</p>{retention.trashed.slice(0, 6).map((entry) => <div className="settings-backup-retention-row is-drop" key={entry.fileName + entry.prunedAt}><span className="settings-backup-retention-tier is-none">回收站</span><span className="settings-backup-retention-when">{formatWhen(entry.prunedAt)}</span><span className="settings-backup-retention-why">{entry.fileName} · {entry.provider === "s3" ? "云端" : "本地"}</span></div>)}</div> : null}
+        {retention.connectionTestCount > 0 ? <p className="settings-backup-retention-note">另有 {retention.connectionTestCount} 个连接测试文件（{formatBytes(retention.connectionTestBytes)}）不算备份，不参与保留。</p> : null}
+        <div className="settings-backup-retention-form"><label><span>日备保留天数</span><input type="number" min={retention.limits.dailyDays.min} max={retention.limits.dailyDays.max} value={retentionDraft.dailyDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, dailyDays: Number(event.target.value) })} /></label><label><span>周备保留周数</span><input type="number" min={retention.limits.weeklyWeeks.min} max={retention.limits.weeklyWeeks.max} value={retentionDraft.weeklyWeeks} onChange={(event) => setRetentionDraft({ ...retentionDraft, weeklyWeeks: Number(event.target.value) })} /></label><label><span>月备保留月数</span><input type="number" min={retention.limits.monthlyMonths.min} max={retention.limits.monthlyMonths.max} value={retentionDraft.monthlyMonths} onChange={(event) => setRetentionDraft({ ...retentionDraft, monthlyMonths: Number(event.target.value) })} /></label><label><span>回收站保留天数</span><input type="number" min={retention.limits.trashDays.min} max={retention.limits.trashDays.max} value={retentionDraft.trashDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, trashDays: Number(event.target.value) })} /></label><button className="secondary-button" type="button" data-backup-retention-save onClick={() => void saveRetention()} disabled={retentionSaving}>{retentionSaving ? "保存中…" : "保存保留策略"}</button></div>
+        {retentionMessage ? <p className="settings-inline-success" role="status">{retentionMessage}</p> : null}
+      </div></details>}
+    <details className="settings-backup-details" data-backup-config-details open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}><summary><FolderOpen size={15} aria-hidden="true" /><span>{needsConfiguring ? "填写对象存储配置（Endpoint / Region / Bucket / 密钥）" : "对象存储配置与本地目录"}</span><ChevronDown size={15} aria-hidden="true" /></summary><div className="settings-backup-details-body"><div><small>本地目录</small><code>{backupStatus.localDirectory ?? "未配置"}</code></div><div><small>当前 Endpoint</small><code>{s3.endpoint || "未配置"}</code></div><div><small>当前 Bucket / Prefix</small><code>{s3.configured ? `${s3.bucket} / ${s3.prefix}` : "尚未保存云端配置"}</code></div><div className="settings-backup-form"><label><span>Endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://s3.bitiful.net" /></label><div className="settings-backup-form-row"><label><span>Region</span><input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="cn-east-1" /></label><label><span>Bucket</span><input value={bucket} onChange={(event) => setBucket(event.target.value)} placeholder="cdnb" /></label></div><label><span>Prefix / 文件夹</span><input value={prefix} onChange={(event) => setPrefix(event.target.value)} placeholder="product-backup/lifeos" /></label><div className="settings-backup-form-row"><label><span>Access Key</span><input value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} autoComplete="off" placeholder={s3.configured ? "已保存，留空不变" : "填写 Access Key"} /></label><label><span>Secret Key</span><input value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} type="password" autoComplete="new-password" placeholder={s3.configured ? "已保存，留空不变" : "填写 Secret Key"} /></label></div><label className="settings-backup-checkbox"><input type="checkbox" checked={forcePathStyle} onChange={(event) => setForcePathStyle(event.target.checked)} /><span>使用 Path-style URL（MinIO / 自建 S3 时开启；cdnb 保持关闭）</span></label><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用对象存储自动备份</span></label><div className="settings-backup-form-actions"><button className="secondary-button" type="button" data-backup-preset onClick={applyPreset} disabled={saving}>填入 Bitiful 预设</button><button className="primary-button" type="button" onClick={() => void save()} disabled={saving || !endpoint.trim() || !region.trim() || !bucket.trim()}>{saving ? "保存中…" : "保存对象存储配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}<p className="settings-backup-note">密钥只提交给 API 服务端并加密保存，不会进入浏览器本地存储或 SQLite 备份。保存后再点上方“测试连接”，确认 cdnb 真实可写。</p></div></div></details>
     <BackupCalendar initialRuns={backupStatus.runs} />
   </div>;
 }
@@ -1746,7 +2032,7 @@ function FontSettingsCard({ value, onChange }: { readonly value: UiFontId; reado
   return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong><small>仅影响本浏览器的 LifeOS 界面；Maple Mono 继续用于日期和数字等宽信息。</small></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
 }
 
-function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, onAiStatusChange, openAiConfig, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange }: { onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatus: AiStatus; onAiStatusChange: (status: AiStatus) => void; openAiConfig: boolean; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void }) {
+function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, onAiStatusChange, openAiConfig, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, movieStatus, onMovieStatusChange, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange }: { onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatus: AiStatus; onAiStatusChange: (status: AiStatus) => void; openAiConfig: boolean; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; movieStatus: MovieModuleStatus; onMovieStatusChange: (status: MovieModuleStatus) => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void }) {
   return <section className="settings-page" aria-label="设置">
     <div className="settings-sections">
       <section className="settings-section"><div className="settings-section-heading"><h3>账户</h3></div><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{authRequired ? "已登录" : "本机访问"}</strong></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : "退出登录"}</span></button> : null}</div></section>
@@ -1754,6 +2040,7 @@ function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, 
       <section className="settings-section settings-demo-section"><div className="settings-section-heading"><h3>演示数据</h3></div><div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>备份</h3></div><BackupSettingsCard backupStatus={backupStatus} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>天气</h3></div><WeatherSettingsCard status={weatherStatus} profiles={weatherProfiles} activeProfileId={weatherActiveProfileId} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} /></section>
+      <section className="settings-section"><div className="settings-section-heading"><h3>模块</h3></div><MovieSettingsCard status={movieStatus} onChanged={onMovieStatusChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>AI 助手</h3></div><AiSettingsCard status={aiStatus} open={openAiConfig} onChanged={onAiStatusChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>系统</h3></div><FontSettingsCard value={uiFont} onChange={onUiFontChange} /><div className="settings-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>自托管 LifeOS</strong></div></div></section>
     </div>
@@ -1776,6 +2063,7 @@ function App() {
   const [cycleModuleOpen, setCycleModuleOpen] = useState(false);
   const [summaries, setSummaries] = useState<readonly DaySummary[]>([]);
   const [aiSummaries, setAiSummaries] = useState(false);
+  const [weatherArchive, setWeatherArchive] = useState<ReadonlyMap<string, CalendarWeather>>(new Map());
   const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerKind, setComposerKind] = useState<ComposerKind>("journal");
@@ -1787,6 +2075,7 @@ function App() {
   const [occurredAt, setOccurredAt] = useState(() => localNowInputFor(localDateToday()));
   const [occurredAtDirty, setOccurredAtDirty] = useState(false);
   const [dueAt, setDueAt] = useState("");
+  const [composerMovieRefs, setComposerMovieRefs] = useState<readonly EntityRef[]>([]);
   const [saving, setSaving] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -1799,6 +2088,7 @@ function App() {
   const [weatherStatus, setWeatherStatus] = useState<WeatherStatus | null>(null);
   const [weatherProfiles, setWeatherProfiles] = useState<readonly WeatherProfile[]>([]);
   const [weatherActiveProfileId, setWeatherActiveProfileId] = useState<string | null>(null);
+  const [movieStatus, setMovieStatus] = useState<MovieModuleStatus>({ enabled: false, configured: false, keyConfigured: false, connected: false });
   const [backupStatus, setBackupStatus] = useState<BackupStatus>({ localDirectory: null, s3: { configured: false, enabled: false, endpoint: "", region: "", bucket: "", prefix: "backups/db", forcePathStyle: true }, schedule: { enabled: false, hour: 2, minute: 0, timeZone: "Asia/Shanghai", nextRunAt: null }, lastDualBackup: null, runs: [] });
   const [backupBusy, setBackupBusy] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -1826,6 +2116,7 @@ function App() {
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoDeleteArmed, setDemoDeleteArmed] = useState(false);
   const [hideDemo, setHideDemo] = useState(() => window.localStorage.getItem(DEMO_HIDDEN_STORAGE_KEY) === "1");
+  const [moviePromptHidden, setMoviePromptHidden] = useState(() => window.localStorage.getItem(MOVIE_PROMPT_HIDDEN_STORAGE_KEY) === "1");
   const [uiFont, setUiFont] = useState<UiFontId>(readUiFont);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recordsRef = useRef<readonly RecordView[]>([]);
@@ -1886,6 +2177,18 @@ function App() {
       return () => controller.abort();
     }
     apiRequest<AiStatus>("/api/ai/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setAiStatus(status); }).catch(() => { if (!controller.signal.aborted) setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none" }); });
+    return () => controller.abort();
+  }, [authState.authenticated, authState.required]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (authState.required && !authState.authenticated) {
+      setMovieStatus({ enabled: false, configured: false, keyConfigured: false, connected: false });
+      return () => controller.abort();
+    }
+    fetchMovieModuleStatus().then((status) => { if (!controller.signal.aborted) setMovieStatus(status); }).catch(() => {
+      if (!controller.signal.aborted) setMovieStatus({ enabled: false, configured: false, keyConfigured: false, connected: false });
+    });
     return () => controller.abort();
   }, [authState.authenticated, authState.required]);
 
@@ -1970,6 +2273,30 @@ function App() {
     return () => controller.abort();
   }, [activeView, calendarMode, calendarRange, selectedDate, authState.authenticated, authState.required, recordsReload]);
 
+  // Month cells read all weather rows in one range request. The API endpoint
+  // only reads SQLite, so browsing history never causes one fetch per day.
+  useEffect(() => {
+    const controller = new AbortController();
+    if (activeView !== "calendar" || (authState.required && !authState.authenticated) || weatherStatus?.configured !== true) {
+      setWeatherArchive(new Map());
+      return () => controller.abort();
+    }
+    const from = calendarRange[0] ?? selectedDate;
+    const to = calendarRange[calendarRange.length - 1] ?? selectedDate;
+    apiRequest<WeatherArchiveResponse>(`/api/weather/archive?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { signal: controller.signal })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        const next = new Map<string, CalendarWeather>();
+        for (const item of payload.items) {
+          const day = weatherFromArchiveValue(item.value, item.date);
+          if (day !== undefined) next.set(item.date, day);
+        }
+        setWeatherArchive(next);
+      })
+      .catch(() => { if (!controller.signal.aborted) setWeatherArchive(new Map()); });
+    return () => controller.abort();
+  }, [activeView, calendarRange, selectedDate, authState.authenticated, authState.required, weatherStatus?.configured]);
+
   useEffect(() => {
     const controller = new AbortController();
     if (authState.required && !authState.authenticated) {
@@ -2028,14 +2355,53 @@ function App() {
   /** A calendar cell is a way back into the day it stands for. */
   const openDay = (date: string) => { setSelectedDate(date); setActiveView("today"); setMobileMenuOpen(false); };
   const showToast = (message: string) => { setActionMessage(message); window.setTimeout(() => setActionMessage(null), 2600); };
+  const rememberMovieEntity = (movie: MovieEntity) => {
+    setEntities((current) => {
+      const next = current.filter((item) => item.id !== movie.id);
+      return [...next, asCoreEntity(movie)];
+    });
+  };
+  const suppressMoviePrompt = () => {
+    window.localStorage.setItem(MOVIE_PROMPT_HIDDEN_STORAGE_KEY, "1");
+    setMoviePromptHidden(true);
+    showToast("已关闭“电影”提示");
+  };
+  const attachMovieToRecord = async (record: RecordView, movie: MovieEntity) => {
+    const movieEntityRef = movieRef(movie) as unknown as EntityRef;
+    const patchRecord = (current: RecordView) => apiRequest<RecordView>(`/api/records/${encodeURIComponent(current.id)}`, { method: "PATCH", body: JSON.stringify({ revision: current.revision, entityRefs: [...current.entityRefs.filter((ref) => !isMovieRef(ref)), movieEntityRef] }) });
+    try {
+      let updated: RecordView;
+      try {
+        updated = await patchRecord(record);
+      } catch (cause) {
+        if (errorStatus(cause) !== 409) throw cause;
+        const latestPayload = await apiRequest<RecordsResponse>(`/api/records?timeZone=${encodeURIComponent(USER_TIME_ZONE)}`);
+        const latest = latestPayload.items.find((item) => item.id === record.id);
+        if (!latest) throw new Error("找不到这条记录的最新版本，请刷新后重试");
+        updated = await patchRecord(latest);
+      }
+      rememberMovieEntity(movie);
+      setRecords((current) => current === null ? current : current.map((item) => item.id === updated.id ? updated : item));
+      showToast("影片已添加到记录");
+    } catch (error) {
+      setActionMessage(handleRequestError(error, "影片关联失败，请稍后重试"));
+    }
+  };
   const handleBackup = async (action: "local" | "s3" | "test" | "dual") => {
     if (backupBusy) return;
     setBackupBusy(true);
     try {
       const path = action === "local" ? "/api/backup/local" : action === "s3" ? "/api/backup/s3" : action === "dual" ? "/api/backup/dual" : "/api/backup/s3/test";
-      const result = await apiRequest<{ ok: boolean; fileName?: string; location?: string; status?: "success" | "partial" | "local_only" | "failed"; s3?: { status?: "success" | "failed" | "skipped"; error?: string } }> (path, { method: "POST", body: "{}" });
+      const result = await apiRequest<{ ok: boolean; fileName?: string; location?: string; transport?: "http" | "file"; warning?: string; status?: "success" | "partial" | "local_only" | "failed"; s3?: { status?: "success" | "failed" | "skipped"; error?: string; location?: string } }> (path, { method: "POST", body: "{}" });
       setBackupStatus(await apiRequest<BackupStatus>("/api/backup/status"));
-      showToast(action === "test" ? "对象存储连接成功" : action === "s3" ? `已上传对象存储${result.fileName ? `：${result.fileName}` : ""}` : action === "dual" ? result.status === "success" ? "双备份已完成" : result.status === "local_only" ? "本地备份已完成，远端已跳过" : result.status === "partial" ? "本地备份已完成，但远端失败" : "本地备份失败" : "本地备份已完成");
+      const remoteWroteLocally = result.transport === "file" || result.location?.startsWith("file:") === true || result.s3?.location?.startsWith("file:") === true;
+      showToast(action === "test"
+        ? remoteWroteLocally ? "连接测试只写入了本机目录，未联网 —— 请检查 Endpoint" : "对象存储连接成功"
+        : action === "s3"
+          ? remoteWroteLocally ? `只写入本机目录，未联网${result.fileName ? `：${result.fileName}` : ""}` : `已上传对象存储${result.fileName ? `：${result.fileName}` : ""}`
+          : action === "dual"
+            ? result.status === "success" ? remoteWroteLocally ? "双备份已完成，但远端只写入了本机目录" : "双备份已完成" : result.status === "local_only" ? "本地备份已完成，远端已跳过" : result.status === "partial" ? "本地备份已完成，但远端失败" : "本地备份失败"
+            : "本地备份已完成");
     } catch (error) {
       try { setBackupStatus(await apiRequest<BackupStatus>("/api/backup/status")); } catch { /* keep the existing status when the follow-up read also fails */ }
       setActionMessage(handleRequestError(error, action === "test" ? "对象存储连接失败" : action === "dual" ? "双备份失败，请查看本地结果" : "备份失败，请检查配置"));
@@ -2064,7 +2430,7 @@ function App() {
 
   useEffect(() => { installDiagnostics(); }, []);
 
-  const handleCreateEntity = async (type: EntityKind, name: string, extras?: { readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod }): Promise<Entity | null> => {
+  const handleCreateEntity = async (type: EntityKind, name: string, extras?: { readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string }): Promise<Entity | null> => {
     try {
       const payloadBody = {
         type,
@@ -2072,6 +2438,7 @@ function App() {
         ...(extras?.aliases === undefined ? {} : { aliases: extras.aliases }),
         ...(type === "place" && extras?.role !== undefined ? { role: extras.role } : {}),
         ...(type === "place" && extras?.period !== undefined ? { period: extras.period } : {}),
+        ...(type === "place" && extras?.address !== undefined ? { address: extras.address } : {}),
       };
       const entity = await apiRequest<Entity>("/api/entities", { method: "POST", body: JSON.stringify(payloadBody) });
       setEntities((current) => [...current, entity]);
@@ -2082,11 +2449,11 @@ function App() {
       return null;
     }
   };
-  const handleSaveEntity = async (entity: Entity, patch: { name: string; aliases: readonly string[]; description?: string }): Promise<Entity | null> => {
+  const handleSaveEntity = async (entity: Entity, patch: { name: string; aliases: readonly string[]; description?: string; address?: string | null }): Promise<Entity | null> => {
     try {
       const updated = await apiRequest<Entity>(`/api/entities/${encodeURIComponent(entity.id)}`, { method: "PATCH", body: JSON.stringify(patch) });
       setEntities((current) => current.map((item) => item.id === updated.id ? updated : item));
-      showToast(`人物「${updated.name}」已更新`);
+      showToast(`${updated.type === "place" ? "地点" : "联系人"}「${updated.name}」已更新`);
       return updated;
     } catch (error) {
       setActionMessage(handleRequestError(error, "人物资料保存失败，请重试"));
@@ -2150,7 +2517,7 @@ function App() {
     try {
       const result = await apiRequest<WeatherCurrentResponse>("/api/weather/current", { method: "POST" });
       setComposerWeather(result.weather);
-      showToast(`已钉住${result.weather.text}天气`);
+      showToast(`已记录${result.weather.text}天气`);
     } catch (error) {
       setActionMessage(handleRequestError(error, "实时天气读取失败，请检查天气配置"));
     } finally {
@@ -2167,10 +2534,10 @@ function App() {
     const occurred = occurredAt ? instantFromInput(occurredAt) : isTodaySelection ? undefined : dateOnly(selectedDate);
     const due = dueAt ? instantFromInput(dueAt) : undefined;
     if ((occurredAt && !occurred) || (dueAt && !due)) { setActionMessage("请检查时间格式后再保存"); return; }
-    const payload: RecordWritePayload = { kind: composerKind, content, ...(occurred ? { occurredAt: occurred } : {}), ...(composerKind === "task" && dueAt && due ? { dueAt: due } : {}), ...(composerPrivate ? { isPrivate: true } : {}), ...(composerBackfill && !isTodaySelection ? { isBackfill: true } : {}), ...(composerWeather === null ? {} : { weather: composerWeather }) };
+    const payload: RecordWritePayload = { kind: composerKind, content, ...(occurred ? { occurredAt: occurred } : {}), ...(composerKind === "task" && dueAt && due ? { dueAt: due } : {}), ...(composerPrivate ? { isPrivate: true } : {}), ...(composerBackfill && !isTodaySelection ? { isBackfill: true } : {}), ...(composerWeather === null ? {} : { weather: composerWeather }), ...(composerMovieRefs.length === 0 ? {} : { entityRefs: composerMovieRefs }) };
     setSaving(true);
     setActionMessage(null);
-    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); setComposerContent(""); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { setActionMessage(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
+    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); setComposerContent(""); setComposerMovieRefs([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { setActionMessage(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
   };
 
   const handleDemo = async () => {
@@ -2246,19 +2613,21 @@ function App() {
   if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
 
   const isToday = activeView === "today";
-  const showComposer = isToday || (activeView !== "settings" && composerOpen);
-  const showPageActions = Boolean(searchQuery || entityFilterId !== null || (activeView !== "settings" && !isToday));
+  const showComposer = isToday || (activeView !== "settings" && activeView !== "entities" && composerOpen);
+  const showPageActions = Boolean(searchQuery || entityFilterId !== null || (activeView !== "settings" && activeView !== "entities" && !isToday));
   const visibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
   const visibleTasks = hideDemo && tasks ? tasks.filter((record) => !isDemoRecord(record)) : tasks;
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer kind={composerKind} content={composerContent} entities={entities} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); }} /> : null}{activeView === "settings"
-      ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} />
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); }} /> : null}{activeView === "settings"
+       ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} />
+      : activeView === "entities"
+        ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"
-        ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
-      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={setPreviewAssetId} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className="action-toast" role="status"><Check size={16} strokeWidth={2} aria-hidden="true" />{actionMessage}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{previewAssetId === null ? null : <AssetPreview assetId={previewAssetId} assets={assets} onClose={() => setPreviewAssetId(null)} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
+        ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
+      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={setPreviewAssetId} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className="action-toast" role="status"><Check size={16} strokeWidth={2} aria-hidden="true" />{actionMessage}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{previewAssetId === null ? null : <AssetPreview assetId={previewAssetId} assets={assets} onClose={() => setPreviewAssetId(null)} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
 }
 
 export default App;

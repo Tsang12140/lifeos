@@ -93,7 +93,8 @@ npm run build
 
 ## 配置
 
-复制 `.env.example` 为本地 `.env`（不要提交 `.env`），按需要设置以下变量：
+复制 `.env.example` 为本地 `.env`（不要提交 `.env`），按需要设置以下变量。
+`npm run dev` 与 `npm start` 都会自动加载项目根目录的 `.env`（`node --env-file-if-exists`），**改完需重启才生效**；文件请存为 UTF-8 **不带 BOM**，否则第一个变量名会被静默吃掉。
 
 | 变量 | 默认值/说明 |
 | --- | --- |

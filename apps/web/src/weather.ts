@@ -41,7 +41,7 @@ export interface WeatherProfile {
   readonly hasKey: boolean;
 }
 
-export type WeatherCategory = "sunny" | "rainy" | "heavy-rainy" | "rainstorm" | "thunderstorm" | "snowy" | "cloudy" | "foggy";
+export type WeatherCategory = "sunny" | "rainy" | "moderate-rainy" | "heavy-rainy" | "rainstorm" | "thunderstorm" | "snowy" | "cloudy" | "foggy";
 
 export function getWeatherCategory(iconCode: string): WeatherCategory {
   const code = Number.parseInt(iconCode, 10);
@@ -49,6 +49,7 @@ export function getWeatherCategory(iconCode: string): WeatherCategory {
   if (code >= 302 && code <= 304) return "thunderstorm";
   if ([308, 310, 311, 312, 317, 318].includes(code)) return "rainstorm";
   if ([307, 315, 316].includes(code)) return "heavy-rainy";
+  if (code === 306) return "moderate-rainy";
   if (code >= 300 && code <= 318) return "rainy";
   if (code >= 400 && code <= 410) return "snowy";
   if (code >= 500 && code <= 515) return "foggy";
@@ -85,7 +86,7 @@ export function getWeatherDecision(snapshot: WeatherSnapshot | null, targetDay: 
   const todayAverage = (Number.parseFloat(snapshot.today.tempMax) + Number.parseFloat(snapshot.today.tempMin)) / 2;
   const targetAverage = (Number.parseFloat(targetDay.tempMax) + Number.parseFloat(targetDay.tempMin)) / 2;
   const tempDelta = Math.round(targetAverage - todayAverage);
-  const precipitation: readonly WeatherCategory[] = ["rainy", "heavy-rainy", "rainstorm", "thunderstorm", "snowy"];
+  const precipitation: readonly WeatherCategory[] = ["rainy", "moderate-rainy", "heavy-rainy", "rainstorm", "thunderstorm", "snowy"];
   const tempHint = Math.abs(tempDelta) >= 5 ? tempDelta > 0 ? `升温${tempDelta}°C，注意防晒补水` : `降温${Math.abs(tempDelta)}°C，注意添衣` : null;
   return { category: targetCategory, tempHint, showAnimation: precipitation.includes(targetCategory) || (precipitation.includes(todayCategory) && !precipitation.includes(targetCategory)) || Math.abs(tempDelta) >= 5 };
 }

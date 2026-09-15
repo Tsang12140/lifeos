@@ -83,6 +83,31 @@ export function normalizeBackupEndpoint(input: string): string {
   return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 }
 
+export type BackupTransport = "http" | "file";
+
+/**
+ * A `file:` endpoint writes the backup into a local directory through writeFile
+ * instead of performing a signed HTTP PUT. It exists only so preview and
+ * acceptance runs can exercise the backup flow without cloud credentials, so it
+ * has to be opted into explicitly: a normal deployment must never end up with an
+ * "object storage" target that silently never leaves the machine.
+ */
+export function fileBackupAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  return ["1", "true", "yes", "on"].includes((env.LIFEOS_ALLOW_FILE_BACKUP ?? "").trim().toLowerCase());
+}
+
+export function backupTransportOf(endpoint: string): BackupTransport {
+  return new URL(normalizeBackupEndpoint(endpoint)).protocol === "file:" ? "file" : "http";
+}
+
+const FILE_BACKUP_HINT =
+  "对象存储 Endpoint 是本机目录（file://），备份不会真正联网上传。请填写真实的 http(s) Endpoint；只有本机预览测试才需要设置 LIFEOS_ALLOW_FILE_BACKUP=1 显式允许。";
+
+/** Guard for every upload path so a local pseudo-bucket cannot pass as cloud storage. */
+export function assertRealBackupTransport(endpoint: string): void {
+  if (backupTransportOf(endpoint) === "file" && !fileBackupAllowed()) throw new Error(FILE_BACKUP_HINT);
+}
+
 function normalizeBucket(value: string): string {
   const bucket = value.trim();
   if (!bucket || bucket.includes("/") || bucket.includes("\\") || bucket === "." || bucket === "..") throw new Error("对象存储 Bucket 不能为空且不能包含路径");
@@ -113,7 +138,16 @@ function storedRuntime(config: ApiConfig, stored: StoredBackupConfig): RuntimeBa
 
 export function readRuntimeBackupConfig(config: ApiConfig): RuntimeBackupConfig | undefined {
   const stored = readStored(config);
-  if (stored !== undefined) return storedRuntime(config, stored);
+  if (stored !== undefined) {
+    const runtime = storedRuntime(config, stored);
+    // A saved config that carries no usable key pair cannot upload anything, so
+    // letting it win would silently mask a complete BACKUP_S3_* environment
+    // configuration — exactly the kind of "looks configured, does nothing"
+    // state this module exists to prevent.
+    if (runtime.accessKeyId && runtime.secretAccessKey) return runtime;
+    if (config.backupS3 !== undefined) return { ...config.backupS3, source: "env" };
+    return runtime;
+  }
   if (config.backupS3 === undefined) return undefined;
   return { ...config.backupS3, source: "env" };
 }
@@ -121,6 +155,7 @@ export function readRuntimeBackupConfig(config: ApiConfig): RuntimeBackupConfig 
 export function resolvedBackupS3(config: ApiConfig): BackupS3Config | undefined {
   const runtime = readRuntimeBackupConfig(config);
   if (runtime === undefined || !runtime.accessKeyId || !runtime.secretAccessKey) return undefined;
+  assertRealBackupTransport(runtime.endpoint);
   return {
     enabled: runtime.enabled,
     endpoint: runtime.endpoint,
@@ -133,15 +168,18 @@ export function resolvedBackupS3(config: ApiConfig): BackupS3Config | undefined 
   };
 }
 
-export function publicBackupConfig(config: ApiConfig): { readonly configured: boolean; readonly enabled: boolean; readonly endpoint: string; readonly region: string; readonly bucket: string; readonly prefix: string; readonly forcePathStyle: boolean; readonly keySource: RuntimeBackupConfig["source"] } {
+export function publicBackupConfig(config: ApiConfig): { readonly configured: boolean; readonly enabled: boolean; readonly endpoint: string; readonly region: string; readonly bucket: string; readonly prefix: string; readonly forcePathStyle: boolean; readonly keySource: RuntimeBackupConfig["source"]; readonly transport: BackupTransport; readonly warning?: string } {
   const runtime = readRuntimeBackupConfig(config);
-  if (runtime === undefined) return { configured: false, enabled: false, endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false, keySource: "none" };
-  return { configured: Boolean(runtime.accessKeyId && runtime.secretAccessKey), enabled: runtime.enabled, endpoint: runtime.endpoint, region: runtime.region, bucket: runtime.bucket, prefix: runtime.prefix, forcePathStyle: runtime.forcePathStyle, keySource: runtime.source };
+  if (runtime === undefined) return { configured: false, enabled: false, endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false, keySource: "none", transport: "http" };
+  const transport = backupTransportOf(runtime.endpoint);
+  const blocked = transport === "file" && !fileBackupAllowed();
+  return { configured: Boolean(runtime.accessKeyId && runtime.secretAccessKey), enabled: runtime.enabled, endpoint: runtime.endpoint, region: runtime.region, bucket: runtime.bucket, prefix: runtime.prefix, forcePathStyle: runtime.forcePathStyle, keySource: runtime.source, transport, ...(blocked ? { warning: FILE_BACKUP_HINT } : {}) };
 }
 
 export function saveRuntimeBackupConfig(config: ApiConfig, input: { readonly enabled: boolean; readonly endpoint: string; readonly region: string; readonly bucket: string; readonly prefix: string; readonly forcePathStyle: boolean; readonly accessKeyId?: string; readonly secretAccessKey?: string }): ReturnType<typeof publicBackupConfig> {
   const current = readRuntimeBackupConfig(config);
   const endpoint = normalizeBackupEndpoint(input.endpoint);
+  assertRealBackupTransport(endpoint);
   const region = input.region.trim();
   if (!region) throw new Error("对象存储 Region 不能为空");
   const bucket = normalizeBucket(input.bucket);

@@ -28,7 +28,8 @@ export interface WeatherLocation {
 
 export interface WeatherArchiveStore {
   readonly getWeatherDayCache: (date: string, locationKey: string) => WeatherDayCache | null;
-  readonly saveWeatherDayCache: (date: string, locationKey: string, locationId: string, city: string, value: unknown, capturedAt: string) => void;
+  readonly listWeatherDayCache?: (from: string, to: string, locationKey?: string) => readonly WeatherDayCache[];
+  readonly saveWeatherDayCache: (date: string, locationKey: string, locationId: string, city: string, value: unknown, capturedAt: string, archived?: boolean) => void;
 }
 
 export interface RealtimeWeatherResult {
@@ -36,7 +37,7 @@ export interface RealtimeWeatherResult {
   readonly location: WeatherLocation;
 }
 
-export type WeatherCategory = "sunny" | "rainy" | "heavy-rainy" | "rainstorm" | "thunderstorm" | "snowy" | "cloudy" | "foggy";
+export type WeatherCategory = "sunny" | "rainy" | "moderate-rainy" | "heavy-rainy" | "rainstorm" | "thunderstorm" | "snowy" | "cloudy" | "foggy";
 
 export function getWeatherCategory(iconCode: string): WeatherCategory {
   const code = Number.parseInt(iconCode, 10);
@@ -44,6 +45,7 @@ export function getWeatherCategory(iconCode: string): WeatherCategory {
   if (code >= 302 && code <= 304) return "thunderstorm";
   if ([308, 310, 311, 312, 317, 318].includes(code)) return "rainstorm";
   if ([307, 315, 316].includes(code)) return "heavy-rainy";
+  if (code === 306) return "moderate-rainy";
   if (code >= 300 && code <= 318) return "rainy";
   if (code >= 400 && code <= 410) return "snowy";
   if (code >= 500 && code <= 515) return "foggy";
@@ -76,7 +78,7 @@ export function getWeatherDecisionForDay(snapshot: WeatherSnapshot | null, targe
   const todayAverage = (Number.parseFloat(snapshot.today.tempMax) + Number.parseFloat(snapshot.today.tempMin)) / 2;
   const targetAverage = (Number.parseFloat(targetDay.tempMax) + Number.parseFloat(targetDay.tempMin)) / 2;
   const tempDelta = Math.round(targetAverage - todayAverage);
-  const precipCategories: readonly WeatherCategory[] = ["rainy", "heavy-rainy", "rainstorm", "thunderstorm", "snowy"];
+  const precipCategories: readonly WeatherCategory[] = ["rainy", "moderate-rainy", "heavy-rainy", "rainstorm", "thunderstorm", "snowy"];
   const showAnimation = precipCategories.includes(targetCategory) || (precipCategories.includes(todayCategory) && !precipCategories.includes(targetCategory)) || Math.abs(tempDelta) >= 5;
   const tempHint = Math.abs(tempDelta) >= 5 ? tempDelta > 0 ? `升温${tempDelta}°C，注意防晒补水` : `降温${Math.abs(tempDelta)}°C，注意添衣` : null;
   return { showAnimation, category: targetCategory, tempHint, tempDelta };
@@ -101,8 +103,33 @@ const KNOWN_LOCATION_LABELS: Readonly<Record<string, Pick<WeatherLocation, "name
   "101280803": { name: "佛山南海区", adm2: "佛山市", adm1: "广东省" },
 };
 
-function currentDateShanghai(): string {
+export function currentDateShanghai(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+}
+
+function isDateOnly(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+/** Finds a cached archive without needing to resolve a location through GeoAPI. */
+function cachedArchiveForDate(
+  archiveStore: WeatherArchiveStore,
+  runtime: RuntimeWeatherConfig,
+  targetDate: string,
+  today: string,
+): WeatherDayCache | null {
+  if (!isDateOnly(targetDate)) return null;
+  const keys = [...new Set([runtime.locationId.trim(), runtime.city.trim()].filter(Boolean))];
+  const candidates: WeatherDayCache[] = [];
+  for (const key of keys) {
+    const cached = archiveStore.getWeatherDayCache(targetDate, key);
+    if (cached !== null) candidates.push(cached);
+  }
+  // Do not guess from a same-day row belonging to another city/profile. A
+  // city-only configuration can resolve once (and then persist its location
+  // ID in subsequent device requests); until that key is known, correctness
+  // wins over a speculative cache hit.
+  return candidates.find((candidate) => targetDate < today || candidate.archived === true) ?? null;
 }
 
 function cleanHost(value: string): string {
@@ -227,12 +254,25 @@ export function clearWeatherCache(): void {
 export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: string | null, locationOverride?: WeatherLocationOverride, archiveStore?: WeatherArchiveStore): Promise<{ readonly snapshot: WeatherSnapshot | null; readonly location: WeatherLocation | null }> {
   const runtime = runtimeWeatherConfigForLocation(config, locationOverride);
   if (!runtime.enabled || !runtime.apiKey) return { snapshot: null, location: null };
+  const targetDate = requestedDate ?? currentDateShanghai();
+  const today = currentDateShanghai();
+  // This check intentionally precedes resolveLocation: a hit in the SQLite
+  // archive must not spend an external request merely to recover a friendly
+  // location label. The archived payload already carries its own location.
+  const cachedBeforeResolve = archiveStore === undefined ? null : cachedArchiveForDate(archiveStore, runtime, targetDate, today);
+  if (cachedBeforeResolve !== null) {
+    const restored = archivedPayload(cachedBeforeResolve.value);
+    if (restored !== null) return { snapshot: restored.snapshot, location: restored.location };
+    // A row for the exact date/location is still authoritative. Do not turn a
+    // malformed local payload into an external request while viewing history.
+    return { snapshot: null, location: null };
+  }
   const location = await resolveLocation(runtime);
   if (!location) return { snapshot: null, location: null };
-  const targetDate = requestedDate ?? currentDateShanghai();
   const locationKey = location.id || location.name;
   const archived = archiveStore?.getWeatherDayCache(targetDate, locationKey);
-  if (archived !== undefined && archived !== null) {
+  const canReadArchive = targetDate < today || archived?.archived === true;
+  if (archived !== undefined && archived !== null && canReadArchive) {
     const restored = archivedPayload(archived.value);
     if (restored !== null) {
       // Older archives may have captured the raw location ID before the
@@ -240,6 +280,7 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
       // the current resolved label for the header and timeline.
       return { snapshot: restored.snapshot, location: restored.location.id === location.id ? location : restored.location };
     }
+    return { snapshot: null, location };
   }
   const cached = snapshotCache.get(`${location.id}:${runtime.apiHost}`);
   let snapshot = cached && cached.expiresAt > Date.now() ? cached.snapshot : undefined;
@@ -251,7 +292,7 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
     if (archiveStore !== undefined) {
       const capturedAt = new Date().toISOString();
       for (const day of daily) {
-        archiveStore.saveWeatherDayCache(day.fxDate, locationKey, location.id, location.name, weatherArchiveValue(oneDaySnapshot(day), location), capturedAt);
+        archiveStore.saveWeatherDayCache(day.fxDate, locationKey, location.id, location.name, weatherArchiveValue(oneDaySnapshot(day), location), capturedAt, false);
       }
     }
   }
@@ -259,11 +300,43 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
     const historical = await fetchHistoricalWeather(targetDate, location.id, runtime);
     if (historical) {
       snapshot = { ...snapshot, days: [...snapshot.days.filter((day) => day.fxDate !== historical.fxDate), historical].sort((left, right) => left.fxDate.localeCompare(right.fxDate)) };
-      archiveStore?.saveWeatherDayCache(historical.fxDate, locationKey, location.id, location.name, weatherArchiveValue(oneDaySnapshot(historical), location), new Date().toISOString());
+      archiveStore?.saveWeatherDayCache(historical.fxDate, locationKey, location.id, location.name, weatherArchiveValue(oneDaySnapshot(historical), location), new Date().toISOString(), true);
     }
   }
   const selected = findWeatherDay(snapshot, targetDate);
   return selected === null ? { snapshot, location } : { snapshot: oneDaySnapshot(selected), location };
+}
+
+/**
+ * Captures one day's final weather into SQLite. The write is monotonic: a
+ * forecast row can become archived, but an archive is never downgraded by a
+ * later forecast refresh.
+ */
+export async function archiveWeatherDay(
+  config: ApiConfig,
+  date: string,
+  locationOverride: WeatherLocationOverride | undefined,
+  archiveStore: WeatherArchiveStore,
+): Promise<boolean> {
+  if (!isDateOnly(date)) return false;
+  const runtime = runtimeWeatherConfigForLocation(config, locationOverride);
+  if (!runtime.enabled || !runtime.apiKey) return false;
+  const directKeys = [...new Set([runtime.locationId.trim(), runtime.city.trim()].filter(Boolean))];
+  if (directKeys.some((key) => archiveStore.getWeatherDayCache(date, key)?.archived === true)) return true;
+  const result = await fetchWeatherSnapshot(config, date, locationOverride, archiveStore);
+  if (result.snapshot === null || result.location === null) return false;
+  const day = findWeatherDay(result.snapshot, date) ?? result.snapshot.today;
+  const locationKey = result.location.id || result.location.name;
+  archiveStore.saveWeatherDayCache(
+    day.fxDate,
+    locationKey,
+    result.location.id,
+    result.location.name,
+    weatherArchiveValue(oneDaySnapshot(day), result.location),
+    new Date().toISOString(),
+    true,
+  );
+  return true;
 }
 
 export async function fetchRealtimeWeather(config: ApiConfig, locationOverride?: WeatherLocationOverride): Promise<RealtimeWeatherResult | null> {

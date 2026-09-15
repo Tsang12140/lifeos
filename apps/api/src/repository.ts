@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
+import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, type BackupRetention } from "./backup-retention.js";
 import {
   assertValidAsset,
   assertValidCycleIntimacyModuleData,
@@ -62,6 +63,10 @@ export interface BackupRun {
   readonly error?: string;
   readonly startedAt: string;
   readonly finishedAt?: string;
+  /** Set once retention moved this snapshot to the recycle bin. */
+  readonly prunedAt?: string;
+  /** Where the trashed copy lives now, so it can be found and restored. */
+  readonly trashLocation?: string;
 }
 
 export interface BackupSchedule {
@@ -91,6 +96,8 @@ export interface WeatherDayCache {
   readonly city: string;
   readonly value: unknown;
   readonly capturedAt: string;
+  /** True once the day's final archive job has completed. */
+  readonly archived: boolean;
 }
 
 export const DEFAULT_CYCLE_INTIMACY_CONFIG: CycleIntimacyModuleConfig = {
@@ -175,6 +182,25 @@ function parseJson<T>(value: string, name: string): T {
   } catch {
     throw new Error(`Corrupt JSON in SQLite column ${name}`);
   }
+}
+
+function entityAddress(entity: Entity): string | null {
+  return entity.type === "place" ? entity.address ?? null : null;
+}
+
+/**
+ * Entity rows pre-date the dedicated address column and therefore may carry
+ * the field only inside value_json. Read both forms so old databases and
+ * partially migrated rows remain importable.
+ */
+function entityFromRow(row: Record<string, unknown>): Entity {
+  const value = parseJson<unknown>(textColumn(row, "value_json"), "entities.value_json");
+  const storedAddress = row.address === undefined || row.address === null ? undefined : textColumn(row, "address");
+  const candidate = storedAddress !== undefined && typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>), ...(Object.prototype.hasOwnProperty.call(value, "address") ? {} : { address: storedAddress }) }
+    : value;
+  assertValidEntity(candidate);
+  return candidate;
 }
 
 // The early weather attachment implementation saved the QWeather location ID
@@ -307,7 +333,8 @@ export class SqliteRecordRepository {
       CREATE INDEX IF NOT EXISTS records_kind_idx ON records (deleted_at_json, kind);
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY NOT NULL,
-        value_json TEXT NOT NULL
+        value_json TEXT NOT NULL,
+        address TEXT
       ) STRICT;
       CREATE TABLE IF NOT EXISTS assets (
         id TEXT PRIMARY KEY NOT NULL,
@@ -345,7 +372,9 @@ export class SqliteRecordRepository {
         size_bytes INTEGER,
         error TEXT,
         started_at TEXT NOT NULL,
-        finished_at TEXT
+        finished_at TEXT,
+        pruned_at TEXT,
+        trash_location TEXT
       ) STRICT;
       CREATE INDEX IF NOT EXISTS backup_runs_started_idx ON backup_runs (started_at DESC);
       CREATE TABLE IF NOT EXISTS backup_schedule (
@@ -354,6 +383,13 @@ export class SqliteRecordRepository {
         hour INTEGER NOT NULL DEFAULT 2,
         minute INTEGER NOT NULL DEFAULT 0,
         last_run_key TEXT
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS backup_retention (
+        id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+        daily_days INTEGER NOT NULL,
+        weekly_weeks INTEGER NOT NULL,
+        monthly_months INTEGER NOT NULL,
+        trash_days INTEGER NOT NULL
       ) STRICT;
       CREATE TABLE IF NOT EXISTS weather_device_locations (
         device_id TEXT PRIMARY KEY NOT NULL,
@@ -369,6 +405,7 @@ export class SqliteRecordRepository {
         city TEXT NOT NULL,
         value_json TEXT NOT NULL,
         captured_at_json TEXT NOT NULL,
+        archived INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (date, location_key)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS weather_day_cache_location_idx ON weather_day_cache (location_key, date);
@@ -390,9 +427,40 @@ export class SqliteRecordRepository {
     if (!weatherLocationColumns.some((column) => column.name === "profile_id")) {
       this.#db.exec("ALTER TABLE weather_device_locations ADD COLUMN profile_id TEXT");
     }
+    const entityColumns = this.#db.prepare("PRAGMA table_info(entities)").all() as readonly Record<string, unknown>[];
+    if (!entityColumns.some((column) => column.name === "address")) {
+      this.#db.exec("ALTER TABLE entities ADD COLUMN address TEXT");
+    }
+    // Backfill the nullable column from imports written before the column was
+    // introduced. Keeping the JSON value too is intentional: exports remain
+    // self-contained and old readers can still understand them.
+    const legacyEntityRows = this.#db.prepare("SELECT id, value_json FROM entities WHERE address IS NULL").all() as readonly Record<string, unknown>[];
+    if (legacyEntityRows.length > 0) {
+      const updateEntityAddress = this.#db.prepare("UPDATE entities SET address = ? WHERE id = ?");
+      for (const row of legacyEntityRows) {
+        const value = parseJson<unknown>(textColumn(row, "value_json"), "entities.value_json");
+        if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+        const entity = value as Record<string, unknown>;
+        if (entity.type === "place" && typeof entity.address === "string") updateEntityAddress.run(entity.address, textColumn(row, "id"));
+      }
+    }
+    const weatherCacheColumns = this.#db.prepare("PRAGMA table_info(weather_day_cache)").all() as readonly Record<string, unknown>[];
+    if (!weatherCacheColumns.some((column) => column.name === "archived")) {
+      this.#db.exec("ALTER TABLE weather_day_cache ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+    }
     const backupRunColumns = this.#db.prepare("PRAGMA table_info(backup_runs)").all() as readonly Record<string, unknown>[];
     if (!backupRunColumns.some((column) => column.name === "batch_id")) {
       this.#db.exec("ALTER TABLE backup_runs ADD COLUMN batch_id TEXT");
+    }
+    if (!backupRunColumns.some((column) => column.name === "pruned_at")) {
+      this.#db.exec("ALTER TABLE backup_runs ADD COLUMN pruned_at TEXT");
+    }
+    if (!backupRunColumns.some((column) => column.name === "trash_location")) {
+      this.#db.exec("ALTER TABLE backup_runs ADD COLUMN trash_location TEXT");
+    }
+    const retentionColumns = this.#db.prepare("PRAGMA table_info(backup_retention)").all() as readonly Record<string, unknown>[];
+    if (retentionColumns.length > 0 && !retentionColumns.some((column) => column.name === "trash_days")) {
+      this.#db.exec(`ALTER TABLE backup_retention ADD COLUMN trash_days INTEGER NOT NULL DEFAULT ${DEFAULT_BACKUP_RETENTION.trashDays}`);
     }
     this.#migrateLegacyDemoLabels();
   }
@@ -501,6 +569,40 @@ export class SqliteRecordRepository {
     return typeof row?.last_run_key === "string" ? row.last_run_key : undefined;
   }
 
+  /** Falls back to the documented defaults whenever nothing has been saved yet. */
+  public getBackupRetention(): BackupRetention {
+    const row = this.#db.prepare("SELECT daily_days, weekly_weeks, monthly_months, trash_days FROM backup_retention WHERE id = 1").get() as Record<string, unknown> | undefined;
+    if (row === undefined) return DEFAULT_BACKUP_RETENTION;
+    const dailyDays = row.daily_days;
+    const weeklyWeeks = row.weekly_weeks;
+    const monthlyMonths = row.monthly_months;
+    const trashDays = row.trash_days;
+    if (typeof dailyDays !== "number" || typeof weeklyWeeks !== "number" || typeof monthlyMonths !== "number" || typeof trashDays !== "number") {
+      return DEFAULT_BACKUP_RETENTION;
+    }
+    const candidate: BackupRetention = { dailyDays, weeklyWeeks, monthlyMonths, trashDays };
+    try {
+      assertValidBackupRetention(candidate);
+      return candidate;
+    } catch {
+      // A hand-edited database must not break backups; fall back rather than throw.
+      return DEFAULT_BACKUP_RETENTION;
+    }
+  }
+
+  public saveBackupRetention(policy: BackupRetention): void {
+    assertValidBackupRetention(policy);
+    this.#db.prepare(`
+      INSERT INTO backup_retention (id, daily_days, weekly_weeks, monthly_months, trash_days)
+      VALUES (1, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        daily_days = excluded.daily_days,
+        weekly_weeks = excluded.weekly_weeks,
+        monthly_months = excluded.monthly_months,
+        trash_days = excluded.trash_days
+    `).run(policy.dailyDays, policy.weeklyWeeks, policy.monthlyMonths, policy.trashDays);
+  }
+
   public recordBackupRun(run: Omit<BackupRun, "id">): void {
     this.#db.prepare(`
       INSERT INTO backup_runs (id, batch_id, provider, kind, status, file_name, location, size_bytes, error, started_at, finished_at)
@@ -521,7 +623,20 @@ export class SqliteRecordRepository {
 
   public listBackupRuns(limit = 20): readonly BackupRun[] {
     const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
-    return this.#db.prepare(`SELECT * FROM backup_runs ORDER BY started_at DESC, id DESC LIMIT ${safeLimit}`).all().map((row) => {
+    return this.#backupRuns(`SELECT * FROM backup_runs ORDER BY started_at DESC, id DESC LIMIT ${safeLimit}`);
+  }
+
+  /**
+   * Retention has to see the whole history: a truncated list would silently stop
+   * older snapshots from ever being planned (and therefore never cleaned).
+   */
+  public listAllBackupRuns(max = 5000): readonly BackupRun[] {
+    const safeMax = Math.max(1, Math.min(max, Math.trunc(max)));
+    return this.#backupRuns(`SELECT * FROM backup_runs ORDER BY started_at DESC, id DESC LIMIT ${safeMax}`);
+  }
+
+  #backupRuns(sql: string): readonly BackupRun[] {
+    return this.#db.prepare(sql).all().map((row) => {
       const value = row as Record<string, unknown>;
       const provider = textColumn(value, "provider");
       const kind = textColumn(value, "kind");
@@ -538,8 +653,16 @@ export class SqliteRecordRepository {
         ...(nullableTextColumn(value, "error") === null ? {} : { error: nullableTextColumn(value, "error")! }),
         startedAt: textColumn(value, "started_at"),
         ...(nullableTextColumn(value, "finished_at") === null ? {} : { finishedAt: nullableTextColumn(value, "finished_at")! }),
+        ...(nullableTextColumn(value, "pruned_at") === null ? {} : { prunedAt: nullableTextColumn(value, "pruned_at")! }),
+        ...(nullableTextColumn(value, "trash_location") === null ? {} : { trashLocation: nullableTextColumn(value, "trash_location")! }),
       } satisfies BackupRun;
     });
+  }
+
+  /** Records that retention moved a snapshot to the recycle bin. */
+  public markBackupRunPruned(id: number, prunedAt: string, trashLocation?: string): void {
+    this.#db.prepare("UPDATE backup_runs SET pruned_at = ?, trash_location = ? WHERE id = ?")
+      .run(prunedAt, trashLocation ?? null, id);
   }
 
   /** Data for the optional private calendar overlay, kept outside free-form notes. */
@@ -600,6 +723,17 @@ export class SqliteRecordRepository {
     };
   }
 
+  /** All per-device locations, used by the daily archive job. */
+  public listWeatherDeviceLocations(): readonly WeatherDeviceLocation[] {
+    return this.#db.prepare("SELECT device_id, location_id, city, updated_at_json, profile_id FROM weather_device_locations ORDER BY device_id").all().map((row) => ({
+      deviceId: textColumn(row, "device_id"),
+      locationId: textColumn(row, "location_id"),
+      city: textColumn(row, "city"),
+      updatedAt: textColumn(row, "updated_at_json"),
+      ...(nullableTextColumn(row, "profile_id") === null ? {} : { profileId: nullableTextColumn(row, "profile_id") as string }),
+    }));
+  }
+
   public saveWeatherDeviceLocation(deviceId: string, locationId: string, city: string, updatedAt: string, profileId?: string): WeatherDeviceLocation {
     this.#db.prepare(`
       INSERT INTO weather_device_locations (device_id, location_id, city, updated_at_json, profile_id)
@@ -610,7 +744,7 @@ export class SqliteRecordRepository {
   }
 
   public getWeatherDayCache(date: string, locationKey: string): WeatherDayCache | null {
-    const row = this.#db.prepare("SELECT date, location_key, location_id, city, value_json, captured_at_json FROM weather_day_cache WHERE date = ? AND location_key = ?").get(date, locationKey);
+    const row = this.#db.prepare("SELECT date, location_key, location_id, city, value_json, captured_at_json, archived FROM weather_day_cache WHERE date = ? AND location_key = ?").get(date, locationKey);
     if (row === undefined) return null;
     return {
       date: textColumn(row, "date"),
@@ -619,15 +753,36 @@ export class SqliteRecordRepository {
       city: textColumn(row, "city"),
       value: parseJson<unknown>(textColumn(row, "value_json"), "weather_day_cache.value_json"),
       capturedAt: textColumn(row, "captured_at_json"),
+      archived: booleanColumn(row, "archived"),
     };
   }
 
-  public saveWeatherDayCache(date: string, locationKey: string, locationId: string, city: string, value: unknown, capturedAt: string): void {
+  public listWeatherDayCache(from: string, to: string, locationKey?: string): readonly WeatherDayCache[] {
+    const rows = locationKey === undefined
+      ? this.#db.prepare("SELECT date, location_key, location_id, city, value_json, captured_at_json, archived FROM weather_day_cache WHERE date >= ? AND date <= ? ORDER BY date ASC, location_key ASC").all(from, to)
+      : this.#db.prepare("SELECT date, location_key, location_id, city, value_json, captured_at_json, archived FROM weather_day_cache WHERE date >= ? AND date <= ? AND location_key = ? ORDER BY date ASC").all(from, to, locationKey);
+    return rows.map((row) => ({
+      date: textColumn(row, "date"),
+      locationKey: textColumn(row, "location_key"),
+      locationId: textColumn(row, "location_id"),
+      city: textColumn(row, "city"),
+      value: parseJson<unknown>(textColumn(row, "value_json"), "weather_day_cache.value_json"),
+      capturedAt: textColumn(row, "captured_at_json"),
+      archived: booleanColumn(row, "archived"),
+    }));
+  }
+
+  public saveWeatherDayCache(date: string, locationKey: string, locationId: string, city: string, value: unknown, capturedAt: string, archived = false): void {
     this.#db.prepare(`
-      INSERT INTO weather_day_cache (date, location_key, location_id, city, value_json, captured_at_json)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(date, location_key) DO UPDATE SET location_id = excluded.location_id, city = excluded.city, value_json = excluded.value_json, captured_at_json = excluded.captured_at_json
-    `).run(date, locationKey, locationId, city, JSON.stringify(value), capturedAt);
+      INSERT INTO weather_day_cache (date, location_key, location_id, city, value_json, captured_at_json, archived)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(date, location_key) DO UPDATE SET
+        location_id = excluded.location_id,
+        city = excluded.city,
+        value_json = excluded.value_json,
+        captured_at_json = excluded.captured_at_json,
+        archived = max(weather_day_cache.archived, excluded.archived)
+    `).run(date, locationKey, locationId, city, JSON.stringify(value), capturedAt, archived ? 1 : 0);
   }
 
   public list(query: RecordListQuery = {}): readonly RecordView[] {
@@ -719,10 +874,8 @@ export class SqliteRecordRepository {
         return record;
       });
     const entities: Entity[] = [];
-    for (const row of this.#db.prepare("SELECT value_json FROM entities ORDER BY id").all()) {
-      const value = parseJson<unknown>(textColumn(row, "value_json"), "entities.value_json");
-      assertValidEntity(value);
-      entities.push(value);
+    for (const row of this.#db.prepare("SELECT value_json, address FROM entities ORDER BY id").all()) {
+      entities.push(entityFromRow(row));
     }
     const assets: Asset[] = [];
     for (const row of this.#db.prepare("SELECT value_json FROM assets ORDER BY id").all()) {
@@ -777,8 +930,8 @@ export class SqliteRecordRepository {
       for (const record of data.records) {
         insertRecord.run(...recordInsertParams(record));
       }
-      const insertEntity = this.#db.prepare("INSERT INTO entities (id, value_json) VALUES (?, ?)");
-      for (const entity of data.entities) insertEntity.run(entity.id, JSON.stringify(entity));
+      const insertEntity = this.#db.prepare("INSERT INTO entities (id, value_json, address) VALUES (?, ?, ?)");
+      for (const entity of data.entities) insertEntity.run(entity.id, JSON.stringify(entity), entityAddress(entity));
       const insertAsset = this.#db.prepare("INSERT INTO assets (id, value_json) VALUES (?, ?)");
       for (const asset of data.assets) insertAsset.run(asset.id, JSON.stringify(asset));
       if (cycleIntimacy !== undefined) {
@@ -799,9 +952,8 @@ export class SqliteRecordRepository {
   public listEntities(query: EntityListQuery = {}): readonly Entity[] {
     const items: Entity[] = [];
     const needle = query.q === undefined ? undefined : normalizeEntitySearchTerm(query.q);
-    for (const row of this.#db.prepare("SELECT value_json FROM entities").all()) {
-      const value = parseJson<unknown>(textColumn(row, "value_json"), "entities.value_json");
-      assertValidEntity(value);
+    for (const row of this.#db.prepare("SELECT value_json, address FROM entities").all()) {
+      const value = entityFromRow(row);
       if (query.type !== undefined && value.type !== query.type) continue;
       // Aliases are searchable, so "@彬哥" and "彬哥" both find 阿彬.
       if (needle !== undefined && needle.length > 0 && !entitySearchTerms(value).some((term) => normalizeEntitySearchTerm(term).includes(needle))) continue;
@@ -813,21 +965,19 @@ export class SqliteRecordRepository {
   }
 
   public findEntityById(id: string): Entity | null {
-    const row = this.#db.prepare("SELECT value_json FROM entities WHERE id = ?").get(id);
+    const row = this.#db.prepare("SELECT value_json, address FROM entities WHERE id = ?").get(id);
     if (row === undefined) return null;
-    const value = parseJson<unknown>(textColumn(row, "value_json"), "entities.value_json");
-    assertValidEntity(value);
-    return value;
+    return entityFromRow(row);
   }
 
   public insertEntity(entity: Entity): void {
     assertValidEntity(entity);
-    this.#db.prepare("INSERT INTO entities (id, value_json) VALUES (?, ?)").run(entity.id, JSON.stringify(entity));
+    this.#db.prepare("INSERT INTO entities (id, value_json, address) VALUES (?, ?, ?)").run(entity.id, JSON.stringify(entity), entityAddress(entity));
   }
 
   public updateEntity(entity: Entity): boolean {
     assertValidEntity(entity);
-    const result = this.#db.prepare("UPDATE entities SET value_json = ? WHERE id = ?").run(JSON.stringify(entity), entity.id);
+    const result = this.#db.prepare("UPDATE entities SET value_json = ?, address = ? WHERE id = ?").run(JSON.stringify(entity), entityAddress(entity), entity.id);
     return Number(result.changes) === 1;
   }
 
@@ -839,9 +989,9 @@ export class SqliteRecordRepository {
     for (const entity of entities) assertValidEntity(entity);
     this.#db.exec("BEGIN IMMEDIATE");
     try {
-      const update = this.#db.prepare("UPDATE entities SET value_json = ? WHERE id = ?");
+      const update = this.#db.prepare("UPDATE entities SET value_json = ?, address = ? WHERE id = ?");
       for (const entity of entities) {
-        const result = update.run(JSON.stringify(entity), entity.id);
+        const result = update.run(JSON.stringify(entity), entityAddress(entity), entity.id);
         if (Number(result.changes) !== 1) throw new Error(`Entity disappeared during write: ${entity.id}`);
       }
       this.#db.exec("COMMIT");

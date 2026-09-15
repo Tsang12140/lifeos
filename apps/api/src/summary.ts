@@ -41,7 +41,7 @@ export class RuleDaySummaryProvider implements DaySummaryProvider {
 
 const SYSTEM_PROMPT = [
   "你是一个生活记录的时间轴摘要器。",
-  `用户会给你若干天的记录，请你为每一天写一个不超过 ${SUMMARY_MAX_LENGTH} 个汉字的短标签，说明那天最主要的一件事或状态。`,
+  `用户会给你若干天的记录，请你为每一天写一个不超过 ${SUMMARY_MAX_LENGTH} 个 Unicode 字符的短标签，说明那天最主要的一件事或状态。超长内容由系统截断并追加两个英文句点，不要自行添加省略号。`,
   "只用一个短语，不要标点，不要解释，不要复述具体时间。",
   '只输出 JSON，形如 {"2026-09-01":"江边散步"}，键必须是给出的日期。',
 ].join("\n");

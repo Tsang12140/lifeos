@@ -3,7 +3,7 @@ export type EntityId = string;
 export type AssetId = string;
 
 export type RecordKind = "journal" | "task" | "event" | "note";
-export type EntityKind = "person" | "project" | "place" | "topic";
+export type EntityKind = "person" | "project" | "place" | "topic" | "movie";
 export type AssetKind = "photo" | "audio" | "file";
 export type AssetRole = "photo" | "recording" | "attachment";
 
@@ -72,7 +72,7 @@ export interface EntityRelation {
 export interface EntityBase {
   readonly id: EntityId;
   readonly name: string;
-  /** Other names the same person, place, project or topic is called by. */
+  /** Other names the same person, place, project, topic or movie is called by. */
   readonly aliases?: readonly string[];
   readonly description?: string;
   readonly relations?: readonly EntityRelation[];
@@ -109,13 +109,41 @@ export interface Place extends EntityBase {
   readonly type: "place";
   readonly role?: PlaceRole;
   readonly period?: PlacePeriod;
+  /** Optional detailed street address; never required for a place. */
+  readonly address?: string;
 }
 
 export interface Topic extends EntityBase {
   readonly type: "topic";
 }
 
-export type Entity = Person | Project | Place | Topic;
+/** IDs returned by movie databases. TMDb and Douban currently arrive as
+ * numbers from some clients and strings from imports, so both are accepted
+ * and preserved; adapters compare their string form when de-duplicating. */
+export interface MovieExternalIds {
+  readonly tmdb?: number | string;
+  readonly imdb?: string;
+  readonly douban?: number | string;
+}
+
+/** A movie is an ordinary entity so timeline records can reference it. */
+export interface Movie extends EntityBase {
+  readonly type: "movie";
+  /** Optional original-language title; `name` remains the display title. */
+  readonly originalTitle?: string;
+  readonly releaseYear?: number;
+  /** Public poster URL, normally derived from TMDb's image host. */
+  readonly posterUrl?: string;
+  readonly overview?: string;
+  readonly externalIds?: MovieExternalIds;
+  readonly doubanRating?: number;
+  readonly personalRating?: number;
+  readonly personalReview?: string;
+  /** Calendar date on which the owner watched the movie. */
+  readonly watchedAt?: string;
+}
+
+export type Entity = Person | Project | Place | Topic | Movie;
 
 export interface AssetLink {
   readonly assetId: AssetId;
@@ -465,7 +493,7 @@ function isJsonValue(value: unknown): value is JsonValue {
 
 function validateEntityRef(value: unknown, name: string): void {
   const ref = objectValue(value, name);
-  enumValue(ref.entityType, ["person", "project", "place", "topic"], `${name}.entityType`);
+  enumValue(ref.entityType, ["person", "project", "place", "topic", "movie"], `${name}.entityType`);
   nonEmptyStringValue(ref.entityId, `${name}.entityId`);
   optionalStringValue(ref.label, `${name}.label`);
 }
@@ -612,6 +640,53 @@ function validateRelation(value: unknown, name: string): void {
   optionalStringValue(relation.note, `${name}.note`);
 }
 
+function validateMovieScore(value: unknown, name: string, halfStep: boolean): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 10) {
+    throw new Error(`${name} must be between 0 and 10`);
+  }
+  if (halfStep && !Number.isInteger(value * 2)) {
+    throw new Error(`${name} must use 0.5 increments`);
+  }
+}
+
+function validateMovieExternalIds(value: unknown, name: string): void {
+  const ids = objectValue(value, name);
+  for (const key of Object.keys(ids)) {
+    if (!["tmdb", "imdb", "douban"].includes(key)) throw new Error(`${name}.${key} is not supported`);
+  }
+  if (ids.tmdb !== undefined) {
+    const tmdb = ids.tmdb;
+    const validNumber = typeof tmdb === "number" && Number.isSafeInteger(tmdb) && tmdb > 0;
+    const validString = typeof tmdb === "string" && /^\d+$/.test(tmdb) && Number.isSafeInteger(Number(tmdb)) && Number(tmdb) > 0;
+    if (!validNumber && !validString) throw new Error(`${name}.tmdb must be a positive integer`);
+  }
+  if (ids.imdb !== undefined && (typeof ids.imdb !== "string" || !/^tt\d+$/i.test(ids.imdb))) {
+    throw new Error(`${name}.imdb must be an IMDb id such as tt1234567`);
+  }
+  if (ids.douban !== undefined) {
+    const douban = ids.douban;
+    const validNumber = typeof douban === "number" && Number.isSafeInteger(douban) && douban > 0;
+    const validString = typeof douban === "string" && ((/^\d+$/.test(douban) && Number.isSafeInteger(Number(douban)) && Number(douban) > 0) || /^https?:\/\/(?:www\.)?(?:movie\.)?douban\.com\/subject\/\d+\/?$/i.test(douban));
+    if (!validNumber && !validString) throw new Error(`${name}.douban must be a positive integer`);
+  }
+}
+
+function validateMovieFields(entity: UnknownRecord): void {
+  optionalStringValue(entity.originalTitle, "entity.originalTitle");
+  if (entity.releaseYear !== undefined && (!Number.isSafeInteger(entity.releaseYear) || (entity.releaseYear as number) < 1 || (entity.releaseYear as number) > 9999)) {
+    throw new Error("entity.releaseYear must be an integer between 1 and 9999");
+  }
+  optionalStringValue(entity.posterUrl, "entity.posterUrl");
+  optionalStringValue(entity.overview, "entity.overview");
+  if (entity.externalIds !== undefined) validateMovieExternalIds(entity.externalIds, "entity.externalIds");
+  if (entity.doubanRating !== undefined) validateMovieScore(entity.doubanRating, "entity.doubanRating", false);
+  if (entity.personalRating !== undefined) validateMovieScore(entity.personalRating, "entity.personalRating", true);
+  optionalStringValue(entity.personalReview, "entity.personalReview");
+  if (entity.watchedAt !== undefined) {
+    validateDateOnlyString(stringValue(entity.watchedAt, "entity.watchedAt"), "entity.watchedAt");
+  }
+}
+
 /** Validates one entity-to-entity relation. Exported so adapters reuse the same rule. */
 export function assertValidEntityRelation(value: unknown, name = "relation"): asserts value is EntityRelation {
   validateRelation(value, name);
@@ -619,7 +694,7 @@ export function assertValidEntityRelation(value: unknown, name = "relation"): as
 
 export function assertValidEntity(value: unknown): asserts value is Entity {
   const entity = objectValue(value, "entity");
-  enumValue(entity.type, ["person", "project", "place", "topic"], "entity.type");
+  enumValue(entity.type, ["person", "project", "place", "topic", "movie"], "entity.type");
   nonEmptyStringValue(entity.id, "entity.id");
   const entityName = stringValue(entity.name, "entity.name");
   if (entityName.trim().length === 0) {
@@ -662,6 +737,18 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
       throw new Error("entity.period.from must not be after entity.period.until");
     }
   }
+  if (entity.address !== undefined) {
+    if (entity.type !== "place") {
+      throw new Error("entity.address is only allowed on a place");
+    }
+    optionalStringValue(entity.address, "entity.address");
+  }
+  const movieFieldNames = ["originalTitle", "releaseYear", "posterUrl", "overview", "externalIds", "doubanRating", "personalRating", "personalReview", "watchedAt"];
+  const carriesMovieFields = movieFieldNames.some((field) => entity[field] !== undefined);
+  if (entity.type !== "movie" && carriesMovieFields) {
+    throw new Error("movie fields are only allowed on a movie");
+  }
+  if (entity.type === "movie") validateMovieFields(entity);
   if (entity.relations !== undefined) {
     const seen = new Set<string>();
     arrayValue(entity.relations, "entity.relations").forEach((value, index) => {

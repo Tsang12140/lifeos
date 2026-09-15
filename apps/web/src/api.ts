@@ -112,10 +112,68 @@ export interface BackupStatus {
     readonly prefix: string;
     readonly forcePathStyle: boolean;
     readonly keySource?: "env" | "file" | "none";
+    /**
+     * "file" means the endpoint is a local directory, so nothing is uploaded
+     * over the network. The settings UI must never present that as cloud backup.
+     */
+    readonly transport?: "http" | "file";
+    readonly warning?: string;
   };
   readonly schedule: BackupSchedule;
   readonly lastDualBackup: DualBackupSummary | null;
   readonly runs: readonly BackupRun[];
+  readonly retention?: { readonly policy: BackupRetentionPolicy; readonly described: readonly string[] };
+}
+
+export interface BackupRetentionPolicy {
+  readonly dailyDays: number;
+  readonly weeklyWeeks: number;
+  readonly monthlyMonths: number;
+  readonly trashDays: number;
+}
+
+export interface TrashedBackupEntry {
+  readonly fileName: string;
+  readonly prunedAt: string;
+  readonly provider: string;
+  readonly trashLocation?: string;
+  readonly sizeBytes?: number;
+}
+
+export type RetentionTier = "daily" | "weekly" | "monthly" | "newest" | "none";
+
+export interface BackupRetentionEntry {
+  readonly fileName: string;
+  readonly startedAt: string;
+  readonly sizeBytes?: number;
+  readonly location?: string;
+  readonly keep: boolean;
+  readonly tier: RetentionTier;
+  readonly reason: string;
+  readonly local: boolean;
+  readonly remote: boolean;
+}
+
+export interface BackupRetentionView {
+  readonly policy: BackupRetentionPolicy;
+  readonly limits: {
+    readonly dailyDays: { readonly min: number; readonly max: number };
+    readonly weeklyWeeks: { readonly min: number; readonly max: number };
+    readonly monthlyMonths: { readonly min: number; readonly max: number };
+    readonly trashDays: { readonly min: number; readonly max: number };
+  };
+  readonly defaults: BackupRetentionPolicy;
+  readonly described: readonly string[];
+  readonly cleanupTrigger: string;
+  readonly cleanupScope: { readonly local: boolean; readonly remote: boolean; readonly recycleBin: { readonly local: boolean; readonly remote: boolean } };
+  readonly cleanupScheduled: boolean;
+  readonly nextCleanupAt: string | null;
+  readonly localDirectory: string | null;
+  readonly entries: readonly BackupRetentionEntry[];
+  readonly summary: { readonly keepCount: number; readonly deleteCount: number; readonly keepBytes: number; readonly deleteBytes: number };
+  readonly trashed: readonly TrashedBackupEntry[];
+  readonly connectionTestCount: number;
+  readonly connectionTestBytes: number;
 }
 
 export type WeatherStatus = WeatherConfigStatus;
@@ -126,6 +184,74 @@ export interface WeatherProfilesResponse {
   readonly status: WeatherStatus;
 }
 
+/**
+ * Movie is an optional module, so its shape lives at the web/API boundary
+ * until the core model grows the corresponding EntityKind.  Keeping the
+ * provider fields optional also lets old records render without a migration.
+ */
+export interface MovieExternalIds {
+  readonly tmdb?: string;
+  readonly imdb?: string;
+  readonly douban?: string;
+}
+
+export interface MovieEntity {
+  readonly id: string;
+  readonly type: "movie";
+  readonly name: string;
+  readonly aliases?: readonly string[];
+  readonly originalTitle?: string;
+  readonly releaseYear?: number;
+  readonly posterUrl?: string;
+  readonly overview?: string;
+  readonly externalIds?: MovieExternalIds;
+  readonly doubanRating?: number;
+  readonly personalRating?: number;
+  readonly personalReview?: string;
+  readonly watchedAt?: string;
+}
+
+export interface MovieEntityRef {
+  readonly entityType: "movie";
+  readonly entityId: string;
+  readonly label?: string;
+}
+
+export interface MovieModuleStatus {
+  readonly enabled: boolean;
+  readonly configured: boolean;
+  readonly keyConfigured: boolean;
+  readonly connected: boolean;
+  readonly provider?: string;
+  readonly message?: string;
+}
+
+export interface MovieResolveCandidate extends Partial<MovieEntity> {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface MovieResolveResponse {
+  readonly items?: readonly MovieResolveCandidate[];
+  readonly candidates?: readonly MovieResolveCandidate[];
+  readonly results?: readonly MovieResolveCandidate[];
+  readonly query?: string;
+}
+
+export interface MovieModulePayload {
+  readonly status?: MovieModuleStatus;
+  readonly config?: Partial<MovieModuleStatus> & { readonly enabled?: boolean };
+  readonly enabled?: boolean;
+  readonly configured?: boolean;
+  readonly keyConfigured?: boolean;
+  readonly hasKey?: boolean;
+  readonly connected?: boolean;
+  readonly provider?: string;
+  readonly source?: string;
+  readonly apiBaseUrl?: string;
+  readonly message?: string;
+}
+
 export interface WeatherCurrentResponse {
   readonly weather: WeatherAttachment;
   readonly location: {
@@ -134,6 +260,23 @@ export interface WeatherCurrentResponse {
     readonly adm2: string;
     readonly adm1: string;
   };
+}
+
+export interface WeatherArchiveItem {
+  readonly date: string;
+  readonly locationKey: string;
+  readonly locationId: string;
+  readonly city: string;
+  readonly value: unknown;
+  readonly capturedAt: string;
+  readonly archived: boolean;
+}
+
+export interface WeatherArchiveResponse {
+  readonly from: string;
+  readonly to: string;
+  readonly timeZone: "Asia/Shanghai";
+  readonly items: readonly WeatherArchiveItem[];
 }
 
 export interface RecordWritePayload {
@@ -158,6 +301,7 @@ export interface EntityWritePayload {
   readonly name?: string;
   readonly aliases?: readonly string[];
   readonly description?: string;
+  readonly address?: string;
 }
 
 export interface AssetWritePayload {
