@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -364,14 +364,70 @@ function mentionQueryAt(value: string, caret: number): MentionQuery | null {
   return { query, marker, start: forceNew ? at - 1 : at, end: caret, forceNew };
 }
 
-function mentionSuggestions(entities: readonly Entity[], marker: string, query: string): readonly Entity[] {
+function mentionSuggestions(entities: readonly Entity[], marker: string, query: string, recentIds: readonly string[] = []): readonly Entity[] {
   // Each marker resolves to its own kinds, so the picker after `@` never
   // offers a place and the picker after `#` never offers a person.
   const kinds = MENTION_MARKERS.find((entry) => entry.marker === marker)?.kinds ?? [];
   const pool = entities.filter((entity) => kinds.includes(entity.type));
   const needle = normalizeEntitySearchTerm(query);
-  if (needle.length === 0) return pool.slice(0, 10);
-  return pool.filter((entity) => entitySearchTerms(entity).some((term) => normalizeEntitySearchTerm(term).includes(needle))).slice(0, 10);
+  const matched = needle.length === 0 ? pool : pool.filter((entity) => entitySearchTerms(entity).some((term) => normalizeEntitySearchTerm(term).includes(needle)));
+  return rankByRecency(matched, recentIds).slice(0, 10);
+}
+
+/**
+ * Recently used first, everything else in the order it arrived.
+ *
+ * The list a mention picker shows is a shortcut, and the shortcut people
+ * actually want is "the one I used last time" — you go back to the same café,
+ * the same office, the same friend. Entity order (creation order, effectively)
+ * says nothing about that, so a stable pass is run over the matches and the ones
+ * that appear in `recentIds` float to the top, most recent first.
+ *
+ * Stability matters here: anything not recently used keeps its relative
+ * position, so the list never shuffles under a person typing into it.
+ */
+function rankByRecency(items: readonly Entity[], recentIds: readonly string[]): readonly Entity[] {
+  if (recentIds.length === 0 || items.length < 2) return items;
+  const rank = new Map(recentIds.map((id, index) => [id, index]));
+  return [...items].sort((left, right) => {
+    const leftRank = rank.get(left.id);
+    const rightRank = rank.get(right.id);
+    if (leftRank === undefined && rightRank === undefined) return 0;
+    if (leftRank === undefined) return 1;
+    if (rightRank === undefined) return -1;
+    return leftRank - rightRank;
+  });
+}
+
+/**
+ * The order places were last written about, most recent first.
+ *
+ * A place has no "used" flag of its own, and inventing one would mean a new
+ * field to keep in sync, migrate and eventually get wrong. The records already
+ * say it: every saved record carries entityRefs, and a place ref inside one is
+ * the evidence that this place was mentioned at that moment. Sorting the refs by
+ * the record's own time gives the recency list for free.
+ *
+ * `occurredAt` (when it happened) is preferred over `createdAt` (when it was
+ * typed), because a backfilled entry about last Tuesday is still a use of that
+ * place — it just happened earlier.
+ */
+function recentPlaceIds(records: readonly RecordView[]): readonly string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const sorted = [...records].sort((left, right) => {
+    const leftTime = Date.parse(left.occurredAt?.value ?? left.createdAt.value) || 0;
+    const rightTime = Date.parse(right.occurredAt?.value ?? right.createdAt.value) || 0;
+    return rightTime - leftTime;
+  });
+  for (const record of sorted) {
+    for (const ref of record.entityRefs) {
+      if (ref.entityType !== "place" || seen.has(ref.entityId)) continue;
+      seen.add(ref.entityId);
+      ordered.push(ref.entityId);
+    }
+  }
+  return ordered;
 }
 
 function hasKnownMentionPrefix(entities: readonly Entity[], marker: string, query: string): boolean {
@@ -565,10 +621,6 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(0);
-  // Clearing is revealed by a hover on a desktop and by a tap on the panel
-  // itself on a phone — where there is no hover to reveal anything with. One
-  // flag drives both: a tap sets it, a pointer leaving clears it.
-  const [clearArmed, setClearArmed] = useState(false);
   // dragenter/dragleave fire again for every child element, so only a depth
   // counter can tell whether the pointer really left the zone.
   const dragDepth = useRef(0);
@@ -614,7 +666,6 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
     if (shots.length === 0) return;
     const cleared = [...shots];
     onShotsChange([]);
-    setClearArmed(false);
     onCleared(cleared, () => onShotsChange((current) => [...cleared, ...current]));
   };
 
@@ -626,20 +677,17 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
   // say is which ones are in it.
   const strip = shots;
 
-  // Two states, one component. The add control is a tile like any other, so it
-  // only changes size and emphasis between them — it is never a different thing.
-  // A separate full-width button for the empty case was what made this area read
-  // as a control bolted under the field rather than as the place photos go.
-  const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"} ${clearArmed ? "is-armed" : ""}`;
+  // One state, one component. The add control is a dashed square like the slot
+  // it stands for, in every state — it is never a different thing. A labelled
+  // button for the empty case was what made this area read as a control bolted
+  // under the field rather than as the place photos go, so it is gone.
+  const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"}`;
   const zoneHandlers = {
     onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current += 1; setDragging(true); },
     onDragOver: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy" as const; },
     onDragLeave: () => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragging(false); },
     onDrop: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void takeFiles(Array.from(event.dataTransfer.files)); },
   };
-  // On a touch screen there is no pointer entering, so a tap on the strip is the
-  // reveal. The first tap only arms; it never reaches `clearAll`.
-  const armOnTap = (event: ReactMouseEvent<HTMLDivElement>) => { if (event.target instanceof HTMLElement && event.target.closest("button") === null) setClearArmed((armed) => !armed); };
 
   const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />;
 
@@ -656,20 +704,20 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
    * second rendering, no second set of rules, and nothing that has to be kept in
    * sync with the other one.
    */
-  return <div className={zoneClass} {...zoneHandlers}
-    onPointerEnter={() => setClearArmed(true)}
-    onPointerLeave={() => { if (dragDepth.current === 0) setClearArmed(false); }}
-    onClick={armOnTap}
-  >
+  return <div className={zoneClass} {...zoneHandlers}>
     <div className="shot-row">
       <ul className="shot-strip" data-count={shots.length}>
         {strip.map((shot) => <li className="shot-tile" key={shot.assetId}>
           <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
           <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
         </li>)}
+        {/* The slot for the next photo, and the same dashed square whether or
+            not there are any yet. A dashed box with a plus is the one add
+            affordance nobody has to be taught; an empty composer just happens to
+            be showing only this one. */}
         <li className="shot-tile shot-tile-add">
           <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片">
-            {empty ? <><ImageIcon size={17} strokeWidth={1.7} aria-hidden="true" /><span>{dragging ? "松手" : "加照片"}</span></> : <Plus size={18} strokeWidth={2} aria-hidden="true" />}
+            <Plus size={18} strokeWidth={2} aria-hidden="true" />
           </button>
         </li>
       </ul>
@@ -677,8 +725,9 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
           the end of the same row, so they cost no height of their own: on a
           line underneath they would add a full caption line of blank below
           the last row of photos, which is exactly the stretch of nothing the
-          owner kept seeing. They stay quiet and only surface when the strip
-          is being looked at — a hover on a desk, a tap on a phone. */}
+          owner kept seeing. The tally and the broom are both simply there — the
+          broom does not wait for a hover, because a control people cannot see is
+          a control half of them never use. */}
       {empty
         ? null
         : <div className="shot-strip-meta">
@@ -691,12 +740,12 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
   </div>;
 }
 
-interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
+interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
+function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
@@ -726,8 +775,24 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
       if (period.until !== undefined && period.until < currentMonth) return false;
       return true;
     };
-    return [...filtered].sort((left, right) => Number(isCurrent(right)) - Number(isCurrent(left))).slice(0, 10);
-  }, [entities, pickerKind, pickerSearch, currentMonth]);
+    // Recently used wins outright -- the place you were last written about is
+    // the one you most likely mean again, and no other signal beats that. "Still
+    // current" only breaks ties among places you have never used, so one whose
+    // period ended does not get buried under one you have never been to.
+    const rank = new Map(recentPlaceIds.map((id, index) => [id, index]));
+    return [...filtered]
+      .sort((left, right) => {
+        const leftRank = rank.get(left.id);
+        const rightRank = rank.get(right.id);
+        if (leftRank !== undefined || rightRank !== undefined) {
+          if (leftRank === undefined) return 1;
+          if (rightRank === undefined) return -1;
+          return leftRank - rightRank;
+        }
+        return Number(isCurrent(right)) - Number(isCurrent(left));
+      })
+      .slice(0, 10);
+  }, [entities, pickerKind, pickerSearch, currentMonth, recentPlaceIds]);
   const exactEntityMatches = (type: "person" | "place", text: string): Entity[] => {
     const needle = normalizeEntitySearchTerm(text);
     return entities.filter((entity) => entity.type === type && entitySearchTerms(entity).some((term) => normalizeEntitySearchTerm(term) === needle));
@@ -884,7 +949,7 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
         as well as width. The strip below is a flat 44px row and needs none of
         that, so the field goes back to two rows (about 81px) and the band adds
         its own height underneath. */}
-    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
+    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
       {/* The photos sit flush under the text block, not under the room. The
           textarea is inset from the room's top by its own padding, so a floor on
           the room leaves that same inset stranded below the text instead — the
@@ -919,6 +984,7 @@ interface MentionBoxProps {
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly entities: readonly Entity[];
+  readonly recentPlaceIds?: readonly string[];
   readonly onCreateEntity: CreateEntity;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
   readonly className?: string;
@@ -938,6 +1004,108 @@ interface MentionBoxProps {
  * again. Marker characters are stripped from the name: an entity literally
  * named "@老王" would be unmentionable forever.
  */
+/**
+ * One alias field, split on `/`.
+ *
+ * The separator used to be a comma, and that was a coin flip: half the world
+ * types `,` and half types `，`, and whichever one you did not handle silently
+ * welded two aliases into one. A slash has no such twin — there is one slash on
+ * a keyboard — so it is the one delimiter that cannot be typed "wrong".
+ *
+ * The split is shown as it happens. Every segment that has been closed off by a
+ * slash lights up as its own chip, so the field answers "did that register?"
+ * while it is being typed rather than at save time. A run with no separator in
+ * it stays unlit as one long block, which is exactly what it is — and seeing
+ * "王后广场皇后广场天后广场" sitting there as a single slab is the tell that the
+ * slashes are missing, without anything having to say so in words.
+ */
+function AliasField({ value, onChange, label, placeholder, compact = false }: { value: string; onChange: (value: string) => void; label: string; placeholder?: string; compact?: boolean }) {
+  const segments = parseAliasSegments(value);
+  const chips = segments.filter((segment) => segment.complete);
+  // A segment can be "complete" by the slash rule and still be obviously wrong:
+  // two aliases glued together is a longer run than any alias should be, and a
+  // comma inside one means somebody used the separator this field no longer
+  // takes. Both are flagged rather than quietly accepted, because the whole
+  // point of showing the split is to catch it now instead of at save time.
+  const suspect = chips.some(isSuspectAlias);
+  return <div className={`alias-field ${compact ? "is-compact" : ""}`}>
+    <input
+      className={compact ? "alias-input" : "entity-create-input alias-input"}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder ?? "可选，用 / 分隔，例如：家 / 老宅"}
+      aria-label={label}
+    />
+    {/* Only rendered once there is something to confirm -- an empty ruler under
+        an empty field would be noise. */}
+    {chips.length > 0 ? <div className="alias-chips" data-alias-count={chips.length} data-alias-suspect={suspect ? "true" : "false"} aria-live="polite">
+      {chips.map((segment) => <span className={`alias-chip ${isSuspectAlias(segment) ? "is-suspect" : ""}`} key={segment.start} title={isSuspectAlias(segment) ? "这一段看起来像两个别名粘在一起了，用 / 分开试试" : undefined}>{segment.text}</span>)}
+      <span className="alias-chip-note">{suspect ? "是不是漏了 / ？" : `${chips.length} 个别名`}</span>
+    </div> : null}
+  </div>;
+}
+
+/**
+ * Whether a finished-looking segment is probably two aliases that never got
+ * separated.
+ *
+ * Two tells, both cheap and both reliable enough: a comma inside it (the old
+ * separator, typed out of habit) or a length no single alias reaches. The length
+ * bound is deliberately loose — place and person names in CJK are usually two to
+ * six characters, and this fires at ten, so it only catches the obvious glue.
+ */
+const SUSPECT_ALIAS_LENGTH = 10;
+function isSuspectAlias(segment: AliasSegment): boolean {
+  return /[,，、;；]/.test(segment.text) || Array.from(segment.text).length >= SUSPECT_ALIAS_LENGTH;
+}
+
+interface AliasSegment { readonly text: string; readonly start: number; readonly complete: boolean; }
+
+/**
+ * Splits raw alias text into the runs between slashes, and says which of them
+ * are finished.
+ *
+ * "Finished" means a slash closed it off, or it is the last run and no slash is
+ * pending. So `家 / 老宅 /` has two finished aliases and an empty tail, while
+ * `家 / 老宅` has two as well, and a bare `家老宅` is one unfinished run — the
+ * case that should visibly not light up.
+ *
+ * Whitespace around a segment is trimmed but tolerated, because people type
+ * `家 / 老宅` and mean two aliases, not one containing spaces.
+ */
+function parseAliasSegments(raw: string): readonly AliasSegment[] {
+  if (raw.trim().length === 0) return [];
+  const parts = raw.split("/");
+  const segments: AliasSegment[] = [];
+  let cursor = 0;
+  parts.forEach((part, index) => {
+    const start = cursor;
+    cursor += part.length + 1;
+    const text = part.trim();
+    // A trailing empty part means the string ended on a slash: nothing pending.
+    const isLast = index === parts.length - 1;
+    const complete = text.length > 0 && (!isLast || !raw.endsWith("/"));
+    if (text.length > 0) segments.push({ text, start, complete });
+  });
+  return segments;
+}
+
+/**
+ * The aliases an alias field actually holds, in order, deduplicated.
+ *
+ * The last run counts even without a closing slash — somebody who typed one
+ * alias and stopped should not have to add a slash to prove it.
+ */
+function aliasListFrom(raw: string): readonly string[] {
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const segment of parseAliasSegments(raw)) {
+    if (seen.has(segment.text)) continue;
+    seen.add(segment.text);
+    list.push(segment.text);
+  }
+  return list;
+}
 function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submitLabel }: { defaultType: "person" | "place"; defaultName: string; onCreate: (request: EntityCreateRequest) => Promise<boolean>; onCancel: () => void; submitLabel: string }) {
   const [type, setType] = useState<"person" | "place">(defaultType);
   const [name, setName] = useState(defaultName);
@@ -950,7 +1118,7 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
   const cleanName = name.replace(/[@#]/g, "").trim();
   const submit = async () => {
     if (cleanName.length === 0 || busy) return;
-    const aliasList = aliases.split(/[,，、\s]+/).map((alias) => alias.trim()).filter((alias) => alias.length > 0);
+    const aliasList = aliasListFrom(aliases);
     setBusy(true);
     const created = await onCreate({
       type,
@@ -977,7 +1145,7 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
     </div>
     <div className="entity-create-row">
       <span className="entity-create-label">别名</span>
-      <input className="entity-create-input" value={aliases} onChange={(event) => setAliases(event.target.value)} placeholder="可选，逗号分隔" />
+      <AliasField value={aliases} onChange={setAliases} label="别名，用斜杠分隔" />
     </div>
     {type === "place" ? <>
       <div className="entity-create-row">
@@ -1014,7 +1182,7 @@ function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submit
  * Unknown names are never rewritten, which is what keeps e-mail addresses,
  * passwords, and hex colours safe.
  */
-function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand }: MentionBoxProps) {
+function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand }: MentionBoxProps) {
   const localRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? localRef;
   const [mention, setMention] = useState<MentionQuery | null>(null);
@@ -1022,7 +1190,7 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
   const [createFormOpen, setCreateFormOpen] = useState(false);
   const [slash, setSlash] = useState<SlashQuery | null>(null);
   const slashOptions = useMemo(() => slash === null ? [] : slashSuggestions(moduleCommands, slash.query), [moduleCommands, slash]);
-  const suggestions = useMemo(() => (mention === null || createFormOpen ? [] : mentionSuggestions(entities, mention.marker, mention.query)), [entities, mention, createFormOpen]);
+  const suggestions = useMemo(() => (mention === null || createFormOpen ? [] : mentionSuggestions(entities, mention.marker, mention.query, recentPlaceIds)), [entities, mention, createFormOpen, recentPlaceIds]);
   const trimmedQuery = mention?.query.trim() ?? "";
   const hasKnownPrefix = mention !== null && hasKnownMentionPrefix(entities, mention.marker, mention.query);
   const markerKind = mention?.marker === PLACE_MARKER ? "place" : "person";
@@ -1037,6 +1205,11 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
   const optionCount = createFormOpen ? 0 : (mention?.forceNew === true ? 0 : suggestions.length) + (wantsNew ? 1 : 0);
 
   useEffect(() => { setActiveIndex(0); }, [mention?.start, mention?.query, slash?.start, slash?.query]);
+  // The list reopens on its first row, and stays there until the owner moves it.
+  // The clamp is a guard, not a feature: the option count can shrink under a
+  // selection (a filter tightening, the create row dropping away) and an index
+  // past the end would silently make Enter do nothing.
+  const safeIndex = optionCount === 0 ? 0 : Math.min(activeIndex, optionCount - 1);
 
   const syncMention = (element: HTMLTextAreaElement) => {
     setMention(mentionQueryAt(element.value, element.selectionStart ?? element.value.length));
@@ -1117,10 +1290,15 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
     if (event.key === "ArrowDown") { event.preventDefault(); setActiveIndex((current) => (current + 1) % optionCount); return; }
     if (event.key === "ArrowUp") { event.preventDefault(); setActiveIndex((current) => (current - 1 + optionCount) % optionCount); return; }
     if (event.key === "Escape") { event.preventDefault(); setMention(null); setCreateFormOpen(false); return; }
-    if (event.key === "Enter") {
+    // Enter and Space both take the highlighted option. Space is not a typo
+    // for Enter -- the picker opens with its first row already highlighted, so
+    // the fastest path through it is "@王后" then space then straight on with
+    // the sentence, and the space that committed is not left behind in the
+    // text. Escape is the only way out without choosing.
+    if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (createFormOpen || mention.forceNew === true) { setCreateFormOpen(true); return; }
-      const target = suggestions[activeIndex];
+      const target = suggestions[safeIndex];
       if (target) insert(target.name);
       else setCreateFormOpen(true);
     }
@@ -1174,8 +1352,8 @@ function MentionBox({ value, onChange, entities, onCreateEntity, textareaRef, cl
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")} · ` : ""}{command.description}</small></button>)}</div> : null}
     {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={`创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">
-      {suggestions.map((entity, index) => <button className={`mention-option ${index === activeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === activeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name)}>{(() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
-      {wantsNew ? <button className="mention-option mention-option-create" type="button" role="option" aria-selected={activeIndex === suggestions.length} onMouseEnter={() => setActiveIndex(suggestions.length)} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateFormOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{kindLabel}「{trimmedQuery}」…</span></button> : null}
+      {suggestions.map((entity, index) => <button className={`mention-option ${index === safeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === safeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name)}>{(() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
+      {wantsNew ? <button className="mention-option mention-option-create" type="button" role="option" aria-selected={safeIndex === suggestions.length} onMouseEnter={() => setActiveIndex(suggestions.length)} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateFormOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{kindLabel}「{trimmedQuery}」…</span></button> : null}
     </div> : null}
   </div>;
 }
@@ -1772,7 +1950,7 @@ function RelationPanel({ entities, assets, candidates, draft, onChange, onCreate
   const submitEntity = async () => {
     const name = createName.trim();
     if (!name || creating) return;
-    const aliases = createAliases.split(/[,，、\s]+/).map((alias) => alias.trim()).filter((alias) => alias.length > 0);
+    const aliases = aliasListFrom(createAliases);
     setCreating(true);
     try {
       const entity = await onCreateEntity(createKind, name, { ...(aliases.length > 0 ? { aliases } : {}), ...(createKind === "place" && createAddress.trim() ? { address: createAddress.trim() } : {}) });
@@ -1805,7 +1983,7 @@ function RelationPanel({ entities, assets, candidates, draft, onChange, onCreate
     <div className="relation-create">
       <select value={createKind} onChange={(event) => setCreateKind(event.target.value as EntityKind)} aria-label="要新建的关联对象类型">{ENTITY_KIND_ORDER.map((kind) => <option value={kind} key={kind}>{ENTITY_META[kind].label}</option>)}</select>
       <input value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="名称" aria-label="新关联对象名称" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
-      <input value={createAliases} onChange={(event) => setCreateAliases(event.target.value)} placeholder="别名（可选，逗号分隔）" aria-label="新关联对象别名" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
+      <AliasField value={createAliases} onChange={setCreateAliases} label="新关联对象别名" placeholder="别名（可选，用 / 分隔）" compact />
       {createKind === "place" ? <input value={createAddress} onChange={(event) => setCreateAddress(event.target.value)} placeholder="详细地址（可选）" aria-label="新地点详细地址" /> : null}
       <button className="secondary-button relation-create-button" type="button" onClick={() => void submitEntity()} disabled={!createName.trim() || creating}>{creating ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}<span>新建并关联</span></button>
     </div>
@@ -1867,18 +2045,21 @@ function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity | null; 
   const [description, setDescription] = useState("");
   const [address, setAddress] = useState("");
   const [saving, setSaving] = useState(false);
-  useEffect(() => { if (entity) { setName(entity.name); setAliases(entity.aliases?.join("，") ?? ""); setDescription(entity.description ?? ""); setAddress(entity.type === "place" ? entity.address ?? "" : ""); } }, [entity?.id]);
+  // Existing aliases come back slash-separated, matching what the field now
+  // accepts -- round-tripping through the old comma join would have shown them
+  // as one unseparated run the moment anything was edited.
+  useEffect(() => { if (entity) { setName(entity.name); setAliases(entity.aliases?.join(" / ") ?? ""); setDescription(entity.description ?? ""); setAddress(entity.type === "place" ? entity.address ?? "" : ""); } }, [entity?.id]);
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (entity && !dialog.open) dialog.showModal(); if (!entity && dialog.open) dialog.close(); }, [entity]);
   if (entity === null) return <dialog ref={dialogRef} className="modal-dialog" />;
   const submit = async () => {
     const nextName = name.trim();
     if (!nextName || saving) return;
     setSaving(true);
-    const result = await onSave(entity, { name: nextName, aliases: aliases.split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean), description: description.trim(), ...(entity.type === "place" ? { address: address.trim() || null } : {}) });
+    const result = await onSave(entity, { name: nextName, aliases: aliasListFrom(aliases), description: description.trim(), ...(entity.type === "place" ? { address: address.trim() || null } : {}) });
     setSaving(false);
     if (result) onClose();
   };
-  return <dialog ref={dialogRef} className="modal-dialog entity-edit-dialog" aria-labelledby="entity-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">{entity.type === "place" ? "地点资料" : "联系人资料"}</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="entity-edit-body"><label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="dialog-field"><span>别名</span><input value={aliases} onChange={(event) => setAliases(event.target.value)} placeholder="多个别名用逗号分隔" /></label>{entity.type === "place" ? <label className="dialog-field"><span>详细地址</span><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="可选；平时不会展开" /></label> : null}<label className="dialog-field"><span>备注</span><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={entity.type === "place" ? "写下这个地点的一些背景" : "写下这个人的一些背景"} /></label></div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => void submit()} disabled={!name.trim() || saving}>{saving ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button></div></dialog>;
+  return <dialog ref={dialogRef} className="modal-dialog entity-edit-dialog" aria-labelledby="entity-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">{entity.type === "place" ? "地点资料" : "联系人资料"}</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="entity-edit-body"><label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="dialog-field"><span>别名</span><AliasField value={aliases} onChange={setAliases} label="别名，用斜杠分隔" placeholder="多个别名用 / 分隔" /></label>{entity.type === "place" ? <label className="dialog-field"><span>详细地址</span><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="可选；平时不会展开" /></label> : null}<label className="dialog-field"><span>备注</span><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={entity.type === "place" ? "写下这个地点的一些背景" : "写下这个人的一些背景"} /></label></div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => void submit()} disabled={!name.trim() || saving}>{saving ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button></div></dialog>;
 }
 
 function entityRelatedRecords(entity: Entity, records: readonly RecordView[]): readonly RecordView[] {
@@ -3189,11 +3370,15 @@ function App() {
   const showPageActions = Boolean(searchQuery || entityFilterId !== null || (activeView !== "settings" && activeView !== "entities" && !isToday));
   const visibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
   const visibleTasks = hideDemo && tasks ? tasks.filter((record) => !isDemoRecord(record)) : tasks;
+  // Which places were written about most recently, so the mention picker can put
+  // them first. Derived from the records rather than tracked separately: the
+  // evidence is already in every saved record's entityRefs.
+  const recentPlaces = useMemo(() => recentPlaceIds(visibleRecords ?? []), [visibleRecords]);
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer onShotsCleared={handleShotsCleared} kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onNotify={showToast} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer onShotsCleared={handleShotsCleared} kind={composerKind} content={composerContent} entities={entities} recentPlaceIds={recentPlaces} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onNotify={showToast} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
        ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />

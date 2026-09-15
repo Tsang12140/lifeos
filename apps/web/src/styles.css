@@ -2508,23 +2508,21 @@ h2 {
 
 /* The add control rides at the end of the queue, as the next empty slot. Kept
    the same size and radius as a tile so the row reads as one run of squares
-   rather than as eight photos and a control. */
+   rather than as eight photos and a control.
+
+   It is the same dashed square in every state, including when it is the only
+   thing in the row. There was a pill version for the empty case once — icon plus
+   the words "加照片" — and it was wrong twice over: it made an empty composer
+   look like a different widget from a filled one, and it put a labelled button
+   under the field where a slot for a picture should be. Everybody already reads
+   a dashed square with a plus as "add one"; the word was never carrying its
+   weight. */
 .shot-tile-add {
   display: grid;
   place-items: center;
   border: 1px dashed var(--line-strong);
   background: transparent;
   box-shadow: none;
-}
-
-/* Empty, it is the first slot and the only thing in the row, so it is allowed
-   to be the doorway rather than a lone square: a pill with the icon and the two
-   words. It is still the same component in the same row — an empty composer just
-   starts with a wider first tile. */
-.composer-shots.is-empty .shot-tile-add {
-  width: auto;
-  min-width: var(--composer-tile, 44px);
-  padding: 0 14px;
 }
 
 .shot-tile-add button {
@@ -2542,27 +2540,7 @@ h2 {
   transition: color 160ms ease;
 }
 
-/* The empty state's pill carries a word, so it lays its two children out in a
-   row instead of stacking them. */
-.composer-shots.is-empty .shot-tile-add button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.composer-shots.is-empty .shot-tile-add button span {
-  color: var(--ink-soft);
-  font-size: 0.84rem;
-  font-weight: 650;
-  line-height: 1;
-}
-
 .shot-tile-add button:hover:not(:disabled) {
-  color: var(--primary);
-}
-
-.composer-shots.is-empty .shot-tile-add button:hover:not(:disabled) span {
   color: var(--primary);
 }
 
@@ -2571,9 +2549,7 @@ h2 {
   cursor: default;
 }
 
-/* The count and the broom ride the end of the tile row. They are quiet by
-   design: at a glance the tiles already say how many there are, so the tally is
-   a confirmation and the clear is a deliberate reach.
+/* The count and the broom ride the end of the tile row.
 
    `margin-left: auto` rather than a flex gap on `.shot-row` so the pair is
    pushed to the far end whether the strip is one tile wide or nine — the strip
@@ -2587,18 +2563,22 @@ h2 {
   flex: 0 0 auto;
 }
 
+/* Readable at a glance. It used to be 0.72rem, which is small enough that
+   "9/9" read as texture rather than as a number — and this is the one place
+   that answers "how many have I got in there?". */
 .shot-strip-tally {
-  color: var(--muted);
-  font-size: 0.72rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
+  font-weight: 700;
   line-height: 1;
 }
 
-/* Out of sight until it is wanted: a hover anywhere on the band reveals it, and
-   a tap on the band does the same, because a touch screen has no hover. Sitting
-   behind a hairline of opacity rather than `display: none` keeps it reachable by
-   keyboard and screen readers. */
+/* Always there. This one does not hide: emptying the whole set is a thing
+   people decide to do by looking at the row, not by discovering a control under
+   the pointer, and a button that only exists on hover is a button half the
+   people never find. The ✕ on each tile still waits for a hover, because that
+   one is destructive per-photo and should not be a target you fall onto. */
 .shot-clear {
   display: inline-flex;
   align-items: center;
@@ -2608,22 +2588,11 @@ h2 {
   border-radius: 999px;
   color: var(--muted);
   background: transparent;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 650;
   line-height: 1.1;
   cursor: pointer;
-  opacity: 0;
-  transform: translateY(-3px);
-  pointer-events: none;
-  transition: opacity 160ms ease, transform 160ms ease, border-color 160ms ease, color 160ms ease;
-}
-
-.composer-shots.is-armed .shot-clear,
-.composer-shots:hover .shot-clear,
-.composer-shots:focus-within .shot-clear {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
+  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
 }
 
 .shot-clear:hover {
@@ -3272,24 +3241,6 @@ button.relation-chip {
     padding: 9px 8px;
   }
 
-  /* No special case for the empty band any more. It is the same row with the one
-     tile in it; the add tile keeps its square shape here rather than stretching
-     into the pill, because a phone's three-column grid would be broken by a cell
-     that changed shape depending on whether anything is in it. */
-  .composer-shots.is-empty .shot-tile-add {
-    width: var(--composer-tile, 44px);
-    padding: 0;
-  }
-
-  .composer-shots.is-empty .shot-tile-add button {
-    display: grid;
-    gap: 0;
-  }
-
-  .composer-shots.is-empty .shot-tile-add button span {
-    display: none;
-  }
-
   /* 朋友圈's arrangement, which is the one everybody already knows how to
      read: one square on its own, 2–4 in a two-wide stack (a row of two, then a
      2×2), and 5+ to a 3-wide wall. Every tile is a square, because a wall of
@@ -3348,6 +3299,19 @@ button.relation-chip {
     box-shadow: 0 1px 2px rgb(20 26 38 / 0.14), 0 0 0 1px rgb(20 26 38 / 0.06);
   }
 
+  /* The add tile is the one cell that must not fill its column. At 0 or 1
+     photos the grid is a single `1fr` column, so a `width: auto` tile would
+     stretch to the whole band — a 336px square where a 44px slot belongs.
+     This used to be hidden by the old empty-state pill, whose `width: auto`
+     plus a text label happened to keep the box small; once the word went away
+     the stretch showed up. Pinning the square here is what the comment below
+     always claimed was happening. */
+  .shot-tile-add {
+    width: var(--composer-tile, 44px);
+    height: var(--composer-tile, 44px);
+    aspect-ratio: auto;
+  }
+
   .shot-tile img {
     border-radius: 0;
   }
@@ -3357,10 +3321,9 @@ button.relation-chip {
      capped so a tall phone does not turn one photo into a wall — but it stays a
      square, because a wall of mixed rectangles looks like a mistake.
 
-     Scoped away from the add tile: that one is a control, and stretching it to
-     58% would make the first slot of the grid a different size from the rest.
-     The selector chain in the empty state has the same idea — `.shot-tile-add`
-     keeps its 44px square here, so an empty row and a one-photo row line up. */
+     Scoped away from the add tile: that one is a control, so a fixed 44px slot
+     rather than a 58% square — see the `.shot-tile-add` rule above. That keeps
+     a lone add slot the same size whether there are no photos or one. */
   .shot-strip[data-count="1"] .shot-tile:not(.shot-tile-add) {
     width: min(58%, 200px);
     margin: 0 auto;
@@ -3406,14 +3369,13 @@ button.relation-chip {
     margin-right: auto;
   }
 
+  /* A finger needs a real target, so the broom gets more padding and its own
+     edge here. It is always visible at every width now, so this block no longer
+     has to force it on — only to make it easy to hit. */
   .shot-clear {
-    opacity: 1;
-    transform: none;
-    pointer-events: auto;
     padding: 6px 10px 6px 8px;
     border-color: var(--line);
     background: var(--surface);
-    font-size: 0.78rem;
   }
 
   /* 朋友圈 draws this tile last, so the newest photo lands where the eye
@@ -6273,6 +6235,82 @@ button.relation-chip {
 
 .entity-create-input:focus {
   border-color: var(--primary);
+}
+
+/* --- the alias field and its lit-up segments ---
+   The chips exist to answer one question while typing: "did that separator
+   register?" Each finished alias gets its own quiet chip, so a correctly
+   separated list looks like a list of names, and a run that was never split
+   shows up as one long unlit slab. Nothing is said in words about it — the
+   difference in shape says it. Deliberately low-contrast: this is confirmation,
+   not a call to action, and it sits under a field that is already the focus. */
+.alias-field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.alias-field.is-compact {
+  flex: 1 1 140px;
+  gap: 4px;
+}
+
+.alias-field.is-compact .alias-input {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  outline: none;
+}
+
+.alias-field.is-compact .alias-input:focus {
+  border-color: var(--primary);
+}
+
+.alias-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A neutral chip, same family as the person capsules: this is a name, not a
+   status, so it does not get a colour that would read as one. */
+.alias-chip {
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 620;
+  line-height: 1.5;
+}
+
+.alias-chip-note {
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+/* The "this looks like two names welded together" state. Warm and low-contrast
+   rather than alarming: it is a nudge to add a slash, not an error — the alias
+   is perfectly saveable as it stands, it is just probably not what was meant.
+   The whole strip shifts together so the signal is visible without reading the
+   text, which is the fastest way to notice it while typing. */
+.alias-chips[data-alias-suspect="true"] .alias-chip.is-suspect {
+  background: #fdf1e3;
+  color: #96601f;
+}
+
+.alias-chips[data-alias-suspect="true"] .alias-chip-note {
+  color: #a06a2c;
+  font-weight: 650;
 }
 
 .entity-create-month {
