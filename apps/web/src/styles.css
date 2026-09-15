@@ -2647,21 +2647,459 @@ h2 {
   background: var(--surface);
 }
 
-.composer-date-control:focus-within {
-  border-color: #bdcbfa;
-  box-shadow: var(--shadow-focus);
+/*
+ * The owner kept seeing a square highlight box when clicking a time field, and
+ * it was never drawn by this control. The global
+ * `button/a/input/textarea:focus-visible` rule near the top of this file paints
+ * `--shadow-focus` — a 3px ring with no offset — on whatever element takes
+ * focus, and the element that used to take focus in here was a bare
+ * `input[type=datetime-local]` with `border-radius: 0`, sitting inside a 10px
+ * capsule. Square ring, round capsule.
+ *
+ * `.search-form` hit the same thing and settled it the same way: nothing inside
+ * the capsule paints a ring, and focus is shown by the capsule's own border,
+ * which follows the 10px curve because it *is* the border. `outline: none`
+ * alone was never enough — the global rule sets `box-shadow` too, and that is
+ * the part that was visible. Same specificity, later in the file, so this wins.
+ */
+.composer-date-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface);
 }
 
-.composer-date-control .field-input {
-  min-height: 34px;
+/*
+ * The date capsule: a button that opens the picker, and a panel that hangs
+ * under it. The trigger paints no chrome of its own — the capsule around it is
+ * the button, so the whole thing is one target.
+ */
+.date-field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.date-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
+  color: inherit;
+  font: inherit;
   font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
 }
 
-.composer-date-control .field-input:focus {
+.date-trigger > svg {
+  flex: 0 0 auto;
+}
+
+.date-trigger-value,
+.date-trigger-time {
+  white-space: nowrap;
+}
+
+.date-trigger-time {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.date-field.is-open .date-trigger,
+.date-field:hover .date-trigger {
+  color: var(--ink-soft);
+}
+
+/*
+ * The panel. Absolutely placed on the field rather than portalled to the body,
+ * because it belongs to this control: the composer footer is a flex row that
+ * wraps on narrow screens, and a popover anchored by hand would drift away from
+ * the capsule whenever it reflowed.
+ *
+ * It opens upward — the composer sits near the bottom of the viewport — so its
+ * height is capped and its body scrolls. Uncapped, the month grid grew the panel
+ * to 471px and pushed its own header to y=-85, off the top of the screen: the
+ * arrows that page the month were the first thing to become unreachable, which
+ * is exactly what somebody opening the grid needs.
+ *
+ * The cap is measured against the space actually above the trigger rather than
+ * the whole viewport, because the panel is anchored to its bottom edge and grows
+ * up: `100vh` here would happily grow past the top of the screen.
+ */
+.date-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 46;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 268px;
+  max-width: calc(100vw - 32px);
+  max-height: var(--date-panel-room, 360px);
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgb(24 36 61 / 0.14);
+}
+
+/*
+ * The month grid is the tall row, so it is the one that scrolls. The header and
+ * the time row stay put: the header carries the paging arrows, and the time row
+ * is where the edit lands next.
+ */
+.date-panel-grid {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.date-panel-grid::-webkit-scrollbar {
+  display: none;
+}
+
+.date-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.date-panel-step {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.date-panel-step:hover {
+  background: var(--surface-soft);
+}
+
+.date-panel-step:disabled {
+  color: var(--line-strong);
+  cursor: default;
+}
+
+.date-panel-step.is-fast {
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+}
+
+.date-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.date-panel-title:hover {
+  background: var(--surface-soft);
+}
+
+.date-panel-today {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--primary-strong);
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.date-panel-today:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.date-panel-today:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/*
+ * The day strip. Scrollable rather than paginated: correcting "today" to
+ * "yesterday" is the single most common edit, and it should not cost a menu.
+ * `scroll-snap-type` is deliberately left at `proximity` — `mandatory` fights
+ * a mouse wheel and makes the strip refuse to sit between slots.
+ */
+.date-day-strip {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.date-day-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.date-day-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 38px;
+  padding: 6px 0 5px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  font: inherit;
+  cursor: pointer;
+  scroll-snap-align: center;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.date-day-slot:hover {
+  border-color: var(--line-strong);
+}
+
+.date-day-weekday {
+  color: var(--muted);
+  font-size: 0.66rem;
+  line-height: 1;
+}
+
+.date-day-number {
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.date-day-slot.is-weekend .date-day-weekday {
+  color: #b3803f;
+}
+
+.date-day-slot.is-today {
+  border-color: #b9c8fb;
+}
+
+.date-day-slot.is-selected {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
+
+.date-day-slot.is-selected .date-day-weekday {
+  color: rgb(255 255 255 / 0.82);
+}
+
+/*
+ * The month grid, opened from the title. Same 42 days as the calendar view,
+ * rearranged for a 268px popover: a square per day instead of a cell per day.
+ */
+.date-panel-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.date-grid-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.date-grid-title {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.date-grid-weekdays,
+.date-grid-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.date-grid-weekdays > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.date-grid-day {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.date-grid-day:hover {
+  background: var(--surface-soft);
+}
+
+.date-grid-day.is-outside {
+  color: var(--line-strong);
+}
+
+.date-grid-day.is-today {
+  border-color: #b9c8fb;
+}
+
+.date-grid-day.is-selected {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
+
+/*
+ * Hour and minute. Two independently scrolling columns, one slot per value, so
+ * the whole day is reachable without a numeric keypad — the thing the native
+ * picker got right and the reason not to flatten this into ± buttons.
+ *
+ * Each slot is a fixed 28px through the boundary rule below. That is what keeps
+ * the selected slot under the cursor after the label changes width, which is
+ * what stops a second click from landing on a different hour than the first.
+ */
+.date-panel-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.date-time-column {
+  /* `position: relative` so `offsetTop` on a slot is measured from the
+     column's own top. Without it the slots report offsets from the nearest
+     positioned ancestor — the panel — and centring lands a whole row out. */
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 132px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  text-align: center;
+}
+
+.date-time-column::-webkit-scrollbar {
+  display: none;
+}
+
+.date-time-slot {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease;
+}
+
+.date-time-slot:hover {
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+}
+
+.date-time-slot.is-selected {
+  color: #fff;
+  background: var(--primary);
+  font-weight: 700;
+}
+
+.date-time-sep {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.date-panel-time-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.date-panel-time-side .text-button {
+  padding: 3px 7px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.dialog-field .date-field {
+  align-self: stretch;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+/*
+ * The owner kept seeing a square highlight box when clicking a time field, and
+ * it was never drawn by this control. The global
+ * `button/a/input/textarea:focus-visible` rule near the top of this file paints
+ * `--shadow-focus` — a 3px ring with no offset — on whatever element takes
+ * focus, and the element that used to take focus in here was a bare
+ * `input[type=datetime-local]` with `border-radius: 0`, sitting inside a 10px
+ * capsule. Square ring, round capsule.
+ *
+ * `.search-form` hit the same thing and settled it the same way: nothing inside
+ * the capsule paints a ring, and focus is shown by the capsule's own border,
+ * which follows the 10px curve because it *is* the border. `outline: none`
+ * alone was never enough — the global rule sets `box-shadow` too, and that is
+ * the part that was visible. Same specificity, later in the file, so this wins.
+ */
+.date-field .date-trigger,
+.date-field .date-trigger:focus,
+.date-field .date-trigger:focus-visible {
   outline: none;
+  box-shadow: none;
+}
+
+.date-field.is-open,
+.date-field:focus-within {
+  border-color: #bdcbfa;
+  box-shadow: var(--shadow-focus);
 }
 
 .privacy-toggle {
@@ -3411,6 +3849,20 @@ button.relation-chip {
 
   .composer-date-control {
     flex: 1 1 160px;
+  }
+
+  /* One phone-width popover, and no side column: "此刻" / "今天" would push the
+     hour and minute columns down to a width that clips two-digit values. */
+  .date-panel {
+    width: min(320px, calc(100vw - 24px));
+  }
+
+  .date-panel-time-side {
+    display: none;
+  }
+
+  .date-day-slot {
+    flex-basis: 34px;
   }
 
   .composer-footer > .primary-button {
