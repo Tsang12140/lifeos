@@ -515,8 +515,20 @@ function MobileNav({ activeView, onNavigate }: { activeView: AppView; onNavigate
  * that stays where it lives. A dropped photo uploads immediately, so the
  * thumbnail on screen is the very asset the record will point at — saving the
  * entry only links it.
+ *
+ * Nine is the timeline's own number, not an arbitrary cap: a record's grid
+ * shows nine squares and folds the rest behind a +N badge. Keeping the two
+ * equal means every photo the owner can attach is a photo the timeline can
+ * show, so the badge never becomes a surprise.
  */
-const SHOT_LIMIT = 6;
+const SHOT_LIMIT = 9;
+
+/**
+ * How many cards of the fan stay legible. A hand of cards reads because the
+ * newest card lies flat and the older ones only peek out from underneath;
+ * past five the peeks get thinner than the eye can tell apart.
+ */
+const SHOT_FAN_VISIBLE = 5;
 
 /**
  * Uploading a photo ends either in newly stored bytes or in a reuse of bytes
@@ -563,11 +575,11 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
     }
     const room = SHOT_LIMIT - shots.length;
     if (room <= 0) {
-      setNotice(`最多 ${SHOT_LIMIT} 张，先删一张再拖`);
+      setNotice(`已经 ${SHOT_LIMIT} 张了，时间轴一屏放不下，先删一张再加`);
       return;
     }
     const batch = images.slice(0, room);
-    setNotice(images.length > room ? `一次最多 ${SHOT_LIMIT} 张，先收了前 ${room} 张` : null);
+    setNotice(images.length > room ? `一次最多收到 ${SHOT_LIMIT} 张，先收了前 ${room} 张` : null);
     setUploading((count) => count + batch.length);
     const added: AssetLink[] = [];
     let reusedCount = 0;
@@ -609,7 +621,7 @@ function ShotDropZone({ shots, onShotsChange, onUpload }: ShotDropZoneProps) {
           <strong>{dragging ? "松手放下" : "拖照片进来"}</strong>
           <span>或点击选择</span>
         </button>
-      : <><ul className="shot-list">{shots.map((shot) => <li className="shot-item" key={shot.assetId}>
+      : <><ul className="shot-list" data-count={shots.length}>{[...shots].reverse().map((shot, rank) => <li className="shot-item" key={shot.assetId} data-rank={rank} data-fanned={rank < SHOT_FAN_VISIBLE ? "true" : "false"}>
             <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
             <button className="shot-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.2} aria-hidden="true" /></button>
           </li>)}</ul>
