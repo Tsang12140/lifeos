@@ -661,7 +661,7 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
           <ImageIcon size={18} strokeWidth={1.7} aria-hidden="true" />
           <strong>{dragging ? "松手放下" : "加照片"}</strong>
         </button>
-      : <>
+      : <div className="shot-row">
           <ul className="shot-strip" data-count={shots.length}>
             {strip.map((shot) => <li className="shot-tile" key={shot.assetId}>
               <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
@@ -671,15 +671,18 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
               <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={18} strokeWidth={2} aria-hidden="true" /></button>
             </li>
           </ul>
-          {/* The two things that are about the strip rather than in it. They sit
-              at the far end, quiet, and only surface when the strip is being
-              looked at — on a desk that means a hover, on a phone a tap. */}
+          {/* The two things that are about the strip rather than in it. They ride
+              the end of the same row, so they cost no height of their own: on a
+              line underneath they would add a full caption line of blank below
+              the last row of photos, which is exactly the stretch of nothing the
+              owner kept seeing. They stay quiet and only surface when the strip
+              is being looked at — a hover on a desk, a tap on a phone. */}
           <div className="shot-strip-meta">
             <span className="shot-strip-tally">{shots.length}/{SHOT_LIMIT}</span>
             <button className="shot-clear" type="button" onClick={clearAll} aria-label="清空全部照片"><Eraser size={13} strokeWidth={2} aria-hidden="true" /><span>清空</span></button>
             {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
           </div>
-        </>}
+        </div>}
     {fileInput}
   </div>;
 }
