@@ -2337,14 +2337,24 @@ h2 {
 }
 
 /* The textarea's height is set inline by MentionBox from its line count, so the
-   only lever CSS has here is the floor the whole box sits on. 130px is a middle
-   way between the original 116px and the 174px the card fan needed: the strip
-   below is a single 44px row, so nothing here is asking for the fan's height any
-   more, but the box is where the writing happens and a little air costs nothing.
-   An empty box measures ~145px (two text rows plus the empty band's button);
-   once photos arrive the band grows and the floor stops mattering. */
+   only lever CSS has here is the floor the text column sits on.
+
+   The floor lives on the text column, not on the room. A floor on the room left
+   the textarea's own top inset stranded *below* the last line, as slack between
+   the writing and the photo band — the gap the room's floor created had to go
+   somewhere, and that is where it went. Pinning it to the column instead means
+   the room is exactly as tall as its two children and the band lands flush under
+   the text.
+
+   118px is the two rows the field collapses to (81px) plus the air the room used
+   to carry, so an empty composer looks the way it always did while one with
+   photos grows to fit them instead of hiding them behind slack. */
 .composer-entry {
-  min-height: 130px;
+  min-height: 0;
+}
+
+.composer-entry > .composer-input {
+  min-height: 118px;
 }
 
 /*
@@ -2361,8 +2371,8 @@ h2 {
 .composer-entry {
   display: flex;
   flex-direction: column;
-  /* The two rooms share one frame; the seam between them is the band's own top
-     border, which only shows once there is something to see. */
+  /* No gap. The seam between the two rooms is the band's own top border; a flex
+     gap would add a line of slack above it and put the gap straight back. */
   gap: 0;
   margin-top: 14px;
   /* The only frame in the pair. `overflow: hidden` is deliberately absent: the

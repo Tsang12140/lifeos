@@ -878,6 +878,11 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
         that, so the field goes back to two rows (about 81px) and the band adds
         its own height underneath. */}
     <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
+      {/* The photos sit flush under the text block, not under the room. The
+          textarea is inset from the room's top by its own padding, so a floor on
+          the room leaves that same inset stranded below the text instead — the
+          gap moves, it does not go away. Cancelling the entry's slack here is
+          what actually closes it. */}
       <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
     </div>
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
