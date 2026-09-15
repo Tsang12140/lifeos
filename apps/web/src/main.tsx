@@ -10,6 +10,8 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleHelp,
   ClipboardCopy,
   CloudUpload,
@@ -1140,7 +1142,7 @@ function groupRecords(records: readonly RecordView[], fallbackDate: string): rea
   return [...groups.entries()].map(([date, items]) => ({ date, records: items }));
 }
 
-function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetId: string) => void; onOpenEntity: (entity: Entity) => void }) {
+function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
   const title = timelineHeading(activeView);
   const empty = emptyCopy(activeView, selectedDate, Boolean(searchQuery));
   const groups = records ? groupRecords(records, selectedDate) : [];
@@ -1437,10 +1439,22 @@ function CycleModuleDialog({ open, module, selectedDate, onClose, onSaveConfig, 
  * same content endpoint the chip already uses; the browser caches it, which is
  * why opening a photo does not re-fetch what the chip just loaded.
  */
-function AssetPreview({ assetId, assets, onClose }: { assetId: string; assets: readonly Asset[]; onClose: () => void }) {
+/**
+ * A record's photo group, opened by tapping one specific square. The viewer opens on
+ * that square and can walk the rest with ← →, so a nine-square grid does not force the
+ * owner to close and reopen for each photo.
+ */
+function AssetPreview({ assetIds, index, assets, onClose, onIndexChange }: { assetIds: readonly string[]; index: number; assets: readonly Asset[]; onClose: () => void; onIndexChange: (index: number) => void }) {
+  const assetId = assetIds[index] ?? assetIds[0] ?? "";
   const asset = assets.find((candidate) => candidate.id === assetId);
+  const many = assetIds.length > 1;
+  const step = useCallback((delta: number) => { onIndexChange(Math.min(assetIds.length - 1, Math.max(0, index + delta))); }, [assetIds.length, index, onIndexChange]);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      else if (event.key === "ArrowLeft") step(-1);
+      else if (event.key === "ArrowRight") step(1);
+    };
     window.addEventListener("keydown", onKeyDown);
     // A background page must not scroll behind the photo.
     const previousOverflow = document.body.style.overflow;
@@ -1449,12 +1463,14 @@ function AssetPreview({ assetId, assets, onClose }: { assetId: string; assets: r
       window.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
-  }, [onClose]);
+  }, [onClose, step]);
   return <div className="asset-preview" role="dialog" aria-modal="true" aria-label={asset?.originalName ?? "照片预览"} onClick={onClose}>
     <button className="asset-preview-close" type="button" onClick={onClose} aria-label="关闭预览"><X size={20} strokeWidth={1.9} aria-hidden="true" /></button>
+    {many && index > 0 ? <button className="asset-preview-nav asset-preview-nav-prev" type="button" onClick={(event) => { event.stopPropagation(); step(-1); }} aria-label="上一张"><ChevronLeft size={22} strokeWidth={1.8} aria-hidden="true" /></button> : null}
+    {many && index < assetIds.length - 1 ? <button className="asset-preview-nav asset-preview-nav-next" type="button" onClick={(event) => { event.stopPropagation(); step(1); }} aria-label="下一张"><ChevronRight size={22} strokeWidth={1.8} aria-hidden="true" /></button> : null}
     <figure className="asset-preview-figure" onClick={(event) => event.stopPropagation()}>
       <img src={`/api/assets/${encodeURIComponent(assetId)}/content`} alt={asset?.originalName ?? "照片"} />
-      {asset?.originalName === undefined ? null : <figcaption>{asset.originalName}</figcaption>}
+      {asset?.originalName === undefined && !many ? null : <figcaption>{many ? `${index + 1} / ${assetIds.length}${asset?.originalName === undefined ? "" : " · "}` : ""}{asset?.originalName}</figcaption>}
     </figure>
   </div>;
 }
@@ -1473,21 +1489,50 @@ function TimelineEntityChip({ refItem, entity, relationKind, onOpenEntity }: { r
   return <button className={className} type="button" onClick={() => onOpenEntity(movie ? asCoreEntity(entity) : entity)} aria-label={movie ? `查看${entity.name}的电影卡片` : `查看${entity.name}的人物卡片`}>{content}</button>;
 }
 
-function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetId: string) => void; onOpenEntity: (entity: Entity) => void }) {
+/** Moments caps the grid at nine squares; the ninth announces what it hides. */
+const PHOTO_GRID_LIMIT = 9;
+
+/** A photo means a real local image. Recordings and attachments keep their chip. */
+function isPhotoAsset(asset: Asset | undefined): boolean {
+  return asset?.kind === "photo" && isLocalAsset(asset);
+}
+
+/**
+ * A record's photos, laid out the way Moments lays out a post: one large, two and
+ * four as a pair, three across from three up. The filename is deliberately absent —
+ * `image_225.png` says nothing to the owner, and the chip it used to live in squeezed
+ * the thumbnail down to 22px. The name still earns its place in the preview caption
+ * and in the aria-label, where it helps rather than clutters.
+ */
+function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: readonly string[]; assets: readonly Asset[]; onPreview: (assetIds: readonly string[], index: number) => void }) {
+  const shown = assetIds.slice(0, PHOTO_GRID_LIMIT);
+  const hidden = assetIds.length - shown.length;
+  return <div className="record-photo-grid" data-shown={shown.length}>
+    {shown.map((assetId, index) => { const asset = assets.find((candidate) => candidate.id === assetId); return <button className="record-photo-cell" key={assetId} type="button" onClick={() => onPreview(assetIds, index)} aria-label={`放大查看 ${asset?.originalName ?? assetId}`}>
+      <img src={`/api/assets/${encodeURIComponent(assetId)}/content`} alt="" loading="lazy" decoding="async" />
+      {hidden > 0 && index === shown.length - 1 ? <span className="record-photo-more">+{hidden}</span> : null}
+    </button>; })}
+  </div>;
+}
+
+function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
   const Icon = COMPOSER_META[record.kind].icon;
   const task = isTaskRecord(record) ? record : undefined;
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
   const masked = record.isPrivate === true && !revealed;
   const reveal = () => setRevealed(true);
   const nextStatus: TaskStatus = task?.task.status === "done" ? "todo" : "done";
-  const relationCount = record.entityRefs.length + record.relatedRecordIds.length + record.assetRefs.length;
+  const photoAssetIds = record.assetRefs.filter((ref) => isPhotoAsset(assets.find((candidate) => candidate.id === ref.assetId))).map((ref) => ref.assetId);
+  const chipAssetRefs = record.assetRefs.filter((ref) => !photoAssetIds.includes(ref.assetId));
+  const relationCount = record.entityRefs.length + record.relatedRecordIds.length + chipAssetRefs.length;
   const vocabulary = useMemo(() => mentionVocabulary(record, entities), [record, entities]);
   const showMoviePrompt = !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && recordText(record).includes("电影") && !record.entityRefs.some(isMovieRef);
+  const photoLine = masked || photoAssetIds.length === 0 ? null : <RecordPhotoGrid assetIds={photoAssetIds} assets={assets} onPreview={onPreviewAsset} />;
   const relationLine = relationCount > 0 ? masked
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
-    : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{record.assetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); const local = isLocalAsset(asset); return <span className={`relation-chip ${local ? "relation-chip-media" : ""}`} key={`asset-${ref.assetId}`}>{local ? <button className="asset-thumb-button" type="button" onClick={() => onPreviewAsset(ref.assetId)} aria-label={`放大查看 ${asset?.originalName ?? ref.assetId}`}><img className="asset-thumb" src={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} /></button> : <ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />}{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
+    : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{record.weather.city}</small></span></div>;
-  return <article className="timeline-item"><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
+  return <article className="timeline-item"><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
 }
 
 interface TaskUndoEntry { readonly task: TaskRecordView; readonly previousStatus: TaskStatus; }
@@ -2342,7 +2387,7 @@ function App() {
   const [summaries, setSummaries] = useState<readonly DaySummary[]>([]);
   const [aiSummaries, setAiSummaries] = useState(false);
   const [weatherArchive, setWeatherArchive] = useState<ReadonlyMap<string, CalendarWeather>>(new Map());
-  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<{ assetIds: readonly string[]; index: number } | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerKind, setComposerKind] = useState<ComposerKind>("journal");
   const [composerContent, setComposerContent] = useState("");
@@ -2960,7 +3005,7 @@ function App() {
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"
         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
-      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={setPreviewAssetId} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className="action-toast" role="status"><Check size={16} strokeWidth={2} aria-hidden="true" />{actionMessage}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{previewAssetId === null ? null : <AssetPreview assetId={previewAssetId} assets={assets} onClose={() => setPreviewAssetId(null)} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
+      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className="action-toast" role="status"><Check size={16} strokeWidth={2} aria-hidden="true" />{actionMessage}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
 }
 
 export default App;

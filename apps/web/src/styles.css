@@ -6164,6 +6164,85 @@ button.relation-chip {
   outline-offset: 1px;
 }
 
+/*
+ * A record's photos, laid out the way Moments lays out a post: one large, two and
+ * four as a pair, three across from three up. The filename is gone — `image_225.png`
+ * told the owner nothing and stole the room the thumbnail needed. The same 610px
+ * ceiling the record text uses keeps the grid from outrunning the column.
+ */
+.record-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+  max-width: 610px;
+}
+
+.record-photo-grid[data-shown="2"],
+.record-photo-grid[data-shown="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* A lone photo keeps its own proportions and is simply allowed to be big. */
+.record-photo-grid[data-shown="1"] {
+  display: block;
+  max-width: 380px;
+}
+
+.record-photo-cell {
+  position: relative;
+  display: block;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: var(--line);
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.record-photo-grid[data-shown="1"] .record-photo-cell {
+  aspect-ratio: auto;
+  border-radius: 10px;
+}
+
+.record-photo-cell:hover,
+.record-photo-cell:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.record-photo-cell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Scaled to fit, never cropped: a tall portrait must not run the column off screen. */
+.record-photo-grid[data-shown="1"] .record-photo-cell img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 520px;
+  margin: 0 auto;
+}
+
+/* The ninth square says how many it is standing in for. */
+.record-photo-more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgb(14 19 30 / 0.52);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
 
 /* Calendar: a week of tall cards and a month of summary cells. Both are
    read-only views onto the same records the timeline already shows, so they
@@ -6629,6 +6708,36 @@ button.relation-chip {
   transform: scale(1.05);
 }
 
+/* Walking the rest of a record's photos without closing the viewer. */
+.asset-preview-nav {
+  position: fixed;
+  top: 50%;
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin-top: -23px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(255 255 255 / 0.1);
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+
+.asset-preview-nav:hover {
+  background: rgb(255 255 255 / 0.2);
+  transform: scale(1.05);
+}
+
+.asset-preview-nav-prev {
+  left: 18px;
+}
+
+.asset-preview-nav-next {
+  right: 18px;
+}
+
 .asset-preview-figure {
   display: grid;
   justify-items: center;
@@ -6741,6 +6850,20 @@ button.relation-chip {
     right: 12px;
     width: 36px;
     height: 36px;
+  }
+
+  .asset-preview-nav {
+    width: 38px;
+    height: 38px;
+    margin-top: -19px;
+  }
+
+  .asset-preview-nav-prev {
+    left: 8px;
+  }
+
+  .asset-preview-nav-next {
+    right: 8px;
   }
 
   .asset-preview-figure img {
