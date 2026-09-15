@@ -626,6 +626,10 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
   // say is which ones are in it.
   const strip = shots;
 
+  // Two states, one component. The add control is a tile like any other, so it
+  // only changes size and emphasis between them — it is never a different thing.
+  // A separate full-width button for the empty case was what made this area read
+  // as a control bolted under the field rather than as the place photos go.
   const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"} ${clearArmed ? "is-armed" : ""}`;
   const zoneHandlers = {
     onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current += 1; setDragging(true); },
@@ -640,10 +644,11 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
   const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />;
 
   /**
-   * One strip, two widths. Every photo is the same square and they run in the
-   * order they were added, with the add control as the last tile in the row —
+   * One strip, one component. Every photo is the same square and they run in the
+   * order they were added, with the add square as the last tile in the row —
    * which is where 微信, 微博 and 小红书 all put it, and therefore where nobody
-   * has to look for it.
+   * has to look for it. On an empty composer that square is simply the only tile
+   * there: the row does not change shape, it only has one member.
    *
    * A desk gets one row of nine. A phone cannot fit nine across, so the same row
    * is allowed to wrap into 朋友圈's grid; the tiles never change size or shape,
@@ -656,33 +661,32 @@ function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: S
     onPointerLeave={() => { if (dragDepth.current === 0) setClearArmed(false); }}
     onClick={armOnTap}
   >
-    {empty
-      ? <button className="shot-drop-button" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
-          <ImageIcon size={18} strokeWidth={1.7} aria-hidden="true" />
-          <strong>{dragging ? "松手放下" : "加照片"}</strong>
-        </button>
-      : <div className="shot-row">
-          <ul className="shot-strip" data-count={shots.length}>
-            {strip.map((shot) => <li className="shot-tile" key={shot.assetId}>
-              <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
-              <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
-            </li>)}
-            <li className="shot-tile shot-tile-add">
-              <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片"><Plus size={18} strokeWidth={2} aria-hidden="true" /></button>
-            </li>
-          </ul>
-          {/* The two things that are about the strip rather than in it. They ride
-              the end of the same row, so they cost no height of their own: on a
-              line underneath they would add a full caption line of blank below
-              the last row of photos, which is exactly the stretch of nothing the
-              owner kept seeing. They stay quiet and only surface when the strip
-              is being looked at — a hover on a desk, a tap on a phone. */}
-          <div className="shot-strip-meta">
+    <div className="shot-row">
+      <ul className="shot-strip" data-count={shots.length}>
+        {strip.map((shot) => <li className="shot-tile" key={shot.assetId}>
+          <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
+          <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
+        </li>)}
+        <li className="shot-tile shot-tile-add">
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片">
+            {empty ? <><ImageIcon size={17} strokeWidth={1.7} aria-hidden="true" /><span>{dragging ? "松手" : "加照片"}</span></> : <Plus size={18} strokeWidth={2} aria-hidden="true" />}
+          </button>
+        </li>
+      </ul>
+      {/* The two things that are about the strip rather than in it. They ride
+          the end of the same row, so they cost no height of their own: on a
+          line underneath they would add a full caption line of blank below
+          the last row of photos, which is exactly the stretch of nothing the
+          owner kept seeing. They stay quiet and only surface when the strip
+          is being looked at — a hover on a desk, a tap on a phone. */}
+      {empty
+        ? null
+        : <div className="shot-strip-meta">
             <span className="shot-strip-tally">{shots.length}/{SHOT_LIMIT}</span>
             <button className="shot-clear" type="button" onClick={clearAll} aria-label="清空全部照片"><Eraser size={13} strokeWidth={2} aria-hidden="true" /><span>清空</span></button>
             {busy ? <span className="shot-busy" role="status"><LoaderCircle className="spin" size={13} aria-hidden="true" /></span> : null}
-          </div>
-        </div>}
+          </div>}
+    </div>
     {fileInput}
   </div>;
 }

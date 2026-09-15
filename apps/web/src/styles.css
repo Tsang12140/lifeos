@@ -2385,46 +2385,35 @@ h2 {
 
 /* The photo band. One row, laid out like every picker the phone crowd already
    knows — WeChat, Weibo, Xiaohongshu all put a single line of square tiles
-   under the field, newest last, with the add button trailing the queue.
+   under the field, newest last, with the add square trailing the queue.
    
-   There is only one rendering now. The fan needed a wide-screen version and a
-   narrow-screen version that had to be kept from impersonating each other; a
-   row of squares is the same shape in both rooms, so the narrow-screen block
-   only has to decide how many fit per line. */
+   There is one rendering and one component in it. The fan needed a wide-screen
+   version and a narrow-screen version that had to be kept from impersonating
+   each other; a row of squares is the same shape in both rooms, so the
+   narrow-screen block only has to decide how many fit per line. And the add
+   control is a tile in that row rather than a button under it, so an empty
+   composer is the same row with one member — not a different widget.
+
+   No rule here draws a line between the field and the photos. There was a seam
+   once, on the theory that the photos were a second room; the tiles already
+   announce themselves, and the line only cut the box in two. */
 .composer-shots {
   display: block;
   position: relative;
-  /* Symmetric and tight. The only thing below the tiles now is the row's own
-     padding — the caption rides alongside them rather than under them — so this
-     number is the whole of the blank under a photo. */
+  /* The only thing below the tiles is this padding — the caption rides
+     alongside them rather than under them — so this number is the whole of the
+     blank under a photo. Top and bottom match so the row sits level in the box
+     whether it holds one tile or ten. */
   padding: 9px 10px;
-  border-top: 1px solid transparent;
   border-radius: 0 0 13px 13px;
   background: transparent;
-  transition: border-color 180ms ease, background-color 180ms ease;
+  transition: background-color 180ms ease;
 }
 
-/* The seam only appears when the band is actually carrying photos. An empty
-   band under the text is just a line across the field for no reason. */
-.composer-shots.has-shots {
-  border-top-color: var(--line);
-}
-
-/* Keeps its own frame while a photo hovers over it — the highlight is what
-   says "you can drop here", so only the tint changes. */
+/* The band keeps its own frame while a photo hovers over it — the tint is what
+   says "you can drop here", and it is now the only thing that can. */
 .composer-shots.is-dragging {
-  border-top-color: var(--primary);
   background: var(--primary-soft);
-}
-
-.composer-shots.is-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Sized to the button it holds plus a hair of air, not to a hoped-for photo
-     tray. The button is 34px; 46px total means the band costs only 6px of blank
-     around it, so an empty composer stays compact. */
-  padding: 6px 10px;
 }
 
 /* The strip itself: an unbroken row, nine tiles wide at most. `nowrap` is the
@@ -2517,7 +2506,7 @@ h2 {
   }
 }
 
-/* The add button rides at the end of the queue, as the next empty slot. Kept
+/* The add control rides at the end of the queue, as the next empty slot. Kept
    the same size and radius as a tile so the row reads as one run of squares
    rather than as eight photos and a control. */
 .shot-tile-add {
@@ -2526,6 +2515,16 @@ h2 {
   border: 1px dashed var(--line-strong);
   background: transparent;
   box-shadow: none;
+}
+
+/* Empty, it is the first slot and the only thing in the row, so it is allowed
+   to be the doorway rather than a lone square: a pill with the icon and the two
+   words. It is still the same component in the same row — an empty composer just
+   starts with a wider first tile. */
+.composer-shots.is-empty .shot-tile-add {
+  width: auto;
+  min-width: var(--composer-tile, 44px);
+  padding: 0 14px;
 }
 
 .shot-tile-add button {
@@ -2543,7 +2542,27 @@ h2 {
   transition: color 160ms ease;
 }
 
+/* The empty state's pill carries a word, so it lays its two children out in a
+   row instead of stacking them. */
+.composer-shots.is-empty .shot-tile-add button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.composer-shots.is-empty .shot-tile-add button span {
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
 .shot-tile-add button:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+.composer-shots.is-empty .shot-tile-add button:hover:not(:disabled) span {
   color: var(--primary);
 }
 
@@ -2619,50 +2638,9 @@ h2 {
   color: var(--muted);
 }
 
-/* The empty band's one prompt. No frame of its own: the field's own border
-   already draws the room, and a second dashed outline inside it read as one box
-   too many. */
-.shot-drop-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 34px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 9px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-  text-align: center;
-  transition: color 160ms ease, background-color 160ms ease;
-}
-
-.shot-drop-button strong {
-  color: var(--ink-soft);
-  font-size: 0.84rem;
-  font-weight: 650;
-  line-height: 1.3;
-}
-
-.shot-drop-button:hover:not(:disabled) {
-  color: var(--primary);
-  background: var(--primary-soft);
-}
-
-.shot-drop-button:hover:not(:disabled) strong {
-  color: var(--primary);
-}
-
-.shot-drop-button:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
 .shot-file-input {
   display: none;
 }
-
 
 .composer-footer {
   align-items: center;
@@ -3294,32 +3272,28 @@ button.relation-chip {
     padding: 9px 8px;
   }
 
-  /* Nothing here yet: one image button, and no photo area at all. An empty
-     band on a phone was a dashed box with nothing in it — a room for pictures
-     that had not arrived. The button is what a phone can use. */
-  .composer-shots.is-empty {
-    min-height: 46px;
-    padding: 4px 8px;
+  /* No special case for the empty band any more. It is the same row with the one
+     tile in it; the add tile keeps its square shape here rather than stretching
+     into the pill, because a phone's three-column grid would be broken by a cell
+     that changed shape depending on whether anything is in it. */
+  .composer-shots.is-empty .shot-tile-add {
+    width: var(--composer-tile, 44px);
+    padding: 0;
   }
 
-  .shot-drop-button {
-    width: 100%;
-    min-height: 40px;
-    border: 1px solid var(--line);
-    border-radius: 11px;
-    background: var(--surface);
+  .composer-shots.is-empty .shot-tile-add button {
+    display: grid;
+    gap: 0;
   }
 
-  .composer-shots.is-dragging .shot-drop-button {
-    border-color: var(--primary);
-    color: var(--primary);
-    background: var(--primary-soft);
+  .composer-shots.is-empty .shot-tile-add button span {
+    display: none;
   }
 
   /* 朋友圈's arrangement, which is the one everybody already knows how to
-     read: one square on its own, 2–3 in a row of two, 4 to a 2×2, and 5+ to a
-     3-wide wall. Every tile is a square, because a wall of mixed rectangles
-     looks like a mistake rather than a design.
+     read: one square on its own, 2–4 in a two-wide stack (a row of two, then a
+     2×2), and 5+ to a 3-wide wall. Every tile is a square, because a wall of
+     mixed rectangles looks like a mistake rather than a design.
 
      The 2–3 case is a two-column grid rather than a bank of `auto` columns:
      with `auto`, three photos would sit left-packed in a row of their own
@@ -3344,6 +3318,15 @@ button.relation-chip {
     flex: 1 0 100%;
   }
 
+  /* `data-count` is the number of *photos*, and the add tile rides the same
+     list, so the column count is one more than the pictures would ask for. The
+     bands are read that way: 0 photos is one lone cell (just the add tile), 1
+     photo is a lone square, 2–4 photos make a 2-wide column stack (a row of two
+     then a 2×2), and 5+ go three wide. 4 belongs with the two-wide group, not
+     with the wall: at three columns it would read as a lopsided 3+1 instead of
+     the 2×2 everybody expects, and the add tile would land beside a photo
+     rather than under them. */
+  .shot-strip[data-count="0"],
   .shot-strip[data-count="1"] {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -3372,8 +3355,13 @@ button.relation-chip {
   /* A single photo gets a bigger square and sits centred. 朋友圈 does the same,
      and it keeps the one-tile case from looking like a shifted grid. It is
      capped so a tall phone does not turn one photo into a wall — but it stays a
-     square, because a wall of mixed rectangles looks like a mistake. */
-  .shot-strip[data-count="1"] .shot-tile {
+     square, because a wall of mixed rectangles looks like a mistake.
+
+     Scoped away from the add tile: that one is a control, and stretching it to
+     58% would make the first slot of the grid a different size from the rest.
+     The selector chain in the empty state has the same idea — `.shot-tile-add`
+     keeps its 44px square here, so an empty row and a one-photo row line up. */
+  .shot-strip[data-count="1"] .shot-tile:not(.shot-tile-add) {
     width: min(58%, 200px);
     margin: 0 auto;
     border-radius: 12px;
@@ -3390,7 +3378,7 @@ button.relation-chip {
     opacity: 1;
   }
 
-  .shot-strip[data-count="1"] .shot-tile-remove {
+  .shot-strip[data-count="1"] .shot-tile:not(.shot-tile-add) .shot-tile-remove {
     width: 26px;
     height: 26px;
     top: 6px;
