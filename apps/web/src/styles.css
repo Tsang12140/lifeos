@@ -7499,3 +7499,165 @@ button.relation-chip {
     padding-left: 16px;
   }
 }
+
+/* --- Settings: photo trash (orphan uploads + collected files) --- */
+.settings-asset-trash-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px 17px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.settings-asset-trash-overview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-asset-trash-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-asset-trash-stats > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 11px;
+  border-radius: 11px;
+  background: #eef3fb;
+}
+
+.settings-asset-trash-stats small {
+  color: #9aa3b0;
+  font-size: 0.68rem;
+}
+
+.settings-asset-trash-stats strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-asset-trash-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.6;
+}
+
+.settings-asset-trash-group {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-asset-trash-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  font-weight: 640;
+}
+
+.settings-asset-trash-group-head span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.settings-asset-trash-list {
+  display: grid;
+  gap: 6px;
+  max-height: 288px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.settings-asset-trash-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 11px;
+  background: #fff;
+  font-size: 0.72rem;
+}
+
+.settings-asset-trash-row img {
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  object-fit: cover;
+}
+
+.settings-asset-trash-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-asset-trash-meta strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-asset-trash-meta small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-asset-trash-days {
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.settings-asset-trash-days.is-overdue {
+  color: var(--danger);
+}
+
+.settings-asset-trash-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-asset-trash-purge.is-armed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .settings-asset-trash-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-asset-trash-row {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .settings-asset-trash-days,
+  .settings-asset-trash-actions {
+    grid-column: 2;
+  }
+}

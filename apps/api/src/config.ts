@@ -34,6 +34,17 @@ export interface ApiConfig {
    * JSON body this API accepts.
    */
   readonly assetUploadLimitBytes: number;
+  /**
+   * A dropped photo that never reaches a record lives in `uploads/` for this
+   * many days before the collector moves it aside. Long enough for the common
+   * "dropped it tonight, wrote the entry days later" rhythm.
+   */
+  readonly assetOrphanGraceDays: number;
+  /**
+   * How long a collected file stays restorable in the orphan trash before it
+   * is deleted for good. Grace plus trash is the real window of regret.
+   */
+  readonly assetTrashDays: number;
   readonly backupDirectory?: string;
   readonly backupS3?: BackupS3Config;
   /**
@@ -55,6 +66,8 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3001;
 const DEFAULT_BODY_LIMIT = 1024 * 1024;
 const DEFAULT_ASSET_UPLOAD_LIMIT = 25 * 1024 * 1024;
+const DEFAULT_ASSET_ORPHAN_GRACE_DAYS = 7;
+const DEFAULT_ASSET_TRASH_DAYS = 30;
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-flash";
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_QWEATHER_HOST = "devapi.qweather.com";
@@ -132,6 +145,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     cookieSecure,
     bodyLimitBytes: parsePositiveInt(env.LIFEOS_BODY_LIMIT_BYTES, DEFAULT_BODY_LIMIT, "LIFEOS_BODY_LIMIT_BYTES"),
     assetUploadLimitBytes: parsePositiveInt(env.LIFEOS_ASSET_UPLOAD_LIMIT_BYTES, DEFAULT_ASSET_UPLOAD_LIMIT, "LIFEOS_ASSET_UPLOAD_LIMIT_BYTES"),
+    assetOrphanGraceDays: parsePositiveInt(env.LIFEOS_ASSET_ORPHAN_GRACE_DAYS, DEFAULT_ASSET_ORPHAN_GRACE_DAYS, "LIFEOS_ASSET_ORPHAN_GRACE_DAYS"),
+    assetTrashDays: parsePositiveInt(env.LIFEOS_ASSET_TRASH_DAYS, DEFAULT_ASSET_TRASH_DAYS, "LIFEOS_ASSET_TRASH_DAYS"),
     backupDirectory,
     ...(backupS3 === undefined ? {} : { backupS3 }),
     ...(deepseekApiKey === undefined || deepseekApiKey === "" ? {} : { deepseekApiKey }),

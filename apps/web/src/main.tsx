@@ -120,6 +120,48 @@ type CreateEntity = (type: EntityKind, name: string, extras?: { readonly aliases
 const DEMO_ID_PREFIX = "demo-";
 const DEMO_HIDDEN_STORAGE_KEY = "lifeos.hideDemo";
 const MOVIE_PROMPT_HIDDEN_STORAGE_KEY = "lifeos.moviePromptHidden";
+/**
+ * Photos dropped beside the entry box are uploaded the moment they land, so
+ * an unsent draft has real files behind it. Keeping the draft in this browser
+ * means switching views — or reloading — does not throw those photos away.
+ */
+const COMPOSER_SHOTS_STORAGE_KEY = "lifeos.composerShots";
+const ASSET_ROLE_VALUES: readonly AssetRole[] = ["photo", "recording", "attachment"];
+
+/**
+ * Rebuilds a stored draft defensively. A draft is a convenience, never a
+ * source of truth, so anything malformed is dropped rather than trusted.
+ */
+function readComposerShotsDraft(): readonly AssetLink[] {
+  try {
+    const raw = window.localStorage.getItem(COMPOSER_SHOTS_STORAGE_KEY);
+    if (raw === null) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const shots = (parsed as { shots?: unknown }).shots;
+    if (!Array.isArray(shots)) return [];
+    return shots.flatMap((shot) => {
+      if (typeof shot !== "object" || shot === null) return [];
+      const candidate = shot as { assetId?: unknown; role?: unknown; label?: unknown };
+      if (typeof candidate.assetId !== "string" || candidate.assetId.length === 0) return [];
+      if (!ASSET_ROLE_VALUES.includes(candidate.role as AssetRole)) return [];
+      if (candidate.label !== undefined && typeof candidate.label !== "string") return [];
+      const link: AssetLink = { assetId: candidate.assetId, role: candidate.role as AssetRole, ...(typeof candidate.label === "string" ? { label: candidate.label } : {}) };
+      return [link];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writeComposerShotsDraft(shots: readonly AssetLink[]): void {
+  try {
+    if (shots.length === 0) window.localStorage.removeItem(COMPOSER_SHOTS_STORAGE_KEY);
+    else window.localStorage.setItem(COMPOSER_SHOTS_STORAGE_KEY, JSON.stringify({ shots, savedAt: new Date().toISOString() }));
+  } catch {
+    // Storage can be blocked or full; the draft simply will not survive a reload.
+  }
+}
 const UI_FONT_STORAGE_KEY = "lifeos.uiFont";
 type UiFontId = "misans" | "source-han-sans" | "harmonyos-sans";
 const UI_FONT_OPTIONS: readonly { id: UiFontId; label: string; stack: string }[] = [
@@ -2108,18 +2150,138 @@ function WeatherSettingsCard({ status, profiles, activeProfileId, onChanged, onP
   </div>;
 }
 
+interface AssetTrashPendingItem {
+  readonly asset: Asset;
+  readonly dueAt: string;
+  readonly daysRemaining: number;
+  readonly overdue: boolean;
+}
+
+interface AssetTrashItem {
+  readonly asset: Asset;
+  readonly trashedAt: string;
+  readonly origin: "orphan-scan" | "asset-delete";
+  readonly daysRemaining: number;
+}
+
+interface AssetTrashView {
+  readonly graceDays: number;
+  readonly trashDays: number;
+  readonly nextRunAt: string;
+  readonly pending: readonly AssetTrashPendingItem[];
+  readonly trashed: readonly AssetTrashItem[];
+}
+
+const ASSET_TRASH_ORIGIN_LABELS: Record<AssetTrashItem["origin"], string> = { "orphan-scan": "自动清理", "asset-delete": "手动删除" };
+
+function assetTrashName(asset: Asset): string {
+  return asset.originalName !== undefined && asset.originalName.trim() !== "" ? asset.originalName : "未命名照片";
+}
+
+function assetTrashMoment(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: USER_TIME_ZONE, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+}
+
+function assetTrashRemaining(days: number): string {
+  return days <= 0 ? "即将清理" : `还剩 ${days} 天`;
+}
+
+/**
+ * The two halves of the asset lifecycle, made visible: uploads waiting out
+ * their grace period, and collected files that can still be put back.
+ */
+function AssetTrashSettingsCard({ onAssetsChanged }: { readonly onAssetsChanged: () => void }) {
+  const [view, setView] = useState<AssetTrashView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    apiRequest<AssetTrashView>("/api/assets/trash", { signal: controller.signal })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        setView(payload);
+        setUnavailable(null);
+      })
+      .catch((cause) => {
+        if (controller.signal.aborted) return;
+        // Without LIFEOS_ASSET_ROOT the host never opted into local files, so
+        // the panel says so instead of showing an error the owner cannot act on.
+        setView(null);
+        setUnavailable(errorMessage(cause, "照片回收站暂不可用"));
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [reload]);
+
+  const act = async (id: string, requestPath: string, method: "POST" | "DELETE", done: string) => {
+    if (busyId !== null) return;
+    setBusyId(id);
+    setMessage(null);
+    setError(null);
+    try {
+      await apiRequest<void>(requestPath, { method });
+      onAssetsChanged();
+      setConfirmId(null);
+      setReload((current) => current + 1);
+      setMessage(done);
+    } catch (cause) {
+      setError(errorMessage(cause, "操作失败，请重试"));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const pending = view?.pending ?? [];
+  const trashed = view?.trashed ?? [];
+  return <div className="settings-asset-trash-card" data-asset-trash>
+    <div className="settings-asset-trash-overview">
+      <div className="settings-card-icon"><Trash2 size={18} aria-hidden="true" /></div>
+      <div className="settings-card-copy"><strong>照片回收站</strong><small>拖进输入框、又没保存的照片，会先在原处留 {view?.graceDays ?? 7} 天；过期后由服务端自动收走，再在回收站放 {view?.trashDays ?? 30} 天可以拿回来。</small></div>
+      <button className="icon-text-button" type="button" onClick={() => setReload((current) => current + 1)} disabled={loading}>{loading ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <RotateCcw size={15} aria-hidden="true" />}<span>{loading ? "读取中" : "刷新"}</span></button>
+    </div>
+    {unavailable !== null ? <p className="settings-asset-trash-note" data-asset-trash-unavailable>{unavailable}；服务端配置 LIFEOS_ASSET_ROOT 后这里会显示实物。</p> : null}
+    {view === null ? null : <>
+      <div className="settings-asset-trash-stats">
+        <div><small>待清理</small><strong data-asset-trash-pending-count>{pending.length} 张</strong></div>
+        <div><small>回收站</small><strong data-asset-trash-trashed-count>{trashed.length} 张</strong></div>
+        <div><small>下次自动清理</small><strong data-asset-trash-next-run>{assetTrashMoment(view.nextRunAt)}</strong></div>
+      </div>
+      <div className="settings-asset-trash-group">
+        <p className="settings-asset-trash-group-head">待清理<span>没人引用，到期即收走</span></p>
+        {pending.length === 0 ? <p className="settings-asset-trash-note">没有等着过期的照片。</p> : <ul className="settings-asset-trash-list" data-asset-trash-pending>{pending.map((item) => <li className="settings-asset-trash-row" key={item.asset.id}><img src={assetContentUrl(item.asset.id)} alt="" loading="lazy" decoding="async" /><span className="settings-asset-trash-meta"><strong>{assetTrashName(item.asset)}</strong><small>{formatBytes(item.asset.sizeBytes) ?? "尺寸未知"}{item.asset.createdAt === undefined ? "" : ` · ${assetTrashMoment(item.asset.createdAt.value)} 上传`}</small></span><span className={`settings-asset-trash-days ${item.overdue ? "is-overdue" : ""}`}>{assetTrashRemaining(item.daysRemaining)}</span></li>)}</ul>}
+      </div>
+      <div className="settings-asset-trash-group">
+        <p className="settings-asset-trash-group-head">回收站<span>可以恢复，也可以立即删掉</span></p>
+        {trashed.length === 0 ? <p className="settings-asset-trash-note">回收站是空的。</p> : <ul className="settings-asset-trash-list" data-asset-trash-trashed>{trashed.map((item) => <li className="settings-asset-trash-row" key={item.asset.id}><img src={`/api/assets/trash/${encodeURIComponent(item.asset.id)}/content`} alt="" loading="lazy" decoding="async" /><span className="settings-asset-trash-meta"><strong>{assetTrashName(item.asset)}</strong><small>{ASSET_TRASH_ORIGIN_LABELS[item.origin]} · {formatBytes(item.asset.sizeBytes) ?? "尺寸未知"} · {assetTrashMoment(item.trashedAt)} 收走</small></span><span className="settings-asset-trash-days">{assetTrashRemaining(item.daysRemaining)}</span><span className="settings-asset-trash-actions"><button className="icon-text-button" type="button" data-asset-trash-restore disabled={busyId !== null} onClick={() => void act(item.asset.id, `/api/assets/trash/${encodeURIComponent(item.asset.id)}/restore`, "POST", `已恢复「${assetTrashName(item.asset)}」`)}><RotateCcw size={14} aria-hidden="true" /><span>恢复</span></button><button className={`danger-button settings-asset-trash-purge ${confirmId === item.asset.id ? "is-armed" : ""}`} type="button" data-asset-trash-purge disabled={busyId !== null} onClick={() => { if (confirmId !== item.asset.id) { setConfirmId(item.asset.id); setMessage(null); return; } void act(item.asset.id, `/api/assets/trash/${encodeURIComponent(item.asset.id)}`, "DELETE", `已永久删除「${assetTrashName(item.asset)}」`); }}>{busyId === item.asset.id ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}<span>{confirmId === item.asset.id ? "再点一次真删" : "立即删除"}</span></button></span></li>)}</ul>}
+      </div>
+    </>}
+    {message !== null ? <p className="settings-inline-success" role="status">{message}</p> : null}
+    {error !== null ? <p className="settings-inline-error" role="alert">{error}</p> : null}
+  </div>;
+}
+
 function FontSettingsCard({ value, onChange }: { readonly value: UiFontId; readonly onChange: (value: UiFontId) => void }) {
   const selected = UI_FONT_OPTIONS.find((option) => option.id === value) ?? UI_FONT_OPTIONS[0];
   return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong><small>仅影响本浏览器的 LifeOS 界面；Maple Mono 继续用于日期和数字等宽信息。</small></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
 }
 
-function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, onAiStatusChange, openAiConfig, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, movieStatus, onMovieStatusChange, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange }: { onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatus: AiStatus; onAiStatusChange: (status: AiStatus) => void; openAiConfig: boolean; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; movieStatus: MovieModuleStatus; onMovieStatusChange: (status: MovieModuleStatus) => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void }) {
+function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, onAiStatusChange, openAiConfig, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, movieStatus, onMovieStatusChange, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged }: { onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatus: AiStatus; onAiStatusChange: (status: AiStatus) => void; openAiConfig: boolean; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; movieStatus: MovieModuleStatus; onMovieStatusChange: (status: MovieModuleStatus) => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void }) {
   return <section className="settings-page" aria-label="设置">
     <div className="settings-sections">
       <section className="settings-section"><div className="settings-section-heading"><h3>账户</h3></div><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{authRequired ? "已登录" : "本机访问"}</strong></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : "退出登录"}</span></button> : null}</div></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>数据</h3></div><div className="settings-card settings-data-grid"><div className="settings-card-icon"><FileJson size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>备份与导出</strong></div><div className="settings-card-actions"><button className="secondary-button" type="button" onClick={onImport}><Upload size={15} aria-hidden="true" /><span>导入 JSON</span></button><a className="secondary-button" href="/api/export?format=json" download><FileJson size={15} aria-hidden="true" /><span>导出 JSON</span></a><a className="secondary-button" href="/api/export?format=markdown" download><FileText size={15} aria-hidden="true" /><span>导出 Markdown</span></a></div></div></section>
       <section className="settings-section settings-demo-section"><div className="settings-section-heading"><h3>演示数据</h3></div><div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>备份</h3></div><BackupSettingsCard backupStatus={backupStatus} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} /></section>
+      <section className="settings-section"><div className="settings-section-heading"><h3>照片</h3></div><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>天气</h3></div><WeatherSettingsCard status={weatherStatus} profiles={weatherProfiles} activeProfileId={weatherActiveProfileId} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>模块</h3></div><MovieSettingsCard status={movieStatus} onChanged={onMovieStatusChange} /></section>
       <section className="settings-section"><div className="settings-section-heading"><h3>AI 助手</h3></div><AiSettingsCard status={aiStatus} open={openAiConfig} onChanged={onAiStatusChange} /></section>
@@ -2159,7 +2321,8 @@ function App() {
   const [composerMovieRefs, setComposerMovieRefs] = useState<readonly EntityRef[]>([]);
   // Photos dropped beside the entry box. They are already uploaded by the time
   // they sit here; saving the entry is what links them to the record.
-  const [composerShots, setComposerShots] = useState<readonly AssetLink[]>([]);
+  const [composerShots, setComposerShots] = useState<readonly AssetLink[]>(readComposerShotsDraft);
+  const shotsDraftChecked = useRef(false);
   const [saving, setSaving] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -2194,6 +2357,9 @@ function App() {
   const [tasksReload, setTasksReload] = useState(0);
   const [entities, setEntities] = useState<readonly Entity[]>([]);
   const [assets, setAssets] = useState<readonly Asset[]>([]);
+  // The draft check must not run against an asset list that has not arrived
+  // yet, or every restored photo would look stale.
+  const [assetsLoaded, setAssetsLoaded] = useState(false);
   const [relationReload, setRelationReload] = useState(0);
   const [cycleModuleReload, setCycleModuleReload] = useState(0);
   const [demoCount, setDemoCount] = useState(0);
@@ -2417,6 +2583,7 @@ function App() {
       if (controller.signal.aborted) return;
       setEntities(entityPayload.items);
       setAssets(assetPayload.items);
+      setAssetsLoaded(true);
       setDemoCount(demoPayload.items.filter(isDemoRecord).length);
     }).catch((error) => { if (!controller.signal.aborted) handleRequestError(error, "关联对象读取失败"); });
     return () => controller.abort();
@@ -2439,6 +2606,26 @@ function App() {
   /** A calendar cell is a way back into the day it stands for. */
   const openDay = (date: string) => { setSelectedDate(date); setActiveView("today"); setMobileMenuOpen(false); };
   const showToast = (message: string) => { setActionMessage(message); window.setTimeout(() => setActionMessage(null), 2600); };
+
+  // An unsent drop is worth keeping: the files are already on disk, so losing
+  // the draft would leave nothing behind but orphans.
+  useEffect(() => { writeComposerShotsDraft(composerShots); }, [composerShots]);
+
+  // A restored draft can name an asset the collector already took away. Check
+  // it once against the real asset list rather than rendering a broken
+  // thumbnail forever, and say what happened.
+  useEffect(() => {
+    if (shotsDraftChecked.current) return;
+    if (composerShots.length === 0) { shotsDraftChecked.current = true; return; }
+    if (!assetsLoaded) return;
+    shotsDraftChecked.current = true;
+    const live = new Set(assets.map((asset) => asset.id));
+    const kept = composerShots.filter((shot) => live.has(shot.assetId));
+    const dropped = composerShots.length - kept.length;
+    if (dropped === 0) { showToast(`已恢复上次没发出的 ${kept.length} 张照片`); return; }
+    setComposerShots(kept);
+    showToast(kept.length === 0 ? `草稿里 ${dropped} 张照片已被清理，已从投放区移除` : `草稿里 ${dropped} 张照片已被清理，保留剩下 ${kept.length} 张`);
+  }, [assets, assetsLoaded, composerShots, showToast]);
   const rememberMovieEntity = (movie: MovieEntity) => {
     setEntities((current) => {
       const next = current.filter((item) => item.id !== movie.id);
@@ -2723,7 +2910,7 @@ function App() {
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
   return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer kind={composerKind} content={composerContent} entities={entities} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
-       ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} />
+       ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"

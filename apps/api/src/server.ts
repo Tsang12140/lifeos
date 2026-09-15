@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
@@ -49,6 +49,8 @@ import {
 } from "@lifeos/core";
 import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
+import { isCollectableAsset, planUnreferencedUploads, purgeTrashedAsset, resolveWithinRoot, restoreTrashedAsset, trashAsset, trashDaysRemaining, trashPathFor } from "./asset-gc.js";
+import { AssetGcScheduler, nextAssetGcAt } from "./asset-gc-scheduler.js";
 import { createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
 import { answerLifeosAssistant, type AssistantHistoryItem } from "./assistant.js";
 import { createDualBackup, createLocalBackup, pruneBackups, testS3Backup, uploadS3Backup } from "./backup.js";
@@ -562,6 +564,18 @@ function patchRecord(
 function safeId(segment: string): string {
   if (segment.length === 0 || segment.length > 512) throw new HttpError(400, "invalid_id", "Invalid record id");
   return segment;
+}
+
+/**
+ * The orphan-trash endpoints only mean something when an asset root is
+ * configured: without one there are no LifeOS-owned uploads to collect.
+ */
+function requireAssetRoot(config: ApiConfig): string {
+  const root = config.assetRoot;
+  if (root === undefined || root === "") {
+    throw new HttpError(404, "asset_root_missing", "LIFEOS_ASSET_ROOT is not configured");
+  }
+  return root;
 }
 
 function contentDisposition(filename: string): string {
@@ -1199,6 +1213,7 @@ export interface LifeosApp {
   readonly repository: SqliteRecordRepository;
   readonly backupScheduler: BackupScheduler;
   readonly weatherArchiveScheduler: WeatherArchiveScheduler;
+  readonly assetGcScheduler: AssetGcScheduler;
   readonly handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   readonly close: () => void;
 }
@@ -1217,6 +1232,12 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     onError: (error) => console.error("[weather-archive] daily archive failed:", error),
   });
   weatherArchiveScheduler.start();
+  const assetGcScheduler = new AssetGcScheduler({
+    repository,
+    config,
+    onError: (error) => console.error("[asset-gc] collection pass failed:", error),
+  });
+  assetGcScheduler.start();
   // One provider for the process: it holds no per-request state, and the summaries
   // it produces are cached per day, so a month view does not re-ask on every open.
   const daySummaryProvider = createDaySummaryProvider(config);
@@ -2047,6 +2068,60 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       setJson(res, 201, asset);
       return;
     }
+    // The trash routes have to come before the `:id` matcher below: "trash" is
+    // a perfectly good asset id as far as that pattern is concerned.
+    if (pathname === "/api/assets/trash" && req.method === "GET") {
+      requireAssetRoot(config);
+      const now = new Date();
+      const pending = planUnreferencedUploads(
+        repository.listAssets(),
+        repository.referencedAssetIds(),
+        now,
+        config.assetOrphanGraceDays,
+      ).map((upload) => ({
+        asset: upload.asset,
+        dueAt: upload.dueAt.toISOString(),
+        daysRemaining: upload.daysRemaining,
+        overdue: upload.overdue,
+      }));
+      const trashed = repository
+        .listAssetTrash()
+        .filter((entry) => entry.restoredAt === undefined && entry.purgedAt === undefined)
+        .map((entry) => ({
+          asset: entry.asset,
+          trashedAt: entry.trashedAt,
+          origin: entry.origin,
+          daysRemaining: trashDaysRemaining(entry, now, config.assetTrashDays),
+        }));
+      setJson(res, 200, {
+        graceDays: config.assetOrphanGraceDays,
+        trashDays: config.assetTrashDays,
+        nextRunAt: nextAssetGcAt(now).toISOString(),
+        pending,
+        trashed,
+      });
+      return;
+    }
+    const assetTrashMatch = /^\/api\/assets\/trash\/([^/]+)(\/restore)?$/.exec(pathname);
+    if (assetTrashMatch !== null) {
+      requireAssetRoot(config);
+      const trashedId = decodeSegment(assetTrashMatch[1]!);
+      if (assetTrashMatch[2] !== undefined && req.method === "POST") {
+        if (!restoreTrashedAsset(config, repository, trashedId)) {
+          throw new HttpError(404, "not_found", "Nothing to restore for this asset");
+        }
+        setEmpty(res, 204);
+        return;
+      }
+      if (assetTrashMatch[2] === undefined && req.method === "DELETE") {
+        requireJsonContentType(req, true);
+        if (!purgeTrashedAsset(config, repository, trashedId)) {
+          throw new HttpError(404, "not_found", "Nothing to delete for this asset");
+        }
+        setEmpty(res, 204);
+        return;
+      }
+    }
     const assetMatch = /^\/api\/assets\/([^/]+)$/.exec(pathname);
     if (assetMatch !== null && (req.method === "PATCH" || req.method === "DELETE")) {
       const id = decodeSegment(assetMatch[1]!);
@@ -2058,7 +2133,14 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         if (references.length > 0) {
           throw new HttpError(409, "asset_in_use", `Asset is still referenced by ${references.length} record(s)`);
         }
-        repository.deleteAsset(id);
+        // Deleting an asset must not leave its file behind. Ours go to the same
+        // trash the collector uses, so a mistake is recoverable; reference-style
+        // assets point into the owner's own folders, so we only unregister them.
+        if (config.assetRoot !== undefined && isCollectableAsset(existing)) {
+          trashAsset(config.assetRoot, repository, existing, "asset-delete", new Date());
+        } else {
+          repository.deleteAsset(id);
+        }
         setEmpty(res, 204);
         return;
       }
@@ -2139,6 +2221,27 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       res.end(readFileSync(resolved.file));
       return;
     }
+    // A collected file no longer lives at its original path, so the thumbnail
+    // in the trash panel needs its own reader. Read-only, and only while the
+    // entry is still restorable.
+    const trashContentMatch = /^\/api\/assets\/trash\/([^/]+)\/content$/.exec(pathname);
+    if (trashContentMatch !== null && req.method === "GET") {
+      const root = requireAssetRoot(config);
+      const trashedId = decodeSegment(trashContentMatch[1]!);
+      const entry = repository.findAssetTrash(trashedId);
+      if (entry === null || entry.purgedAt !== undefined) throw new HttpError(404, "not_found", "Asset not found");
+      const trashedRelative = trashPathFor(entry.relativePath);
+      const file = trashedRelative === null ? null : resolveWithinRoot(root, trashedRelative);
+      if (file === null || !existsSync(file)) throw new HttpError(404, "not_found", "Collected file is gone");
+      res.writeHead(200, {
+        "content-type": ASSET_MEDIA_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
+        "content-length": String(statSync(file).size),
+        "cache-control": "private, max-age=60",
+        "content-disposition": "inline",
+      });
+      res.end(readFileSync(file));
+      return;
+    }
     throw new HttpError(404, "not_found", "API route not found");
   }
 
@@ -2183,6 +2286,7 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     repository,
     backupScheduler,
     weatherArchiveScheduler,
+    assetGcScheduler,
     handler: async function handler(req, res): Promise<void> {
       const startedAt = Date.now();
       try {
@@ -2225,6 +2329,7 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       closed = true;
       backupScheduler.stop();
       weatherArchiveScheduler.stop();
+      assetGcScheduler.stop();
       repository.close();
     },
   };

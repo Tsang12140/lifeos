@@ -50,6 +50,24 @@ export interface ExportData {
   readonly modules?: { readonly cycleIntimacy?: CycleIntimacyModuleData };
 }
 
+/** Why a file landed in the orphan trash: the collector, or a manual delete. */
+export type AssetTrashOrigin = "orphan-scan" | "asset-delete";
+
+/**
+ * A collected photo, kept whole so restoring it is a file move plus an insert.
+ * Rows survive the final delete on purpose: the audit trail is how the owner
+ * can tell what a past cleanup actually removed.
+ */
+export interface AssetTrashEntry {
+  readonly asset: Asset;
+  readonly trashedAt: string;
+  readonly origin: AssetTrashOrigin;
+  /** Original asset-root-relative path, used to locate the trashed copy. */
+  readonly relativePath: string;
+  readonly restoredAt?: string;
+  readonly purgedAt?: string;
+}
+
 export interface BackupRun {
   readonly id: number;
   readonly provider: "local" | "s3";
@@ -186,6 +204,21 @@ function parseJson<T>(value: string, name: string): T {
 
 function entityAddress(entity: Entity): string | null {
   return entity.type === "place" ? entity.address ?? null : null;
+}
+
+function assetTrashEntryFrom(row: Record<string, unknown>): AssetTrashEntry {
+  const asset = parseJson<unknown>(textColumn(row, "asset_json"), "asset_trash.asset_json");
+  assertValidAsset(asset);
+  const restoredAt = nullableTextColumn(row, "restored_at");
+  const purgedAt = nullableTextColumn(row, "purged_at");
+  return {
+    asset,
+    trashedAt: textColumn(row, "trashed_at"),
+    origin: textColumn(row, "origin") === "asset-delete" ? "asset-delete" : "orphan-scan",
+    relativePath: textColumn(row, "relative_path"),
+    ...(restoredAt === null ? {} : { restoredAt }),
+    ...(purgedAt === null ? {} : { purgedAt }),
+  };
 }
 
 /**
@@ -340,6 +373,16 @@ export class SqliteRecordRepository {
         id TEXT PRIMARY KEY NOT NULL,
         value_json TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS asset_trash (
+        asset_id TEXT PRIMARY KEY NOT NULL,
+        trashed_at TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        asset_json TEXT NOT NULL,
+        restored_at TEXT,
+        purged_at TEXT
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS asset_trash_trashed_idx ON asset_trash (trashed_at DESC);
       CREATE TABLE IF NOT EXISTS day_summaries (
         date TEXT PRIMARY KEY NOT NULL,
         fingerprint TEXT NOT NULL,
@@ -1051,9 +1094,73 @@ export class SqliteRecordRepository {
     return Number(result.changes) === 1;
   }
 
+  /**
+   * Records a collection. The asset row itself is gone by design, so the whole
+   * asset is stored here: restoring is then a file move plus this row's value.
+   */
+  public insertAssetTrash(entry: AssetTrashEntry): void {
+    this.#db
+      .prepare(
+        `INSERT INTO asset_trash (asset_id, trashed_at, origin, relative_path, asset_json, restored_at, purged_at)
+         VALUES (?, ?, ?, ?, ?, NULL, NULL)
+         ON CONFLICT(asset_id) DO UPDATE SET
+           trashed_at = excluded.trashed_at,
+           origin = excluded.origin,
+           relative_path = excluded.relative_path,
+           asset_json = excluded.asset_json,
+           restored_at = NULL,
+           purged_at = NULL`,
+      )
+      .run(entry.asset.id, entry.trashedAt, entry.origin, entry.relativePath, JSON.stringify(entry.asset));
+  }
+
+  /** Newest first, including entries already restored or purged (audit trail). */
+  public listAssetTrash(): readonly AssetTrashEntry[] {
+    const rows = this.#db
+      .prepare("SELECT asset_json, trashed_at, origin, relative_path, restored_at, purged_at FROM asset_trash ORDER BY trashed_at DESC")
+      .all();
+    return rows.map((row) => assetTrashEntryFrom(row));
+  }
+
+  public findAssetTrash(assetId: string): AssetTrashEntry | null {
+    const row = this.#db
+      .prepare("SELECT asset_json, trashed_at, origin, relative_path, restored_at, purged_at FROM asset_trash WHERE asset_id = ?")
+      .get(assetId);
+    return row === undefined ? null : assetTrashEntryFrom(row);
+  }
+
+  public markAssetTrashRestored(assetId: string, at: string): boolean {
+    const result = this.#db.prepare("UPDATE asset_trash SET restored_at = ? WHERE asset_id = ?").run(at, assetId);
+    return Number(result.changes) === 1;
+  }
+
+  public markAssetTrashPurged(assetId: string, at: string): boolean {
+    const result = this.#db.prepare("UPDATE asset_trash SET purged_at = ? WHERE asset_id = ?").run(at, assetId);
+    return Number(result.changes) === 1;
+  }
+
   /** Active records that still point at this asset; used to refuse unsafe deletes. */
   public assetReferenceRecordIds(assetId: string): readonly string[] {
     return this.#referenceRecordIds("asset_refs_json", "assetId", assetId);
+  }
+
+  /**
+   * Every asset id that any record points at — soft-deleted records included.
+   *
+   * That inclusion is the whole point: a record sitting in the recycle bin can
+   * still be restored, so its photos must never be mistaken for orphans. One
+   * pass over the table is also far cheaper than asking per asset.
+   */
+  public referencedAssetIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const row of this.#db.prepare("SELECT asset_refs_json FROM records").all()) {
+      const refs = parseJson<readonly Record<string, unknown>[]>(textColumn(row, "asset_refs_json"), "asset_refs_json");
+      for (const ref of refs) {
+        const assetId = ref["assetId"];
+        if (typeof assetId === "string" && assetId !== "") ids.add(assetId);
+      }
+    }
+    return ids;
   }
 
   /**

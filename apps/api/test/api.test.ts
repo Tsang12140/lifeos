@@ -10,6 +10,9 @@ import { createHttpServer } from "../src/server.js";
 import { BackupScheduler, backupScheduleRunKey, nextDailyBackupAt } from "../src/backup-scheduler.js";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, describeBackupRetention, planBackupRetention, retentionHorizonDays } from "../src/backup-retention.js";
 import { SqliteRecordRepository } from "../src/repository.js";
+import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
+import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
+import { createInstant, type Asset } from "@lifeos/core";
 
 // WHATWG fetch rejects a small set of historically reserved ports even when
 // Node's HTTP server can bind them.  Windows can hand one of those ports out
@@ -64,7 +67,7 @@ interface Harness {
   readonly stop: (remove?: boolean) => Promise<void>;
 }
 
-async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, existingRoot?: string, assetRoot?: string, assetUploadLimitBytes = 25 * 1024 * 1024): Promise<Harness> {
+async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, existingRoot?: string, assetRoot?: string, assetUploadLimitBytes = 25 * 1024 * 1024, assetOrphanGraceDays = 7, assetTrashDays = 30): Promise<Harness> {
   const root = existingRoot ?? mkdtempSync(join(tmpdir(), "lifeos-api-"));
   const config = {
     host: "127.0.0.1",
@@ -77,6 +80,8 @@ async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, exi
     cookieSecure: false,
     bodyLimitBytes,
     assetUploadLimitBytes,
+    assetOrphanGraceDays,
+    assetTrashDays,
     deepseekModel: "deepseek-flash",
     deepseekBaseUrl: "https://api.deepseek.com",
     qweatherHost: "devapi.qweather.com",
@@ -681,6 +686,8 @@ test("scheduler runOnce claims the supplied Shanghai slot instead of tomorrow", 
     cookieSecure: false,
     bodyLimitBytes: 1024 * 1024,
     assetUploadLimitBytes: 25 * 1024 * 1024,
+    assetOrphanGraceDays: 7,
+    assetTrashDays: 30,
     deepseekModel: "deepseek-flash",
     deepseekBaseUrl: "https://api.deepseek.com",
     qweatherHost: "devapi.qweather.com",
@@ -1872,4 +1879,216 @@ test("backup retention endpoint exposes the plan and saves changes", async (t) =
     ...json({ dailyDays: 3, weeklyWeeks: 2, monthlyMonths: 6, trashDays: 14, extra: 1 }),
   });
   equal(unknownKey.response.status, 400);
+});
+
+function photoAsset(id: string, sourceRef: string, createdAt?: string): Asset {
+  return {
+    id,
+    kind: "photo",
+    ...(createdAt === undefined ? {} : { createdAt: createInstant(createdAt) }),
+    storageRefs: [{ sourceId: "local", sourceRef }],
+  };
+}
+
+test("the collector's rule set refuses anything LifeOS does not own", () => {
+  const now = new Date("2026-09-15T12:00:00.000Z");
+  const fresh = photoAsset("asset_fresh", "uploads/2026/09/fresh.png", "2026-09-15T00:00:00.000Z");
+  const stale = photoAsset("asset_stale", "uploads/2026/09/stale.png", "2026-09-01T00:00:00.000Z");
+  // The owner's own file, an escaping path, and an upload with no timestamp:
+  // all three are refused rather than guessed at.
+  const foreign = photoAsset("asset_foreign", "holiday.jpg", "2020-01-01T00:00:00.000Z");
+  const escape = photoAsset("asset_escape", "../outside.png", "2020-01-01T00:00:00.000Z");
+  const unstamped = photoAsset("asset_unstamped", "uploads/2026/09/unstamped.png");
+  const mixed: Asset = {
+    ...photoAsset("asset_mixed", "uploads/2026/09/mixed.png", "2026-09-01T00:00:00.000Z"),
+    storageRefs: [
+      { sourceId: "local", sourceRef: "uploads/2026/09/mixed.png" },
+      { sourceId: "synology", sourceRef: "/photo/mixed.heic" },
+    ],
+  };
+
+  const plan = planUnreferencedUploads([fresh, stale, foreign, escape, unstamped, mixed], new Set<string>(), now, 7);
+  deepEqual(plan.map((item) => item.asset.id), ["asset_fresh", "asset_stale"]);
+  equal(plan[0]?.overdue, false);
+  equal(plan[0]?.daysRemaining, 7);
+  equal(plan[0]?.dueAt.toISOString(), "2026-09-22T00:00:00.000Z");
+  equal(plan[1]?.overdue, true);
+  equal(plan[1]?.daysRemaining, 0);
+
+  // A reference — even one from a soft-deleted record — takes it out entirely.
+  deepEqual(planUnreferencedUploads([stale], new Set(["asset_stale"]), now, 7), []);
+
+  equal(isCollectableAsset(foreign), false);
+  equal(isCollectableAsset(mixed), false);
+  equal(trashPathFor("uploads/2026/09/a.png"), "uploads/_orphan-trash/2026/09/a.png");
+  equal(trashPathFor("holiday.jpg"), null);
+  equal(trashPathFor("uploads/_orphan-trash/2026/09/a.png"), null);
+  equal(originalPathFor("uploads/_orphan-trash/2026/09/a.png"), "uploads/2026/09/a.png");
+  equal(resolveWithinRoot("root", "../etc/passwd"), null);
+  ok(resolveWithinRoot("root", "uploads/a.png")?.endsWith("a.png") === true);
+
+  // The daily pass lands at 03:30 in Shanghai whatever the host clock says.
+  equal(nextAssetGcAt(new Date("2026-09-15T12:00:00.000Z")).toISOString(), "2026-09-15T19:30:00.000Z");
+  equal(nextAssetGcAt(new Date("2026-09-15T20:00:00.000Z")).toISOString(), "2026-09-16T19:30:00.000Z");
+
+  const entry = { asset: stale, trashedAt: "2026-09-01T00:00:00.000Z", origin: "orphan-scan" as const, relativePath: "uploads/2026/09/stale.png" };
+  deepEqual(planTrashPurge([entry], new Date("2026-09-20T00:00:00.000Z"), 30), []);
+  deepEqual(planTrashPurge([entry], new Date("2026-10-05T00:00:00.000Z"), 30).map((item) => item.asset.id), ["asset_stale"]);
+  deepEqual(planTrashPurge([{ ...entry, restoredAt: "2026-09-10T00:00:00.000Z" }], new Date("2026-10-05T00:00:00.000Z"), 30), []);
+});
+
+test("an unreferenced upload is collected after the grace period, then restorable", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-gc-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=orphan.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const asset = upload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  const sourceRef = asset.storageRefs[0]?.sourceRef ?? "";
+  const originalPath = join(assetRoot, ...sourceRef.split("/"));
+  ok(existsSync(originalPath), "the upload should start on disk");
+
+  // Inside the grace period nothing moves: the owner may still be writing.
+  equal(harness.app.assetGcScheduler.runOnce(new Date())?.collected.length, 0);
+  ok(existsSync(originalPath), "a fresh upload must survive the first pass");
+
+  const pendingView = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  equal(pendingView.response.status, 200);
+  const pendingBody = pendingView.body as {
+    graceDays: number;
+    trashDays: number;
+    pending: Array<{ asset: { id: string }; daysRemaining: number; overdue: boolean }>;
+    trashed: unknown[];
+  };
+  equal(pendingBody.graceDays, 7);
+  equal(pendingBody.trashDays, 30);
+  equal(pendingBody.pending.length, 1);
+  equal(pendingBody.pending[0]?.asset.id, asset.id);
+  equal(pendingBody.pending[0]?.overdue, false);
+  equal(pendingBody.pending[0]?.daysRemaining, 7);
+  equal(pendingBody.trashed.length, 0);
+
+  // Eight days on the collector moves it aside — parked, not deleted.
+  const pass = harness.app.assetGcScheduler.runOnce(new Date(Date.now() + 8 * 24 * 60 * 60 * 1000));
+  deepEqual(pass?.collected, [asset.id]);
+  equal(existsSync(originalPath), false);
+  const trashedPath = join(assetRoot, "uploads", "_orphan-trash", ...sourceRef.split("/").slice(1));
+  ok(existsSync(trashedPath), "the file should wait in the trash");
+  equal((await fetch(`${harness.base}/api/assets/${encodeURIComponent(asset.id)}/content`)).status, 404);
+
+  const afterView = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  const afterBody = afterView.body as { pending: unknown[]; trashed: Array<{ asset: { id: string }; origin: string; daysRemaining: number }> };
+  equal(afterBody.pending.length, 0);
+  equal(afterBody.trashed.length, 1);
+  equal(afterBody.trashed[0]?.asset.id, asset.id);
+  equal(afterBody.trashed[0]?.origin, "orphan-scan");
+  // The trash window counts from the moment of collection, which this test
+  // pushed eight days into the future — hence 30 days of policy plus those 8.
+  equal(afterBody.trashed[0]?.daysRemaining, 38);
+
+  // The panel needs a thumbnail, and a collected file is no longer at its path.
+  const thumb = await fetch(`${harness.base}/api/assets/trash/${encodeURIComponent(asset.id)}/content`);
+  equal(thumb.status, 200);
+  equal((await thumb.arrayBuffer()).byteLength, TINY_PNG.length);
+
+  const restored = await request(harness.base, `/api/assets/trash/${encodeURIComponent(asset.id)}/restore`, { method: "POST" });
+  equal(restored.response.status, 204);
+  ok(existsSync(originalPath), "restoring must put the file back where it was");
+  const content = await fetch(`${harness.base}/api/assets/${encodeURIComponent(asset.id)}/content`);
+  equal(content.status, 200);
+  equal((await content.arrayBuffer()).byteLength, TINY_PNG.length);
+});
+
+test("the collector leaves referenced uploads alone, including records in the recycle bin", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-gc-ref-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=kept.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  const asset = upload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  const originalPath = join(assetRoot, ...((asset.storageRefs[0]?.sourceRef ?? "").split("/")));
+
+  const created = await request(harness.base, "/api/records", {
+    method: "POST",
+    ...json({ kind: "journal", content: "用上了这张图", assetRefs: [{ assetId: asset.id, role: "photo" }] }),
+  });
+  equal(created.response.status, 201);
+  const createdBody = created.body as { id: string; revision?: number };
+
+  const far = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000);
+  equal(harness.app.assetGcScheduler.runOnce(far)?.collected.length, 0);
+  ok(existsSync(originalPath), "a referenced upload is never collected");
+
+  // A soft-deleted record can still be restored, so its photo has to survive.
+  // This is the trap the whole feature hinges on.
+  const removed = await request(harness.base, `/api/records/${encodeURIComponent(createdBody.id)}`, {
+    method: "DELETE",
+    ...json({ revision: createdBody.revision ?? 1 }),
+  });
+  equal(removed.response.status, 204);
+  equal(harness.app.assetGcScheduler.runOnce(far)?.collected.length, 0);
+  ok(existsSync(originalPath), "a record in the recycle bin still owns its photo");
+});
+
+test("deleting an asset parks its file in the orphan trash instead of leaving it behind", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-delete-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=bye.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  const asset = upload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  const sourceRef = asset.storageRefs[0]?.sourceRef ?? "";
+  const originalPath = join(assetRoot, ...sourceRef.split("/"));
+  const trashedPath = join(assetRoot, "uploads", "_orphan-trash", ...sourceRef.split("/").slice(1));
+
+  const removed = await request(harness.base, `/api/assets/${encodeURIComponent(asset.id)}`, { method: "DELETE" });
+  equal(removed.response.status, 204);
+  equal(existsSync(originalPath), false, "the file must not stay where the asset was");
+  ok(existsSync(trashedPath), "the file belongs in the trash, not deleted outright");
+
+  const view = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  const viewBody = view.body as { trashed: Array<{ asset: { id: string }; origin: string }> };
+  equal(viewBody.trashed.length, 1);
+  equal(viewBody.trashed[0]?.origin, "asset-delete");
+
+  // Emptying the trash is the only step that really deletes.
+  const purged = await request(harness.base, `/api/assets/trash/${encodeURIComponent(asset.id)}`, { method: "DELETE" });
+  equal(purged.response.status, 204);
+  equal(existsSync(trashedPath), false, "emptying the trash deletes the file for good");
+  const emptied = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  equal((emptied.body as { trashed: unknown[] }).trashed.length, 0);
+});
+
+test("the collector never touches a photo the owner put into the asset root by hand", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-foreign-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  writeFileSync(join(assetRoot, "holiday.jpg"), TINY_PNG);
+  const registered = await request(harness.base, "/api/assets", {
+    method: "POST",
+    ...json({ kind: "photo", originalName: "holiday.jpg", storageRefs: [{ sourceId: "local", sourceRef: "holiday.jpg" }] }),
+  });
+  equal(registered.response.status, 201);
+
+  equal(harness.app.assetGcScheduler.runOnce(new Date(Date.now() + 400 * 24 * 60 * 60 * 1000))?.collected.length, 0);
+  ok(existsSync(join(assetRoot, "holiday.jpg")), "a photo from the owner's own folder is not ours to collect");
+  equal((await fetch(`${harness.base}/api/assets/${encodeURIComponent((registered.body as { id: string }).id)}/content`)).status, 200);
 });
