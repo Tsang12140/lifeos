@@ -2554,13 +2554,28 @@ h2 {
    `margin-left: auto` rather than a flex gap on `.shot-row` so the pair is
    pushed to the far end whether the strip is one tile wide or nine — the strip
    is told to shrink (`flex: 0 1 auto`) but never to grow, so the free space all
-   collects here. */
+   collects here.
+
+   `align-self: flex-end` is what keeps them off the floor of the band. The row
+   is 44px tall because the tiles are, but this pair is only ~20px; centred (the
+   old behaviour) it floated 24px above the band's bottom edge while the photos
+   sat 9px above it, which read as a strip of blank under the count. Pinned to
+   the bottom, the text lands on the same 9px line as the last row of photos.
+
+   The `padding-bottom: 2px` is optical, not structural: a line of text has half
+   a line box of leading under it, so at `flex-end` the digits still sit ~2px
+   above the padded pill of the clear button. The 2px closes that. It does make
+   the row 46px instead of 44px and so the band 2px taller — small enough that
+   nothing asserts on it, and left alone rather than disturbing the band's own
+   padding to win back 2 invisible pixels. */
 .shot-strip-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
   flex: 0 0 auto;
+  align-self: flex-end;
+  padding-bottom: 2px;
 }
 
 /* Readable at a glance. It used to be 0.72rem, which is small enough that
@@ -3357,12 +3372,17 @@ button.relation-chip {
 
   /* The caption drops to its own line under the wall, so it does its own
      spacing here. The tally goes to the left of that line and the broom to the
-     right, so the pair frames the wall rather than crowding one end. */
+     right, so the pair frames the wall rather than crowding one end.
+     `align-self` and the 2px trim are reset: on this width the pair is a
+     full-width line of its own, so there is no tile bottom to line up with and
+     `margin-top` is doing the spacing instead. */
   .shot-strip-meta {
     flex: 1 0 100%;
     margin-left: 0;
     margin-top: 8px;
     justify-content: flex-end;
+    align-self: auto;
+    padding-bottom: 0;
   }
 
   .shot-strip-tally {
