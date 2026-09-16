@@ -8,6 +8,9 @@ import { localDateToday, shiftDate, weekdayShort } from "./time";
 interface WeatherPayload {
   readonly weatherSnapshot: WeatherSnapshot | null;
   readonly location: WeatherLocation | null;
+  /** Present when the server refused a manual refresh and said how long to wait. */
+  readonly throttled?: boolean;
+  readonly retryAfterMs?: number;
 }
 
 interface DateFlipState {
@@ -70,25 +73,38 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   </div>;
 }
 
-export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void }) {
+export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string) => void }) {
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
+  // A refused manual refresh arms the escape hatch: pressing again asks the
+  // server to escalate, which is the owner saying they do not care about the
+  // quota. Cleared by a successful refresh.
+  const [armed, setArmed] = useState(false);
   const today = localDateToday();
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options: { readonly manual?: boolean; readonly escalate?: boolean } = {}) => {
     if (!status?.configured) {
       setPayload({ weatherSnapshot: null, location: null });
       return;
     }
     setLoading(true);
     try {
-      const query = selectedDate && selectedDate !== today ? `?date=${encodeURIComponent(selectedDate)}` : "";
-      setPayload(await apiRequest<WeatherPayload>(`/api/weather${query}`));
+      const query = selectedDate && selectedDate !== today ? `&date=${encodeURIComponent(selectedDate)}` : "";
+      const manual = options.manual === true ? `&force=1${options.escalate === true ? "&escalate=1" : ""}` : "";
+      const next = await apiRequest<WeatherPayload>(`/api/weather?x=1${query}${manual}`);
+      setPayload(next);
+      if (next.throttled === true) {
+        const seconds = Math.max(1, Math.ceil((next.retryAfterMs ?? 0) / 1000));
+        setArmed(true);
+        onNotice?.(`刷新太快了，${seconds} 秒后再试`);
+      } else if (options.manual === true) {
+        setArmed(false);
+      }
     } catch {
       setPayload({ weatherSnapshot: null, location: null });
     } finally {
       setLoading(false);
     }
-  }, [selectedDate, status?.configured, today]);
+  }, [selectedDate, status?.configured, today, onNotice]);
 
   useEffect(() => {
     void refresh();
@@ -109,11 +125,13 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       <div className="weather-header-summary">
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>
-          <span className="weather-header-condition"><span className="weather-header-emoji" aria-hidden="true">{getWeatherEmoji(displayDay.iconDay)}</span><strong>{displayDay.textDay}</strong></span>
+          <span className="weather-header-condition"><span className="weather-header-emoji" aria-hidden="true">{getWeatherEmoji(displayDay.iconDay)}</span><strong>{displayDay.textDay}</strong><small className="weather-header-basis">今日预报</small></span>
           <strong className="weather-header-temperature">{temperature}</strong>
         </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>
-    {status?.configured ? <button className="weather-header-refresh" type="button" onClick={() => void refresh()} aria-label={`刷新${selectedDate}天气`} title="刷新天气">{loading ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}</button> : null}
+    {status?.configured ? <div className="weather-header-actions">
+      <button className="weather-header-refresh" type="button" onClick={() => void refresh({ manual: true, escalate: armed })} aria-label={`刷新${selectedDate}天气`} title={armed ? "刷新天气（再按一次立即刷新）" : "刷新天气"} data-weather-armed={armed ? "on" : "off"}>{loading ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}</button>
+    </div> : null}
   </section>;
 }

@@ -1,5 +1,5 @@
 import type { ApiConfig } from "./config.js";
-import { archiveWeatherDay } from "./weather.js";
+import { archiveWeatherDay, fetchRealtimeWeather, recordWeatherObservation, WEATHER_OBSERVATION_TIME_ZONE } from "./weather.js";
 import { readRuntimeWeatherConfig, readWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
 import type { SqliteRecordRepository } from "./repository.js";
 
@@ -42,6 +42,16 @@ export function nextWeatherArchiveAt(now: Date, hour = WEATHER_ARCHIVE_HOUR, min
   return new Date(candidate);
 }
 
+/**
+ * The next whole Shanghai hour. Observations are filed on the hour so the
+ * `hour` column lands on a clean 0–23 value and the day reads as a timeline.
+ */
+export function nextWeatherObservationAt(now: Date): Date {
+  const current = zonedParts(now);
+  const hourStart = Date.UTC(current.year, current.month - 1, current.day, current.hour, 0, 0, 0) - 8 * 60 * 60 * 1000;
+  return new Date(hourStart + 60 * 60 * 1000);
+}
+
 export interface WeatherArchiveSchedulerOptions {
   readonly repository: SqliteRecordRepository;
   readonly config: ApiConfig;
@@ -65,8 +75,10 @@ export class WeatherArchiveScheduler {
   readonly #clearTimeout: (timer: ReturnType<typeof globalThis.setTimeout>) => void;
   readonly #onError: (error: unknown) => void;
   #timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  #observationTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   #running = false;
   #inFlight = false;
+  #observationInFlight = false;
 
   public constructor(options: WeatherArchiveSchedulerOptions) {
     this.#repository = options.repository;
@@ -84,6 +96,9 @@ export class WeatherArchiveScheduler {
     // also checks today's final snapshot instead of waiting another day.
     void this.#runDue(this.#now());
     this.#arm();
+    // The hourly observation tick is a separate concern from the daily
+    // archive: one keeps the day's final verdict, the other keeps its history.
+    this.#armObservation();
   }
 
   public stop(): void {
@@ -92,12 +107,51 @@ export class WeatherArchiveScheduler {
       this.#clearTimeout(this.#timer);
       this.#timer = undefined;
     }
+    if (this.#observationTimer !== undefined) {
+      this.#clearTimeout(this.#observationTimer);
+      this.#observationTimer = undefined;
+    }
   }
 
   /** Explicit test/operator hook; it uses the same due-date rules as startup. */
   public async runOnce(now = this.#now()): Promise<boolean> {
     if (this.#inFlight) return false;
     return this.#runDue(now);
+  }
+
+  #armObservation(): void {
+    if (!this.#running) return;
+    if (this.#observationTimer !== undefined) this.#clearTimeout(this.#observationTimer);
+    const target = nextWeatherObservationAt(this.#now());
+    const delay = Math.max(1, target.getTime() - this.#now().getTime());
+    this.#observationTimer = this.#setTimeout(() => {
+      this.#observationTimer = undefined;
+      void this.takeObservation().finally(() => this.#armObservation());
+    }, delay);
+  }
+
+  /**
+   * Reads the sky once and files it against the current hour. Failure is
+   * swallowed into the error hook: a missed hour is a gap in the day's
+   * history, never a reason to disturb the owner.
+   */
+  public async takeObservation(): Promise<boolean> {
+    if (this.#observationInFlight) return false;
+    this.#observationInFlight = true;
+    try {
+      for (const target of this.#targets()) {
+        try {
+          const result = await fetchRealtimeWeather(this.#config, target);
+          if (result === null) continue;
+          recordWeatherObservation(this.#repository, { weather: result.weather, location: result.location, source: "auto" });
+        } catch (error) {
+          this.#onError(error);
+        }
+      }
+      return true;
+    } finally {
+      this.#observationInFlight = false;
+    }
   }
 
   #targets(): readonly (WeatherLocationOverride | undefined)[] {

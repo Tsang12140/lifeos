@@ -1,7 +1,7 @@
 import { createInstant, type WeatherAttachment } from "@lifeos/core";
 import type { ApiConfig } from "./config.js";
 import { readRuntimeWeatherConfig, runtimeWeatherConfigForLocation, type RuntimeWeatherConfig, type WeatherLocationOverride } from "./weather-config.js";
-import type { WeatherDayCache } from "./repository.js";
+import type { WeatherDayCache, WeatherObservation } from "./repository.js";
 
 export interface WeatherDay {
   readonly fxDate: string;
@@ -30,6 +30,8 @@ export interface WeatherArchiveStore {
   readonly getWeatherDayCache: (date: string, locationKey: string) => WeatherDayCache | null;
   readonly listWeatherDayCache?: (from: string, to: string, locationKey?: string) => readonly WeatherDayCache[];
   readonly saveWeatherDayCache: (date: string, locationKey: string, locationId: string, city: string, value: unknown, capturedAt: string, archived?: boolean) => void;
+  readonly saveWeatherObservation?: (observation: WeatherObservation) => void;
+  readonly listWeatherObservations?: (date: string, locationKey?: string) => readonly WeatherObservation[];
 }
 
 export interface RealtimeWeatherResult {
@@ -87,7 +89,7 @@ export function getWeatherDecisionForDay(snapshot: WeatherSnapshot | null, targe
 interface QWeatherDailyResponse { readonly code?: string; readonly daily?: readonly Record<string, unknown>[]; }
 interface QWeatherLocationResponse { readonly code?: string; readonly location?: readonly { readonly id?: string; readonly name?: string; readonly adm2?: string; readonly adm1?: string }[]; }
 interface QWeatherHistoricalResponse { readonly code?: string; readonly weatherDaily?: { readonly date?: string; readonly tempMax?: string; readonly tempMin?: string }; readonly weatherHourly?: readonly { readonly time?: string; readonly icon?: string; readonly text?: string; readonly windDir?: string; readonly windScale?: string }[]; }
-interface QWeatherNowResponse { readonly code?: string; readonly now?: { readonly obsTime?: string; readonly temp?: string; readonly text?: string; readonly icon?: string; readonly windDir?: string; readonly windScale?: string }; }
+interface QWeatherNowResponse { readonly code?: string; readonly now?: { readonly obsTime?: string; readonly temp?: string; readonly text?: string; readonly icon?: string; readonly windDir?: string; readonly windScale?: string; readonly precip?: string; readonly cloud?: string }; }
 
 const GEO_HOST = "geoapi.qweather.com";
 const CACHE_MS = 30 * 60 * 1000;
@@ -105,6 +107,21 @@ const KNOWN_LOCATION_LABELS: Readonly<Record<string, Pick<WeatherLocation, "name
 
 export function currentDateShanghai(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+}
+
+/**
+ * The zone every weather date/hour is filed under. One name so the scheduler
+ * and the recorder cannot drift apart.
+ */
+export const WEATHER_OBSERVATION_TIME_ZONE = "Asia/Shanghai";
+
+/**
+ * The hour of the day in Shanghai, 0–23. Always pair it with
+ * `currentDateShanghai()`: deriving the date from a UTC slice would file a
+ * post-midnight reading under the previous day.
+ */
+export function currentHourShanghai(value: Date = new Date()): number {
+  return Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", hourCycle: "h23" }).format(value));
 }
 
 function isDateOnly(value: string): boolean {
@@ -249,9 +266,37 @@ export function clearWeatherCache(): void {
   historyCache.clear();
   snapshotCache.clear();
   locationCache = null;
+  forcedRefreshAt.clear();
 }
 
-export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: string | null, locationOverride?: WeatherLocationOverride, archiveStore?: WeatherArchiveStore): Promise<{ readonly snapshot: WeatherSnapshot | null; readonly location: WeatherLocation | null }> {
+/**
+ * The owner asked for a fresh forecast rather than the cached one. We still
+ * refuse to hammer the provider: a manual refresh is allowed once every five
+ * minutes, and the caller is told how long to wait instead of being handed an
+ * error, because "slow down" is not a failure.
+ *
+ * The escape hatch is deliberate. Pressing again after being told to wait is
+ * reported as `escalated`, and the caller is allowed through — someone who
+ * deliberately presses twice has just told us they do not care about the quota.
+ */
+export const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const forcedRefreshAt = new Map<string, number>();
+
+export type ForcedRefreshDecision = { readonly allowed: true; readonly escalated: boolean } | { readonly allowed: false; readonly retryAfterMs: number };
+
+export function decideForcedRefresh(key: string, now: number, escalated = false): ForcedRefreshDecision {
+  const previous = forcedRefreshAt.get(key);
+  if (previous !== undefined && now - previous < REFRESH_MIN_INTERVAL_MS) {
+    if (!escalated) return { allowed: false, retryAfterMs: REFRESH_MIN_INTERVAL_MS - (now - previous) };
+    // The second press inside the window is the point, not an accident.
+    forcedRefreshAt.set(key, now);
+    return { allowed: true, escalated: true };
+  }
+  forcedRefreshAt.set(key, now);
+  return { allowed: true, escalated: false };
+}
+
+export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: string | null, locationOverride?: WeatherLocationOverride, archiveStore?: WeatherArchiveStore, options: { readonly force?: boolean } = {}): Promise<{ readonly snapshot: WeatherSnapshot | null; readonly location: WeatherLocation | null }> {
   const runtime = runtimeWeatherConfigForLocation(config, locationOverride);
   if (!runtime.enabled || !runtime.apiKey) return { snapshot: null, location: null };
   const targetDate = requestedDate ?? currentDateShanghai();
@@ -283,7 +328,9 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
     return { snapshot: null, location };
   }
   const cached = snapshotCache.get(`${location.id}:${runtime.apiHost}`);
-  let snapshot = cached && cached.expiresAt > Date.now() ? cached.snapshot : undefined;
+  // `force` is the owner asking a second time; skip the TTL but still refresh
+  // the entry so the next ordinary read sees the newer snapshot.
+  let snapshot = options.force === true ? undefined : cached && cached.expiresAt > Date.now() ? cached.snapshot : undefined;
   if (snapshot === undefined) {
     const daily = await fetchDailyWeather(location.id, runtime);
     if (daily === null || daily.length < 2) return { snapshot: null, location };
@@ -358,6 +405,11 @@ export async function fetchRealtimeWeather(config: ApiConfig, locationOverride?:
       ...(now.temp === undefined ? {} : { temperature: now.temp }),
       ...(now.windDir === undefined ? {} : { windDir: now.windDir }),
       ...(now.windScale === undefined ? {} : { windScale: now.windScale }),
+      // Kept because they are the only evidence of actual precipitation; the
+      // provider's `text` alone reports "overcast" during a local downpour.
+      ...(now.precip === undefined ? {} : { precip: now.precip }),
+      ...(now.cloud === undefined ? {} : { cloud: now.cloud }),
+      ...(now.obsTime === undefined ? {} : { observedAt: now.obsTime }),
       capturedAt: createInstant(new Date().toISOString()),
     };
     return { weather, location };
@@ -366,8 +418,43 @@ export async function fetchRealtimeWeather(config: ApiConfig, locationOverride?:
   }
 }
 
-export async function verifyWeatherLocation(config: ApiConfig, input: { readonly apiKey?: string; readonly locationId: string; readonly apiHost?: string }): Promise<{ readonly location: WeatherLocation }> {
-  const runtime = readRuntimeWeatherConfig(config);
+/**
+ * Files one reading of the sky. The table's primary key collapses repeats in
+ * the same hour, so calling this twice inside one hour is one fact, not two.
+ *
+ * `source` records who asked: "auto" for the hourly tick, "manual" for the
+ * owner pressing the button — the latter is the one that means "I was outside
+ * right then", so the day's selection weights it highest.
+ */
+export function recordWeatherObservation(
+  store: WeatherArchiveStore | undefined,
+  input: { readonly weather: WeatherAttachment; readonly location: WeatherLocation; readonly source: "auto" | "manual"; readonly at?: Date },
+): boolean {
+  if (store?.saveWeatherObservation === undefined) return false;
+  const at = input.at ?? new Date();
+  const locationKey = input.location.id || input.location.name;
+  if (locationKey === "") return false;
+  store.saveWeatherObservation({
+    date: currentDateShanghai(),
+    hour: currentHourShanghai(at),
+    locationKey,
+    locationId: input.location.id,
+    city: input.location.name || input.location.id,
+    source: input.source,
+    text: input.weather.text,
+    icon: input.weather.icon,
+    ...(input.weather.temperature === undefined ? {} : { temperature: input.weather.temperature }),
+    ...(input.weather.precip === undefined ? {} : { precip: input.weather.precip }),
+    ...(input.weather.cloud === undefined ? {} : { cloud: input.weather.cloud }),
+    ...(input.weather.windDir === undefined ? {} : { windDir: input.weather.windDir }),
+    ...(input.weather.windScale === undefined ? {} : { windScale: input.weather.windScale }),
+    ...(input.weather.observedAt === undefined ? {} : { observedAt: input.weather.observedAt }),
+    capturedAt: new Date().toISOString(),
+  });
+  return true;
+}
+
+export async function verifyWeatherLocation(config: ApiConfig, input: { readonly apiKey?: string; readonly locationId: string; readonly apiHost?: string }): Promise<{ readonly location: WeatherLocation }> {  const runtime = readRuntimeWeatherConfig(config);
   const apiKey = input.apiKey?.trim() || runtime.apiKey;
   const locationId = input.locationId.trim();
   const apiHost = cleanHost(input.apiHost?.trim() || runtime.apiHost);

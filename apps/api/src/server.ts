@@ -59,7 +59,8 @@ import { BackupScheduler, BACKUP_TIME_ZONE, publicNextBackupAt, shanghaiDateKey 
 import { publicBackupConfig, saveRuntimeBackupConfig } from "./backup-config.js";
 import { BACKUP_RETENTION_LIMITS, buildBackupRetentionView, DEFAULT_BACKUP_RETENTION, describeBackupRetention, type BackupRetention } from "./backup-retention.js";
 import { AI_REASONING_EFFORTS, publicAiConfig, saveRuntimeAiConfig, testRuntimeAiConfig } from "./ai-config.js";
-import { clearWeatherCache, fetchRealtimeWeather, fetchWeatherSnapshot, verifyWeatherLocation } from "./weather.js";
+import { clearWeatherCache, decideForcedRefresh, fetchRealtimeWeather, fetchWeatherSnapshot, recordWeatherObservation, verifyWeatherLocation, WEATHER_OBSERVATION_TIME_ZONE } from "./weather.js";
+import { selectDayObservations } from "./weather-selection.js";
 import { listWeatherProfiles, publicWeatherConfig, readRuntimeWeatherConfig, readWeatherProfile, saveRuntimeWeatherConfig, saveWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
 import { WeatherArchiveScheduler, WEATHER_ARCHIVE_TIME_ZONE } from "./weather-archive-scheduler.js";
 import { publicMovieConfig, readRuntimeMovieConfig, saveRuntimeMovieConfig } from "./movie-config.js";
@@ -1690,8 +1691,25 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       if (requestedDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) throw new HttpError(400, "invalid_date", "date must use YYYY-MM-DD");
       const deviceId = weatherDeviceId(req, res, config);
       const deviceLocation = repository.getWeatherDeviceLocation(deviceId);
-      const result = await fetchWeatherSnapshot(config, requestedDate, weatherLocationOverride(config, deviceLocation), repository);
-      setJson(res, 200, { weatherSnapshot: result.snapshot, location: result.location });
+      const override = weatherLocationOverride(config, deviceLocation);
+      // A manual refresh is rate-limited, but being told to wait is not an
+      // error: answer 200 with the cached snapshot and say how long.
+      const wantsForce = url.searchParams.get("force") === "1";
+      const escalated = url.searchParams.get("escalate") === "1";
+      let force = false;
+      let throttle: { readonly retryAfterMs: number } | null = null;
+      if (wantsForce) {
+        const key = `${deviceLocation?.locationId ?? readRuntimeWeatherConfig(config).locationId}:${readRuntimeWeatherConfig(config).apiHost}`;
+        const decision = decideForcedRefresh(key, Date.now(), escalated);
+        if (decision.allowed) force = true;
+        else throttle = { retryAfterMs: decision.retryAfterMs };
+      }
+      const result = await fetchWeatherSnapshot(config, requestedDate, override, repository, { force });
+      setJson(res, 200, {
+        weatherSnapshot: result.snapshot,
+        location: result.location,
+        ...(throttle === null ? {} : { throttled: true, retryAfterMs: throttle.retryAfterMs }),
+      });
       return;
     }
     if (pathname === "/api/weather/current" && req.method === "POST") {
@@ -1700,6 +1718,9 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       const deviceLocation = repository.getWeatherDeviceLocation(deviceId);
       const result = await fetchRealtimeWeather(config, weatherLocationOverride(config, deviceLocation));
       if (result === null) throw new HttpError(502, "weather_current_failed", "实时天气暂时不可用，请检查天气配置");
+      // The owner pressed the button, so this reading is worth keeping: it is
+      // the one that means "I was outside right then".
+      recordWeatherObservation(repository, { weather: result.weather, location: result.location, source: "manual" });
       setJson(res, 200, result);
       return;
     }
@@ -1767,6 +1788,25 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       const rows = [...locationKeys].flatMap((locationKey) => repository.listWeatherDayCache(from, to, locationKey));
       const unique = new Map(rows.map((row) => [`${row.date}|${row.locationKey}`, row]));
       setJson(res, 200, { from, to, timeZone: WEATHER_ARCHIVE_TIME_ZONE, items: [...unique.values()].sort((left, right) => left.date.localeCompare(right.date) || left.locationKey.localeCompare(right.locationKey)) });
+      return;
+    }
+    if (pathname === "/api/weather/observations" && req.method === "GET") {
+      const date = parseDateQuery(url.searchParams.get("date"), "date");
+      if (date === undefined) throw new HttpError(400, "invalid_date", "date is required");
+      const deviceId = weatherDeviceId(req, res, config);
+      const deviceLocation = repository.getWeatherDeviceLocation(deviceId);
+      const activeOverride = deviceLocation === null ? undefined : weatherLocationOverride(config, deviceLocation);
+      const runtime = activeOverride === undefined ? readRuntimeWeatherConfig(config) : activeOverride;
+      const locationKey = runtime.locationId || runtime.city;
+      const all = repository.listWeatherObservations(date, locationKey || undefined);
+      // A day can overflow with routine ticks. What the owner gets back is the
+      // day's kept history, not every raw row that was ever written.
+      setJson(res, 200, {
+        date,
+        timeZone: WEATHER_OBSERVATION_TIME_ZONE,
+        total: all.length,
+        items: selectDayObservations(all),
+      });
       return;
     }
     if (pathname === "/api/modules/cycle-intimacy" && req.method === "GET") {

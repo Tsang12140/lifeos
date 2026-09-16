@@ -41,11 +41,16 @@ export interface WeatherProfile {
   readonly hasKey: boolean;
 }
 
-export type WeatherCategory = "sunny" | "rainy" | "moderate-rainy" | "heavy-rainy" | "rainstorm" | "thunderstorm" | "snowy" | "cloudy" | "foggy";
+export type WeatherCategory = "sunny" | "partly-cloudy" | "overcast" | "rainy" | "moderate-rainy" | "heavy-rainy" | "rainstorm" | "thunderstorm" | "snowy" | "cloudy" | "foggy";
 
 export function getWeatherCategory(iconCode: string): WeatherCategory {
   const code = Number.parseInt(iconCode, 10);
   if (code === 100 || code === 150) return "sunny";
+  // QWeather separates these codes, and so should the UI: 101 is "partly
+  // cloudy" and 104 is "overcast". Collapsing them made the header claim 多云
+  // while the sky was grey.
+  if (code === 101 || code === 151 || code === 102 || code === 152 || code === 103 || code === 153) return "partly-cloudy";
+  if (code === 104 || code === 154) return "overcast";
   if (code >= 302 && code <= 304) return "thunderstorm";
   if ([308, 310, 311, 312, 317, 318].includes(code)) return "rainstorm";
   if ([307, 315, 316].includes(code)) return "heavy-rainy";

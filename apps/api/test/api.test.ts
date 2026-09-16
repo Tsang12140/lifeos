@@ -13,6 +13,7 @@ import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, describeBackupRet
 import { SqliteRecordRepository } from "../src/repository.js";
 import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
 import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
+import { OBSERVATION_KEEP_LIMIT, selectDayObservations } from "../src/weather-selection.js";
 import { createInstant, type Asset } from "@lifeos/core";
 import sharp from "sharp";
 
@@ -1338,6 +1339,157 @@ test("daily weather scheduler archives the final Shanghai day once and reuses it
     equal(callsAfterFirstRun > 0, true);
     equal(await harness.app.weatherArchiveScheduler.runOnce(afterFinalTime), true);
     equal(externalCalls, callsAfterFirstRun, "an archived day is never fetched a second time");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a day keeps its story when the observations overflow the limit", () => {
+  const observation = (hour: number, source: "auto" | "manual", icon: string, precip?: string) => ({
+    date: "2026-09-16",
+    hour,
+    locationKey: "101280601",
+    locationId: "101280601",
+    city: "佛山南海区",
+    source,
+    text: icon === "306" ? "中雨" : "多云",
+    icon,
+    ...(precip === undefined ? {} : { precip }),
+    capturedAt: `2026-09-16T${String(hour).padStart(2, "0")}:00:00.000Z`,
+  });
+
+  // 60 routine hours of identical sky: the day overflows and must be trimmed.
+  const routine = Array.from({ length: 60 }, (_, index) => observation(index % 24, "auto", "101"));
+  const trimmed = selectDayObservations(routine);
+  equal(trimmed.length, OBSERVATION_KEEP_LIMIT);
+
+  // With a real story underneath, the story is what survives.
+  const mixed = [
+    ...routine,
+    observation(8, "manual", "306", "3.2"),
+    observation(14, "auto", "306", "5.0"),
+  ];
+  const kept = selectDayObservations(mixed);
+  equal(kept.length, OBSERVATION_KEEP_LIMIT);
+  equal(kept.some((item) => item.source === "manual"), true, "the reading the owner took by hand is never dropped");
+  equal(kept.some((item) => item.icon === "306"), true, "a change in the sky outranks a routine tick");
+  // The kept set still reads forward, so the day renders as a timeline.
+  const hours = kept.map((item) => item.hour);
+  deepEqual(hours, [...hours].sort((left, right) => left - right));
+
+  // A day under the limit is handed back whole, untouched.
+  const small = [observation(9, "auto", "101"), observation(10, "manual", "306")];
+  equal(selectDayObservations(small).length, 2);
+});
+
+test("the hourly tick files one observation per hour and a second press inside the hour replaces it", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const saved = await request(harness.base, "/api/weather/config", {
+    method: "POST",
+    ...json({ enabled: true, locationId: "101280601", city: "佛山南海区", apiHost: "devapi.qweather.com", apiKey: "observation-key" }),
+  });
+  equal(saved.response.status, 200);
+
+  const originalFetch = globalThis.fetch;
+  const location = { id: "101280601", name: "佛山南海区", adm2: "佛山市", adm1: "广东省" };
+  let nowText = "多云";
+  let nowIcon = "101";
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    // Only the provider is stubbed; the harness's own localhost traffic must
+    // still reach the server under test.
+    if (!url.startsWith("https://")) return originalFetch(input, init);
+    if (url.includes("geoapi.qweather.com")) return new Response(JSON.stringify({ code: "200", location: [location] }), { status: 200 });
+    if (url.includes("/v7/weather/now")) {
+      return new Response(JSON.stringify({ code: "200", now: { obsTime: "2026-09-16T08:00+08:00", temp: "27", text: nowText, icon: nowIcon, windDir: "西北风", windScale: "2", precip: "0.0", cloud: "97" } }), { status: 200 });
+    }
+    throw new Error(`unexpected observation fetch: ${url}`);
+  };
+  try {
+    // The hourly tick writes one row for the current hour.
+    equal(await harness.app.weatherArchiveScheduler.takeObservation(), true);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+    const first = harness.app.repository.listWeatherObservations(today);
+    equal(first.length, 1);
+    equal(first[0]?.source, "auto");
+    equal(first[0]?.text, "多云");
+    // The raw measurement travels with it, not just the provider's wording.
+    equal(first[0]?.precip, "0.0");
+    equal(first[0]?.cloud, "97");
+
+    // A second tick in the same hour updates that row instead of adding one.
+    nowText = "雷阵雨";
+    nowIcon = "302";
+    equal(await harness.app.weatherArchiveScheduler.takeObservation(), true);
+    const second = harness.app.repository.listWeatherObservations(today);
+    equal(second.length, 1, "the same hour is one fact, not two");
+    equal(second[0]?.text, "雷阵雨");
+
+    // The owner pressing the button is filed separately, under `manual`.
+    const live = await request(harness.base, "/api/weather/current", { method: "POST", ...json({}) });
+    equal(live.response.status, 200);
+    const third = harness.app.repository.listWeatherObservations(today);
+    equal(third.filter((item) => item.source === "manual").length, 1);
+    equal(third.length, 2, "auto and manual for the same hour coexist");
+
+    // Reading the day back yields the kept set.
+    const read = await request(harness.base, `/api/weather/observations?date=${today}`);
+    equal(read.response.status, 200);
+    const payload = read.body as { readonly total: number; readonly items: readonly { readonly source: string }[] };
+    equal(payload.total, 2);
+    equal(payload.items.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a manual forecast refresh is rate-limited, and pressing again is the way through", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const saved = await request(harness.base, "/api/weather/config", {
+    method: "POST",
+    ...json({ enabled: true, locationId: "101280601", city: "佛山南海区", apiHost: "devapi.qweather.com", apiKey: "refresh-key" }),
+  });
+  equal(saved.response.status, 200);
+
+  const originalFetch = globalThis.fetch;
+  const location = { id: "101280601", name: "佛山南海区", adm2: "佛山市", adm1: "广东省" };
+  const weatherDay = (fxDate: string) => ({ fxDate, textDay: "多云", tempMax: "32", tempMin: "26", iconDay: "101", windDirDay: "北风", windScaleDay: "1-3" });
+  let forecastCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (!url.startsWith("https://")) return originalFetch(input, init);
+    if (url.includes("geoapi.qweather.com")) return new Response(JSON.stringify({ code: "200", location: [location] }), { status: 200 });
+    if (url.includes("/v7/weather/7d")) {
+      forecastCalls += 1;
+      return new Response(JSON.stringify({ code: "200", daily: [weatherDay("2026-09-16"), weatherDay("2026-09-17")] }), { status: 200 });
+    }
+    throw new Error(`unexpected refresh fetch: ${url}`);
+  };
+  try {
+    // First manual refresh is allowed and really hits the provider.
+    const first = await request(harness.base, "/api/weather?force=1");
+    equal(first.response.status, 200);
+    equal((first.body as { readonly throttled?: boolean }).throttled, undefined);
+    const callsAfterFirst = forecastCalls;
+    equal(callsAfterFirst > 0, true);
+
+    // A second press inside the window is refused politely: 200, not an error,
+    // with the snapshot still present so the header does not blank out.
+    const second = await request(harness.base, "/api/weather?force=1");
+    equal(second.response.status, 200);
+    const secondBody = second.body as { readonly throttled?: boolean; readonly retryAfterMs?: number; readonly weatherSnapshot?: unknown };
+    equal(secondBody.throttled, true);
+    equal(typeof secondBody.retryAfterMs === "number" && secondBody.retryAfterMs > 0, true);
+    equal(secondBody.weatherSnapshot !== null, true, "a refused refresh still shows the last known forecast");
+    equal(forecastCalls, callsAfterFirst, "the refused press did not touch the provider");
+
+    // Pressing again after being told to wait is the documented escape hatch.
+    const escalated = await request(harness.base, "/api/weather?force=1&escalate=1");
+    equal(escalated.response.status, 200);
+    equal((escalated.body as { readonly throttled?: boolean }).throttled, undefined);
+    equal(forecastCalls > callsAfterFirst, true, "the second deliberate press goes through");
   } finally {
     globalThis.fetch = originalFetch;
   }

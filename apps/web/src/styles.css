@@ -439,7 +439,14 @@ textarea:focus-visible {
 .weather-header-emoji { font-size: 1rem; line-height: 1; }
 .weather-header-temperature { font-size: 0.88rem; font-variant-numeric: tabular-nums; font-weight: 760; }
 .weather-header-unavailable { color: var(--muted); font-size: 0.78rem; }
+/* The header reads the day's forecast; the composer pinned one reads the sky
+   right now. Two sources, so the label keeps them from looking contradictory. */
+.weather-header-basis { padding: 1px 5px; border-radius: 5px; color: #5c6f95; background: rgb(233 239 250 / 0.72); font-size: 0.62rem; font-weight: 720; letter-spacing: 0.01em; }
+.weather-header-actions { display: inline-flex; align-items: center; margin-left: 10px; }
 .weather-header-refresh { margin-left: 10px; }
+.weather-header-actions .weather-header-refresh { margin-left: 0; }
+/* Armed by a refused refresh: the next press escalates past the quota. */
+.weather-header-refresh[data-weather-armed="on"] { border-color: #8fa9dc; color: #2c4a86; background: rgb(233 240 255 / 0.92); }
 .weather-configure-button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 9px; border: 1px solid rgb(119 135 161 / 0.2); border-radius: 10px; color: var(--ink-soft); background: rgb(255 255 255 / 0.58); cursor: pointer; font-size: 0.78rem; font-weight: 680; }
 .weather-configure-button:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.86); }
 
@@ -474,6 +481,10 @@ textarea:focus-visible {
 @keyframes snow-fall { 0% { transform: translateY(-12px) translateX(0); opacity: 0; } 15%, 85% { opacity: .75; } 50% { transform: translateY(54px) translateX(6px); } 100% { transform: translateY(116px) translateX(-4px); opacity: 0; } }
 .snow-flake { position: absolute; top: 0; color: #90caf9; animation: snow-fall 2s ease-in-out infinite; user-select: none; }
 .weather-bg--cloudy { background: linear-gradient(160deg, #eef2ff 0%, #f5f7ff 100%); }
+/* Overcast is the heavier, greyer sibling of cloudy — the difference the
+   provider draws between code 101 and 104 should be visible at a glance. */
+.weather-bg--overcast { background: linear-gradient(160deg, #dfe3ea 0%, #eef0f4 100%); }
+.weather-bg--overcast .cloud { background: rgb(160 170 190 / .42); }
 @keyframes cloud-drift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(8px); } }
 .cloud { position: absolute; border-radius: 50px; background: rgb(200 210 240 / .35); }
 .cloud--1 { top: 10px; right: 20px; width: 80px; height: 22px; animation: cloud-drift 8s ease-in-out infinite; }

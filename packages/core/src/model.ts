@@ -205,6 +205,16 @@ export interface WeatherAttachment {
   readonly tempMax?: string;
   readonly windDir?: string;
   readonly windScale?: string;
+  /**
+   * Precipitation in millimetres and cloud cover in percent, straight from the
+   * observation. They are the only honest evidence that it is actually raining
+   * where the station is — the provider's own `text` can read "overcast" while
+   * the owner watches a downpour outside.
+   */
+  readonly precip?: string;
+  readonly cloud?: string;
+  /** The provider's observation time; distinct from when we captured it. */
+  readonly observedAt?: string;
   readonly capturedAt: InstantTime;
 }
 
@@ -573,6 +583,9 @@ function validateWeatherAttachment(value: unknown): void {
   optionalStringValue(weather.tempMax, "record.weather.tempMax");
   optionalStringValue(weather.windDir, "record.weather.windDir");
   optionalStringValue(weather.windScale, "record.weather.windScale");
+  optionalStringValue(weather.precip, "record.weather.precip");
+  optionalStringValue(weather.cloud, "record.weather.cloud");
+  optionalStringValue(weather.observedAt, "record.weather.observedAt");
   assertValidInstantTime(weather.capturedAt, "record.weather.capturedAt");
 }
 
@@ -592,6 +605,9 @@ export function assertValidWeatherAttachment(value: unknown, name = "record.weat
   optionalStringValue(weather.tempMax, `${name}.tempMax`);
   optionalStringValue(weather.windDir, `${name}.windDir`);
   optionalStringValue(weather.windScale, `${name}.windScale`);
+  optionalStringValue(weather.precip, `${name}.precip`);
+  optionalStringValue(weather.cloud, `${name}.cloud`);
+  optionalStringValue(weather.observedAt, `${name}.observedAt`);
   assertValidInstantTime(weather.capturedAt, `${name}.capturedAt`);
 }
 

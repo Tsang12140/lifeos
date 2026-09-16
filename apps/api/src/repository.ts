@@ -118,6 +118,33 @@ export interface WeatherDayCache {
   readonly archived: boolean;
 }
 
+/** Where an observation came from: the hourly tick, or the owner pressing the button. */
+export type WeatherObservationSource = "auto" | "manual";
+
+/**
+ * One reading of the sky. A day accumulates these at most once per hour per
+ * source; the same hour written twice updates the row rather than growing the
+ * table, which is what keeps "file only what happened" true.
+ */
+export interface WeatherObservation {
+  readonly date: string;
+  readonly hour: number;
+  readonly locationKey: string;
+  readonly locationId: string;
+  readonly city: string;
+  readonly source: WeatherObservationSource;
+  readonly text: string;
+  readonly icon: string;
+  readonly temperature?: string;
+  readonly precip?: string;
+  readonly cloud?: string;
+  readonly windDir?: string;
+  readonly windScale?: string;
+  /** The upstream observation time, when the provider reported one. */
+  readonly observedAt?: string;
+  readonly capturedAt: string;
+}
+
 export const DEFAULT_CYCLE_INTIMACY_CONFIG: CycleIntimacyModuleConfig = {
   enabled: false,
   cycleLength: 28,
@@ -452,6 +479,25 @@ export class SqliteRecordRepository {
         PRIMARY KEY (date, location_key)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS weather_day_cache_location_idx ON weather_day_cache (location_key, date);
+      CREATE TABLE IF NOT EXISTS weather_observation (
+        date TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        location_key TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        city TEXT NOT NULL,
+        source TEXT NOT NULL,
+        text TEXT NOT NULL,
+        icon TEXT NOT NULL,
+        temperature TEXT,
+        precip TEXT,
+        cloud TEXT,
+        wind_dir TEXT,
+        wind_scale TEXT,
+        observed_at TEXT,
+        captured_at_json TEXT NOT NULL,
+        PRIMARY KEY (date, hour, location_key, source)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS weather_observation_day_idx ON weather_observation (date, location_key);
     `);
     const recordColumns = this.#db.prepare("PRAGMA table_info(records)").all() as readonly Record<string, unknown>[];
     if (!recordColumns.some((column) => column.name === "is_private")) {
@@ -826,6 +872,87 @@ export class SqliteRecordRepository {
         captured_at_json = excluded.captured_at_json,
         archived = max(weather_day_cache.archived, excluded.archived)
     `).run(date, locationKey, locationId, city, JSON.stringify(value), capturedAt, archived ? 1 : 0);
+  }
+
+  /**
+   * Writes one observation. The primary key is (date, hour, locationKey,
+   * source), so a repeat within the same hour replaces the previous reading
+   * instead of adding a row — two presses in one hour are one fact.
+   */
+  public saveWeatherObservation(observation: WeatherObservation): void {
+    this.#db.prepare(`
+      INSERT INTO weather_observation (date, hour, location_key, location_id, city, source, text, icon, temperature, precip, cloud, wind_dir, wind_scale, observed_at, captured_at_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(date, hour, location_key, source) DO UPDATE SET
+        location_id = excluded.location_id,
+        city = excluded.city,
+        text = excluded.text,
+        icon = excluded.icon,
+        temperature = excluded.temperature,
+        precip = excluded.precip,
+        cloud = excluded.cloud,
+        wind_dir = excluded.wind_dir,
+        wind_scale = excluded.wind_scale,
+        observed_at = excluded.observed_at,
+        captured_at_json = excluded.captured_at_json
+    `).run(
+      observation.date,
+      observation.hour,
+      observation.locationKey,
+      observation.locationId,
+      observation.city,
+      observation.source,
+      observation.text,
+      observation.icon,
+      observation.temperature ?? null,
+      observation.precip ?? null,
+      observation.cloud ?? null,
+      observation.windDir ?? null,
+      observation.windScale ?? null,
+      observation.observedAt ?? null,
+      observation.capturedAt,
+    );
+  }
+
+  public listWeatherObservations(date: string, locationKey?: string): readonly WeatherObservation[] {
+    const rows = locationKey === undefined
+      ? this.#db.prepare("SELECT date, hour, location_key, location_id, city, source, text, icon, temperature, precip, cloud, wind_dir, wind_scale, observed_at, captured_at_json FROM weather_observation WHERE date = ? ORDER BY hour ASC, source ASC").all(date)
+      : this.#db.prepare("SELECT date, hour, location_key, location_id, city, source, text, icon, temperature, precip, cloud, wind_dir, wind_scale, observed_at, captured_at_json FROM weather_observation WHERE date = ? AND location_key = ? ORDER BY hour ASC, source ASC").all(date, locationKey);
+    return rows.map((row) => this.#weatherObservationFromRow(row));
+  }
+
+  public countWeatherObservations(date: string, locationKey?: string): number {
+    const row = locationKey === undefined
+      ? this.#db.prepare("SELECT count(*) AS total FROM weather_observation WHERE date = ?").get(date)
+      : this.#db.prepare("SELECT count(*) AS total FROM weather_observation WHERE date = ? AND location_key = ?").get(date, locationKey);
+    return row === undefined ? 0 : numberColumn(row, "total");
+  }
+
+  #weatherObservationFromRow(row: Record<string, unknown>): WeatherObservation {
+    const temperature = nullableTextColumn(row, "temperature");
+    const precip = nullableTextColumn(row, "precip");
+    const cloud = nullableTextColumn(row, "cloud");
+    const windDir = nullableTextColumn(row, "wind_dir");
+    const windScale = nullableTextColumn(row, "wind_scale");
+    const observedAt = nullableTextColumn(row, "observed_at");
+    const source = textColumn(row, "source");
+    return {
+      date: textColumn(row, "date"),
+      hour: numberColumn(row, "hour"),
+      locationKey: textColumn(row, "location_key"),
+      locationId: textColumn(row, "location_id"),
+      city: textColumn(row, "city"),
+      source: source === "manual" ? "manual" : "auto",
+      text: textColumn(row, "text"),
+      icon: textColumn(row, "icon"),
+      ...(temperature === null ? {} : { temperature }),
+      ...(precip === null ? {} : { precip }),
+      ...(cloud === null ? {} : { cloud }),
+      ...(windDir === null ? {} : { windDir }),
+      ...(windScale === null ? {} : { windScale }),
+      ...(observedAt === null ? {} : { observedAt }),
+      capturedAt: textColumn(row, "captured_at_json"),
+    };
   }
 
   public list(query: RecordListQuery = {}): readonly RecordView[] {
