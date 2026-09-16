@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, RefreshCw, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
 import { getWeatherDecision, getWeatherEmoji, getWeatherPhase, findWeatherDay, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
-import { WeatherBackground } from "./WeatherBackground";
+import { WeatherSky } from "./WeatherBackground";
 import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
 
 interface WeatherPayload {
@@ -76,6 +76,11 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
 export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string) => void }) {
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
+  // Only a manual press spins the refresh button. Stepping through dates also
+  // refreshes, and flipping that icon on every step read as the button
+  // flickering. The sky dissolve and the date flip already say "something
+  // changed", so the automatic path stays quiet.
+  const [manualBusy, setManualBusy] = useState(false);
   // A refused manual refresh arms the escape hatch: pressing again asks the
   // server to escalate, which is the owner saying they do not care about the
   // quota. Cleared by a successful refresh.
@@ -87,6 +92,8 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       return;
     }
     setLoading(true);
+    const isManual = options.manual === true;
+    if (isManual) setManualBusy(true);
     try {
       const query = selectedDate && selectedDate !== today ? `&date=${encodeURIComponent(selectedDate)}` : "";
       const manual = options.manual === true ? `&force=1${options.escalate === true ? "&escalate=1" : ""}` : "";
@@ -103,6 +110,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       setPayload({ weatherSnapshot: null, location: null });
     } finally {
       setLoading(false);
+      if (isManual) setManualBusy(false);
     }
   }, [selectedDate, status?.configured, today, onNotice]);
 
@@ -122,7 +130,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
   return <section className={`weather-header ${displayDay && decision ? `weather-header--${decision.category}` : "weather-header--empty"}`} aria-label={`${selectedDate} 的天气`}>
-    {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherBackground category={decision.category} phase={phase} /></div> : null}
+    {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className="weather-header-content">
       <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} />
@@ -135,7 +143,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       </div>
     </div>
     {status?.configured ? <div className="weather-header-actions">
-      <button className="weather-header-refresh" type="button" onClick={() => void refresh({ manual: true, escalate: armed })} aria-label={`刷新${selectedDate}天气`} title={armed ? "刷新天气（再按一次立即刷新）" : "刷新天气"} data-weather-armed={armed ? "on" : "off"}>{loading ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}</button>
+      <button className="weather-header-refresh" type="button" onClick={() => void refresh({ manual: true, escalate: armed })} aria-label={`刷新${selectedDate}天气`} title={armed ? "刷新天气（再按一次立即刷新）" : "刷新天气"} data-weather-armed={armed ? "on" : "off"}>{manualBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}</button>
     </div> : null}
   </section>;
 }

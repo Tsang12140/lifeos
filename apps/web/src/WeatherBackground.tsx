@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { WeatherCategory, WeatherPhase } from "./weather";
 
 /**
@@ -108,7 +108,10 @@ function Rain({ category }: { readonly category: RainCategory }) {
         className={`rain-drop ${index % 3 === 0 ? "rain-drop--dark" : ""}`}
         style={{
           left: `${((index * 97) % 100) + 0.5}%`,
-          animationDelay: `${((index * plan.stagger) % 1.3).toFixed(2)}s`,
+          // Negative, so every drop is already mid-fall on the first frame.
+          // A positive delay left the drop sitting at its base position, which
+          // read as drops hanging at the top of the card before falling.
+          animationDelay: `${(-((index * plan.stagger) % 1.3)).toFixed(2)}s`,
           animationDuration: `${(plan.speed + (index % 5) * 0.055).toFixed(2)}s`,
         } satisfies CSSProperties}
       />
@@ -151,7 +154,9 @@ export function WeatherBackground({ category, phase }: { readonly category: Weat
           className="snow-flake"
           style={{
             left: `${((index * 113) % 96) + 2}%`,
-            animationDelay: `${((index * 0.31) % 2).toFixed(2)}s`,
+            // Negative for the same reason as the rain: a pending delay would
+            // park the flake at the top edge, fully opaque.
+            animationDelay: `${(-((index * 0.31) % 2)).toFixed(2)}s`,
             animationDuration: `${(1.8 + (index % 4) * 0.3).toFixed(2)}s`,
             fontSize: `${10 + (index % 3) * 4}px`,
             opacity: `${(0.5 + (index % 4) * 0.14).toFixed(2)}`,
@@ -174,4 +179,43 @@ export function WeatherBackground({ category, phase }: { readonly category: Weat
     <div className="fog-band fog-band--2" />
     <div className="fog-band fog-band--3" />
   </div>;
+}
+
+/** How long the outgoing sky stays mounted while it fades. Kept in step with
+ *  `sky-out` in styles.css. */
+const SKY_FADE_MS = 420;
+
+interface SkySpec {
+  readonly key: string;
+  readonly category: WeatherCategory;
+  readonly phase: WeatherPhase;
+}
+
+/**
+ * Wraps the sky so a date change dissolves instead of cutting. The outgoing
+ * layer is kept on top and faded away; the incoming sky is already in place
+ * underneath, so nothing ever blanks out and no other element has to move.
+ */
+export function WeatherSky({ category, phase }: { readonly category: WeatherCategory; readonly phase: WeatherPhase }) {
+  const key = `${category}|${phase}`;
+  const [shown, setShown] = useState<SkySpec>({ key, category, phase });
+  const [outgoing, setOutgoing] = useState<SkySpec | null>(null);
+
+  useEffect(() => {
+    if (shown.key === key) return;
+    // Hand the layer that is on screen over to the outgoing slot, then swap.
+    setOutgoing(shown);
+    setShown({ key, category, phase });
+  }, [key, category, phase, shown]);
+
+  useEffect(() => {
+    if (outgoing === null) return;
+    const timer = window.setTimeout(() => setOutgoing(null), SKY_FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [outgoing]);
+
+  return <>
+    <div className="weather-bg-layer is-current"><WeatherBackground category={shown.category} phase={shown.phase} /></div>
+    {outgoing === null ? null : <div className="weather-bg-layer is-leaving"><WeatherBackground category={outgoing.category} phase={outgoing.phase} /></div>}
+  </>;
 }

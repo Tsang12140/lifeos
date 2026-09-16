@@ -345,6 +345,15 @@ textarea:focus-visible {
   background: linear-gradient(90deg, rgb(255 255 255 / 0.7) 0%, rgb(255 255 255 / 0.6) 58%, rgb(255 255 255 / 0.52) 92%, rgb(255 255 255 / 0.3) 100%);
 }
 
+/* Changing the date used to swap the sky in one frame. Now the outgoing layer
+   stays mounted on top and fades away, which reveals the new sky underneath.
+   Keeping the outgoing layer on top (rather than fading the new one in over the
+   old) matters: both skies sit at partial opacity, so cross-blending them would
+   wash the middle of the transition out toward the white card underneath. */
+@keyframes sky-out { from { opacity: 1; } to { opacity: 0; } }
+.weather-bg-layer { position: absolute; inset: 0; }
+.weather-bg-layer.is-leaving { animation: sky-out 420ms ease-out forwards; }
+
 .weather-header-content {
   position: relative;
   z-index: 2;
@@ -672,10 +681,18 @@ textarea:focus-visible {
 .cloud--near { --cloud-h: 24px; --cloud-fill: var(--cloud-near); --cloud-under: var(--cloud-under); --cloud-drift-x: 9px; opacity: 0.95; }
 
 /* --- Rain ------------------------------------------------------------------ */
-@keyframes rain-fall { 0% { transform: translate3d(0, -12px, 0) scaleY(.5); opacity: 0; } 15%, 85% { opacity: .72; } 100% { transform: translate3d(0, 116px, 0) scaleY(1.28); opacity: 0; } }
+/* Drops start above the card, not at its top edge. The base position matters:
+   before the animation begins (a positive `animation-delay`, up to 1.3s) the
+   element sits at its base style, so with `top: 0` a drop hung motionless at the
+   top of the card until its delay elapsed. The delays are negative as well, so
+   the field is already mid-fall on the first frame instead of trickling in. */
+@keyframes rain-fall {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0, 156px, 0); }
+}
 .rain-drop {
   position: absolute;
-  top: 0;
+  top: -30px;
   width: 1.5px;
   height: 12px;
   border-radius: 1px;
@@ -6505,13 +6522,15 @@ button.relation-chip {
   /* Keep a readable, static sky when motion is disabled. A 0.01ms animation
      ends every element on its LAST keyframe, which for rain is fully
      transparent — so every animated layer needs an explicit resting state. */
+  /* The drops rest 30px above the card, so the frozen positions have to carry
+     them back into the visible band: 40 / 66 / 92 land their tops at 10 / 36 / 62. */
   .weather-bg .rain-drop {
     animation: none !important;
     opacity: .72 !important;
-    transform: translateY(24px) rotate(18deg) !important;
+    transform: translateY(40px) rotate(18deg) !important;
   }
-  .weather-bg .rain-drop:nth-child(3n) { transform: translateY(46px) rotate(18deg) !important; }
-  .weather-bg .rain-drop:nth-child(3n + 1) { transform: translateY(8px) rotate(18deg) !important; }
+  .weather-bg .rain-drop:nth-child(3n) { transform: translateY(66px) rotate(18deg) !important; }
+  .weather-bg .rain-drop:nth-child(3n + 1) { transform: translateY(92px) rotate(18deg) !important; }
   .weather-bg .cloud,
   .weather-bg .snow-flake,
   .weather-bg .snow-field,
