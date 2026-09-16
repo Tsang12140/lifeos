@@ -6,6 +6,10 @@ export interface WeatherDay {
   readonly iconDay: string;
   readonly windDirDay: string;
   readonly windScaleDay: string;
+  /** Passed through from the daily forecast so the sky can put dawn and dusk in
+   *  the right place for this city on this date. */
+  readonly sunrise?: string;
+  readonly sunset?: string;
 }
 
 export interface WeatherSnapshot {
@@ -59,6 +63,54 @@ export function getWeatherCategory(iconCode: string): WeatherCategory {
   if (code >= 400 && code <= 410) return "snowy";
   if (code >= 500 && code <= 515) return "foggy";
   return "cloudy";
+}
+
+/**
+ * The second axis of the sky: what time of day it is. Kept separate from
+ * `WeatherCategory` on purpose. A category decides *what is drawn*; a phase only
+ * decides *what colour it is and where the light sits*. Rain looks the same at
+ * 10:00 and 15:00, so rain must not change shape with the phase — but a sunny
+ * morning and a sunny night have nothing in common, so sunshine must.
+ *
+ * `day` is the neutral daytime phase used for dates that are not today: a daily
+ * forecast has no hour attached, so claiming "夜晚" for tomorrow's card at 22:00
+ * would be a lie.
+ */
+export type WeatherPhase = "dawn" | "morning" | "day" | "afternoon" | "dusk" | "night";
+
+const DEFAULT_SUNRISE = "06:00";
+const DEFAULT_SUNSET = "18:00";
+/** How far either side of sunrise/sunset counts as dawn/dusk. */
+const TWILIGHT_MINUTES = 45;
+
+function clockMinutes(clock: string | undefined, fallback: string): number {
+  const value = typeof clock === "string" && /^\d{2}:\d{2}$/.test(clock) ? clock : fallback;
+  const [hour, minute] = value.split(":");
+  return Number.parseInt(hour, 10) * 60 + Number.parseInt(minute, 10);
+}
+
+export function getWeatherPhase(day: WeatherDay | null, selectedDate: string, today: string, nowClock: string): WeatherPhase {
+  // Only today has a time of day. Other dates get the neutral daylight phase.
+  if (selectedDate !== today) return "day";
+  const sunrise = clockMinutes(day?.sunrise, DEFAULT_SUNRISE);
+  const sunset = clockMinutes(day?.sunset, DEFAULT_SUNSET);
+  const now = clockMinutes(nowClock, "12:00");
+  // Solar noon is the midpoint of the real sunrise and sunset, so the
+  // morning/afternoon split tracks the season instead of the wall clock.
+  const noon = (sunrise + sunset) / 2;
+  if (now < sunrise - TWILIGHT_MINUTES) return "night";
+  if (now < sunrise + TWILIGHT_MINUTES) return "dawn";
+  if (now < noon) return "morning";
+  if (now < sunset - TWILIGHT_MINUTES) return "afternoon";
+  if (now < sunset + TWILIGHT_MINUTES) return "dusk";
+  return "night";
+}
+
+/** Categories that draw a light source, and therefore have to answer to the phase. */
+const LIT_CATEGORIES: readonly WeatherCategory[] = ["sunny", "partly-cloudy"];
+
+export function categoryFollowsPhase(category: WeatherCategory): boolean {
+  return LIT_CATEGORIES.includes(category);
 }
 
 export function getWeatherEmoji(iconCode: string): string {

@@ -11,6 +11,11 @@ export interface WeatherDay {
   readonly iconDay: string;
   readonly windDirDay: string;
   readonly windScaleDay: string;
+  /** QWeather already returns these on the daily endpoint; they used to be
+   *  discarded. The sky renderer needs them to place dawn/dusk per city and
+   *  per date instead of hardcoding 06:00/18:00. */
+  readonly sunrise?: string;
+  readonly sunset?: string;
 }
 
 export interface WeatherSnapshot {
@@ -153,6 +158,11 @@ function cleanHost(value: string): string {
   return value.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
 }
 
+function clockFromDaily(raw: Record<string, unknown>, key: "sunrise" | "sunset"): string | undefined {
+  const value = raw[key];
+  return typeof value === "string" && /^\d{2}:\d{2}$/.test(value) ? value : undefined;
+}
+
 function weatherDayFromDaily(raw: Record<string, unknown>): WeatherDay | null {
   const fxDate = typeof raw.fxDate === "string" ? raw.fxDate : "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fxDate)) return null;
@@ -160,7 +170,19 @@ function weatherDayFromDaily(raw: Record<string, unknown>): WeatherDay | null {
   const tempMax = typeof raw.tempMax === "string" ? raw.tempMax : String(raw.tempMax ?? "—");
   const tempMin = typeof raw.tempMin === "string" ? raw.tempMin : String(raw.tempMin ?? "—");
   const iconDay = typeof raw.iconDay === "string" ? raw.iconDay : "999";
-  return { fxDate, textDay, tempMax, tempMin, iconDay, windDirDay: typeof raw.windDirDay === "string" ? raw.windDirDay : "", windScaleDay: typeof raw.windScaleDay === "string" ? raw.windScaleDay : "" };
+  const sunrise = clockFromDaily(raw, "sunrise");
+  const sunset = clockFromDaily(raw, "sunset");
+  return {
+    fxDate,
+    textDay,
+    tempMax,
+    tempMin,
+    iconDay,
+    windDirDay: typeof raw.windDirDay === "string" ? raw.windDirDay : "",
+    windScaleDay: typeof raw.windScaleDay === "string" ? raw.windScaleDay : "",
+    ...(sunrise === undefined ? {} : { sunrise }),
+    ...(sunset === undefined ? {} : { sunset }),
+  };
 }
 
 function trimAdministrativeSuffix(value: string): string {

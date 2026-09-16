@@ -12,6 +12,21 @@
 
 **判断口诀**：`accept-serve.mjs` = 常驻预览，留着；`photo-grid-serve.mjs` 等带隔离 data dir 的 = 验收用完可收。
 
+**但沙箱会在 turn 结束时回收它（2026-09-16 20:30 实测）**：
+
+- `nohup … &` 和 `spawn({ detached: true }).unref()` **都不管用** —— `.review/run/api.log` / `web.log` 里能看到服务确实起来过、随后端口就空了。**只有后台任务机制（Bash 工具的 `run_in_background`）能跨工具调用存活，但它活不过 turn 边界。**
+- 所以**每次开工先探一次端口**（`http://127.0.0.1:3011/api/health` + `5199/`），不在就先拉起再跑验收。`.review/spawn-serve.mjs` 是便捷拉起器（已存在就跳过、否则拉起并轮询就绪）。
+- **教训**：验收脚本的前置条件分支会**覆盖**上一次的完整结果文件 —— 有一次 3011 没起来，`RESULT: PASS (189 checks)` 被冲成了 2 行前置失败。跑之前先确认预览在线。
+
+## 天气天空的两根轴（2026-09-16 重做）
+
+- `WeatherBackground.tsx` 接两个 prop：`category`（形态，来自预报 `iconDay`）决定**画什么**，`phase`（时段）只决定**什么色、光在哪**。时段是纯 CSS 变量替换 → **加时段不增节点、不增动画**。
+- `phase` 由 `getWeatherPhase()` 用**真实日出/日落**算（和风 7d 的 `sunrise`/`sunset`，此前被丢弃）；非今天的日期一律中性 `day`。
+- **硬预算（验收脚本 `verify-weather-art.mjs` 在守）**：每形态 ≤ 20 节点；只许动 `transform` / `opacity`；`filter` 只出现在 `cloud--far` / `fog-band` / `lightning-bolt`；`.weather-header *` 里 `backdrop-filter` 必须为 0。
+- **`.weather-header-summary` 是 `margin-left: auto`，文字右缘在卡片宽度的 0.917** —— 白蒙版在任何有文字的地方都必须 ≥ 0.5 alpha。放松蒙版前先量文字位置，别猜。
+- `cloudy` 分支在真实和风码表下**不可达**（101/102/103/151/152/153 → `partly-cloudy`，104/154 → `overcast`）。
+
+
 ## 改动前先勘察、先问
 
 - 设计/规则类工作**先出方案等确认**再动手；主人说"听你的"才是授权点。

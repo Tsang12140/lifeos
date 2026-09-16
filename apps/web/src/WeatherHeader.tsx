@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, RefreshCw, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
-import { getWeatherDecision, getWeatherEmoji, findWeatherDay, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
+import { getWeatherDecision, getWeatherEmoji, getWeatherPhase, findWeatherDay, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherBackground } from "./WeatherBackground";
-import { localDateToday, shiftDate, weekdayShort } from "./time";
+import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
 
 interface WeatherPayload {
   readonly weatherSnapshot: WeatherSnapshot | null;
@@ -114,11 +114,15 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
 
   const displayDay = findWeatherDay(payload.weatherSnapshot, selectedDate) ?? payload.weatherSnapshot?.today ?? null;
   const decision = getWeatherDecision(payload.weatherSnapshot, displayDay);
+  // The phase only says what colour the sky is and where the light sits. It
+  // rides on the same 30-minute refresh as the forecast, so a dawn card can
+  // linger a few minutes past sunrise; that is cheaper than a per-minute tick.
+  const phase = getWeatherPhase(displayDay, selectedDate, today, localNowInput().slice(11, 16));
   const locationLabel = payload.location?.name || status?.city || status?.locationId || "未设置地点";
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
   return <section className={`weather-header ${displayDay && decision ? `weather-header--${decision.category}` : "weather-header--empty"}`} aria-label={`${selectedDate} 的天气`}>
-    {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherBackground category={decision.category} /></div> : null}
+    {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherBackground category={decision.category} phase={phase} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className="weather-header-content">
       <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} />
