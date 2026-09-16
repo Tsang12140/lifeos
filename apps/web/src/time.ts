@@ -332,6 +332,86 @@ export function minuteOptions(step = 1): readonly string[] {
 }
 
 /**
+ * The default minute step for the time columns, and the finer one the "精细"
+ * switch turns on.
+ *
+ * Five minutes is the honest grain for a journal: nobody remembers whether the
+ * coffee was at 08:07 or 08:09, and 60 slots in a 132px column is a list you
+ * scroll rather than a wheel you turn. Twelve slots are deliberately coarse. A
+ * person who does care can ask for the minute, but they have to say so — the
+ * cost of precision is paid by the few who want it, not by everyone.
+ */
+export const MINUTE_STEP_COARSE = 5;
+export const MINUTE_STEP_FINE = 1;
+
+/**
+ * The most recent whole hour at or before `now`, as `HH` (or `HH:MM` when a
+ * minute step is given).
+ *
+ * Rounded *down*, never to the nearest: 07:54 must not become 08:00, because
+ * 08:00 has not happened yet. A default that quietly points at the future is
+ * exactly the bug the whole cap rule exists to prevent, so the rounding here
+ * leans the same way as the rule.
+ */
+/**
+ * The most recent whole hour at or before `now`, as `HH:00`.
+ *
+ * Whole hour, not "the current hour and its minute": the entry being made is
+ * usually "this morning" rather than "08:06", and a round default is the one a
+ * person leaves alone. Rounded *down*, never to the nearest — 07:54 must not
+ * become 08:00, because 08:00 has not happened yet. A default that quietly
+ * points at the future is exactly the bug the whole cap rule exists to prevent,
+ * so the rounding here leans the same way as the rule.
+ *
+ * `HH:00` is always on the minute column's grid whether the grain is five
+ * minutes or one, so the default never lands between two rows.
+ */
+export function lastWholeHour(now: string): string {
+  const time = timePartOf(now);
+  if (time === "") return "";
+  return `${time.slice(0, 2)}:00`;
+}
+
+/**
+ * The latest minute, within `hour`, that is still in the past — as the `HH:MM`
+ * value of a slot, or `""` when no slot in that hour qualifies.
+ *
+ * `hour` is compared against the current hour rather than the current instant so
+ * that stepping the hour *backwards* reopens the whole minute column: once you
+ * are looking at 06:xx every minute of it is in the past, and greying half of it
+ * out would be a lie.
+ */
+export function minuteCapFor(hour: string, now: string, step = MINUTE_STEP_COARSE): string {
+  const time = timePartOf(now);
+  if (time === "" || !/^\d{2}$/.test(hour)) return "";
+  if (hour < time.slice(0, 2)) return "59";
+  if (hour > time.slice(0, 2)) return "";
+  return String(Math.floor(Number(time.slice(3, 5)) / step) * step).padStart(2, "0");
+}
+
+/**
+ * Whether a day key is in the future, i.e. later than today in the user's zone.
+ *
+ * Compared as plain strings on purpose: both sides are `YYYY-MM-DD`, which sorts
+ * the same lexically as chronologically, so there is no Date arithmetic to get
+ * wrong and no timezone to lose. The same reasoning that makes `validDateKey`
+ * the only gate for day keys applies here.
+ */
+export function isFutureDay(value: string): boolean {
+  return validDateKey(value) && value > localDateToday();
+}
+
+/**
+ * Whether a `YYYY-MM` month anchor is entirely in the future, so paging to it
+ * should be refused. The current month is never "future": the days inside it
+ * that have not happened yet are handled one level down, by the day cells.
+ */
+export function isFutureMonth(anchor: string): boolean {
+  if (!/^\d{4}-\d{2}$/.test(anchor)) return false;
+  return anchor > localDateToday().slice(0, 7);
+}
+
+/**
  * The 42 cells of a month grid, grouped into weeks so the grid is read row by
  * row instead of cell by cell. Same dates as `monthGridDates`, one level
  * coarser — a month picker needs to know where the weeks end.

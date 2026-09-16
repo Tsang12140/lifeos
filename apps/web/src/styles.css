@@ -2912,6 +2912,54 @@ h2 {
   background: var(--primary);
 }
 
+/*
+ * A slot past "now" is shown but not selectable. Kept in the layout and merely
+ * faded: a wheel whose tail disappears looks truncated, and the fade is the
+ * explanation for why it will not move. `cursor: default` keeps the pointer
+ * from promising a click that will not land.
+ */
+.date-day-slot.is-locked,
+.date-grid-day.is-locked,
+.date-time-slot.is-locked {
+  color: var(--muted);
+  opacity: 0.34;
+  cursor: default;
+}
+
+.date-day-slot.is-locked:hover {
+  border-color: transparent;
+}
+
+.date-time-slot.is-locked:hover {
+  background: transparent;
+}
+
+.date-grid-day.is-locked:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+/*
+ * The grain switch. Five minutes is the default, the minute is opt-in, and the
+ * cap is stated next to it so the greyed slots have a visible reason.
+ */
+.date-panel-fine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.date-panel-fine-note {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .date-day-slot.is-selected .date-day-weekday {
   color: rgb(255 255 255 / 0.82);
 }
