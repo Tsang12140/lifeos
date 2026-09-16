@@ -118,6 +118,17 @@
   box-sizing: border-box;
 }
 
+/* The document is the scroll container, and its height follows the timeline's
+   content. Changing the date can therefore make the page short enough that the
+   vertical scrollbar disappears, which widens the layout viewport by the
+   scrollbar width and slides the centred column sideways — a whole-page twitch
+   on every date change. Measured: clientWidth went 1665 -> 1680 and the weather
+   card moved from x=364.5 to x=372. Reserving the gutter keeps the viewport
+   width constant whatever the content does. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   min-width: 0;
   min-height: 100vh;
