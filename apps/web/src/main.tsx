@@ -992,47 +992,83 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
         <label className={`privacy-toggle ${isPrivate ? "is-on" : ""}`} title="隐私记录"><input type="checkbox" checked={isPrivate} onChange={(event) => onPrivateChange(event.target.checked)} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私</span></label>
         <button className={`weather-pin-toggle ${weather ? "is-on" : ""}`} type="button" onClick={weather ? onClearWeather : onCaptureWeather} disabled={weatherBusy} title={weather ? "取消天气" : "读取此刻室外天气"} aria-label={weather ? `天气 · 现场 ${weather.text}，点击取消` : "天气，点击读取此刻室外天气"}>{weatherBusy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CloudSun size={14} aria-hidden="true" />}<span>{weatherBusy ? "读取中" : weather ? `现场 · ${weather.text}` : "天气"}</span></button>
       </div>
-      <button className="primary-button" type="button" disabled={!content.trim() || saving} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : "保存记录"}</span></button>
+      <button className="primary-button" type="button" disabled={!content.trim() || saving} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button>
     </div>
   </section>;
 }
 
+/** Matches the height transition in styles.css. */
+const REVIEW_EXPAND_MS = 300;
+
 /**
- * Past-date composer. Review mode is for reading first, so the full editor is
- * not allowed to occupy the same visual weight as the timeline. The compact
- * textarea is still a real input-shaped control; clicking it promotes the
- * existing Composer instead of mounting a second draft pipeline.
+ * Past-date composer. The collapsed bar is a mirror of the editor's own first
+ * row — the same kind chips, a preview of the draft, and the same primary button
+ * — and the whole bar is one click target. Nothing inside it is separately
+ * interactive on purpose: the owner asked for it to be a "placebo" that only
+ * announces "you are not on today, this is a backfill". The primary button reads
+ * 补记 while collapsed and 保存 once the real editor is open, because it is the
+ * same action at two stages.
+ *
+ * The expansion animates: the bar folds away and the editor grows to its
+ * measured height, then hands the height back to `auto` so the editor keeps its
+ * own size when the kind changes or a photo is added.
  */
 function ReviewComposer(props: ComposerProps) {
   const [expanded, setExpanded] = useState(false);
-  const hasDraft = props.content.trim().length > 0 || props.shots.length > 0 || props.movieRefs.length > 0 || props.weather !== null;
-  const visibleExpanded = expanded || hasDraft;
+  // Mounted on first expansion and kept afterwards: the collapse animation needs
+  // something to measure.
+  const [bodyMounted, setBodyMounted] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [bodyHeight, setBodyHeight] = useState<number | "auto">(0);
 
   useEffect(() => {
-    if (!visibleExpanded) return;
+    if (!bodyMounted) return;
+    const node = bodyRef.current;
+    if (node === null) return;
+    if (!expanded) {
+      // `auto` is not an interpolable height, so collapsing straight to 0 would
+      // snap. Pin the current pixel height for one frame first, then animate.
+      setBodyHeight(node.getBoundingClientRect().height);
+      const frame = window.requestAnimationFrame(() => setBodyHeight(0));
+      return () => window.cancelAnimationFrame(frame);
+    }
+    setBodyHeight(0);
+    const frame = window.requestAnimationFrame(() => setBodyHeight(node.scrollHeight));
+    // After the transition, drop the inline height so the editor is free to
+    // grow on its own again. `overflow: hidden` has to go with it, or the date
+    // panel and the mention list would be clipped.
+    const settle = window.setTimeout(() => setBodyHeight("auto"), REVIEW_EXPAND_MS + 80);
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(settle); };
+  }, [bodyMounted, expanded]);
+
+  useEffect(() => {
+    if (!expanded) return;
     const frame = window.requestAnimationFrame(() => {
-      document.querySelector<HTMLTextAreaElement>(".review-composer-expanded .composer-input")?.focus();
+      document.querySelector<HTMLTextAreaElement>(".review-composer-body .composer-input")?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [visibleExpanded]);
+  }, [expanded]);
 
-  if (visibleExpanded) {
-    return <div className="review-composer-expanded"><Composer {...props} onClose={() => { setExpanded(false); props.onClose(); }} /></div>;
-  }
+  const open = () => { setBodyMounted(true); setExpanded(true); };
+  const draft = props.content.trim();
 
-  return <section className="review-composer-compact surface" aria-label="回看记录编辑器">
-    <textarea
-      className="review-composer-input"
-      rows={1}
-      readOnly
-      value=""
-      placeholder="回看这一天，写一条……"
-      aria-label="回看这一天，点击展开记录编辑器"
-      onFocus={() => setExpanded(true)}
-      onClick={() => setExpanded(true)}
-    />
-    <button className="review-composer-expand" type="button" onClick={() => setExpanded(true)} aria-label="展开完整记录编辑器"><Plus size={16} strokeWidth={1.9} aria-hidden="true" /></button>
-  </section>;
+  return <div className="review-composer" data-expanded={expanded ? "true" : "false"}>
+    <button className="review-composer-bar" type="button" onClick={open} aria-label="补记这一天的记录，展开完整编辑器">
+      <span className="review-composer-kinds" aria-hidden="true">
+        {(Object.keys(COMPOSER_META) as ComposerKind[]).map((item) => {
+          const Icon = COMPOSER_META[item].icon;
+          return <span className={`review-composer-kind ${item === props.kind ? "is-active" : ""}`} key={item}><Icon size={14} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></span>;
+        })}
+      </span>
+      <span className={`review-composer-preview ${draft ? "has-draft" : ""}`} aria-hidden="true">{draft || COMPOSER_META[props.kind].placeholder}</span>
+      <span className="primary-button review-composer-cta" aria-hidden="true">补记</span>
+    </button>
+    <div className="review-composer-slot" style={bodyHeight === "auto" ? undefined : { height: bodyHeight, overflow: "hidden" }}>
+      <div className="review-composer-body" ref={bodyRef} inert={!expanded}>
+        {bodyMounted ? <Composer {...props} onClose={() => { setExpanded(false); props.onClose(); }} /> : null}
+      </div>
+    </div>
+  </div>;
 }
 
 interface MentionBoxProps {
@@ -3778,7 +3814,10 @@ function App() {
     isBackfill: composerBackfill,
     selectedDate,
     saving,
-    dismissible: !isToday,
+    // Review mode needs a way back: the bar would otherwise be a one-way door,
+    // since the Today view normally has no close button. The ✕ folds the editor
+    // back into the bar rather than discarding anything.
+    dismissible: isReviewingPast || !isToday,
     occurredDirty: occurredAtDirty,
     weather: composerWeather,
     weatherBusy: composerWeatherBusy,

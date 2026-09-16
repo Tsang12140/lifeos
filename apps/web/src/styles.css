@@ -1110,52 +1110,87 @@ h2 {
   padding: 24px;
 }
 
-/* Past-date review starts as a small writing affordance. It is a real textarea
-   for keyboard and screen-reader users, but readonly until the owner promotes
-   it to the full composer by clicking. The full editor remains the existing
-   component, so draft state, uploads and mention state do not fork. */
-.review-composer-compact {
+/* Past-date review. The collapsed bar is a mirror of the editor's own first row:
+   the same kind chips, a preview of the draft, and the same primary button —
+   which reads 补记 while collapsed and 保存 once the editor is open. The whole
+   bar is a single click target, so the chips and the button are spans, not
+   controls: nothing inside it is separately interactive. */
+.review-composer-bar {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   min-height: 58px;
-  padding: 8px 10px 8px 14px;
+  padding: 7px 9px 7px 11px;
+  border: 1px solid #cfd9e6;
   border-radius: 16px;
+  color: var(--ink-soft);
+  background: var(--surface);
   box-shadow: 0 5px 14px rgb(24 36 61 / 0.045);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease, opacity 200ms ease;
 }
-.review-composer-input {
+.review-composer-bar:hover { border-color: #c5d0e3; background: #fff; }
+.review-composer-bar:active { transform: translateY(1px); }
+.review-composer-kinds { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.review-composer-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 9px;
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 660;
+}
+.review-composer-kind.is-active { color: #3157c8; background: var(--primary-soft); }
+.review-composer-preview {
   display: block;
   flex: 1;
   min-width: 0;
-  min-height: 38px;
-  max-height: 64px;
-  padding: 8px 2px;
-  border: 0;
-  outline: 0;
-  resize: none;
-  overflow: hidden;
-  color: var(--ink-soft);
-  background: transparent;
-  cursor: text;
-  font-size: 0.86rem;
-  line-height: 1.5;
-}
-.review-composer-input::placeholder { color: var(--muted); }
-.review-composer-compact:focus-within { border-color: #bdcbfa; box-shadow: var(--shadow-focus); }
-.review-composer-expand {
-  display: inline-grid;
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid #cfd9e6;
+  padding: 9px 12px;
+  border: 1px solid #d7e0ec;
   border-radius: 10px;
-  color: var(--primary);
-  background: #f7f9ff;
-  cursor: pointer;
+  color: var(--muted);
+  background: #f7f9fc;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.review-composer-expand:hover { border-color: #aebef0; background: #eef2ff; }
-.review-composer-expanded { margin-bottom: 0; }
+.review-composer-preview.has-draft { color: var(--ink-soft); background: #fff; }
+.review-composer-cta { flex: 0 0 auto; }
+.review-composer-bar:active .review-composer-cta { transform: translateY(1px); }
+
+/* The bar folds away as the editor grows, so the page below slides instead of
+   jumping. The bar can clip safely (it holds no popovers); the editor cannot,
+   which is why its height is driven inline from JS and `overflow` is handed
+   back to `visible` once the transition settles. */
+.review-composer-slot {
+  transition: height 300ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease;
+}
+.review-composer-slot { opacity: 0; }
+.review-composer[data-expanded="true"] .review-composer-slot { opacity: 1; }
+.review-composer[data-expanded="true"] .review-composer-bar {
+  max-height: 0;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.review-composer-bar { max-height: 200px; transition: max-height 300ms cubic-bezier(0.4, 0, 0.2, 1), opacity 180ms ease, visibility 0s, border-color 180ms ease, background-color 180ms ease; }
+.review-composer[data-expanded="true"] .review-composer-bar { transition: max-height 300ms cubic-bezier(0.4, 0, 0.2, 1), opacity 180ms ease, visibility 0s 300ms, border-color 180ms ease, background-color 180ms ease; }
+@media (prefers-reduced-motion: reduce) {
+  .review-composer-bar,
+  .review-composer-slot { transition: none; }
+}
 
 .composer-header,
 .section-heading,
