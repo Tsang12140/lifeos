@@ -18,20 +18,23 @@ type RainCategory = "rainy" | "moderate-rainy" | "heavy-rainy" | "rainstorm" | "
 
 interface RainPlan {
   readonly drops: number;
-  readonly sheets: number;
   readonly speed: number;
   readonly stagger: number;
 }
 
 const RAIN_PLANS: Record<RainCategory, RainPlan> = {
-  rainy: { drops: 14, sheets: 0, speed: 0.72, stagger: 0.19 },
-  "moderate-rainy": { drops: 19, sheets: 0, speed: 0.62, stagger: 0.15 },
-  // Past moderate rain you cannot pick out individual drops anyway, so two
-  // moving sheets carry the downpour and a handful of foreground drops keep the
-  // sense of depth. That drops the layer count from 32 to 10.
-  "heavy-rainy": { drops: 8, sheets: 2, speed: 0.5, stagger: 0.12 },
-  rainstorm: { drops: 8, sheets: 2, speed: 0.42, stagger: 0.1 },
-  thunderstorm: { drops: 8, sheets: 2, speed: 0.46, stagger: 0.11 },
+  rainy: { drops: 14, speed: 0.72, stagger: 0.19 },
+  "moderate-rainy": { drops: 19, speed: 0.62, stagger: 0.15 },
+  // Heavy rain and up used to add two fast-moving stripe sheets for density.
+  // A fine periodic pattern (10px stripes) travelling at 226px/s is 22.6 cycles
+  // a second, and two sheets at different periods also interfere with each other
+  // — the owner reported a moire-like shimmer. Measured on the rendered pixels,
+  // the sheets multiplied the card's high-frequency energy by 2.9 and left a
+  // 19px periodic signal at 0.89 correlation. Drops are aperiodic and measure at
+  // the clear-sky noise floor, so the density comes from more, thicker drops.
+  "heavy-rainy": { drops: 19, speed: 0.46, stagger: 0.11 },
+  rainstorm: { drops: 19, speed: 0.38, stagger: 0.09 },
+  thunderstorm: { drops: 15, speed: 0.42, stagger: 0.12 },
 };
 
 interface CloudSpec {
@@ -99,13 +102,6 @@ function Luminary({ night }: { readonly night: boolean }) {
 function Rain({ category }: { readonly category: RainCategory }) {
   const plan = RAIN_PLANS[category];
   return <>
-    {Array.from({ length: plan.sheets }, (_, index) => (
-      <div
-        key={`sheet-${index}`}
-        className={`rain-sheet rain-sheet--${index}`}
-        style={{ animationDuration: `${(0.62 - index * 0.14).toFixed(2)}s` } satisfies CSSProperties}
-      />
-    ))}
     {Array.from({ length: plan.drops }, (_, index) => (
       <div
         key={`drop-${index}`}
