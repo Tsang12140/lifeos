@@ -1114,16 +1114,22 @@ h2 {
    the same kind chips, a preview of the draft, and the same primary button —
    which reads 补记 while collapsed and 保存 once the editor is open. The whole
    bar is a single click target, so the chips and the button are spans, not
-   controls: nothing inside it is separately interactive. */
+   controls: nothing inside it is separately interactive.
+
+   The bar reuses `.kind-switcher` / `.kind-option` / `.primary-button` instead of
+   restating their metrics, and its horizontal padding is the composer's own
+   (20px), so the chips and the primary button land on exactly the same x axis and
+   at exactly the same size in both states. `verify-review-mode.mjs` asserts that
+   by measuring both and comparing the rectangles. */
 .review-composer-bar {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 58px;
-  padding: 7px 9px 7px 11px;
+  min-height: 60px;
+  padding: 8px 20px;
   border: 1px solid #cfd9e6;
-  border-radius: 16px;
+  border-radius: 21px;
   color: var(--ink-soft);
   background: var(--surface);
   box-shadow: 0 5px 14px rgb(24 36 61 / 0.045);
@@ -1133,19 +1139,11 @@ h2 {
 }
 .review-composer-bar:hover { border-color: #c5d0e3; background: #fff; }
 .review-composer-bar:active { transform: translateY(1px); }
-.review-composer-kinds { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
-.review-composer-kind {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 30px;
-  padding: 0 9px;
-  border-radius: 9px;
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 660;
-}
-.review-composer-kind.is-active { color: #3157c8; background: var(--primary-soft); }
+/* One row: the editor's switcher wraps and carries the toolbar's own vertical
+   margin, the bar must do neither. Scoped through `.review-composer-bar` because
+   `.kind-switcher` is declared later in this file and would otherwise win the
+   margin back — that made the bar 88px tall with the chips sitting low. */
+.review-composer-bar .review-composer-kinds { flex: 0 0 auto; flex-wrap: nowrap; margin: 0; }
 .review-composer-preview {
   display: block;
   flex: 1;

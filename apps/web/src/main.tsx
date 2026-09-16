@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -1019,26 +1019,33 @@ function ReviewComposer(props: ComposerProps) {
   // something to measure.
   const [bodyMounted, setBodyMounted] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [bodyHeight, setBodyHeight] = useState<number | "auto">(0);
+  const slotRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!bodyMounted) return;
+  // Written straight to the element rather than through React state. State would
+  // let the two height writes land in the same frame, and then the browser sees a
+  // single change from `auto` to the target — no transition, a hard snap. The
+  // forced reflow between the writes is what makes the starting value real.
+  // `useLayoutEffect` so the first paint already has height 0 and the editor
+  // never flashes open at full size.
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
     const node = bodyRef.current;
-    if (node === null) return;
+    if (slot === null || node === null || !bodyMounted) return;
+    slot.style.overflow = "hidden";
     if (!expanded) {
-      // `auto` is not an interpolable height, so collapsing straight to 0 would
-      // snap. Pin the current pixel height for one frame first, then animate.
-      setBodyHeight(node.getBoundingClientRect().height);
-      const frame = window.requestAnimationFrame(() => setBodyHeight(0));
-      return () => window.cancelAnimationFrame(frame);
+      slot.style.height = `${node.getBoundingClientRect().height}px`;
+      void slot.offsetHeight;
+      slot.style.height = "0px";
+      return;
     }
-    setBodyHeight(0);
-    const frame = window.requestAnimationFrame(() => setBodyHeight(node.scrollHeight));
-    // After the transition, drop the inline height so the editor is free to
-    // grow on its own again. `overflow: hidden` has to go with it, or the date
-    // panel and the mention list would be clipped.
-    const settle = window.setTimeout(() => setBodyHeight("auto"), REVIEW_EXPAND_MS + 80);
-    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(settle); };
+    slot.style.height = "0px";
+    void slot.offsetHeight;
+    slot.style.height = `${node.scrollHeight}px`;
+    // Hand the height back to `auto` once it has arrived, and drop the clipping
+    // with it: the date panel and the mention list are absolutely positioned
+    // inside the editor and must not be cut off.
+    const settle = window.setTimeout(() => { slot.style.height = ""; slot.style.overflow = ""; }, REVIEW_EXPAND_MS + 80);
+    return () => window.clearTimeout(settle);
   }, [bodyMounted, expanded]);
 
   useEffect(() => {
@@ -1054,16 +1061,19 @@ function ReviewComposer(props: ComposerProps) {
 
   return <div className="review-composer" data-expanded={expanded ? "true" : "false"}>
     <button className="review-composer-bar" type="button" onClick={open} aria-label="补记这一天的记录，展开完整编辑器">
-      <span className="review-composer-kinds" aria-hidden="true">
+      {/* The chips and the primary button reuse the editor's own classes rather
+          than restating their metrics: the bar has to sit exactly on top of the
+          editor's geometry, so it is the same styles, not the same numbers. */}
+      <span className="kind-switcher review-composer-kinds" aria-hidden="true">
         {(Object.keys(COMPOSER_META) as ComposerKind[]).map((item) => {
           const Icon = COMPOSER_META[item].icon;
-          return <span className={`review-composer-kind ${item === props.kind ? "is-active" : ""}`} key={item}><Icon size={14} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></span>;
+          return <span className={`kind-option ${item === props.kind ? "is-active" : ""}`} key={item}><Icon size={15} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></span>;
         })}
       </span>
       <span className={`review-composer-preview ${draft ? "has-draft" : ""}`} aria-hidden="true">{draft || COMPOSER_META[props.kind].placeholder}</span>
-      <span className="primary-button review-composer-cta" aria-hidden="true">补记</span>
+      <span className="primary-button review-composer-cta" aria-hidden="true"><Send size={17} strokeWidth={1.8} aria-hidden="true" /><span>补记</span></span>
     </button>
-    <div className="review-composer-slot" style={bodyHeight === "auto" ? undefined : { height: bodyHeight, overflow: "hidden" }}>
+    <div className="review-composer-slot" ref={slotRef}>
       <div className="review-composer-body" ref={bodyRef} inert={!expanded}>
         {bodyMounted ? <Composer {...props} onClose={() => { setExpanded(false); props.onClose(); }} /> : null}
       </div>

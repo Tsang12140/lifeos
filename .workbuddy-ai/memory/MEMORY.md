@@ -81,11 +81,34 @@
 - 反过来（0 → auto）之所以正常，是因为起点恰好是显式 `0`；动画结束要交还 `auto`，否则编辑器无法自适应长高。
 - **编辑器类容器不能长期 `overflow: hidden`**：日期面板、提及列表都是绝对定位挂在里面的，裁切只在过渡期间存在。
 
+## 交付方式：不出截图（2026-09-17 主人明确要求，已写进 AGENTS.md）
+
+- **不要主动生成截图、不要在回复里贴图**。主人自己开预览端口（Web `http://127.0.0.1:5199/`）看效果。
+- 收尾只汇报：改了什么 / 怎么验证的 / 验收数字 / 预览地址。`.review/shoot-*.mjs` 留着备用，不作为交付物。
+
+## 样式对齐：复用 class，不要复述数值（2026-09-17）
+
+- 要让两个状态（如补记条 vs 正式编辑器）的控件 x 轴/体积完全一致，**做法是复用同一套 class**，而不是把数字抄一遍。图标宽度也算进按钮宽度。
+- **同名 class 覆盖必须带父级前缀**：`.kind-switcher` 自带 `margin: 22px 0 12px`，会顶掉后写的同优先级 `margin: 0`（`.review-composer-kinds` 被顶掉 → 条条 88px）。写 `.review-composer-bar .review-composer-kinds` 才生效。
+- **几何对比要在「主人实际看到的状态」下量**：展开态 CSS 可能改掉边框宽度（条条展开时 `border-width: 0`），会报出 1px 假差异。塌缩态量 A、展开态量 B 才对。
+
+## 高度动画：React state 会被批处理（2026-09-17）
+
+- 「先钉住当前像素高度、下一帧再设 0」如果用 React state 写，**两次 setState 会进同一帧**，浏览器只看到一次变化 → 不触发 transition → 硬切。**这是竞态，可能碰巧通过**。
+- 正解：`useLayoutEffect` + **直接写 `element.style.height`** + 两次写入之间 `void element.offsetHeight` 强制回流。`useLayoutEffect` 还保证首帧就是目标起始值，不会先闪一下。
+
 ## 验收脚本：日期夹具一律动态推导（2026-09-17 真踩）
 
 - **硬编码日期会在午夜静默失效**，且失败形态像产品回归（`verify-weather-observe.mjs` 写死 09-16/09-17 → 过了午夜 3 条红）。
 - 一律用 `new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date())` 推导。
 - **已知未修**：`verify-weather-device.mjs`（硬编码 09-14/09-15 且断言翻到 09-15）；`verify-weather.mjs`（硬编码 09-14/09-15，靠 `snapshot.today` 兜底仍 PASS —— 绿得侥幸）。
+
+## 验收脚本：崩溃必须变成 FAIL（2026-09-17 真踩）
+
+- 脚本抛错退出时，**结果文件里会留着上一次的 `RESULT: PASS`** —— 一个只代表「没跑到失败那一步」的 PASS。
+- `verify-review-mode.mjs` 已加 `uncaughtException` / `unhandledRejection` → 改写成 `CRASH …` 并退出 1。**其它 verify 脚本还没有这层保护，看到 PASS 先确认脚本真的跑完了**（检查断言条数是否符合预期）。
+
+
 
 
 
