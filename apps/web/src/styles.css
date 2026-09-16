@@ -1110,6 +1110,53 @@ h2 {
   padding: 24px;
 }
 
+/* Past-date review starts as a small writing affordance. It is a real textarea
+   for keyboard and screen-reader users, but readonly until the owner promotes
+   it to the full composer by clicking. The full editor remains the existing
+   component, so draft state, uploads and mention state do not fork. */
+.review-composer-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 16px;
+  box-shadow: 0 5px 14px rgb(24 36 61 / 0.045);
+}
+.review-composer-input {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  max-height: 64px;
+  padding: 8px 2px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: text;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.review-composer-input::placeholder { color: var(--muted); }
+.review-composer-compact:focus-within { border-color: #bdcbfa; box-shadow: var(--shadow-focus); }
+.review-composer-expand {
+  display: inline-grid;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #cfd9e6;
+  border-radius: 10px;
+  color: var(--primary);
+  background: #f7f9ff;
+  cursor: pointer;
+}
+.review-composer-expand:hover { border-color: #aebef0; background: #eef2ff; }
+.review-composer-expanded { margin-bottom: 0; }
+
 .composer-header,
 .section-heading,
 .summary-heading {
@@ -1421,6 +1468,90 @@ h2 {
      lines" survives a change to the body type scale instead of drifting silently.
      Kept as a plain length, not a calc(), so `calc(5 * var(--record-line))` stays valid. */
   --record-line: 1.617rem;
+}
+
+/* Historical review mode: four or more records become two natural-height lanes.
+   This is not CSS columns: the records keep their API order through the JS
+   height estimate, and one SVG route below connects their real rectangles. */
+.timeline-group--review-grid .timeline-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.timeline-group--review-grid .timeline-group-title small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 560;
+}
+.review-timeline-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  isolation: isolate;
+}
+.review-timeline-column {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+.review-timeline-route {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.review-timeline-route path {
+  fill: none;
+  stroke: #b9c6d7;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.review-timeline-grid .timeline-item {
+  display: block;
+  min-height: 0;
+  padding: 0;
+}
+.review-timeline-grid .timeline-time {
+  padding: 0 0 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-align: left;
+}
+.review-timeline-grid .timeline-marker {
+  display: none;
+}
+.review-timeline-grid .timeline-content {
+  position: relative;
+  z-index: 1;
+  padding: 13px 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.82);
+  box-shadow: 0 5px 14px rgb(24 36 61 / 0.045);
+}
+.review-timeline-grid .timeline-meta {
+  min-height: 22px;
+}
+.review-timeline-grid .timeline-text {
+  margin-top: 7px;
+}
+@media (max-width: 720px) {
+  .review-timeline-grid {
+    display: block;
+  }
+  .review-timeline-route {
+    display: none;
+  }
+  .review-timeline-column + .review-timeline-column {
+    margin-top: 14px;
+  }
 }
 
 .timeline-meta {

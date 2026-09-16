@@ -997,6 +997,44 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
   </section>;
 }
 
+/**
+ * Past-date composer. Review mode is for reading first, so the full editor is
+ * not allowed to occupy the same visual weight as the timeline. The compact
+ * textarea is still a real input-shaped control; clicking it promotes the
+ * existing Composer instead of mounting a second draft pipeline.
+ */
+function ReviewComposer(props: ComposerProps) {
+  const [expanded, setExpanded] = useState(false);
+  const hasDraft = props.content.trim().length > 0 || props.shots.length > 0 || props.movieRefs.length > 0 || props.weather !== null;
+  const visibleExpanded = expanded || hasDraft;
+
+  useEffect(() => {
+    if (!visibleExpanded) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>(".review-composer-expanded .composer-input")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [visibleExpanded]);
+
+  if (visibleExpanded) {
+    return <div className="review-composer-expanded"><Composer {...props} onClose={() => { setExpanded(false); props.onClose(); }} /></div>;
+  }
+
+  return <section className="review-composer-compact surface" aria-label="回看记录编辑器">
+    <textarea
+      className="review-composer-input"
+      rows={1}
+      readOnly
+      value=""
+      placeholder="回看这一天，写一条……"
+      aria-label="回看这一天，点击展开记录编辑器"
+      onFocus={() => setExpanded(true)}
+      onClick={() => setExpanded(true)}
+    />
+    <button className="review-composer-expand" type="button" onClick={() => setExpanded(true)} aria-label="展开完整记录编辑器"><Plus size={16} strokeWidth={1.9} aria-hidden="true" /></button>
+  </section>;
+}
+
 interface MentionBoxProps {
   readonly value: string;
   readonly onChange: (value: string) => void;
@@ -1668,11 +1706,91 @@ function groupRecords(records: readonly RecordView[], fallbackDate: string): rea
   return [...groups.entries()].map(([date, items]) => ({ date, records: items }));
 }
 
+type ReviewColumn = "left" | "right";
+
+/**
+ * The review grid needs a stable estimate before the browser lays out the
+ * cards. Photos already have fixed square rows, so their contribution is
+ * predictable; text and relation rows are deliberately coarse. We use the
+ * estimate only to choose a lane — ResizeObserver later measures the real
+ * rectangles for the connector, but never re-shuffles a card after paint.
+ */
+function reviewHeightEstimate(record: RecordView, assets: readonly Asset[]): number {
+  const textLines = Math.max(1, Math.ceil(recordText(record).length / 42));
+  const photoCount = record.assetRefs.filter((ref) => ref.role === "photo" && isPhotoAsset(assets.find((asset) => asset.id === ref.assetId))).length;
+  const photoRows = photoCount === 0 ? 0 : photoCount === 1 ? 5.2 : photoCount <= 4 ? 5.2 * Math.ceil(photoCount / 2) : 5.2 * Math.ceil(Math.min(photoCount, PHOTO_GRID_LIMIT) / 3);
+  const relationRows = record.entityRefs.length + record.relatedRecordIds.length + record.assetRefs.filter((ref) => ref.role !== "photo").length > 0 ? 1.1 : 0;
+  const weatherRow = record.weather === undefined ? 0 : 1.1;
+  const taskRow = isTaskRecord(record) ? 1.1 : 0;
+  return 2.4 + textLines + photoRows + relationRows + weatherRow + taskRow;
+}
+
+function assignReviewColumns(records: readonly RecordView[], assets: readonly Asset[]): ReadonlyMap<string, ReviewColumn> {
+  const totals: Record<ReviewColumn, number> = { left: 0, right: 0 };
+  const result = new Map<string, ReviewColumn>();
+  for (const record of records) {
+    const column: ReviewColumn = totals.left <= totals.right ? "left" : "right";
+    result.set(record.id, column);
+    totals[column] += reviewHeightEstimate(record, assets);
+  }
+  return result;
+}
+
+function ReviewTimelineGrid({ records, assets, renderItem }: { readonly records: readonly RecordView[]; readonly assets: readonly Asset[]; readonly renderItem: (record: RecordView, column: ReviewColumn) => ReactNode }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [route, setRoute] = useState<{ readonly width: number; readonly height: number; readonly path: string }>({ width: 0, height: 0, path: "" });
+  const columns = useMemo(() => assignReviewColumns(records, assets), [assets, records]);
+  const grouped = useMemo(() => ({
+    left: records.filter((record) => columns.get(record.id) === "left"),
+    right: records.filter((record) => columns.get(record.id) === "right"),
+  }), [columns, records]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const updateRoute = () => {
+      const rootRect = root.getBoundingClientRect();
+      const items = records.map((record) => {
+        const element = root.querySelector<HTMLElement>(`[data-review-record-id="${CSS.escape(record.id)}"]`);
+        if (element === null) return null;
+        const rect = element.getBoundingClientRect();
+        const column = columns.get(record.id) ?? "left";
+        return { x: column === "left" ? rect.right - rootRect.left : rect.left - rootRect.left, y: rect.top - rootRect.top + 27 };
+      }).filter((point): point is { x: number; y: number } => point !== null);
+      if (items.length < 2) { setRoute({ width: rootRect.width, height: rootRect.height, path: "" }); return; }
+      const center = rootRect.width / 2;
+      const path = items.reduce((current, point, index) => {
+        if (index === 0) return `M ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+        const previous = items[index - 1];
+        const bend = Math.max(18, Math.abs(point.y - previous.y) * 0.28);
+        const direction = point.x >= previous.x ? 1 : -1;
+        const c1x = previous.x + direction * Math.min(42, Math.abs(center - previous.x));
+        const c2x = point.x - direction * Math.min(42, Math.abs(center - point.x));
+        return `${current} C ${c1x.toFixed(1)} ${previous.y.toFixed(1)}, ${c2x.toFixed(1)} ${(point.y - bend * direction * 0.18).toFixed(1)}, ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+      }, "");
+      setRoute({ width: rootRect.width, height: rootRect.height, path });
+    };
+    const observer = new ResizeObserver(updateRoute);
+    observer.observe(root);
+    root.querySelectorAll<HTMLElement>("[data-review-record-id]").forEach((element) => observer.observe(element));
+    updateRoute();
+    return () => observer.disconnect();
+  }, [columns, records]);
+
+  return <div ref={rootRef} className="review-timeline-grid" data-review-count={records.length}>
+    {route.path ? <svg className="review-timeline-route" viewBox={`0 0 ${route.width} ${route.height}`} width={route.width} height={route.height} aria-hidden="true"><path d={route.path} /></svg> : null}
+    <div className="review-timeline-column review-timeline-column--left">{grouped.left.map((record) => renderItem(record, "left"))}</div>
+    <div className="review-timeline-column review-timeline-column--right">{grouped.right.map((record) => renderItem(record, "right"))}</div>
+  </div>;
+}
+
 function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
   const title = timelineHeading(activeView);
   const empty = emptyCopy(activeView, selectedDate, Boolean(searchQuery));
   const groups = records ? groupRecords(records, selectedDate) : [];
-  return <section className="timeline-section" aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} />)}</div>)}</div> : null}</section>;
+  const reviewMode = activeView === "today" && selectedDate < localDateToday();
+  const renderItem = (record: RecordView, reviewColumn?: ReviewColumn) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} reviewColumn={reviewColumn} />;
+  return <section className={`timeline-section ${reviewMode ? "is-reviewing-past" : ""}`} aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => { const useReviewGrid = reviewMode && group.records.length >= 4; return <div className={`timeline-group ${useReviewGrid ? "timeline-group--review-grid" : ""}`} key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}{useReviewGrid ? <small>按动态高度分列</small> : null}</h3>{useReviewGrid ? <ReviewTimelineGrid records={group.records} assets={assets} renderItem={renderItem} /> : group.records.map((record) => renderItem(record))}</div>; })}</div> : null}</section>;
 }
 
 const WEEKDAY_LABELS: readonly string[] = ["一", "二", "三", "四", "五", "六", "日"];
@@ -2062,7 +2180,7 @@ function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: readonly s
   </div>;
 }
 
-function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
+function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, reviewColumn }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void; reviewColumn?: ReviewColumn }) {
   const Icon = COMPOSER_META[record.kind].icon;
   const task = isTaskRecord(record) ? record : undefined;
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
@@ -2079,7 +2197,7 @@ function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidde
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{record.weather.city}</small></span></div>;
-  return <article className="timeline-item"><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
+  return <article className={`timeline-item ${reviewColumn === undefined ? "" : `timeline-item--review-${reviewColumn}`}`.trim()} data-review-record-id={reviewColumn === undefined ? undefined : record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
 }
 
 interface TaskUndoEntry { readonly task: TaskRecordView; readonly previousStatus: TaskStatus; }
@@ -3634,6 +3752,7 @@ function App() {
   if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
 
   const isToday = activeView === "today";
+  const isReviewingPast = isToday && selectedDate < localDateToday();
   const showComposer = isToday || (activeView !== "settings" && activeView !== "entities" && composerOpen);
   const showPageActions = Boolean(searchQuery || entityFilterId !== null || (activeView !== "settings" && activeView !== "entities" && !isToday));
   const visibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
@@ -3642,11 +3761,47 @@ function App() {
   // them first. Derived from the records rather than tracked separately: the
   // evidence is already in every saved record's entityRefs.
   const recentPlaces = useMemo(() => recentPlaceIds(visibleRecords ?? []), [visibleRecords]);
+  const composerProps: ComposerProps = {
+    onShotsCleared: handleShotsCleared,
+    kind: composerKind,
+    content: composerContent,
+    entities,
+    recentPlaceIds: recentPlaces,
+    movieEnabled: movieStatus.enabled,
+    movieRefs: composerMovieRefs,
+    onMovieRefsChange: setComposerMovieRefs,
+    onMovieEntity: rememberMovieEntity,
+    onCreateEntity: handleCreateEntity,
+    occurredAt,
+    dueAt,
+    isPrivate: composerPrivate,
+    isBackfill: composerBackfill,
+    selectedDate,
+    saving,
+    dismissible: !isToday,
+    occurredDirty: occurredAtDirty,
+    weather: composerWeather,
+    weatherBusy: composerWeatherBusy,
+    onCaptureWeather: () => void captureComposerWeather(),
+    onClearWeather: () => setComposerWeather(null),
+    onKindChange: setComposerKind,
+    onContentChange: setComposerContent,
+    onOccurredAtChange: (value) => { setOccurredAt(value); setOccurredAtDirty(true); },
+    onDueAtChange: setDueAt,
+    onPrivateChange: setComposerPrivate,
+    onBackfillChange: setComposerBackfill,
+    shots: composerShots,
+    onShotsChange: setComposerShots,
+    onUploadShot: uploadComposerShot,
+    onNotify: showToast,
+    onSubmit: () => void handleCreate(),
+    onClose: () => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); },
+  };
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message) => showToast(message, "warn")} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? <Composer onShotsCleared={handleShotsCleared} kind={composerKind} content={composerContent} entities={entities} recentPlaceIds={recentPlaces} movieEnabled={movieStatus.enabled} movieRefs={composerMovieRefs} onMovieRefsChange={setComposerMovieRefs} onMovieEntity={rememberMovieEntity} onCreateEntity={handleCreateEntity} occurredAt={occurredAt} dueAt={dueAt} isPrivate={composerPrivate} isBackfill={composerBackfill} selectedDate={selectedDate} saving={saving} dismissible={!isToday} occurredDirty={occurredAtDirty} weather={composerWeather} weatherBusy={composerWeatherBusy} onCaptureWeather={() => void captureComposerWeather()} onClearWeather={() => setComposerWeather(null)} onKindChange={setComposerKind} onContentChange={setComposerContent} onOccurredAtChange={(value) => { setOccurredAt(value); setOccurredAtDirty(true); }} onDueAtChange={setDueAt} onPrivateChange={setComposerPrivate} onBackfillChange={setComposerBackfill} shots={composerShots} onShotsChange={setComposerShots} onUploadShot={uploadComposerShot} onNotify={showToast} onSubmit={() => void handleCreate()} onClose={() => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); }} /> : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message) => showToast(message, "warn")} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{demoCount > 0 && activeView !== "settings" ? <section className="demo-banner" aria-label="预置记录"><div className="demo-banner-text"><Sparkles size={16} strokeWidth={1.8} aria-hidden="true" /><div><strong>预置记录</strong><p>{demoCount} 条记录，包含关联、@ 提及和照片引用。随时可以藏起来或整批删掉。</p></div></div><div className="demo-banner-actions"><button className="secondary-button" type="button" onClick={toggleDemo}>{hideDemo ? "显示预置记录" : "隐藏预置记录"}</button><button className={`text-button demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={() => void handleDeleteDemo()} disabled={demoBusy}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再点一次，删除 ${demoCount} 条` : "删除全部预置记录"}</button></div></section> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
        ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
