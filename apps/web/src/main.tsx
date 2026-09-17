@@ -3357,7 +3357,7 @@ function App() {
     setRecordsError(null);
     apiRequest<RecordsResponse>(queryPath, { signal: controller.signal }).then((payload) => { if (!controller.signal.aborted && requestId === recordsRequestRef.current) setRecords(payload.items); }).catch((error) => { if (controller.signal.aborted || requestId !== recordsRequestRef.current) return; setRecords(null); setRecordsError(handleRequestError(error, "请检查 API 服务是否已启动")); }).finally(() => { if (!controller.signal.aborted && requestId === recordsRequestRef.current) setRecordsLoading(false); });
     return () => controller.abort();
-  }, [authState.authenticated, authState.required, handleRequestError, queryPath, recordsReload]);
+  }, [activeView, authState.authenticated, authState.required, handleRequestError, queryPath, recordsReload]);
 
   useEffect(() => { recordsRef.current = records ?? []; }, [records]);
 
