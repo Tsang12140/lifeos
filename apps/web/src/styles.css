@@ -1505,17 +1505,23 @@ h2 {
    the relation chips and the row of actions — lives inside this box, so the actions
    read as belonging to the record instead of floating at the end of the row.
 
-   The card takes its width from the widest thing it ever has to hold: a three-up
-   photo row. That row is `3 × 5 lines + 2 × 6px gap` = 400.08px of tiles, and the
-   own-column padding is 14px a side, so 428px holds it exactly and leaves no void.
-   The card stops there instead of stretching to the content column (669px), which
-   used to open a 227px blank on the right of every photo record. Text simply wraps
-   inside the card, and the card left-aligns against the timeline axis. */
+   The width is fixed, not capped: every card is 428px, whether it holds six photos
+   or four characters. 428 is the widest thing a record ever has to hold — a three-up
+   photo row of `3 × 5 lines + 2 × 6px gap` = 400.08px of tiles, plus 14px of padding
+   a side. A `max-width` alone would let a text-only card shrink to its text and give
+   every row a different right edge (measured: 188/212/226/228/280/282px down one
+   column); `width` + `max-width` makes the width a rule and lets only the height
+   follow the content. `max-width: 100%` keeps phones honest — a grid item with a
+   fixed width wider than its column would otherwise overflow it.
+
+   Height is deliberately unconstrained: one line of text stays 126px, six photos
+   make 400px, and nothing stretches to match a neighbour. */
 .timeline-content {
   grid-column: 3;
   grid-row: 2;
   min-width: 0;
-  max-width: calc(3 * 5 * 1.617rem + 2 * 6px + 28px);
+  width: calc(3 * 5 * 1.617rem + 2 * 6px + 28px);
+  max-width: 100%;
   justify-self: start;
   padding: 13px 14px 12px;
   border: 1px solid var(--line);
@@ -1529,32 +1535,50 @@ h2 {
   --record-line: 1.617rem;
 }
 
-/* The actions ride the card's bottom-right corner. `margin-left: auto` does the
-   work: without it a record with no relation chips would leave the buttons stuck
-   at the left edge. It is safe now because the card — not the page column — bounds
-   the row, so "far right" means the card's own 14px padding, not a 585px void. */
+/* The actions are pinned to the card's bottom-right corner, not floated to the end
+   of whatever row happens to come last. That is what a fixed-width card buys: the
+   corner is a known point on every record, so "edit / delete" lands in the same
+   place whether the record is four characters or six photos.
+
+   Grid, not flex. On a flex row the buttons can only reach the right edge of *their
+   own row*, so a one-line record buries them mid-card next to the text and a record
+   whose chips wrap pushes them onto a line of their own. Here the footer is the
+   bottom row of the card: the chips take the first column and the actions the
+   second, and the actions column is `justify-items: end` — a fixed right edge that
+   does not care how wide the chips are, because the column is sized by the card.
+
+   `align-items: end` keeps the buttons on the baseline of the last chip row rather
+   than stretching them to a tall wrapped block.
+
+   The second track is `max-content`, not `auto`. With `auto` the track is sized by
+   the free-space distribution first, and because the chips column is `minmax(0, 1fr)`
+   the buttons ended up in a 0px track with their 32px spilling out of it — measured
+   as a 9px miss on the right edge and an element sitting to their right. `max-content`
+   reserves the buttons' own width up front, so the corner is exact. */
 .timeline-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: end;
   gap: 8px;
   margin-top: 8px;
 }
 
+/* The actions are pinned to column 2 by hand, not by auto-placement. Auto-placement
+   fills left to right, so a record with no relation chips puts the buttons in column 1
+   and leaves column 2 empty: the track collapses to 0px and `justify-self: end` parks
+   them at the right edge of the *chips* track — 8px short of the corner, and only on
+   the records that happen to have no chips. Naming the column makes the corner the
+   same point whether the chips are there or not. */
 .timeline-footer .timeline-actions {
-  justify-content: flex-end;
-  flex-shrink: 0;
-  margin: 0 0 0 auto;
+  grid-column: 2;
+  justify-self: end;
+  align-self: end;
 }
 
-/* The relation chips live inside the footer, so they share the row with the
-   actions instead of owning a full-width row above them. `min-width: 0` is what
-   lets the row actually shrink: without it a flex item refuses to go below its
-   content width and the chips shove the buttons out of the card. Wrapping is on
-   because the card is only as wide as a six-photo row — a record with several
-   chips drops them onto the next line rather than escaping the card. */
+/* The relation chips live in the footer's first column, so their wrap width is the
+   card minus the actions, and they drop onto extra lines inside that column rather
+   than shoving the buttons off the right edge. */
 .timeline-footer .relation-row {
-  flex: 1 1 auto;
   min-width: 0;
   flex-wrap: wrap;
   margin-top: 0;
@@ -1574,11 +1598,18 @@ h2 {
 }
 
 @media (max-width: 560px) {
-  /* The card's padding is already the gutter on a phone, so the footer only needs
-     to let the relation chips wrap above the actions — the actions keep their own
-     width and ride the bottom-right corner. */
+  /* On a phone the card is down to ~273px, so the two columns no longer fit the
+     chips and the buttons side by side without squeezing the chips to nothing.
+     One column: the chips get the full width, the actions keep the corner on the
+     line below — still bottom-right, just a row lower. The explicit `grid-column: 2`
+     has to be released here, or it would invent a third track and push the buttons
+     back off the card. */
   .timeline-footer {
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .timeline-footer .timeline-actions {
+    grid-column: 1;
   }
 }
 
