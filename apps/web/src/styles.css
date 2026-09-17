@@ -1463,12 +1463,18 @@ h2 {
   position: relative;
   display: grid;
   grid-template-columns: 65px 46px minmax(0, 1fr);
-  min-height: 92px;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
   padding: 0;
 }
 
 .timeline-time {
-  padding-top: 5px;
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  position: relative;
+  z-index: 2;
+  padding-top: 0;
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.45;
@@ -1476,6 +1482,8 @@ h2 {
 }
 
 .timeline-marker {
+  grid-column: 2;
+  grid-row: 1 / -1;
   position: relative;
   z-index: 1;
   display: flex;
@@ -1493,9 +1501,21 @@ h2 {
   box-shadow: 0 0 0 1px #8199e9;
 }
 
+/* The record is one card. Every part of it — the kind tags, the text, the photos,
+   the relation chips and the row of actions — lives inside this box, so the actions
+   read as belonging to the record instead of floating at the end of the row.
+   The card is the container: it spans the whole content column so a three-up photo
+   grid has a stable width to sit in, while .timeline-text keeps its own 610px cap
+   so a long line stays readable. */
 .timeline-content {
+  grid-column: 3;
+  grid-row: 2;
   min-width: 0;
-  padding: 0 0 30px 2px;
+  padding: 13px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.82);
+  box-shadow: 0 5px 14px rgb(24 36 61 / 0.045);
   /* One line of .timeline-text (0.98rem × 1.65 = 25.872px). The photo grid is sized in
      these units — a grid square is five lines tall and a lone photo nine — so "five
      lines" survives a change to the body type scale instead of drifting silently.
@@ -1503,91 +1523,48 @@ h2 {
   --record-line: 1.617rem;
 }
 
-/* Historical review mode: four or more records become two natural-height lanes.
-   This is not CSS columns: the records keep their API order through the JS
-   height estimate, and one SVG route below connects their real rectangles. */
-.timeline-group--review-grid .timeline-group-title {
+/* The actions ride the card's bottom-right corner. `margin-left: auto` does the
+   work: without it a record with no relation chips would leave the buttons stuck
+   at the left edge. It is safe now because the card — not the page column — bounds
+   the row, so "far right" means the card's own 14px padding, not a 585px void. */
+.timeline-footer {
   display: flex;
-  align-items: baseline;
+  align-items: flex-end;
   gap: 8px;
+  margin-top: 8px;
 }
-.timeline-group--review-grid .timeline-group-title small {
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 560;
+
+.timeline-footer .timeline-actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+  margin: 0 0 0 auto;
 }
-.review-timeline-grid {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
-  isolation: isolate;
-}
-.review-timeline-column {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  min-width: 0;
-}
-.review-timeline-route {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-.review-timeline-route path {
-  fill: none;
-  stroke: #b9c6d7;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.review-timeline-grid .timeline-item {
-  display: block;
-  min-height: 0;
+
+.record-action.record-action-icon {
+  justify-content: center;
+  width: 32px;
   padding: 0;
 }
-.review-timeline-grid .timeline-time {
-  padding: 0 0 5px;
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.35;
-  text-align: left;
-}
-.review-timeline-grid .timeline-marker {
-  display: none;
-}
-.review-timeline-grid .timeline-content {
-  position: relative;
-  z-index: 1;
-  padding: 13px 14px 15px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgb(255 255 255 / 0.82);
-  box-shadow: 0 5px 14px rgb(24 36 61 / 0.045);
-}
-.review-timeline-grid .timeline-meta {
-  min-height: 22px;
-}
-.review-timeline-grid .timeline-text {
-  margin-top: 7px;
-}
-@media (max-width: 720px) {
-  .review-timeline-grid {
-    display: block;
+
+@media (pointer: coarse) {
+  .record-action.record-action-icon {
+    width: 44px;
+    min-height: 44px;
   }
-  .review-timeline-route {
-    display: none;
-  }
-  .review-timeline-column + .review-timeline-column {
-    margin-top: 14px;
+}
+
+@media (max-width: 560px) {
+  /* The card's padding is already the gutter on a phone, so the footer only needs
+     to let the relation chips wrap above the actions — the actions keep their own
+     width and ride the bottom-right corner. */
+  .timeline-footer {
+    flex-wrap: wrap;
   }
 }
 
 .timeline-meta {
+  flex-wrap: wrap;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -6366,7 +6343,7 @@ button.relation-chip {
     text-align: center;
   }
 
-.page-heading {
+  .page-heading {
     margin-bottom: 23px;
   }
 }
@@ -6520,6 +6497,10 @@ button.relation-chip {
 
   .timeline-time {
     font-size: 0.73rem;
+  }
+
+  .timeline-footer {
+    flex-wrap: wrap;
   }
 
   .timeline-text {

@@ -36,6 +36,7 @@ import {
   type EntityKind,
   type EntityRef,
   type EntityRelation,
+  type ExportBundleV1,
   type Movie,
   type MovieExternalIds,
   type LifeTime,
@@ -665,6 +666,63 @@ function assetRefsField(value: unknown, repository: SqliteRecordRepository): rea
     }
   }
   return refs;
+}
+
+/**
+ * Import is the only write path that hands us a pre-assembled object graph, so
+ * it is the only path where a reference can point at nothing: POST and PATCH
+ * resolve every ref against the database as they go, but a bundle arrives whole.
+ * Enforce the same invariant here — each ref must resolve to something the
+ * database knows about, either because the bundle carries it or because it is
+ * already stored.
+ *
+ * Soft-deleted records and trashed assets count as "known": their tombstones
+ * are still in the database, and refusing them would make an owner's own export
+ * un-importable after they emptied the recycle bin.
+ */
+function assertImportReferences(bundle: ExportBundleV1, repository: SqliteRecordRepository): void {
+  const incomingRecords = new Set(bundle.records.map((record) => record.id));
+  const incomingEntityTypes = new Map(bundle.entities.map((entity) => [entity.id, entity.type]));
+  const incomingAssets = new Set(bundle.assets.map((asset) => asset.id));
+
+  for (const entity of bundle.entities) {
+    for (const relation of entity.relations ?? []) {
+      if (relation.entityId === entity.id) {
+        throw new HttpError(400, "self_relation", "An entity cannot relate to itself");
+      }
+      if (incomingEntityTypes.has(relation.entityId) || repository.findEntityById(relation.entityId) !== null) continue;
+      throw new HttpError(400, "unknown_entity", `Unknown entity: ${relation.entityId}`);
+    }
+  }
+
+  for (const record of bundle.records) {
+    const seenEntities = new Set<string>();
+    for (const ref of record.entityRefs) {
+      if (seenEntities.has(ref.entityId)) throw new HttpError(400, "duplicate_reference", `entityRefs repeats ${ref.entityId}`);
+      seenEntities.add(ref.entityId);
+      const actualType = incomingEntityTypes.get(ref.entityId) ?? repository.findEntityById(ref.entityId)?.type;
+      if (actualType === undefined) throw new HttpError(400, "unknown_entity", `Unknown entity: ${ref.entityId}`);
+      if (actualType !== ref.entityType) {
+        throw new HttpError(400, "entity_type_mismatch", `Entity ${ref.entityId} is a ${actualType}, not a ${ref.entityType}`);
+      }
+    }
+    const seenAssets = new Set<string>();
+    for (const ref of record.assetRefs) {
+      if (seenAssets.has(ref.assetId)) throw new HttpError(400, "duplicate_reference", `assetRefs repeats ${ref.assetId}`);
+      seenAssets.add(ref.assetId);
+      if (incomingAssets.has(ref.assetId) || repository.findAssetById(ref.assetId) !== null) continue;
+      if (repository.findAssetTrash(ref.assetId) !== null) continue;
+      throw new HttpError(400, "unknown_asset", `Unknown asset: ${ref.assetId}`);
+    }
+    const seenRecords = new Set<string>();
+    for (const id of record.relatedRecordIds) {
+      if (id === record.id) throw new HttpError(400, "self_reference", "A record cannot relate to itself");
+      if (seenRecords.has(id)) throw new HttpError(400, "duplicate_reference", `relatedRecordIds repeats ${id}`);
+      seenRecords.add(id);
+      if (incomingRecords.has(id) || repository.findById(id, true) !== null) continue;
+      throw new HttpError(400, "unknown_record", `Unknown record: ${id}`);
+    }
+  }
 }
 
 function storageRefsField(value: unknown): readonly StorageReference[] {
@@ -1687,8 +1745,9 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       return;
     }
     if (pathname === "/api/weather" && req.method === "GET") {
-      const requestedDate = url.searchParams.get("date");
-      if (requestedDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) throw new HttpError(400, "invalid_date", "date must use YYYY-MM-DD");
+      // Same three-tier day-key rule as every other date endpoint: the regex
+      // alone would let 2026-02-30 through, and this value is used as a cache key.
+      const requestedDate = parseDateQuery(url.searchParams.get("date"), "date") ?? null;
       const deviceId = weatherDeviceId(req, res, config);
       const deviceLocation = repository.getWeatherDeviceLocation(deviceId);
       const override = weatherLocationOverride(config, deviceLocation);
@@ -1985,6 +2044,9 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       } catch (error) {
         throw new HttpError(400, "invalid_bundle", error instanceof Error ? error.message : "Invalid export bundle");
       }
+      // A bundle is the one payload that can carry a reference to nothing; check
+      // the whole graph before it reaches the transaction.
+      assertImportReferences(bundle, repository);
       try {
         repository.importData(bundle);
       } catch (error) {

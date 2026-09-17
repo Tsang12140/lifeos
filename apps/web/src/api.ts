@@ -133,6 +133,17 @@ export interface BackupRetentionPolicy {
 }
 
 export interface TrashedBackupEntry {
+  /**
+   * The server-side run id. A dual backup writes one row per provider, so both
+   * `fileName` and `fileName + prunedAt` are shared by the pair — only the id is
+   * unique, which is what a React list key needs.
+   *
+   * Optional because the web and the API build separately: a preview pointed at
+   * an API built before this field existed receives entries without it (observed
+   * on the 3011 preview). Callers must still derive a unique key, so the id is
+   * the first choice rather than the only one.
+   */
+  readonly id?: number;
   readonly fileName: string;
   readonly prunedAt: string;
   readonly provider: string;

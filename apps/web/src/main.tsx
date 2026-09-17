@@ -1752,91 +1752,13 @@ function groupRecords(records: readonly RecordView[], fallbackDate: string): rea
   return [...groups.entries()].map(([date, items]) => ({ date, records: items }));
 }
 
-type ReviewColumn = "left" | "right";
-
-/**
- * The review grid needs a stable estimate before the browser lays out the
- * cards. Photos already have fixed square rows, so their contribution is
- * predictable; text and relation rows are deliberately coarse. We use the
- * estimate only to choose a lane — ResizeObserver later measures the real
- * rectangles for the connector, but never re-shuffles a card after paint.
- */
-function reviewHeightEstimate(record: RecordView, assets: readonly Asset[]): number {
-  const textLines = Math.max(1, Math.ceil(recordText(record).length / 42));
-  const photoCount = record.assetRefs.filter((ref) => ref.role === "photo" && isPhotoAsset(assets.find((asset) => asset.id === ref.assetId))).length;
-  const photoRows = photoCount === 0 ? 0 : photoCount === 1 ? 5.2 : photoCount <= 4 ? 5.2 * Math.ceil(photoCount / 2) : 5.2 * Math.ceil(Math.min(photoCount, PHOTO_GRID_LIMIT) / 3);
-  const relationRows = record.entityRefs.length + record.relatedRecordIds.length + record.assetRefs.filter((ref) => ref.role !== "photo").length > 0 ? 1.1 : 0;
-  const weatherRow = record.weather === undefined ? 0 : 1.1;
-  const taskRow = isTaskRecord(record) ? 1.1 : 0;
-  return 2.4 + textLines + photoRows + relationRows + weatherRow + taskRow;
-}
-
-function assignReviewColumns(records: readonly RecordView[], assets: readonly Asset[]): ReadonlyMap<string, ReviewColumn> {
-  const totals: Record<ReviewColumn, number> = { left: 0, right: 0 };
-  const result = new Map<string, ReviewColumn>();
-  for (const record of records) {
-    const column: ReviewColumn = totals.left <= totals.right ? "left" : "right";
-    result.set(record.id, column);
-    totals[column] += reviewHeightEstimate(record, assets);
-  }
-  return result;
-}
-
-function ReviewTimelineGrid({ records, assets, renderItem }: { readonly records: readonly RecordView[]; readonly assets: readonly Asset[]; readonly renderItem: (record: RecordView, column: ReviewColumn) => ReactNode }) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [route, setRoute] = useState<{ readonly width: number; readonly height: number; readonly path: string }>({ width: 0, height: 0, path: "" });
-  const columns = useMemo(() => assignReviewColumns(records, assets), [assets, records]);
-  const grouped = useMemo(() => ({
-    left: records.filter((record) => columns.get(record.id) === "left"),
-    right: records.filter((record) => columns.get(record.id) === "right"),
-  }), [columns, records]);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (root === null) return;
-    const updateRoute = () => {
-      const rootRect = root.getBoundingClientRect();
-      const items = records.map((record) => {
-        const element = root.querySelector<HTMLElement>(`[data-review-record-id="${CSS.escape(record.id)}"]`);
-        if (element === null) return null;
-        const rect = element.getBoundingClientRect();
-        const column = columns.get(record.id) ?? "left";
-        return { x: column === "left" ? rect.right - rootRect.left : rect.left - rootRect.left, y: rect.top - rootRect.top + 27 };
-      }).filter((point): point is { x: number; y: number } => point !== null);
-      if (items.length < 2) { setRoute({ width: rootRect.width, height: rootRect.height, path: "" }); return; }
-      const center = rootRect.width / 2;
-      const path = items.reduce((current, point, index) => {
-        if (index === 0) return `M ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
-        const previous = items[index - 1];
-        const bend = Math.max(18, Math.abs(point.y - previous.y) * 0.28);
-        const direction = point.x >= previous.x ? 1 : -1;
-        const c1x = previous.x + direction * Math.min(42, Math.abs(center - previous.x));
-        const c2x = point.x - direction * Math.min(42, Math.abs(center - point.x));
-        return `${current} C ${c1x.toFixed(1)} ${previous.y.toFixed(1)}, ${c2x.toFixed(1)} ${(point.y - bend * direction * 0.18).toFixed(1)}, ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
-      }, "");
-      setRoute({ width: rootRect.width, height: rootRect.height, path });
-    };
-    const observer = new ResizeObserver(updateRoute);
-    observer.observe(root);
-    root.querySelectorAll<HTMLElement>("[data-review-record-id]").forEach((element) => observer.observe(element));
-    updateRoute();
-    return () => observer.disconnect();
-  }, [columns, records]);
-
-  return <div ref={rootRef} className="review-timeline-grid" data-review-count={records.length}>
-    {route.path ? <svg className="review-timeline-route" viewBox={`0 0 ${route.width} ${route.height}`} width={route.width} height={route.height} aria-hidden="true"><path d={route.path} /></svg> : null}
-    <div className="review-timeline-column review-timeline-column--left">{grouped.left.map((record) => renderItem(record, "left"))}</div>
-    <div className="review-timeline-column review-timeline-column--right">{grouped.right.map((record) => renderItem(record, "right"))}</div>
-  </div>;
-}
-
 function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
   const title = timelineHeading(activeView);
   const empty = emptyCopy(activeView, selectedDate, Boolean(searchQuery));
   const groups = records ? groupRecords(records, selectedDate) : [];
-  const reviewMode = activeView === "today" && selectedDate < localDateToday();
-  const renderItem = (record: RecordView, reviewColumn?: ReviewColumn) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} reviewColumn={reviewColumn} />;
-  return <section className={`timeline-section ${reviewMode ? "is-reviewing-past" : ""}`} aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => { const useReviewGrid = reviewMode && group.records.length >= 4; return <div className={`timeline-group ${useReviewGrid ? "timeline-group--review-grid" : ""}`} key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}{useReviewGrid ? <small>按动态高度分列</small> : null}</h3>{useReviewGrid ? <ReviewTimelineGrid records={group.records} assets={assets} renderItem={renderItem} /> : group.records.map((record) => renderItem(record))}</div>; })}</div> : null}</section>;
+  /* `data-view` lets the compact rules tell the three surfaces apart without the
+     component having to thread a class name through every branch. */
+  return <section className="timeline-section" data-view={activeView} aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} />)}</div>)}</div> : null}</section>;
 }
 
 const WEEKDAY_LABELS: readonly string[] = ["一", "二", "三", "四", "五", "六", "日"];
@@ -2226,7 +2148,7 @@ function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: readonly s
   </div>;
 }
 
-function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, reviewColumn }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void; reviewColumn?: ReviewColumn }) {
+function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
   const Icon = COMPOSER_META[record.kind].icon;
   const task = isTaskRecord(record) ? record : undefined;
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
@@ -2243,7 +2165,7 @@ function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidde
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{record.weather.city}</small></span></div>;
-  return <article className={`timeline-item ${reviewColumn === undefined ? "" : `timeline-item--review-${reviewColumn}`}`.trim()} data-review-record-id={reviewColumn === undefined ? undefined : record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action" type="button" onClick={() => onEdit(record)}><Edit3 size={14} aria-hidden="true" />编辑</button><button className="record-action record-action-danger" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" />删除</button></div></div></article>;
+  return <article className="timeline-item" data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{relationLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer"><div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
 }
 
 interface TaskUndoEntry { readonly task: TaskRecordView; readonly previousStatus: TaskStatus; }
@@ -2822,7 +2744,7 @@ function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: {
         </div>
         <p className="settings-backup-retention-scope" data-backup-retention-scope>清理不会直接删掉：本地副本移入备份目录下的 <code>_trash</code>，云端对象移入 <code>{(s3.prefix || "product-backup/lifeos") + "-trash"}</code>，在回收站留满 {retention.policy.trashDays} 天后才真正删除。{retention.cleanupTrigger}</p>
         <div className="settings-backup-retention-list">{retention.entries.length === 0 ? <p className="settings-backup-retention-note">还没有备份。</p> : retention.entries.slice(0, 12).map((entry) => <div className={`settings-backup-retention-row ${entry.keep ? "is-keep" : "is-drop"}`} key={entry.fileName} data-backup-retention-row={entry.keep ? "keep" : "drop"}><span className={`settings-backup-retention-tier is-${entry.tier}`}>{RETENTION_TIER_LABELS[entry.tier]}</span><span className="settings-backup-retention-when">{formatWhen(entry.startedAt)}{entry.sizeBytes === undefined ? "" : ` · ${formatBytes(entry.sizeBytes)}`}</span><span className="settings-backup-retention-why">{entry.reason}</span></div>)}{retention.entries.length > 12 ? <p className="settings-backup-retention-note">仅显示最近 12 份，共 {retention.entries.length} 份。</p> : null}</div>
-        {retention.trashed.length > 0 ? <div className="settings-backup-retention-trashed" data-backup-retention-trashed><p className="settings-backup-retention-note">已清理 {retention.trashed.length} 份，仍在回收站里（可以拿回来）。最近几份：</p>{retention.trashed.slice(0, 6).map((entry) => <div className="settings-backup-retention-row is-drop" key={entry.fileName + entry.prunedAt}><span className="settings-backup-retention-tier is-none">回收站</span><span className="settings-backup-retention-when">{formatWhen(entry.prunedAt)}</span><span className="settings-backup-retention-why">{entry.fileName} · {entry.provider === "s3" ? "云端" : "本地"}</span></div>)}</div> : null}
+        {retention.trashed.length > 0 ? <div className="settings-backup-retention-trashed" data-backup-retention-trashed><p className="settings-backup-retention-note">已清理 {retention.trashed.length} 份，仍在回收站里（可以拿回来）。最近几份：</p>{retention.trashed.slice(0, 6).map((entry) => <div className="settings-backup-retention-row is-drop" key={entry.id ?? `${entry.fileName}@${entry.prunedAt}`}><span className="settings-backup-retention-tier is-none">回收站</span><span className="settings-backup-retention-when">{formatWhen(entry.prunedAt)}</span><span className="settings-backup-retention-why">{entry.fileName} · {entry.provider === "s3" ? "云端" : "本地"}</span></div>)}</div> : null}
         {retention.connectionTestCount > 0 ? <p className="settings-backup-retention-note">另有 {retention.connectionTestCount} 个连接测试文件（{formatBytes(retention.connectionTestBytes)}）不算备份，不参与保留。</p> : null}
         <div className="settings-backup-retention-form"><label><span>日备保留天数</span><input type="number" min={retention.limits.dailyDays.min} max={retention.limits.dailyDays.max} value={retentionDraft.dailyDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, dailyDays: Number(event.target.value) })} /></label><label><span>周备保留周数</span><input type="number" min={retention.limits.weeklyWeeks.min} max={retention.limits.weeklyWeeks.max} value={retentionDraft.weeklyWeeks} onChange={(event) => setRetentionDraft({ ...retentionDraft, weeklyWeeks: Number(event.target.value) })} /></label><label><span>月备保留月数</span><input type="number" min={retention.limits.monthlyMonths.min} max={retention.limits.monthlyMonths.max} value={retentionDraft.monthlyMonths} onChange={(event) => setRetentionDraft({ ...retentionDraft, monthlyMonths: Number(event.target.value) })} /></label><label><span>回收站保留天数</span><input type="number" min={retention.limits.trashDays.min} max={retention.limits.trashDays.max} value={retentionDraft.trashDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, trashDays: Number(event.target.value) })} /></label><button className="secondary-button" type="button" data-backup-retention-save onClick={() => void saveRetention()} disabled={retentionSaving}>{retentionSaving ? "保存中…" : "保存保留策略"}</button></div>
         {retentionMessage ? <p className="settings-inline-success" role="status">{retentionMessage}</p> : null}

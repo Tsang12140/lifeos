@@ -91,26 +91,44 @@ export function assertValidExportBundle(value: unknown): asserts value is Export
   }
 }
 
+/**
+ * JSON.stringify leaves U+2028 / U+2029 raw (they are legal *inside* JSON
+ * strings), but YAML 1.2 counts both as line breaks. A raw one inside a
+ * frontmatter value therefore splits the block in two. Escaping them keeps the
+ * output simultaneously a valid YAML 1.2 scalar and a valid JSON document, and
+ * both parsers decode `\u2028` back to the same character — so nothing is lost.
+ */
+function jsonScalar(value: unknown): string | undefined {
+  const json = JSON.stringify(value);
+  if (json === undefined) return undefined;
+  return json.replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
+}
+
 export function quoteYamlScalar(value: string): string {
   // JSON double-quoted strings are valid YAML scalars and cover quotes,
-  // backslashes, newlines, colons and leading # without special cases.
-  return JSON.stringify(value);
+  // backslashes, newlines, colons, leading # and the two YAML line separators
+  // (U+2028 / U+2029, which JSON.stringify does *not* escape) without special cases.
+  return jsonScalar(value) ?? '""';
 }
 
 export function escapeMarkdownPath(path: string): string {
   // Angle-bracket destinations permit spaces and parentheses. Escape the two
   // characters that still have structural meaning inside that form. Newlines
-  // are percent-encoded so a source key cannot break the Markdown link.
+  // are percent-encoded so a source key cannot break the Markdown link — and
+  // U+2028 / U+2029 are line breaks to Markdown too, even though they are not
+  // \n or \r.
   return path
     .replaceAll("\\", "\\\\")
     .replaceAll("<", "\\<")
     .replaceAll(">", "\\>")
     .replaceAll("\r", "%0D")
-    .replaceAll("\n", "%0A");
+    .replaceAll("\n", "%0A")
+    .replaceAll("\u2028", "%E2%80%A8")
+    .replaceAll("\u2029", "%E2%80%A9");
 }
 
 function yamlValue(value: unknown): string {
-  const json = JSON.stringify(value);
+  const json = jsonScalar(value);
   if (json === undefined) {
     return "null";
   }

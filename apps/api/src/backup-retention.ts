@@ -219,6 +219,8 @@ export function retentionHorizonDays(policy: BackupRetention): number {
 
 /** Structural shape of a `backup_runs` row, kept generic to avoid an import cycle. */
 export interface RetentionRunInput {
+  /** The row's own id. It is the only field that is unique per run, not per file. */
+  readonly id: number;
   readonly provider: string;
   readonly kind: string;
   readonly status: string;
@@ -231,6 +233,12 @@ export interface RetentionRunInput {
 }
 
 export interface TrashedBackupEntry {
+  /**
+   * The `backup_runs` row id. A dual backup writes one row per provider, so
+   * `fileName` and even `fileName + prunedAt` repeat across the pair — the id is
+   * what a list key can rely on.
+   */
+  readonly id: number;
   readonly fileName: string;
   readonly prunedAt: string;
   readonly provider: string;
@@ -276,6 +284,7 @@ export function buildBackupRetentionView(runs: readonly RetentionRunInput[], pol
   const trashed: TrashedBackupEntry[] = runs
     .filter((run) => run.prunedAt !== undefined && typeof run.fileName === "string")
     .map((run) => ({
+      id: run.id,
       fileName: run.fileName as string,
       prunedAt: run.prunedAt as string,
       provider: run.provider,

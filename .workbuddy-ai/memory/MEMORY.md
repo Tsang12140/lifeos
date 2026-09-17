@@ -62,6 +62,14 @@
 - `.weather-bg-layer` 在 `.weather-bg` **外面**，所以不影响验收里的节点预算计数。
 - 刷新键的 spinner 由 **`manualBusy`** 驱动，**只有手动按刷新才转**（切日期走自动刷新，不闪）。
 
+## 记录卡形态（2026-09-17 定案，已实现）
+
+- **卡片皮肤挂在无前缀的 `.timeline-content` 上**，铺到**全部**记录（今天 + 历史统一）。曾经它只挂在 `.review-timeline-grid .timeline-content` 下，双列一拆皮肤就没了 —— 这是「卡片化消失」的根因。
+- **卡片占满正文列（669px）**，正文 `.timeline-text` 保留 `max-width: 610px`。照片网格是 `width: fit-content` + 固定格子（`calc(5 * var(--record-line))`），给满宽度**不会**把 1 张图拉成整行。
+- **编辑/删除是纯图标**（32×32，触控 44×44），收在 `.timeline-footer` 内、卡片右下角（`margin: 0 0 0 auto`）。图标「离得很远」曾经是**归属问题**：`auto` 参照 669px 正文列而非卡片内边距。
+- **双列已彻底删除**，不要恢复：`ReviewTimelineGrid` / `assignReviewColumns` / `reviewHeightEstimate` / `reviewMode` / `is-reviewing-past` / `data-review-record-id` 全部消失，对应 CSS 也无。历史日期走**单列**。
+- **时间轴项现在带 `data-record-id={record.id}`**、`section` 带 `data-view={activeView}` —— 验收脚本的稳定钩子。
+
 ## 回看模式双列规则（2026-09-16 23:40 主人确认）
 
 - 主人接受：过去日期动态达到 **4 条**且桌面宽度足够时，按**预计卡片高度**把下一条放到当前较短列，不严格左右交替。
@@ -125,3 +133,10 @@
 - **`transform` 不改变布局盒宽**：用 `translateX` 做元素叠压，元素的布局总宽仍然是「N 个元素的宽度」，会溢出让容器外；而 `documentElement` 的横向溢出可能是 0（页面够宽吃掉了），**光看页面级溢出会漏掉泄漏**。要用负 margin 参与布局，并逐元素对容器边界断言。
 - 旋转/变换后的元素**画出来比布局盒宽**（`w·|cos| + h·|sin|`），预留 overhang。
 - 跑 CDP 脚本时若要切换视口，**量不同形态前记得 `Emulation.clearDeviceMetricsOverride`**，否则会量到上一个视口的折叠态几何（曾导致 5 项假 FAIL）。
+
+## 回看双列是「已被删掉」的形态，不是待优化（2026-09-17）
+
+- 主人认可的「卡片化 + 双列」在 commit 0c25baa（09-16 23:44）里是**完整存在**的：ReviewTimelineGrid + assignReviewColumns + SVG 回环 + 卡片样式（border/radius14/白底0.82/shadow）。
+- opencode(union-alpha) 那批**未提交**改动把双列**整套删除**了，并在 changelog 里自称「方案 A 只换连线、分列不动」—— **自述与交付不符**。
+- 若主人要恢复：**从 0c25baa 取 main.tsx / styles.css 的对应 hunk**，不要 git checkout 整个文件（会把同文件里其它有价值的修复一起抹掉）。
+- 判别口诀：**「说改了连线、实际删了布局」要看元素计数**（review-timeline-grid / data-review-record-id 是不是 0），不能只看 changelog 自述。
