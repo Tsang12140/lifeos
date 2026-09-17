@@ -1504,13 +1504,19 @@ h2 {
 /* The record is one card. Every part of it — the kind tags, the text, the photos,
    the relation chips and the row of actions — lives inside this box, so the actions
    read as belonging to the record instead of floating at the end of the row.
-   The card is the container: it spans the whole content column so a three-up photo
-   grid has a stable width to sit in, while .timeline-text keeps its own 610px cap
-   so a long line stays readable. */
+
+   The card takes its width from the widest thing it ever has to hold: a three-up
+   photo row. That row is `3 × 5 lines + 2 × 6px gap` = 400.08px of tiles, and the
+   own-column padding is 14px a side, so 428px holds it exactly and leaves no void.
+   The card stops there instead of stretching to the content column (669px), which
+   used to open a 227px blank on the right of every photo record. Text simply wraps
+   inside the card, and the card left-aligns against the timeline axis. */
 .timeline-content {
   grid-column: 3;
   grid-row: 2;
   min-width: 0;
+  max-width: calc(3 * 5 * 1.617rem + 2 * 6px + 28px);
+  justify-self: start;
   padding: 13px 14px 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -1529,6 +1535,7 @@ h2 {
    the row, so "far right" means the card's own 14px padding, not a 585px void. */
 .timeline-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
   margin-top: 8px;
@@ -1538,6 +1545,19 @@ h2 {
   justify-content: flex-end;
   flex-shrink: 0;
   margin: 0 0 0 auto;
+}
+
+/* The relation chips live inside the footer, so they share the row with the
+   actions instead of owning a full-width row above them. `min-width: 0` is what
+   lets the row actually shrink: without it a flex item refuses to go below its
+   content width and the chips shove the buttons out of the card. Wrapping is on
+   because the card is only as wide as a six-photo row — a record with several
+   chips drops them onto the next line rather than escaping the card. */
+.timeline-footer .relation-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  margin-top: 0;
 }
 
 .record-action.record-action-icon {
@@ -1621,8 +1641,9 @@ h2 {
   background: #eef1f6;
 }
 
+/* No max-width of its own: the card is the measure now, and a second cap inside it
+   would only leave a ragged right edge when the card is the narrower of the two. */
 .timeline-text {
-  max-width: 610px;
   margin: 9px 0 0;
   color: var(--ink);
   font-size: 0.98rem;
