@@ -35,6 +35,12 @@
   → `npm run dev` / `npm start` **什么都不配**读的就是主人的数据；3011 预览也显式指向它。
   → **永远不要对它跑 `seed-demo --clean`、不要重置、不要删。** 要造数据请用**另开 `LIFEOS_DATA_DIR` 的隔离实例**（`verify-*.mjs` 那批脚本本来就是这么做的，用 `.review/<name>-run/`）。
   → **3011/5199 现在直接指向生产库**，**跑会产生记录的验收会污染主人的数据**（09-18 清掉的那 105 条就是这么来的）。
+- **⚠️ `.review/` 里 16 个脚本会直接写生产库**（144 个脚本中：22 个自带隔离 data dir、**16 个连 3011/5199 且会写**、72 个只读）。
+  → **跑验收前先看清单：`node .review/audit-toolbox-targets.mjs`**（会分「会写 / 只读」两组）。
+  → 判断某个预览实例指着哪个库：`GET /api/backup/status` 的 `localDirectory` 字段。
+  → 这类脚本「建记录 → 断言 → 删」：正常收尾留**软删墓碑**（不可见），**中途崩了就留活记录**（可见）—— 第一轮清的那 14 条「2036-09-15」就是这么来的。
+  → **只读那组也不安全**：读的是主人真实数据，断言会随主人数据漂移（`verify-settings-ai.mjs` 的 8 项长期 FAIL 属此类）。
+  → **13/15 个目标脚本都 import `./reap-chrome.mjs`，但只读脚本也 import 它** → 不是干净的单一改动点，别在那儿加硬拦截。
 - **唯一的安全网 = 应用自己的 S3 定时快照**（`.env` 的 `BACKUP_S3_*`，桶 `cdnb`，前缀 `product-backup/lifeos`；老的被保留策略挪到 `lifeos-trash/`，**同样可恢复**）。
   → **恢复用 `.review/restore-from-backup.mjs`**（`--list` / `--latest` / `--key`；**恢复前强制备份当前 data dir**）。资产文件不在快照里，但存在 `LIFEOS_ASSET_ROOT`（预览 = `pic-test/`），通常还在。
   → **恢复三件事**：① 先停 API（SQLite 被持有句柄）；② **同时删 `-wal`/`-shm`**，否则旧 WAL 会盖回新库；③ 保留 `weather-config.json` 与 `ai-config.json`。
