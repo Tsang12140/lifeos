@@ -7,8 +7,9 @@
 
 - **预览常开**：`.review/accept-serve.mjs` → API 3011 + Web 5199（主人开 `http://127.0.0.1:5199/`）。
   **收尾不要杀**（曾误杀被纠正）；端口固定。主人的端口（3001）**永不杀**。只收带隔离 data dir 的（`photo-grid-serve.mjs`）+ 临时 Chrome。
-- **沙箱在 turn 结束时回收它**（`nohup`/`detached+unref`/`run_in_background` 都活不过 turn 边界）
-  → **开工先探端口**（3011 `/api/health` + 5199），不在就用 `.review/spawn-serve.mjs` 拉起。
+- **沙箱用 Job Object 收拢子进程**：`nohup`/`detached+unref`/`dangerouslyDisableSandbox` **都留不住预览服务**，命令一结束就被回收。
+  → **开工先探端口**（3011 `/api/health` + 5199），不在就用 `.review/spawn-serve.mjs` 拉起；只是本次要看效果时用**后台任务**方式拉（能撑过本次会话）。
+- **换数据库文件必须先停 API**（SQLite 被持有句柄）——停整个进程树：`netstat -ano` 找 3011/5199 的 PID → 找父进程 → `taskkill /F /T /PID <launcher>`，再 `.review/spawn-serve.mjs` 拉起。
 - **验收脚本前置失败会覆盖上次结果文件** → 跑前先确认预览在线。
 - **bash 是残缺 PortableGit**（`ls/cat/head/grep/find` 不存在）→ 用 `node -e` 或内置工具。
   npm 直调：`"C:/Program Files/nodejs/node.exe" "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js"`。
@@ -25,7 +26,17 @@
 - **修法必须同步强杀**（清理块多在 `finish = () => {…}` / `process.on("exit")` 里，`await` 非法）：
   `.review/reap-chrome.mjs` 的 `reapChromeSync` / `reapChrome` / `sweepStaleProfiles`，**新脚本一律用它**；
   `.review/sweep-profiles.mjs` 随时清扫；`.review/codemod-reap.mjs` 批量改写器（严格匹配 + `node --check` + 失败回滚）。
-- **⚠️ 动 `.review/run/data` 前先备份 `weather-config.json`**（`<dataDirectory>/weather-config.json`，`weather-config.ts:70`）——**不在 `.env`、不在 git、无副本**。误删过一次。
+## 🔴 数据安全：`.review/run/data` 是**主人的生产库**，不是可丢弃的预览目录
+
+- **2026-09-18 出过事故**：我把它当「预览用的种子数据目录」重置了，**删掉主人 527 条真实记录 + 149 个 assets**，主人当晚发现 09-16 起自己发的（含照片）全没了。
+- **`AGENTS.md` 写「预览用独立 data dir（含种子数据）」、`accept-serve.mjs` 注释也这么说 —— 与事实不符。** 主人一直把预览 5199 当自己的应用在用。
+  → **永远不要对 `.review/run/data` 跑 `seed-demo --clean`、不要重置、不要删。** 要造数据请用**另开 data dir 的隔离实例**（`verify-*.mjs` 那批脚本本来就是这么做的，用 `.review/<name>-run/`）。
+- **唯一的安全网 = 应用自己的 S3 定时快照**（`.env` 的 `BACKUP_S3_*`，桶 `cdnb`，前缀 `product-backup/lifeos`；老的被保留策略挪到 `lifeos-trash/`，**同样可恢复**）。
+  → **恢复用 `.review/restore-from-backup.mjs`**（`--list` / `--latest` / `--key`；**恢复前强制备份当前 data dir**）。资产文件不在快照里，但存在 `LIFEOS_ASSET_ROOT`（预览 = `pic-test/`），通常还在。
+  → **恢复三件事**：① 先停 API（SQLite 被持有句柄）；② **同时删 `-wal`/`-shm`**，否则旧 WAL 会盖回新库；③ 保留 `weather-config.json` 与 `ai-config.json`。
+- **⚠️ `weather-config.json`**（`<dataDirectory>/weather-config.json`，`weather-config.ts:70`）存天气 key+位置，**不在 `.env`、不在 git、无副本**。
+- **别用文档判断「哪些是示例数据」**：`AGENTS.md` 说的 `isDemo` 字段**实际不存在**（527 条记录里一个都没有）。可靠判别 = **`entity_refs_json` 是否引用 `demo-` 前缀实体**。
+- **光看 `.sqlite` 大小会误判**：事故前主库 4096 字节、WAL 却有 1.6MB。
 
 ## 演示数据坑
 
@@ -41,8 +52,7 @@
   `main.tsx` 的 `WeatherSettingsCard` 换掉两个手输框；`styles.css` 加 `.settings-weather-location*`；重编译器 `scripts/compile-weather-locations.mjs`。
 - **`save()/test()/saveProfile()` 一字未动**。区县**选填**、市级 ID 恒有效；换上级**清空下级**；境外/旧 ID 有**默认折叠**逃生口（`unplaceable` 时自动展开）。
 - 守卫：`verify-weather-locations-data.mjs` **33** / `verify-weather-locations.mjs` **30**（3572 全量往返无损）/ `verify-weather-location-picker.mjs` **53**（CDP 端到端）。
-- **编译器三坑**（细节见 changelog）：① 城市自身行名 ≠ `adm2`（`哈尔滨` vs `哈尔滨市`）→ 初版 **377 个 ID 两级重复**；② 自治州**没有「全域」行**（延边州第一行是州府延吉）→ 拿 `districts[0]` 凑数会再重复；③ CSV 里台湾国家名含逗号 → `split(",")` 整体错位，必须 RFC 4180。
-  → **只有「无重复 ID」断言能抓住 ①②，肉眼抽查全会通过。**
+- **编译器三坑**（细节见 changelog）：① 城市自身行名 ≠ `adm2`（`哈尔滨` vs `哈尔滨市`）→ 初版 **377 个 ID 两级重复**；② 自治州**没有「全域」行**（延边州第一行是州府延吉）→ 拿 `districts[0]` 凑数会再重复；③ CSV 里台湾国家名含逗号 → 必须 RFC 4180。**只有「无重复 ID」断言能抓住 ①②。**
 
 ## 记录卡片与 grid（2026-09-17 主人裁定，已实现）
 
