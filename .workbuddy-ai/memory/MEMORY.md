@@ -45,8 +45,12 @@
   → **别用「是否引用 `demo-` 实体」这个启发式替代字段**（会把真实记录误判成示例，反之亦然）。
 - **⚠️ 读数据前先确认读的是哪个库**：`data/`、`.review/data`、`.review/recovery/`、`.review/*-run/` 下都有同名 `lifeos.sqlite`，**表结构可能不同**（老的没有 `is_demo` 列）。我曾因此把「`is_demo` 不存在」这个错误结论写进交接记录。
 - **回收站（软删）分两类**，别混：
-  - `is_demo=1` → 示例种子，走设置页按钮；
-  - `is_demo=0` → **混着历次 CDP/验收残留**，按内容签名清：`.review/purge-trash-junk.mjs`（dry-run 默认，`--apply` 才删；**认不出的行一律中止整轮**，且会先查 `relatedRecordIds` 引用）。09-18 用它硬删了 105 条，剩 283 条示例软删。
+  - `is_demo=1` → 示例种子，走设置页按钮；要硬清用 `purge-trash-junk.mjs --demo`（**默认关闭**）。
+  - `is_demo=0` → **混着历次 CDP/验收残留**，按内容签名清：`.review/purge-trash-junk.mjs`（dry-run 默认，`--apply` 才删；**认不出的行一律中止整轮**，且会先查 `relatedRecordIds` 引用）。
+  - 09-18 两轮清完：105 条测试残留 + 283 条示例 → **软删 0**，`records 139`（121 示例 + 18 条主人的）始终没动。
+- **备份退路要实测，别靠推断**：`backup_schedule.enabled=1` **不等于**备份能用。实跑 `POST /api/backup/dual`（脚本 `.review/verify-backup-path.mjs`）→ 本地 `data/backups/` + 上传桶 `cdnb`。
+  「`backup_runs` 里没有今天的记录」也不说明坏了 —— 看 `last_run_key` / `nextRunAt`（每天 02:00）。
+- **`VACUUM` / 大批量写之后，文件尺寸要在 `close()` 之后再量** —— WAL 模式里新内容还在 `-wal`，之前读到的还是旧值（踩过，差 24 万字节）。
 - **搬 sqlite 必须先 `PRAGMA wal_checkpoint(TRUNCATE)`**。只复制 `.sqlite` 会**静默丢最新记录**（事故前主库 4096B、WAL 1.6MB；09-18 迁移时 WAL 370,832B）。**光看 `.sqlite` 大小会误判。**
 - **迁移类改动必须全局搜路径引用** —— 而 **`.review/` 被 gitignore，`grep`/`rg` 默认不进这个目录**，只搜仓库会漏掉整个验收工具箱（09-18 就漏掉了 `restore-from-backup.mjs` 里的硬编码路径）。
 - **沿革**：原名 `.review/run/data`，名字长得像临时目录，是它被误删的一半原因。09-18 晚迁到 `data/`（一次性脚本 `.review/migrate-data-dir.mjs`，默认 dry-run）。**别再在 `.review/` 下放生产数据。**
