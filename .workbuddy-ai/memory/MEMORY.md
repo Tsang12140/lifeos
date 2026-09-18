@@ -35,7 +35,12 @@
   → **恢复用 `.review/restore-from-backup.mjs`**（`--list` / `--latest` / `--key`；**恢复前强制备份当前 data dir**）。资产文件不在快照里，但存在 `LIFEOS_ASSET_ROOT`（预览 = `pic-test/`），通常还在。
   → **恢复三件事**：① 先停 API（SQLite 被持有句柄）；② **同时删 `-wal`/`-shm`**，否则旧 WAL 会盖回新库；③ 保留 `weather-config.json` 与 `ai-config.json`。
 - **⚠️ `weather-config.json`**（`<dataDirectory>/weather-config.json`，`weather-config.ts:70`）存天气 key+位置，**不在 `.env`、不在 git、无副本**。
-- **别用文档判断「哪些是示例数据」**：`AGENTS.md` 说的 `isDemo` 字段**实际不存在**（527 条记录里一个都没有）。可靠判别 = **`entity_refs_json` 是否引用 `demo-` 前缀实体**。
+- **动手前先跑 `node .review/data-inventory.mjs`**（只读；**有主人写的记录就 exit 1**）；目录里也放了 `.review/run/data/DO-NOT-DELETE.md`。
+- **示例 vs 真实的隐形标记 = `records.is_demo`**（持久化列，正文无任何前缀；示例实体/资产 id 带 `demo-`）。
+  设置页已有「隐藏预置记录」/「删除预置记录」（二次确认，只删 `is_demo=1` + `demo-` 对象）；`seed-demo --clean` 同样只删这些，**从来不会删主人写的内容**。
+  → **别用「是否引用 `demo-` 实体」这个启发式替代字段**（会把真实记录误判成示例，反之亦然）。
+- **⚠️ 读数据前先确认读的是哪个库**：`.review/data`、`.review/run/data`、`.review/recovery/`、`.review/*-run/` 下都有同名 `lifeos.sqlite`，**表结构可能不同**。我曾因此把「`is_demo` 不存在」这个错误结论写进交接记录。
+- **测试残留是 `is_demo=0`**，会混进真实记录里 → 只能按内容签名清（`.review/purge-test-junk.mjs`，带 `--apply`；会先查 `relatedRecordIds` 引用）。
 - **光看 `.sqlite` 大小会误判**：事故前主库 4096 字节、WAL 却有 1.6MB。
 
 ## 演示数据坑

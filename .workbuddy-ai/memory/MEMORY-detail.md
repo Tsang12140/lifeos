@@ -137,3 +137,33 @@
 
 **另一个误判陷阱**：事故前主库 `lifeos.sqlite` 只有 4096 字节，`-wal` 却有 1.6MB。
 **光看 `.sqlite` 大小会得出「里面没东西」的错误结论。**
+
+## 更正：`is_demo` 是存在的（我上一轮写错了）
+
+**上一轮的结论错了**：我写了「`AGENTS.md` 说的 `isDemo` 字段实际不存在，527 条记录里一个都没有」—— **`AGENTS.md` 是对的**。
+
+**错在哪**：我查 schema 时查的是 **`.review/data/lifeos.sqlite`**（一份 09-12 的旧演示库，表结构**早于**该列），又去 `body_json` 里找 `isDemo` 键。**两个都不是目标库。**
+
+**事实**：快照与活库的 `records` 表都有 **`is_demo`**，另有 `is_private` / `is_backfill` / `weather_json`；
+`repository.ts:506` 还有自动迁移（缺列时 `ALTER TABLE records ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`）。
+
+**正确数字**：527 条 = **404 条 `is_demo=1`** + 123 条 `is_demo=0`；清掉测试残留后现存 **139 条 = 121 示例 + 18 条主人写的**。
+上一轮「154 条真实 / 373 条示例」是用「是否引用 `demo-` 实体」启发式估的，**不准**。
+
+**教训升级**：上一轮我说「别信文档，去读数据」；真正的教训是「**读数据之前先确认读的是哪个库**」——
+`.review/data`、`.review/run/data`、`.review/recovery/`、`.review/*-run/` 下都有同名 `lifeos.sqlite`，**表结构可能不同**。
+
+## 示例 / 真实的分野与「一次性清掉示例」
+
+- **标记**：`records.is_demo`（持久化列，正文里看不到任何前缀 = 隐形）；示例实体/资产的 id 带 `demo-` 前缀。
+- **清示例的入口已经有了**：设置页「隐藏预置记录」/「删除预置记录」（`main.tsx:3595`，4 秒内二次确认；只删 `isDemo` 记录 + `demo-` 对象；toast「预置记录已删除，你写的内容不受影响」）。
+- `seed-demo.mjs` 的 `clean()` 也只删这些 —— **09-18 毁数据的是「删掉整个数据目录」，不是 `--clean`**。
+- **测试残留是 `is_demo=0`**，会混进真实记录里，清示例的按钮**不会**碰它们。只能按内容签名清：`.review/purge-test-junk.mjs`（`--apply` 才动手；先查 `relatedRecordIds` 引用，被引用就停下）。本次清掉 14 条（9 条日期写成 2036-09-15、4 条 `今天想聊电影 <ts>`、1 条同类）。
+- `repository.ts:572` 有一段把旧库「`【示例】` 前缀」记录迁移成 `is_demo=1` 的逻辑 —— 以后改示例文本时注意别让迁移正则误伤主人内容。
+
+## 「不可再丢弃」是怎么钉住的
+
+1. `.review/run/data/DO-NOT-DELETE.md` —— 目录内标记，任何人 ls 就能看到。
+2. `.review/data-inventory.mjs` —— 只读清点；**有主人写的记录就 `exit 1`**，可做破坏性操作的前置闸门。
+3. `AGENTS.md` 项目概览里一整条 ⚠️ 说明 + 写准「预置记录」那条。
+4. `.review/accept-serve.mjs` 头部注释 —— 原文「starts a **throwaway** API on 3011 (its own data dir)」**就是本次事故的根源**，已改成明确警告。
