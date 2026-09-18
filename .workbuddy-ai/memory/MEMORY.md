@@ -50,6 +50,11 @@
 - **搬 sqlite 必须先 `PRAGMA wal_checkpoint(TRUNCATE)`**。只复制 `.sqlite` 会**静默丢最新记录**（事故前主库 4096B、WAL 1.6MB；09-18 迁移时 WAL 370,832B）。**光看 `.sqlite` 大小会误判。**
 - **迁移类改动必须全局搜路径引用** —— 而 **`.review/` 被 gitignore，`grep`/`rg` 默认不进这个目录**，只搜仓库会漏掉整个验收工具箱（09-18 就漏掉了 `restore-from-backup.mjs` 里的硬编码路径）。
 - **沿革**：原名 `.review/run/data`，名字长得像临时目录，是它被误删的一半原因。09-18 晚迁到 `data/`（一次性脚本 `.review/migrate-data-dir.mjs`，默认 dry-run）。**别再在 `.review/` 下放生产数据。**
+- **🔑 搬数据目录会打断密钥解密（09-18 踩过，我造成的）**：`weather/ai/movie/backup-config.ts` 的 AES 种子是
+  `LIFEOS_<模块>_CONFIG_SECRET || LIFEOS_PASSWORD || \`lifeos-local-<模块>:${dataDirectory}\``。
+  后两者都没设时**种子就是数据目录路径** → 一搬目录就换密钥 → **已存的 API key 静默解不开**（设置页只显示「未配置」，无任何报错）。当时天气 key 就这么丢了。
+  → **`.env` 里 4 个 `LIFEOS_*_CONFIG_SECRET` 是故意钉成历史路径的，别删别改**（删了等于换密钥）。反查工具 `.review/find-weather-secret.mjs`；决定性探针 `.review/probe-weather-secret.mjs`。
+  → `migrate-data-dir.mjs` 已有前置守卫：**种子没钉住就拒绝搬迁**（双向已验证）。**凡是动了数据目录 / `LIFEOS_PASSWORD`，回头看一眼 `/api/weather/status` 的 `hasKey`。**
 
 ## 演示数据坑
 

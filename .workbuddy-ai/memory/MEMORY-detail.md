@@ -234,3 +234,66 @@ const dataDirectory = resolve(env.LIFEOS_DATA_DIR?.trim() || "data");
 3011/5199 **现在直接指向生产库**。以前它们指向 `.review/run/data`，同样是生产库 —— 但那时至少「看起来像临时目录」会让人多一分犹豫。
 现在**跑会产生记录的验收会污染主人的数据**（清掉的那 105 条就是这么来的）。
 → 要验收请**另开 `LIFEOS_DATA_DIR`**，`.review/verify-*.mjs` 本来就是这么做的。
+
+---
+
+## 🔑 搬数据目录会打断密钥解密（09-18 我自己造成的回归）
+
+### 机制
+
+`weather-config.ts:75`（以及 `ai-config.ts:42` / `movie-config.ts:37` / `backup-config.ts:38`，各自盐不同）：
+
+```ts
+const secret = process.env.LIFEOS_<模块>_CONFIG_SECRET?.trim()
+            || process.env.LIFEOS_PASSWORD
+            || `lifeos-local-<模块>:${config.dataDirectory}`;
+return scryptSync(secret, "lifeos-<模块>-config-v1", 32);
+```
+
+**当两个环境变量都没设时，加密种子就是数据目录路径本身。**
+所以把 `.review/run/data` 搬成 `data/` = **换了一把钥匙** → 已存的天气 API key 再也解不开。
+
+### 症状（为什么差点漏掉）
+
+- `/api/weather/status` → `hasKey:false / configured:false / source:"none"`，**没有任何报错、没有日志**。
+- 密文还好端端躺在 `weather-config.json` 里，长度也没变 —— 只是 `decrypt()` 里 GCM 校验失败被 `catch { return undefined }` 吞了。
+- 唯一的表现是**设置页显示「未配置」**。
+- 我是在收尾复验时多打了一眼 `hasKey` 才发现的。
+
+**规则：凡是动了数据目录 / `LIFEOS_PASSWORD`，回头看一眼 `/api/weather/status` 的 `hasKey`。**
+
+### 怎么定位的（方法可复用）
+
+1. **先穷举，别急着下结论**。离线试了 7 个路径候选，全失败 → 差点得出「不是路径派生」的错误结论。
+   **失败原因是我用 `node -e` 内联脚本，bash 双引号把 `\\\\` 折成 `\\`，候选串写坏了。** 改成写文件、用 node 自己的 `resolve()` 算候选 → 一次命中。
+   → **教训：涉及反斜杠的字符串比较，一律写成脚本文件，别走 `node -e`。**
+2. **决定性实验**：`.review/probe-weather-secret.mjs` —— 用 pre-move 快照的副本**把原路径原样重建**，同一份密文跑独立 API（3099）。
+   原路径 `hasKey:true`、新路径 `false` → **同一份密文只差路径，证明就是路径派生**。
+   探针自带清理；`LIFEOS_ASSET_ROOT` 指向空目录（**第二个 API 实例开机就跑孤儿资源回收，绝不能让它走主人的 `pic-test/`**）、`BACKUP_S3_ENABLED=false`（**别让探针往真桶里写快照**）。
+3. **反查种子**：`.review/find-weather-secret.mjs` —— 拿密文反推种子串，只打印长度不打印明文。三个密文全部命中同一个串。
+
+### 修复
+
+在 `.env` 里把 4 个种子**钉成搬迁前那个目录派生出来的值**：
+
+```
+LIFEOS_WEATHER_CONFIG_SECRET='lifeos-local-weather:<搬迁前的数据目录>'
+LIFEOS_AI_CONFIG_SECRET='lifeos-local-ai:...'
+LIFEOS_MOVIE_CONFIG_SECRET='lifeos-local-movie:...'
+LIFEOS_BACKUP_CONFIG_SECRET='lifeos-local-backup:...'
+```
+
+- 选「钉历史路径」而不是「换新密钥 + 重新加密」：**零写入数据文件、零风险弄坏密文**，且种子仍可由那个串**推导**出来（`.env` 万一丢了还能救）。
+- 影响面其实只有天气一个（`ai-config.json` 没有密文字段，movie/backup 配置文件不存在），但**四个一起钉**，因为下一个给它们存 key 的人会踩同一个坑。
+- **`.env` 里带反斜杠和冒号的值**：实测 node `--env-file` 对不加引号 / 单引号 / 双引号三种写法解析一致，本文件用单引号。
+
+### 守卫
+
+`migrate-data-dir.mjs` 加了前置检查：**4 个种子没钉住就拒绝搬迁**。
+顺序上放在**端口检查之前** —— 配置问题该先暴露，不该先让人白停一次服务。
+**双向验证过**：`.env` 在位 → 放行；临时藏起 `.env` → 拒绝并列出变量名。
+
+### 附带教训
+
+`.env` 第 19-21 行**早就写了这个坑**（「一旦改了数据目录或密码，已保存的密钥就会静默解不开，建议显式设一个」），但那行是**注释状态**，谁都没设。
+→ **项目里那些「建议显式设一个」的注释，是前人踩过的坑，不是可选装饰。**
