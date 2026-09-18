@@ -92,6 +92,8 @@ import { peekScore, scorePhoto, storyWeight } from "./photoScore";
 import { WeatherHeader } from "./WeatherHeader";
 import { BackupCalendar } from "./BackupCalendar";
 import { getWeatherEmoji, type WeatherDay, type WeatherProfile } from "./weather";
+import { WeatherLocationPicker } from "./WeatherLocationPicker";
+import { describeWeatherLocationByName } from "./weather-locations";
 import { ScrollSlotStrip } from "./ScrollSlotStrip";
 import {
   combineDateTime,
@@ -2766,6 +2768,20 @@ function WeatherSettingsCard({ status, profiles, activeProfileId, onChanged, onP
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [manualLocationId, setManualLocationId] = useState(false);
+
+  /**
+   * A saved location the dropdown cannot place — an overseas ID typed before
+   * this picker existed, or a hand-written one. It has nowhere to sit in the
+   * three rungs, so without the manual field below it would vanish from the
+   * form and be silently dropped on the next save. Auto-reveal that field in
+   * exactly that case; if the owner closes it again, respect that (the effect
+   * only re-runs when `unplaceable` itself changes).
+   */
+  const unplaceable = locationId.trim() !== "" && describeWeatherLocationByName(locationId) === null && (city.trim() === "" || describeWeatherLocationByName(city) === null);
+  useEffect(() => {
+    if (unplaceable) setManualLocationId(true);
+  }, [unplaceable]);
 
   useEffect(() => {
     if (!status) return;
@@ -2856,7 +2872,11 @@ function WeatherSettingsCard({ status, profiles, activeProfileId, onChanged, onP
     <div className="settings-weather-form">
       <div className="settings-weather-profile-row"><label><span>已保存的天气方案</span><select value={selectedProfileId ?? ""} onChange={(event) => { const id = event.target.value; setSelectedProfileId(id || null); if (id) void activateProfile(id); }} disabled={busy || testing}><option value="">当前手动配置 / 服务端默认</option>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.label} · {profile.city || profile.locationId}{profile.hasKey ? "" : " · 缺少 Key"}</option>)}</select></label><label><span>方案名称</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="例如：佛山南海区" /></label></div>
       <label><span>API Key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" placeholder={status?.hasKey ? "已保存，留空不变" : "填写和风天气 Key"} /></label>
-      <div className="settings-weather-form-row"><label><span>位置 ID</span><input value={locationId} onChange={(event) => setLocationId(event.target.value)} placeholder="例如 101280601" /></label><label><span>城市名（备用）</span><input value={city} onChange={(event) => setCity(event.target.value)} placeholder="例如 佛山南海区" /></label></div>
+      <WeatherLocationPicker locationId={locationId} city={city} disabled={busy || testing} onChange={(option) => { setLocationId(option.locationId); setCity(option.city); }} />
+      <details className="settings-weather-manual" open={manualLocationId} onToggle={(event) => setManualLocationId(event.currentTarget.open)}>
+        <summary><span>手动输入位置 ID（境外位置 / 旧配置迁移）</span></summary>
+        <div className="settings-weather-form-row"><label><span>位置 ID</span><input value={locationId} onChange={(event) => setLocationId(event.target.value)} placeholder="例如 101280601" /></label><label><span>城市名（备用）</span><input value={city} onChange={(event) => setCity(event.target.value)} placeholder="例如 佛山南海区" /></label></div>
+      </details>
       <label><span>API Host</span><input value={apiHost} onChange={(event) => setApiHost(event.target.value)} placeholder="devapi.qweather.com" /></label>
       <label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用天气模块与表头动画</span></label>
       <div className="settings-weather-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={testing || busy || !locationId.trim()}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="secondary-button" type="button" onClick={() => void saveProfile()} disabled={busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存为天气方案"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存默认配置"}</span></button></div>

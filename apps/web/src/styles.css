@@ -5001,6 +5001,54 @@ button.relation-chip {
   gap: 10px;
 }
 
+/**
+ * 位置三级下拉（省 / 市 / 区）。
+ * 下拉本身**不另写样式** —— 它落在 .settings-weather-form 内，直接命中上面
+ * `.settings-weather-form select` 的规则（同 min-height 36px、同内边距与圆角），
+ * 所以与输入框天然同高同位，不需要抄数值对齐。
+ */
+.settings-weather-location {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  /* fieldset 的默认 min-inline-size: min-content 会挡住收缩，窄屏下撑破网格。 */
+  min-width: 0;
+  min-inline-size: 0;
+}
+
+.settings-weather-location-row {
+  display: grid;
+  /* 省级名字最长（新疆维吾尔自治区），给它多一点。 */
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.settings-weather-location-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.69rem;
+  line-height: 1.5;
+}
+
+.settings-weather-location-note code {
+  color: var(--ink);
+  font-size: 0.69rem;
+}
+
+/* 境外位置与旧配置的逃生口：默认折叠，不重新变成「手输城市」的入口。 */
+.settings-weather-manual > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.69rem;
+  font-weight: 680;
+}
+
+.settings-weather-manual[open] > summary {
+  margin-bottom: 8px;
+}
+
 .settings-weather-actions {
   display: flex;
   justify-content: flex-end;
@@ -5108,7 +5156,8 @@ button.relation-chip {
 
   .settings-backup-form-row,
   .settings-weather-form-row,
-  .settings-weather-profile-row {
+  .settings-weather-profile-row,
+  .settings-weather-location-row {
     grid-template-columns: minmax(0, 1fr);
   }
 
