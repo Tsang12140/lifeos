@@ -106,7 +106,7 @@
 - **不出截图**（主人明确要求，已写进 `AGENTS.md`）：不生成截图、不在回复里贴图。收尾只汇报：改了什么 / 怎么验证 / 验收数字 / 预览地址。
 - **改动前先勘察、先问**：设计/规则类先出方案等确认；主人说「听你的」才是授权点。只读勘察很有价值（「照片上限 6→9」先查明 6 只存在于 Web 端一个常量，才敢只动一处）。
 
-## 数据安全：`.review/run/data` 是生产库（2026-09-18 事故详情）
+## 数据安全：`data/` 是生产库（2026-09-18 事故详情）
 
 **事故**：我把它当「预览用的、含种子数据的独立目录」重置了（为修「今天没有记录」），
 删掉 **527 条记录 / 149 个 assets / 52 个实体 / 54 天摘要**。主人当晚发现 09-16 起自己发的（含照片）全没了。
@@ -163,7 +163,74 @@
 
 ## 「不可再丢弃」是怎么钉住的
 
-1. `.review/run/data/DO-NOT-DELETE.md` —— 目录内标记，任何人 ls 就能看到。
+1. `data/DO-NOT-DELETE.md` —— 目录内标记，任何人 ls 就能看到。（原在 `.review/run/data/`，09-18 晚随数据一起搬到 `data/`。）
 2. `.review/data-inventory.mjs` —— 只读清点；**有主人写的记录就 `exit 1`**，可做破坏性操作的前置闸门。
 3. `AGENTS.md` 项目概览里一整条 ⚠️ 说明 + 写准「预置记录」那条。
 4. `.review/accept-serve.mjs` 头部注释 —— 原文「starts a **throwaway** API on 3011 (its own data dir)」**就是本次事故的根源**，已改成明确警告。
+
+---
+
+## 数据目录迁移到 `data/`（2026-09-18 晚，主人批准）
+
+### 为什么搬
+
+`.review/` 是 gitignore 的草稿区，`.review/run/data` 这个名字**本身就长得像临时目录** —— 那是 09-18 事故的一半原因。
+而 `data/` 是 **API 自己的默认数据目录**（`apps/api/src/config.ts:108`）：
+
+```ts
+const dataDirectory = resolve(env.LIFEOS_DATA_DIR?.trim() || "data");
+```
+
+`.gitignore` 里早就有一行 `data/`。搬到那儿之后：
+- `npm run dev` / `npm start` **什么都不配**读的就是主人的数据 —— 语义是「这是应用的数据」，不是「这是某次预览的产物」；
+- 位置不再暗示「可丢弃」。
+
+**现状**：3011 预览 API 的 `LIFEOS_DATA_DIR` 显式指向 `data/`，主人的 5199 也就跟着读同一份。
+
+### 迁移步骤（`.review/migrate-data-dir.mjs`，dry-run 默认，`--apply` 才动）
+
+1. **前置**：3011/5199 都不能有监听（API 持有 sqlite 句柄，边跑边搬会半途失败）。
+2. **`PRAGMA wal_checkpoint(TRUNCATE)`** —— **这一步不能省**。本次 `-wal` 有 370,832 字节；只复制 `.sqlite` 会**静默丢掉最新记录**。checkpoint 后 `-wal` 归零，主库自洽。
+3. **字节级备份**：整目录复制到 `.review/recovery/pre-move-<戳>/`，比文件数 + 总字节数，不一致就中止。
+4. **归档陈旧 `data/`**：仓库里那份 4 条记录、**没有 `is_demo` 列**的旧 schema 库，先复制到 `.review/recovery/superseded-data-<戳>/` **再**删。不是直接抹掉。
+5. **`renameSync`** 搬迁。
+6. **七项对账**：`total / live / demo / mine / trash / assets / entities` 必须逐项与搬迁前一致。
+
+实测：`527 / 139 / 121 / 18 / 388 / 149 / 52` 全一致。
+
+### 迁移时必须一起改的引用
+
+| 文件 | 改什么 |
+| --- | --- |
+| `.review/accept-serve.mjs` | `LIFEOS_DATA_DIR` → `resolve(root, "data")` |
+| `.review/accept-serve.mjs` | **伪桶兜底路径** `<outDir>/data/object-storage` → `<outDir>/object-storage` |
+| `.review/data-inventory.mjs` | `DATA_DIR` |
+| **`.review/restore-from-backup.mjs`** | **`DATA_DIR` 是硬编码的** —— 不改就恢复到旧位置 |
+| `AGENTS.md` | 项目概览里那条 ⚠️ |
+| `data/DO-NOT-DELETE.md` | 目录内标记 |
+
+### 踩到的坑
+
+1. **守卫不能一刀切**：我最初写「目标目录已有活库就拒绝」，用 `live > 0` 判断 —— 陈旧 `data/` 没有 `is_demo` 列，4 条未删记录被算成 live，**把自己拦下来了**。正解是**先判 legacy schema**（没有 `is_demo` 列 = 早于应用运行过，可安全归档）。
+2. **伪桶兜底路径会复活旧目录**：它原本指向 `<数据目录>/object-storage`。数据目录一改，就会在 `.review/run/` 下新建一个 `data/`，把刚拆掉的误会重新装回去。（`.env` 里配了真 S3，这条分支当前不生效 —— 但谁清空 `.env` 就会踩。）
+3. **`.review/` 被 gitignore，`grep` / `rg` 默认不进这个目录**。只搜仓库会漏掉**整个验收工具箱**。本次靠手写 `walk` 才捞出 `restore-from-backup.mjs` 的硬编码路径。**迁移类改动必须显式搜 `.review/`。**
+
+### 回收站清理（`.review/purge-trash-junk.mjs`）
+
+388 条软删 = **283 条 `is_demo=1`**（示例种子，**没动** —— 那是应用的另一个范畴，设置页有专门按钮）+ **105 条 `is_demo=0`**。
+
+105 条逐条看过，**没有一条是主人写的**，全是历次 CDP/验收夹具：
+45 `验收：照片和文字一起保存（可删）` / 15 `@测试客户` / 9 `这是一个专门验证月历两行摘要…` / 8 `CDP 补记验收 <ts>` / 8 `验收：最近使用地点排序 半山咖啡（可删）` / 6 `#新咖啡馆` / 4 `隐私验收 privacy-verify-<ts>` / 4 `今天想聊电影|也想聊电影 <ts>` / 5 `#测试顾客`+`##测试客户`+`#测试客户`。
+
+**脚本的核心约束**：这 105 条必须**全部**匹配到已知签名，**有一条认不出来就中止整轮**。
+「我认不出它」绝不能等同于「它是垃圾」—— 认不出的行按主人的算，不动。
+另外先查 `relatedRecordIds`：0 条被活记录引用。
+
+删前快照 `.review/recovery/pre-purge-2026-09-18T13-47-10-883.sqlite`。
+结果：`records 527 → 422`，`live 139`（18 条主人的）**一条没动**，软删 388 → 283。
+
+### 隔离语义变了（重要）
+
+3011/5199 **现在直接指向生产库**。以前它们指向 `.review/run/data`，同样是生产库 —— 但那时至少「看起来像临时目录」会让人多一分犹豫。
+现在**跑会产生记录的验收会污染主人的数据**（清掉的那 105 条就是这么来的）。
+→ 要验收请**另开 `LIFEOS_DATA_DIR`**，`.review/verify-*.mjs` 本来就是这么做的。

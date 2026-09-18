@@ -26,22 +26,30 @@
 - **修法必须同步强杀**（清理块多在 `finish = () => {…}` / `process.on("exit")` 里，`await` 非法）：
   `.review/reap-chrome.mjs` 的 `reapChromeSync` / `reapChrome` / `sweepStaleProfiles`，**新脚本一律用它**；
   `.review/sweep-profiles.mjs` 随时清扫；`.review/codemod-reap.mjs` 批量改写器（严格匹配 + `node --check` + 失败回滚）。
-## 🔴 数据安全：`.review/run/data` 是**主人的生产库**，不是可丢弃的预览目录
+## 🔴 数据安全：**`data/`（仓库根）是主人的生产库**，不是可丢弃的预览目录
 
-- **2026-09-18 出过事故**：我把它当「预览用的种子数据目录」重置了，**删掉主人 527 条真实记录 + 149 个 assets**，主人当晚发现 09-16 起自己发的（含照片）全没了。
-- **`AGENTS.md` 写「预览用独立 data dir（含种子数据）」、`accept-serve.mjs` 注释也这么说 —— 与事实不符。** 主人一直把预览 5199 当自己的应用在用。
-  → **永远不要对 `.review/run/data` 跑 `seed-demo --clean`、不要重置、不要删。** 要造数据请用**另开 data dir 的隔离实例**（`verify-*.mjs` 那批脚本本来就是这么做的，用 `.review/<name>-run/`）。
+> **2026-09-18 晚已从 `.review/run/data` 迁到这里。** 旧路径**不要重建**。见下「沿革」。
+
+- **2026-09-18 出过事故**：有人把它当「预览用的种子数据目录」重置了，**删掉主人 527 条真实记录 + 149 个 assets**，主人当晚发现 09-16 起自己发的（含照片）全没了。
+- **`data/` 就是 API 自己的默认数据目录**（`config.ts:108` `resolve(env.LIFEOS_DATA_DIR?.trim() || "data")`，`.gitignore` 已排除 `data/`）。
+  → `npm run dev` / `npm start` **什么都不配**读的就是主人的数据；3011 预览也显式指向它。
+  → **永远不要对它跑 `seed-demo --clean`、不要重置、不要删。** 要造数据请用**另开 `LIFEOS_DATA_DIR` 的隔离实例**（`verify-*.mjs` 那批脚本本来就是这么做的，用 `.review/<name>-run/`）。
+  → **3011/5199 现在直接指向生产库**，**跑会产生记录的验收会污染主人的数据**（09-18 清掉的那 105 条就是这么来的）。
 - **唯一的安全网 = 应用自己的 S3 定时快照**（`.env` 的 `BACKUP_S3_*`，桶 `cdnb`，前缀 `product-backup/lifeos`；老的被保留策略挪到 `lifeos-trash/`，**同样可恢复**）。
   → **恢复用 `.review/restore-from-backup.mjs`**（`--list` / `--latest` / `--key`；**恢复前强制备份当前 data dir**）。资产文件不在快照里，但存在 `LIFEOS_ASSET_ROOT`（预览 = `pic-test/`），通常还在。
   → **恢复三件事**：① 先停 API（SQLite 被持有句柄）；② **同时删 `-wal`/`-shm`**，否则旧 WAL 会盖回新库；③ 保留 `weather-config.json` 与 `ai-config.json`。
 - **⚠️ `weather-config.json`**（`<dataDirectory>/weather-config.json`，`weather-config.ts:70`）存天气 key+位置，**不在 `.env`、不在 git、无副本**。
-- **动手前先跑 `node .review/data-inventory.mjs`**（只读；**有主人写的记录就 exit 1**）；目录里也放了 `.review/run/data/DO-NOT-DELETE.md`。
+- **动手前先跑 `node .review/data-inventory.mjs`**（只读；**有主人写的记录就 exit 1**）；目录里也放了 `data/DO-NOT-DELETE.md`。
 - **示例 vs 真实的隐形标记 = `records.is_demo`**（持久化列，正文无任何前缀；示例实体/资产 id 带 `demo-`）。
   设置页已有「隐藏预置记录」/「删除预置记录」（二次确认，只删 `is_demo=1` + `demo-` 对象）；`seed-demo --clean` 同样只删这些，**从来不会删主人写的内容**。
   → **别用「是否引用 `demo-` 实体」这个启发式替代字段**（会把真实记录误判成示例，反之亦然）。
-- **⚠️ 读数据前先确认读的是哪个库**：`.review/data`、`.review/run/data`、`.review/recovery/`、`.review/*-run/` 下都有同名 `lifeos.sqlite`，**表结构可能不同**。我曾因此把「`is_demo` 不存在」这个错误结论写进交接记录。
-- **测试残留是 `is_demo=0`**，会混进真实记录里 → 只能按内容签名清（`.review/purge-test-junk.mjs`，带 `--apply`；会先查 `relatedRecordIds` 引用）。
-- **光看 `.sqlite` 大小会误判**：事故前主库 4096 字节、WAL 却有 1.6MB。
+- **⚠️ 读数据前先确认读的是哪个库**：`data/`、`.review/data`、`.review/recovery/`、`.review/*-run/` 下都有同名 `lifeos.sqlite`，**表结构可能不同**（老的没有 `is_demo` 列）。我曾因此把「`is_demo` 不存在」这个错误结论写进交接记录。
+- **回收站（软删）分两类**，别混：
+  - `is_demo=1` → 示例种子，走设置页按钮；
+  - `is_demo=0` → **混着历次 CDP/验收残留**，按内容签名清：`.review/purge-trash-junk.mjs`（dry-run 默认，`--apply` 才删；**认不出的行一律中止整轮**，且会先查 `relatedRecordIds` 引用）。09-18 用它硬删了 105 条，剩 283 条示例软删。
+- **搬 sqlite 必须先 `PRAGMA wal_checkpoint(TRUNCATE)`**。只复制 `.sqlite` 会**静默丢最新记录**（事故前主库 4096B、WAL 1.6MB；09-18 迁移时 WAL 370,832B）。**光看 `.sqlite` 大小会误判。**
+- **迁移类改动必须全局搜路径引用** —— 而 **`.review/` 被 gitignore，`grep`/`rg` 默认不进这个目录**，只搜仓库会漏掉整个验收工具箱（09-18 就漏掉了 `restore-from-backup.mjs` 里的硬编码路径）。
+- **沿革**：原名 `.review/run/data`，名字长得像临时目录，是它被误删的一半原因。09-18 晚迁到 `data/`（一次性脚本 `.review/migrate-data-dir.mjs`，默认 dry-run）。**别再在 `.review/` 下放生产数据。**
 
 ## 演示数据坑
 
