@@ -35,12 +35,20 @@
   → `npm run dev` / `npm start` **什么都不配**读的就是主人的数据；3011 预览也显式指向它。
   → **永远不要对它跑 `seed-demo --clean`、不要重置、不要删。** 要造数据请用**另开 `LIFEOS_DATA_DIR` 的隔离实例**（`verify-*.mjs` 那批脚本本来就是这么做的，用 `.review/<name>-run/`）。
   → **3011/5199 现在直接指向生产库**，**跑会产生记录的验收会污染主人的数据**（09-18 清掉的那 105 条就是这么来的）。
-- **⚠️ `.review/` 里 16 个脚本会直接写生产库**（144 个脚本中：22 个自带隔离 data dir、**16 个连 3011/5199 且会写**、72 个只读）。
-  → **跑验收前先看清单：`node .review/audit-toolbox-targets.mjs`**（会分「会写 / 只读」两组）。
+- **⚠️ `.review/` 里 17 个脚本会直接写生产库 —— 已全部装上「生产守卫」**（144 个脚本中：22 个自带隔离 data dir、**17 个连 3011/5199 且会写**、74 个只读）。
+  → **守卫 = `.review/lib/production-guard.mjs`**，副作用式 import，**必须是第一条 import**。读 `GET /api/backup/status` 的 `localDirectory`，落在 `data/` 里就 `exit 1`。
+  → **跑验收前先看清单：`node .review/audit-toolbox-targets.mjs`**（列出守卫状态；**有未守卫的写入脚本就 exit 1**）。豁免要显式写 `@unguarded-on-purpose`（目前只有 `retract-record.mjs`）。
   → 判断某个预览实例指着哪个库：`GET /api/backup/status` 的 `localDirectory` 字段。
   → 这类脚本「建记录 → 断言 → 删」：正常收尾留**软删墓碑**（不可见），**中途崩了就留活记录**（可见）—— 第一轮清的那 14 条「2036-09-15」就是这么来的。
   → **只读那组也不安全**：读的是主人真实数据，断言会随主人数据漂移（`verify-settings-ai.mjs` 的 8 项长期 FAIL 属此类）。
   → **13/15 个目标脚本都 import `./reap-chrome.mjs`，但只读脚本也 import 它** → 不是干净的单一改动点，别在那儿加硬拦截。
+  → 要放行：`LIFEOS_ALLOW_PROD_ACCEPTANCE=1`（仍警告）。守卫自身回归：`node .review/verify-production-guard.mjs`（**14 项**，夹具在 `.review/guard-fixtures/`）。
+  → **真写进去了**：`node .review/retract-record.mjs <id> --apply`（走 API 软删 + revision 校验 + 三重断言）→ 再 `node .review/purge-trash-junk.mjs --apply` 清墓碑。
+- **🔒 守卫设计铁律：只采信它能验证的东西**（两次踩坑换来，09-18 我因此污染过生产库一条）。
+  → 判定用「**包含**」不用「相等」：`localDirectory` 是 `<数据目录>/backups`（**子目录**），相等判定**永不成立** → 守卫形同虚设。报不出数据目录 → **fail-closed 当生产**。
+  → 显式目标变量（`LIFEOS_API_ORIGIN`/`LIFEOS_BASE_URL`）**只有入口脚本源码真的读它**才采信（`process.argv[1]` 取入口、**剥掉注释再 grep**）。`verify-calendar.mjs` 走 `argv[2]`、`verify-weekart.mjs` 硬编码 3011 → 对它们这变量就是谎话。
+  → **必须留唯一豁免口**，否则唯一合法用例永远报红 → 所有人学会忽略这个检查。
+  → **测试脚手架**：`spawnSync` **阻塞父进程事件循环** → 父进程内的假服务器永远答不上，断言会**因错误的原因失败**（看着像被测代码坏了）；用异步 `spawn` + Promise。`node -e` 没有 `argv[1]` → 显式目标豁免在 `-e` 下永不生效（**安全的失败方向，别去修**）。
 - **唯一的安全网 = 应用自己的 S3 定时快照**（`.env` 的 `BACKUP_S3_*`，桶 `cdnb`，前缀 `product-backup/lifeos`；老的被保留策略挪到 `lifeos-trash/`，**同样可恢复**）。
   → **恢复用 `.review/restore-from-backup.mjs`**（`--list` / `--latest` / `--key`；**恢复前强制备份当前 data dir**）。资产文件不在快照里，但存在 `LIFEOS_ASSET_ROOT`（预览 = `pic-test/`），通常还在。
   → **恢复三件事**：① 先停 API（SQLite 被持有句柄）；② **同时删 `-wal`/`-shm`**，否则旧 WAL 会盖回新库；③ 保留 `weather-config.json` 与 `ai-config.json`。

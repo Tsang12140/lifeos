@@ -274,14 +274,17 @@ return scryptSync(secret, "lifeos-<模块>-config-v1", 32);
 
 ### 修复
 
-在 `.env` 里把 4 个种子**钉成搬迁前那个目录派生出来的值**：
+在 `.env` 里把 4 个种子**钉成搬迁前那个目录派生出来的值**（形状如下，**真实值只在 `.env` 里，不要抄进本文件**）：
 
 ```
 LIFEOS_WEATHER_CONFIG_SECRET='lifeos-local-weather:<搬迁前的数据目录>'
-LIFEOS_AI_CONFIG_SECRET='lifeos-local-ai:...'
-LIFEOS_MOVIE_CONFIG_SECRET='lifeos-local-movie:...'
-LIFEOS_BACKUP_CONFIG_SECRET='lifeos-local-backup:...'
+LIFEOS_AI_CONFIG_SECRET='lifeos-local-ai:<搬迁前的数据目录>'
+LIFEOS_MOVIE_CONFIG_SECRET='lifeos-local-movie:<搬迁前的数据目录>'
+LIFEOS_BACKUP_CONFIG_SECRET='lifeos-local-backup:<搬迁前的数据目录>'
 ```
+
+> **⚠️ 2026-09-18 22:58 补记**：这一节原先**写的是天气那个种子的真实明文**，而 `.workbuddy-ai/memory/` 是**被 git 跟踪的** —— 差点随 45 个提交推上 GitHub。
+> 已改成占位符。**记忆文件是公开的，`.env` 不是。凡是「密钥」类内容，这里只写形状与来源，绝不写值。**
 
 - 选「钉历史路径」而不是「换新密钥 + 重新加密」：**零写入数据文件、零风险弄坏密文**，且种子仍可由那个串**推导**出来（`.env` 万一丢了还能救）。
 - 影响面其实只有天气一个（`ai-config.json` 没有密文字段，movie/backup 配置文件不存在），但**四个一起钉**，因为下一个给它们存 key 的人会踩同一个坑。
@@ -297,3 +300,77 @@ LIFEOS_BACKUP_CONFIG_SECRET='lifeos-local-backup:...'
 
 `.env` 第 19-21 行**早就写了这个坑**（「一旦改了数据目录或密码，已保存的密钥就会静默解不开，建议显式设一个」），但那行是**注释状态**，谁都没设。
 → **项目里那些「建议显式设一个」的注释，是前人踩过的坑，不是可选装饰。**
+
+---
+
+## 生产守卫：两次踩坑的完整过程（2026-09-18 晚）
+
+### 为什么要加
+
+上一轮只做了「看得见」的改动（审计清单 + 启动横幅 + AGENTS.md 规则），理由是「15 个目标里 13 个 import `reap-chrome.mjs`，只读脚本也 import 它 → 不是干净改动点」。
+主人回「请继续执行任务」→ 我把守卫加上（改用**逐个文件插 import**，不动 `reap-chrome.mjs`）。
+**「有清理调用」≠「清理成功」的同类：有规则 ≠ 有拦截。文档拦不住已经决定要跑脚本的人。**
+
+### 第一版守卫的洞（`verify-production-guard.mjs` 自己抓出来的）
+
+`/api/backup/status` 的 `localDirectory` 返回的是 **`<dataDirectory>/backups`**，是数据目录的**子目录**，不是数据目录本身。
+我最初写 `normalized === PRODUCTION_NORMALIZED` → **永不成立** → 守卫形同虚设。
+→ 改成 `insideProductionData()`：等于自身 **或** 以 `生产路径 + sep` 开头。
+→ 而且「应答了但报不出数据目录」要 **fail-closed 当生产**。
+
+### 🔴 我自己污染了生产库（139 → 140）
+
+给守卫加了「显式目标端口」优化后，我用
+`LIFEOS_BASE_URL="http://127.0.0.1:3999" node .review/verify-calendar.mjs`
+验证「指向隔离实例时应该放行」。
+
+**结果放行了，而且写进了一条真实记录。** 因为：
+
+```js
+// verify-calendar.mjs 第 6 行
+const BASE = (process.argv[2] ?? "http://127.0.0.1:3011").replace(/\/$/, "");
+```
+
+**它根本不读 `LIFEOS_BASE_URL`。** 守卫以为目标是 3999（隔离），脚本实际连的是 3011（生产）。
+污染记录：`bc0717b9-…`，正文「这是一个专门验证月历两行摘要最后需要使用两个英文句点截断的长文本内容」，`occurred 2036-09-15`。
+
+**教训：安全闸门不能相信它验证不了的线索。** 「环境变量声称目标是隔离实例」不是证据。
+
+### 第二版：显式目标必须被「入口脚本源码真的读它」佐证
+
+```js
+const entrySource = entryScriptSource();          // process.argv[1]
+const entryCode = stripComments(entrySource);     // 先剥注释
+const originIsHonored = originVar !== null && originValue !== ""
+  && entryCode !== null && entryCode.includes(originVar);
+```
+
+两条同时成立才采信：① 该端口真应答且报出非生产数据目录；② 入口脚本源码里真的读了这个变量。
+不成立 → 拒绝，并打印 `note: ignoring <变量> — <脚本> never reads it.`（**静默拒绝会让人以为是别的问题**）。
+
+哪些脚本对不上：`verify-calendar.mjs` 走 `argv[2]`、`verify-weekart.mjs` **硬编码 3011**、`verify-backup-live-bucket.mjs` 先 `argv[2]` 再 env。
+
+### 测试脚手架自己的两个坑
+
+1. **`spawnSync` 阻塞父进程事件循环。** 测试里我用一个**进程内的假 HTTP 监听器**冒充隔离实例（守卫只读 `localDirectory` 这一个字段），但 `spawnSync` 一跑，父进程事件循环被占住 → 假服务器**永远答不上** → `fetchStatus` 超时 → 回落到 3011 → 被判生产 → **三条断言全部失败，原因却是假的**（看起来像守卫坏了）。改成异步 `spawn` + Promise。
+2. **「源码包含变量名」会被注释骗过。** 我夹具的头注释里写了 `LIFEOS_BASE_URL` → 「不读变量」的夹具被判成「读变量」。修法：`stripComments()` 先剥 `//` 与 `/* */`（带引号状态机，避免误伤字符串里的 `//`）再 grep。真实脚本侥幸没暴露（它们的注释里没提），但判据本身不诚实。
+
+### 豁免口
+
+`retract-record.mjs` 的职责就是操作生产，**给它标 `@unguarded-on-purpose`**，`audit-toolbox-targets.mjs` 识别这个标记并单独归为 `prod-tool`。
+**没有豁免口的检查会永远报红，然后所有人学会忽略它。**
+
+### 撤回污染记录的两步
+
+记录**没有硬删 API**，所以：
+1. `node .review/retract-record.mjs bc0717b9-… --apply` → 走 `DELETE /api/records/:id` + `{revision}`（软删）。删前断言：必须活着、不能是 `is_demo=1`、不能被活记录引用，**并把正文打出来给人看**。
+2. `node .review/purge-trash-junk.mjs --apply` → 收墓碑（签名已覆盖，`matched 1 / UNMATCHED 0`）。
+
+**清墓碑前先 `PRAGMA wal_checkpoint(TRUNCATE)`**，否则 `copyFileSync` 的快照**不含 `-wal` 里的最新内容**（本次 `-wal` 有 90,672 字节）。
+
+结果：`live 140 → 139`、`2036-09-15` 归零、**18 条主人写的始终没动**、软删 0。
+
+### 一条附带的干净结论
+
+本轮所有改动**全部落在 gitignore 内**（`.review/`、`AGENTS.md`、`docs/changelog.md`、`data/`、`.env`）→ `git status` 干净。
+**接力依赖链（规则 + 改动记录 + 交接文档）不在 git 里**，所以「有 git 检查点」不等于「成果被保住了」。
