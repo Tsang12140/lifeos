@@ -18,6 +18,22 @@
 - **按天对账**一律 `Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai"}).format(...)`；UTC `slice(0,10)` 跨午夜归错天（已踩两次）。
 - **42 格月历第一格 = 含 1 号那周的周一**，不是 1 号。
 
+## 🔴 密钥与 git：**`.workbuddy-ai/memory/` 是公开的，`.env` 不是**
+
+- **2026-09-18 推送前拦下**：`MEMORY-detail.md` / `2026-09-18.md`（**被 git 跟踪**）里抄了 `LIFEOS_WEATHER_CONFIG_SECRET` 的**真实明文**，已在 3 个未推送提交里，差一步上 GitHub。
+  → **根因不是「忘了 ignore」**，是**规则只保护 `.env` 这个文件，没保护「把 `.env` 内容复制到别处」这个动作**。交接文档写得越详细越容易犯。
+  → **密钥类内容只写形状与来源，绝不写值**（写 `LIFEOS_WEATHER_CONFIG_SECRET='lifeos-local-weather:<搬迁前的数据目录>'` 这种形状）。
+- **被 ignore 的**：`.env`、`data/`、`.review/`、`AGENTS.md`、`docs/changelog.md`。
+  **没被 ignore 的**：`.workbuddy-ai/memory/**`、`docs/audit-prompt.md`、源码、`.env.example`（占位符可以，真值不行）。
+- **推送前必做**：① `npm run typecheck` + `npm test`；② 按**值**搜一遍 —— `git grep -F -e <密钥值> $(git rev-list origin/main..HEAD)`，**别只按文件名搜**。
+- **改写历史**（工具已就绪，均默认 dry-run）：
+  ① `.review/snapshot-git.mjs --label pre-rewrite` → `.git` **字节级快照 + 自包含 restore 脚本**（**别用 `git reset --hard`/`stash`**，会连未提交成果一起抹掉）；
+  ② `.review/rewrite-history-redact.mjs` → 7 项断言全 PASS 再 `--apply`；
+  ③ 回滚三件套 = 字节快照 + `refs/backup/pre-rewrite-main` + reflog。撤销：`git update-ref refs/heads/main <旧 tip>`。
+- **⚠️ `refs/original/…` 写不进去**：`git update-ref` **返回 0 却什么都不建**（那是 `filter-branch` 的命名空间）→ 用 `refs/backup/…`。**回滚点建完必须 `show-ref` 验，别信退出码。**
+- **⚠️ 排查脚本先估进程启动次数**：逐文件 `git cat-file` × 46 个提交 = 上千次 spawn，Windows 上直接跑到被杀（**无输出**）→ 用 `git grep -l -F -e <值> <commit>`，一个提交一次。
+- **⚠️ 沙箱丢 `refs/remotes/` 的写入**：`git fetch` 报 `* [new branch] main -> origin/main`，但 `.git/refs/remotes/origin/main` 落不了盘。**不影响推送**（推送只依赖远端 URL + 本地 ref）；自己终端 `git fetch` 一次即恢复。
+
 ## 磁盘：测试失败先 `df -h /c`
 
 - 症状 `database or disk is full` / `ENOSPC` **伪装成产品回归**，实际是 C 盘满。
