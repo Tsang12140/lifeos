@@ -2619,3 +2619,124 @@ test("a thumbnail is rotated upright from EXIF, and an audio original is refused
   equal(refused.response.status, 415);
   equal((refused.body as { error: string }).error, "unsupported_thumbnail_type");
 });
+
+test("the time machine reads a snapshot without touching it and sorts the drift three ways", async (t) => {
+  type Reading = {
+    fileName: string;
+    source: string;
+    counts: { records: number; recordsTrashed: number; people: number };
+    diff: {
+      gone: { total: number; samples: Array<{ id: string; preview: string; isPrivate: boolean; restorable?: boolean }> };
+      changed: { total: number; samples: Array<{ id: string; revisions?: { then: number; now: number } }> };
+      added: { total: number; samples: Array<{ id: string; preview: string }> };
+      unchanged: number;
+      trashedInSnapshot: number;
+    };
+  };
+
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+
+  const create = async (payload: Record<string, unknown>): Promise<{ id: string; revision: number }> => {
+    const created = await request(harness.base, "/api/records", { method: "POST", ...json(payload) });
+    equal(created.response.status, 201);
+    return created.body as { id: string; revision: number };
+  };
+  // Every snapshot below has to be addressed by the name the route accepts, so the
+  // extraction doubles as a check that local backups are named the way the time
+  // machine expects.
+  const fileNameOf = (body: unknown): string => {
+    const fileName = String((body as { location: string }).location).match(/lifeos-\d{8}-\d{6}-[0-9a-f]{8}\.sqlite$/)?.[0];
+    ok(fileName !== undefined, "a local backup must carry a time-machine-readable name");
+    return fileName;
+  };
+
+  const edited = await create({ kind: "journal", content: "会被改的那条", occurredAt: { kind: "date", value: "2026-09-10" } });
+  const trashed = await create({ kind: "journal", content: "会被删的那条", occurredAt: { kind: "date", value: "2026-09-11" } });
+  await create({ kind: "note", content: "一直没动的那条", occurredAt: { kind: "date", value: "2026-09-12" } });
+  const hidden = await create({ kind: "journal", content: "私密的那条", isPrivate: true, occurredAt: { kind: "date", value: "2026-09-13" } });
+
+  const snapshot = await request(harness.base, "/api/backup/local", { method: "POST", ...json({}) });
+  equal(snapshot.response.status, 201);
+  const fileName = fileNameOf(snapshot.body);
+  const snapshotPath = join(harness.root, "backups", fileName);
+  const bytesBefore = createHash("sha256").update(readFileSync(snapshotPath)).digest("hex");
+
+  // Drift since the snapshot: one edit, two recycle-bin moves, one new record, one
+  // record left alone.
+  const editResponse = await request(harness.base, `/api/records/${encodeURIComponent(edited.id)}`, {
+    method: "PATCH",
+    ...json({ revision: edited.revision, content: "改过之后的内容" }),
+  });
+  equal(editResponse.response.status, 200);
+  const trashResponse = await request(harness.base, `/api/records/${encodeURIComponent(trashed.id)}`, {
+    method: "DELETE",
+    ...json({ revision: trashed.revision }),
+  });
+  equal(trashResponse.response.status, 204);
+  const hideResponse = await request(harness.base, `/api/records/${encodeURIComponent(hidden.id)}`, {
+    method: "DELETE",
+    ...json({ revision: hidden.revision }),
+  });
+  equal(hideResponse.response.status, 204);
+  await create({ kind: "journal", content: "备份之后才写的", occurredAt: { kind: "date", value: "2026-09-14" } });
+
+  const reading = await request(harness.base, `/api/backup/snapshot?fileName=${encodeURIComponent(fileName)}`);
+  equal(reading.response.status, 200);
+  const body = reading.body as Reading;
+
+  equal(body.fileName, fileName);
+  equal(body.source, "local");
+  equal(body.counts.records, 4);
+  equal(body.counts.recordsTrashed, 0);
+  equal(body.counts.people, 0);
+  equal(body.diff.gone.total, 2);
+  equal(body.diff.changed.total, 1);
+  equal(body.diff.added.total, 1);
+  equal(body.diff.unchanged, 1);
+  equal(body.diff.trashedInSnapshot, 0);
+
+  const goneTrashed = body.diff.gone.samples.find((sample) => sample.id === trashed.id);
+  equal(goneTrashed?.restorable, true, "a record waiting in the recycle bin can still be brought back");
+  const gonePrivate = body.diff.gone.samples.find((sample) => sample.id === hidden.id);
+  equal(gonePrivate?.isPrivate, true);
+  equal(gonePrivate?.preview, "", "the diff must not become a way around the privacy mask");
+  const changedSample = body.diff.changed.samples.find((sample) => sample.id === edited.id);
+  deepEqual(changedSample?.revisions, { then: 1, now: 2 });
+  equal(body.diff.added.samples.length, 1);
+
+  // Read-only in the two ways that actually matter. Byte-identical afterwards, and
+  // nothing new beside it: SQLite creates -wal/-shm sidecars wherever it opens a
+  // file, which is precisely what reading a snapshot in place would have caused in
+  // the owner's backup directory.
+  equal(createHash("sha256").update(readFileSync(snapshotPath)).digest("hex"), bytesBefore);
+  deepEqual(readdirSync(join(harness.root, "backups")).filter((name) => name.endsWith("-wal") || name.endsWith("-shm")), []);
+  deepEqual(readdirSync(join(harness.root, "derived", "snapshots")), [], "the scratch copy has to be cleaned up again");
+
+  // A record that was already in the recycle bin when the snapshot was taken lands
+  // in no bucket: reporting it as "gone" would describe a loss that had happened
+  // before the moment being read.
+  const secondSnapshot = await request(harness.base, "/api/backup/local", { method: "POST", ...json({}) });
+  equal(secondSnapshot.response.status, 201);
+  const secondReading = await request(harness.base, `/api/backup/snapshot?fileName=${encodeURIComponent(fileNameOf(secondSnapshot.body))}`);
+  equal(secondReading.response.status, 200);
+  const second = secondReading.body as Reading;
+  equal(second.counts.records, 3);
+  equal(second.counts.recordsTrashed, 2);
+  equal(second.diff.trashedInSnapshot, 2);
+  equal(second.diff.gone.total, 0);
+  equal(second.diff.changed.total, 0);
+  equal(second.diff.unchanged, 3);
+
+  // A name that is not a backup name never reaches the filesystem, and a point that
+  // exists nowhere is a 404 rather than a server error.
+  const traversal = await request(harness.base, "/api/backup/snapshot?fileName=..%2F..%2Flifeos.sqlite");
+  equal(traversal.response.status, 400);
+  equal((traversal.body as { error: string }).error, "invalid_snapshot_name");
+  const unnamed = await request(harness.base, "/api/backup/snapshot");
+  equal(unnamed.response.status, 400);
+  equal((unnamed.body as { error: string }).error, "invalid_snapshot_name");
+  const absent = await request(harness.base, "/api/backup/snapshot?fileName=lifeos-20200101-000000-deadbeef.sqlite");
+  equal(absent.response.status, 404);
+  equal((absent.body as { error: string }).error, "snapshot_missing");
+});

@@ -91,6 +91,7 @@ import { calendarDayInfo } from "./calendarData";
 import { peekScore, scorePhoto, storyWeight } from "./photoScore";
 import { WeatherHeader } from "./WeatherHeader";
 import { BackupCalendar } from "./BackupCalendar";
+import { TimeMachine } from "./TimeMachine";
 import { getWeatherEmoji, type WeatherDay, type WeatherProfile } from "./weather";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { describeWeatherLocationByName } from "./weather-locations";
@@ -135,7 +136,7 @@ import { registerWebMcp } from "./webmcp";
 import { enabledModuleCommands, fetchMovieModuleStatus, movieRef, MovieAddPanel, MovieCardDialog, MoviePrompt, MovieSettingsCard, type ModuleCommand } from "./movie";
 import "./styles.css";
 
-type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "entities" | "settings";
+type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "entities" | "timemachine" | "settings";
 type CalendarMode = "week" | "month";
 type ComposerKind = Extract<RecordKind, "journal" | "task" | "event" | "note">;
 /** Everything the create form can collect in one shot. */
@@ -491,6 +492,7 @@ const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
   { id: "tasks", label: "任务", icon: ListChecks },
   { id: "notes", label: "笔记", icon: NotebookPen },
   { id: "entities", label: "联系人与地点", icon: ContactRound },
+  { id: "timemachine", label: "时光机", icon: History },
 ];
 
 const SETTINGS_NAV_ITEM: { id: AppView; label: string; icon: LucideIcon } = { id: "settings", label: "设置", icon: Settings };
@@ -3741,8 +3743,13 @@ function App() {
 
   const isToday = activeView === "today";
   const isReviewingPast = isToday && selectedDate < localDateToday();
-  const showComposer = isToday || (activeView !== "settings" && activeView !== "entities" && composerOpen);
-  const showPageActions = Boolean(searchQuery || entityFilterId !== null || (activeView !== "settings" && activeView !== "entities" && !isToday));
+  // Views that own their column outright: no composer bar, no page actions. The
+  // time machine is one of them — there is nothing to write while reading history,
+  // and the composer would push the axis down the page. It keeps the task column,
+  // like the calendar does.
+  const hidesComposer = activeView === "settings" || activeView === "entities" || activeView === "timemachine";
+  const showComposer = isToday || (!hidesComposer && composerOpen);
+  const showPageActions = Boolean(searchQuery || entityFilterId !== null || (!hidesComposer && !isToday));
   const visibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
   const visibleTasks = hideDemo && tasks ? tasks.filter((record) => !isDemoRecord(record)) : tasks;
   // Which places were written about most recently, so the mention picker can put
@@ -3798,6 +3805,8 @@ function App() {
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"
         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
+      : activeView === "timemachine"
+        ? <TimeMachine />
       : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
 }
 

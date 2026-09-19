@@ -59,6 +59,7 @@ import { createDualBackup, createLocalBackup, pruneBackups, testS3Backup, upload
 import { BackupScheduler, BACKUP_TIME_ZONE, publicNextBackupAt, shanghaiDateKey } from "./backup-scheduler.js";
 import { publicBackupConfig, saveRuntimeBackupConfig } from "./backup-config.js";
 import { BACKUP_RETENTION_LIMITS, buildBackupRetentionView, DEFAULT_BACKUP_RETENTION, describeBackupRetention, type BackupRetention } from "./backup-retention.js";
+import { readSnapshot, SnapshotUnavailableError } from "./backup-timeline.js";
 import { AI_REASONING_EFFORTS, publicAiConfig, saveRuntimeAiConfig, testRuntimeAiConfig } from "./ai-config.js";
 import { clearWeatherCache, decideForcedRefresh, fetchRealtimeWeather, fetchWeatherSnapshot, recordWeatherObservation, verifyWeatherLocation, WEATHER_OBSERVATION_TIME_ZONE } from "./weather.js";
 import { selectDayObservations } from "./weather-selection.js";
@@ -1438,6 +1439,31 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         setJson(res, 200, backupRetentionPayload(repository, config, backupScheduler.schedule));
       } catch (error) {
         throw new HttpError(400, "invalid_backup_retention", error instanceof Error ? error.message : "保留策略无效");
+      }
+      return;
+    }
+    // The time machine: reads one point in time without altering it. The snapshot
+    // is copied into a scratch directory under the data directory and opened
+    // read-only, so this route can look at the owner's real backup set but has no
+    // way to write to it.
+    if (pathname === "/api/backup/snapshot" && req.method === "GET") {
+      const fileName = (url.searchParams.get("fileName") ?? "").trim();
+      try {
+        setJson(res, 200, await readSnapshot(config, fileName, repository));
+      } catch (error) {
+        if (!(error instanceof SnapshotUnavailableError)) throw error;
+        // The mapping lives here, not in the read layer, because these are HTTP
+        // answers: a point that vanished between listing and clicking is a 404
+        // rather than a 500, and an unreachable object store is a 502 so the view
+        // can blame the copy instead of the request.
+        const mapping = error.reason === "invalid-name"
+          ? { status: 400, code: "invalid_snapshot_name" }
+          : error.reason === "missing"
+            ? { status: 404, code: "snapshot_missing" }
+            : error.reason === "transport"
+              ? { status: 502, code: "snapshot_unavailable" }
+              : { status: 500, code: "snapshot_unreadable" };
+        throw new HttpError(mapping.status, mapping.code, error.message);
       }
       return;
     }

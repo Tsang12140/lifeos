@@ -24,6 +24,21 @@ import {
 
 export type RecordView = TimelineRecord & { readonly revision: number };
 
+/**
+ * The identity of one record as a comparison needs it: a stable id, a revision
+ * that only moves when the record's content moves, and whether it sits in the
+ * recycle bin.
+ *
+ * Deliberately excludes the body. Comparing a snapshot against the live data
+ * thousands of rows at a time should not drag every journal entry through the
+ * diff; whoever needs the text fetches it for the handful of rows they show.
+ */
+export interface RecordFingerprint {
+  readonly id: string;
+  readonly revision: number;
+  readonly deleted: boolean;
+}
+
 export interface RecordListQuery {
   readonly q?: string;
   readonly kind?: RecordKind;
@@ -982,6 +997,23 @@ export class SqliteRecordRepository {
     }
     const sql = `SELECT * FROM records WHERE ${where.join(" AND ")} ORDER BY timeline_sort DESC, created_at_json DESC, id DESC`;
     return this.#db.prepare(sql).all(...params).map((row) => rowToView(readRecordRow(row)));
+  }
+
+  /**
+   * Every record's identity, recycle bin included — the live half of a time
+   * machine comparison.
+   *
+   * It reads through this connection rather than letting the caller open the
+   * database file, so a diff can never race a write in progress and, more to the
+   * point, can never modify anything: the shape it returns is three scalars wide.
+   */
+  public recordFingerprints(): readonly RecordFingerprint[] {
+    const rows = this.#db.prepare("SELECT id, revision, deleted_at_json FROM records").all();
+    return rows.map((row) => ({
+      id: textColumn(row, "id"),
+      revision: numberColumn(row, "revision"),
+      deleted: nullableTextColumn(row, "deleted_at_json") !== null,
+    }));
   }
 
   public insert(record: TimelineRecord): void {

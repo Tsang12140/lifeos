@@ -9281,3 +9281,425 @@ button.relation-chip {
     grid-column: 2;
   }
 }
+
+/* ── 时光机 ────────────────────────────────────────────────────────────────
+   A scale ruler, not a list. Snapshots are unevenly spaced in time, and the gaps
+   between the ticks are part of what the owner came here to see, so the axis keeps
+   a fixed gutter for the time and hangs the copy off it. The only thing coloured
+   is a loss: a neutral row is one nobody has to act on. */
+.time-machine {
+  --tm-gutter: 64px;
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: 30px;
+  align-items: start;
+}
+
+.tm-axis-caption {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.tm-days,
+.tm-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tm-day-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--tm-gutter) minmax(0, 1fr);
+  align-items: baseline;
+  padding: 16px 0 8px;
+}
+
+.tm-day-head::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--tm-gutter) + 6px);
+  top: 22px;
+  width: 11px;
+  height: 1px;
+  background: var(--line-strong);
+  /* Centred on the spine below, so the tick reads as a mark on the ruler rather
+     than as a line that happens to start near it. */
+  transform: translateX(-50%);
+}
+
+.tm-day-label {
+  padding-right: 14px;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.tm-day-week {
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+/* The spine. Every dot below sits exactly on it. */
+.tm-points {
+  position: relative;
+}
+
+.tm-points::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tm-gutter) + 6px);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+}
+
+.tm-point {
+  position: relative;
+}
+
+/* Three columns, and the dot is a plain grid item in the middle one.
+   It used to be `position: absolute; left: var(--tm-gutter)` inside this button —
+   which landed it 64px to the right of the spine, because an absolutely
+   positioned child of a grid container is placed against its own grid area rather
+   than against the container's edge. Measured: spine at x=351.5, dot at x=415.5.
+   A static item in a 12px column has no such ambiguity, and its centre is the
+   spine, so the geometry is the layout instead of a calculation that has to agree
+   with it. */
+.tm-point-button {
+  display: grid;
+  grid-template-columns: var(--tm-gutter) 12px minmax(0, 1fr);
+  width: 100%;
+  padding: 6px 8px 6px 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tm-point-button:hover {
+  background: var(--surface-soft);
+}
+
+.tm-point-button.is-selected {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.tm-point-time {
+  padding-right: 14px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.tm-point-dot {
+  grid-column: 2;
+  align-self: start;
+  justify-self: center;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.tm-point-button.is-selected .tm-point-dot {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.tm-point-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 16px;
+  min-width: 0;
+}
+
+.tm-point-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tm-tier {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--chip-ink);
+  font-size: 0.68rem;
+}
+
+.tm-point-size {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-point-where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.tm-point-keep {
+  color: var(--ink-soft);
+}
+
+.tm-more-button {
+  margin-left: calc(var(--tm-gutter) + 28px);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.tm-panel {
+  min-width: 0;
+}
+
+.tm-panel-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.tm-panel-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.06rem;
+  font-weight: 620;
+}
+
+.tm-panel-sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  word-break: break-all;
+}
+
+.tm-recover-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: not-allowed;
+}
+
+.tm-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+
+.tm-counts li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.tm-counts small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.tm-counts strong {
+  color: var(--ink);
+  font-size: 1.2rem;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-counts em {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.tm-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tm-diff-caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.tm-diff-caption b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-diff-row {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.tm-diff-gone {
+  border-left-color: var(--danger);
+}
+
+.tm-diff-changed {
+  border-left-color: var(--primary);
+}
+
+.tm-diff-added {
+  border-left-color: var(--line-strong);
+}
+
+.tm-diff-row header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tm-diff-title {
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.tm-diff-row header strong {
+  color: var(--ink);
+  font-size: 1.04rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-diff-row header small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.tm-diff-none {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.tm-diff-items {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tm-diff-items li {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: baseline;
+  font-size: 0.8rem;
+}
+
+.tm-diff-kind {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.tm-diff-text {
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-diff-meta {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.tm-diff-rest {
+  grid-template-columns: minmax(0, 1fr);
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.tm-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.tm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: center;
+}
+
+.tm-empty strong {
+  color: var(--ink);
+  font-size: 0.94rem;
+}
+
+.tm-empty p {
+  max-width: 34ch;
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.tm-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgb(186 77 90 / 0.28);
+  border-radius: 12px;
+  background: rgb(186 77 90 / 0.08);
+  color: var(--danger);
+  font-size: 0.82rem;
+}
+
+/* The ruler needs its own column to be a ruler; below that it stacks, which is
+   the same shape as every other view on a phone. */
+@media (max-width: 1080px) {
+  .time-machine {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}

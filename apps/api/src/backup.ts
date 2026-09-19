@@ -9,6 +9,13 @@ import { planBackupRetention, retentionHorizonDays, type BackupRetention } from 
 
 type S3Config = NonNullable<ApiConfig["backupS3"]>;
 
+/**
+ * Ceiling on one snapshot pulled into memory. A LifeOS database snapshot is
+ * roughly 1MB today; the cap exists so that a wrong key can never talk this
+ * process into buffering something enormous.
+ */
+export const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+
 function sha256(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -84,10 +91,13 @@ function signingKey(secret: string, date: string, region: string): Buffer {
 
 function s3Error(status: number, body: string): string {
   const code = /<Code>([^<]+)<\/Code>/.exec(body)?.[1];
-  if (code === "AccessDenied") return "对象存储拒绝上传，请检查 Bucket 的 PutObject 权限。";
+  // Verb-neutral on purpose: this one helper now answers for uploads, deletes,
+  // listings and time-machine reads alike, and "上传失败" during a read sends the
+  // owner looking at the wrong half of their credentials.
+  if (code === "AccessDenied") return "对象存储拒绝访问，请检查 Bucket 的读写权限。";
   if (code === "SignatureDoesNotMatch") return "对象存储签名失败，请检查 Endpoint、Region、密钥和 Path-style 设置。";
   if (code === "NoSuchBucket") return "对象存储 Bucket 不存在，请检查名称。";
-  return `对象存储上传失败：HTTP ${status}${code ? ` (${code})` : ""}`;
+  return `对象存储请求失败：HTTP ${status}${code ? ` (${code})` : ""}`;
 }
 
 /** Encoded exactly the way the request URL encodes it, so signature and wire agree. */
@@ -282,6 +292,54 @@ function objectKeyFromLocation(config: S3Config, location: string): string | und
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Reads one snapshot back out of the object store. The timeline needs this to
+ * look inside a point that still exists only remotely.
+ *
+ * Read-only by construction: the only verb it can reach is GET. `assertOwnedKey`
+ * runs up front rather than only inside `signedS3Request`, because the file://
+ * branch below never goes through the signer — and that guard is what keeps this
+ * inside `product-backup/lifeos`. The bucket is shared with another product whose
+ * objects must never be read or written from here.
+ *
+ * Returns `undefined` when the object store is unconfigured or switched off, so
+ * the caller can report "this point is local-only" instead of failing.
+ */
+export async function downloadSnapshotObject(config: ApiConfig, fileName: string, scope: "live" | "trashed" = "live"): Promise<Buffer | undefined> {
+  let s3: S3Config | undefined;
+  try {
+    s3 = resolvedBackupS3(config);
+  } catch {
+    return undefined;
+  }
+  if (s3 === undefined || !s3.enabled) return undefined;
+  // The caller hands over a file name, never a key: the key is derived here, so
+  // no route gets the chance to ask for an arbitrary path inside the bucket.
+  const prefix = scope === "live" ? s3.prefix.replace(/^\/+|\/+$/g, "") : trashPrefixOf(s3);
+  const owned = assertOwnedKey(s3, `${prefix}/${fileName}`);
+  const localPath = localObjectPath(s3, owned);
+  if (localPath !== undefined) {
+    // A file:// transport answers a missing object with ENOENT. That means "no copy
+    // here", not "the object store is broken" — and the caller has to tell those
+    // apart, because retention moves an old snapshot to the recycle bin without
+    // telling anybody, so a cleaned-away point must come back as a 404.
+    try {
+      return await readFile(localPath);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+  const { response } = await signedS3Request(s3, { method: "GET", key: owned, failureLabel: "对象存储读取" });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(s3Error(response.status, await response.text().catch(() => "")));
+  // Refuse before buffering: the whole object lands in memory, and a snapshot is
+  // the only thing this route is allowed to ask for.
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (declared > MAX_SNAPSHOT_BYTES) throw new Error(`对象存储读取失败：对象 ${declared} 字节，超出快照上限`);
+  return Buffer.from(await response.arrayBuffer());
 }
 
 export interface BackupArtifact {
