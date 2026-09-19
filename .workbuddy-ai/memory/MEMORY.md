@@ -41,6 +41,10 @@
 - **照片生命周期（`asset-gc.ts`；界面 `main.tsx:2992` 有原文）**：没人引用的上传 → **原处留 7 天**（`assetOrphanGraceDays`，锚点 = **`lastUsedAt ?? createdAt`**，不是 createdAt）→ 收进 `pic-test/uploads/_orphan-trash/` → **回收站再留 30 天**（`assetTrashDays`，可恢复）→ 才永久删。**总时限 34 天，不是 7 天。**
   → `referencedAssetIds` **包含软删记录**（回收站里的记录还能恢复，它的照片必须留着）→ 「先关联、后删除」**不算**孤儿。
   → **回收站条目没有 `id` 字段**（只有 `asset`/`trashedAt`/`origin`/`daysRemaining`）→ 取内容 / 恢复 / 删除一律传 **`asset.id`**（传条目 id 只会得到 `undefined` 的 404，我因此误报过「93 条不可恢复」）。
+- **内容寻址 / `contentHash`（2026-09-19 起）**：hash 挂在 **`storageRef`** 上 —— `asset.storageRefs[*].contentHash = { algorithm:"sha256", value }`，**资产顶层没有这个字段**；判「有没有 hash」必须读 refs，读 `asset.contentHash` 永远是 `undefined`（我为此写过两次「161 张里 0 张有 hash」的假结论）。且 **`GET /api/assets` 不返回 `contentHash`** → 数覆盖率只能读库（把 `.sqlite` + `-wal` + `-shm` 三件套一起复制到 scratch 再 `readOnly` 打开）。
+  → **回填是单向窗口**：hash 只在文件还在盘上时算得出（`holiday.jpg` 已永久补不上）。现状 **160 / 161 带 hash**。
+  → 上传路由**已**按 hash 复用（`POST /api/assets/uploads` 命中即回 201 + 同一个 asset）；但 **`POST /api/assets`（JSON 自带 `storageRefs`）不算 hash**，永远躲开复用检查（09-19 量到 6 组重复、约 28.1MB）。
+  → `findAssetByContentHash` 是**全表线性扫**（`repository.ts:1257`），而上传路由每个请求都走它 —— 表一大就是热路径，要加索引。
 - **备份退路要实测**：`POST /api/backup/dual`（`.review/verify-backup-path.mjs`）。`enabled=1` ≠ 能用。
 - **迁移类改动必须显式搜 `.review/`**（它被 gitignore，`grep`/`rg` 默认不进 → 会漏掉整个工具箱）。
 
