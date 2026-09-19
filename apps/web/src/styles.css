@@ -9646,6 +9646,49 @@ button.relation-chip {
   font-size: 0.72rem;
 }
 
+/* A record's photos at that moment, as small squares rather than a second
+   timeline: the panel is the narrower half of the page and the job here is
+   recognition ("that one"), not browsing. It asks for the same derived thumbnail
+   the timeline's grid asks for, so the browser keeps serving one cached file to
+   both views instead of paying for the same photo twice. */
+.tm-diff-photos {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.tm-diff-photo {
+  width: 78px;
+  height: 78px;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  object-fit: cover;
+}
+
+/* The read layer only names photos it can still serve, so a tile should never
+   land here — it exists so that a file which disappears between the query and
+   the paint shows as a quiet dashed gap instead of a broken-image icon. */
+.tm-diff-photo-missing {
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+}
+
+.tm-diff-photos-rest,
+.tm-diff-photos-gone {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+/* Stated, never hidden: a photo the collector has taken away cannot come back
+   through the time machine, and the row says so instead of leaving a gap. */
+.tm-diff-photos-gone {
+  grid-column: 2;
+  margin-top: 2px;
+}
+
 .tm-diff-rest {
   grid-template-columns: minmax(0, 1fr);
   color: var(--muted);

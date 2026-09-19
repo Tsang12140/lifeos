@@ -82,6 +82,16 @@ export interface SnapshotDiffSample {
   readonly preview: string;
   readonly isPrivate: boolean;
   readonly occurredDay?: string;
+  /**
+   * Photos this record pointed at *at that moment*, and that the API can still
+   * draw today. That second half is the honest half: the snapshot holds the
+   * database, not the photographs, so a picture the collector has since taken
+   * away cannot come back through the time machine. It is reported instead —
+   * see `photosGone` — rather than promised and then rendered as a broken tile.
+   */
+  readonly photos?: readonly string[];
+  /** How many of that moment's photos no longer have a file behind them. */
+  readonly photosGone?: number;
   /** Set on `changed` samples: the revision in the snapshot, and the revision now. */
   readonly revisions?: { readonly then: number; readonly now: number };
   /** Set on `gone` samples that are sitting in the recycle bin and can be restored. */
@@ -117,11 +127,19 @@ export interface SnapshotReading {
 
 /**
  * The slice of the repository the diff reads. Narrow on purpose: it is the only
- * thing this module can do to the live data, and neither method can write.
+ * thing this module can do to the live data, and no method on it can write.
  */
 export interface TimelineSource {
   recordFingerprints(): readonly RecordFingerprint[];
   list(): readonly RecordView[];
+  /**
+   * Photo assets whose local original is still on disk.
+   *
+   * Optional so a test can hand in the two required methods alone. Absent, the
+   * diff reports no photos at all — a missing image is a smaller lie than an
+   * `<img>` pointed at an asset id nobody can serve.
+   */
+  photoAssetIds?(): readonly string[];
 }
 
 /** One record in the shape a comparison needs. Both sides of the diff use this. */
@@ -133,6 +151,8 @@ export interface DiffableRecord {
   readonly preview: string;
   readonly isPrivate: boolean;
   readonly occurredDay?: string;
+  readonly photos?: readonly string[];
+  readonly photosGone?: number;
 }
 
 export function assertSafeSnapshotFileName(fileName: string): string {
@@ -291,6 +311,83 @@ function countJsonKind(db: DatabaseSync, tables: ReadonlySet<string>, table: str
   return total;
 }
 
+/**
+ * The asset ids of one kind inside a snapshot.
+ *
+ * `assets` is a key–value table, so the kind lives inside `value_json` and has to
+ * be read in JavaScript — the same trade `countJsonKind` makes, for the same
+ * reason: one unreadable payload drops one row instead of blanking the view.
+ */
+function snapshotIdsOfKind(db: DatabaseSync, tables: ReadonlySet<string>, table: string, kind: string): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!tables.has(table)) return ids;
+  for (const row of db.prepare(`SELECT id, value_json AS value FROM ${table}`).all()) {
+    const id = row["id"];
+    const value = row["value"];
+    if (typeof id !== "string" || typeof value !== "string") continue;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed !== null && typeof parsed === "object" && (parsed as { kind?: unknown }).kind === kind) ids.add(id);
+    } catch {
+      // Unreadable payload: this one asset is skipped, nothing else is.
+    }
+  }
+  return ids;
+}
+
+/**
+ * Asset ids a record pointed at, in reference order, without duplicates.
+ *
+ * Accepts either side's shape: the snapshot hands over the raw `asset_refs_json`
+ * column, while a live `RecordView` hands over an already-parsed `assetRefs`.
+ */
+function referencedAssetIds(assetRefs: unknown): readonly string[] {
+  let parsed: unknown = assetRefs;
+  if (typeof assetRefs === "string") {
+    if (assetRefs.length === 0) return [];
+    try {
+      parsed = JSON.parse(assetRefs);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const ids: string[] = [];
+  for (const entry of parsed) {
+    if (entry === null || typeof entry !== "object") continue;
+    const assetId = (entry as { assetId?: unknown }).assetId;
+    if (typeof assetId !== "string" || assetId.length === 0) continue;
+    if (!ids.includes(assetId)) ids.push(assetId);
+  }
+  return ids;
+}
+
+/**
+ * Splits one record's asset references into the pictures a panel can draw, and
+ * the pictures it can only talk about.
+ *
+ * `knownPhotoIds` is what the snapshot recorded as a photo. Without it the caller
+ * is describing the present, where every drawable reference is simply drawable —
+ * only the snapshot side can say "this used to be a picture and the file is gone".
+ * An audio clip or an attachment therefore never counts as a missing photo.
+ */
+function photosOf(
+  assetRefsJson: unknown,
+  drawable: ReadonlySet<string>,
+  knownPhotoIds?: ReadonlySet<string>,
+): { readonly photos: readonly string[]; readonly photosGone: number } {
+  const photos: string[] = [];
+  let photosGone = 0;
+  for (const assetId of referencedAssetIds(assetRefsJson)) {
+    if (drawable.has(assetId)) {
+      photos.push(assetId);
+      continue;
+    }
+    if (knownPhotoIds !== undefined && knownPhotoIds.has(assetId)) photosGone += 1;
+  }
+  return { photos, photosGone };
+}
+
 function countRecords(db: DatabaseSync, tables: ReadonlySet<string>): { readonly live: number; readonly trashed: number } {
   if (!tables.has("records")) return { live: 0, trashed: 0 };
   const row = db.prepare(
@@ -343,11 +440,14 @@ function parseJsonColumn(value: unknown): unknown {
   }
 }
 
-function readSnapshotRecords(db: DatabaseSync): readonly DiffableRecord[] {
+function readSnapshotRecords(db: DatabaseSync, drawable: ReadonlySet<string>): readonly DiffableRecord[] {
   const tables = snapshotTables(db);
   if (!tables.has("records")) return [];
+  // What the snapshot itself counted as a photo, so an attachment or a recording
+  // is never reported as a picture that went missing.
+  const snapshotPhotoIds = snapshotIdsOfKind(db, tables, "assets", "photo");
   const rows = db
-    .prepare("SELECT id, kind, revision, deleted_at_json, is_private, body_original, body_edited, occurred_at_json FROM records")
+    .prepare("SELECT id, kind, revision, deleted_at_json, is_private, body_original, body_edited, occurred_at_json, asset_refs_json FROM records")
     .all();
   const records: DiffableRecord[] = [];
   for (const row of rows) {
@@ -355,6 +455,11 @@ function readSnapshotRecords(db: DatabaseSync): readonly DiffableRecord[] {
     if (typeof id !== "string") continue;
     const isPrivate = Number(row["is_private"] ?? 0) === 1;
     const day = occurredDay(parseJsonColumn(row["occurred_at_json"]));
+    // A masked record gives up its pictures for the same reason it gives up its
+    // text: otherwise "what disappeared" becomes a way to look at a private photo.
+    const pictures = isPrivate
+      ? { photos: [] as readonly string[], photosGone: 0 }
+      : photosOf(row["asset_refs_json"], drawable, snapshotPhotoIds);
     records.push({
       id,
       revision: Number(row["revision"] ?? 1),
@@ -367,6 +472,8 @@ function readSnapshotRecords(db: DatabaseSync): readonly DiffableRecord[] {
       ),
       isPrivate,
       ...(day === undefined ? {} : { occurredDay: day }),
+      ...(pictures.photos.length === 0 ? {} : { photos: pictures.photos }),
+      ...(pictures.photosGone === 0 ? {} : { photosGone: pictures.photosGone }),
     });
   }
   return records;
@@ -379,7 +486,7 @@ function readSnapshotRecords(db: DatabaseSync): readonly DiffableRecord[] {
  * record that disappeared from the timeline can be reported as *restorable* rather
  * than destroyed. The views supply the text for records that are still around.
  */
-function readLiveRecords(source: TimelineSource): readonly DiffableRecord[] {
+function readLiveRecords(source: TimelineSource, drawable: ReadonlySet<string>): readonly DiffableRecord[] {
   const views = new Map(source.list().map((view) => [view.id, view]));
   return source.recordFingerprints().map((fingerprint): DiffableRecord => {
     const view = views.get(fingerprint.id);
@@ -395,6 +502,9 @@ function readLiveRecords(source: TimelineSource): readonly DiffableRecord[] {
     }
     const isPrivate = view.isPrivate === true;
     const day = occurredDay(view.occurredAt);
+    // No earlier state to compare against on this side, so nothing here can be
+    // reported as a photo that went missing: `photosGone` stays absent.
+    const pictures = isPrivate ? [] : photosOf(view.assetRefs, drawable).photos;
     return {
       id: fingerprint.id,
       revision: fingerprint.revision,
@@ -403,6 +513,7 @@ function readLiveRecords(source: TimelineSource): readonly DiffableRecord[] {
       preview: previewOf(view.body.original, view.body.edited ?? null, isPrivate),
       isPrivate,
       ...(day === undefined ? {} : { occurredDay: day }),
+      ...(pictures.length === 0 ? {} : { photos: pictures }),
     };
   });
 }
@@ -414,6 +525,8 @@ function sampleOf(row: DiffableRecord): SnapshotDiffSample {
     preview: row.preview,
     isPrivate: row.isPrivate,
     ...(row.occurredDay === undefined ? {} : { occurredDay: row.occurredDay }),
+    ...(row.photos === undefined ? {} : { photos: row.photos }),
+    ...(row.photosGone === undefined ? {} : { photosGone: row.photosGone }),
   };
 }
 
@@ -496,15 +609,19 @@ export async function readSnapshot(
   source: TimelineSource,
   sampleLimit: number = SNAPSHOT_SAMPLE_LIMIT,
 ): Promise<SnapshotReading> {
+  // Resolved once, outside the snapshot, then handed to both sides: "which photos
+  // can still be drawn today" is a property of right now, not of either side of
+  // the comparison.
+  const drawable = new Set(source.photoAssetIds?.() ?? []);
   const read = await withSnapshot(config, fileName, (db) => ({
     counts: readSnapshotCounts(db),
-    records: readSnapshotRecords(db),
+    records: readSnapshotRecords(db, drawable),
   }));
   return {
     fileName,
     source: read.source,
     sizeBytes: read.sizeBytes,
     counts: read.value.counts,
-    diff: classifyRecords(read.value.records, readLiveRecords(source), sampleLimit),
+    diff: classifyRecords(read.value.records, readLiveRecords(source, drawable), sampleLimit),
   };
 }

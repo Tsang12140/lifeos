@@ -1230,6 +1230,22 @@ export class SqliteRecordRepository {
   }
 
   /**
+   * Photo assets whose local original is still on disk — the ones `<img>` can
+   * actually be pointed at.
+   *
+   * "Local" is deliberately the same test the timeline uses before it draws a
+   * grid (`storageRefs` naming `local`), because that is what makes a file this
+   * API is allowed to serve at all. The time machine needs it to keep its word:
+   * it would rather say "one of that moment's photos is gone" than put a tile on
+   * screen that can never load.
+   */
+  public photoAssetIds(): readonly string[] {
+    return this.listAssets({ kind: "photo" })
+      .filter((asset) => asset.storageRefs.some((storageRef) => storageRef.sourceId === "local"))
+      .map((asset) => asset.id);
+  }
+
+  /**
    * The live asset whose bytes hash to this value, if any.
    *
    * Only the `assets` table is searched, so a collected file sitting in the

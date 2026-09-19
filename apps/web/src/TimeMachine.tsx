@@ -8,6 +8,16 @@ const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
 const MAX_POINTS_PER_DAY = 3;
 
 /**
+ * How many of a record's photos a diff row spells out before it counts the rest.
+ *
+ * Three, and then a number. This panel sits beside the axis and is the narrower
+ * half of the page, so a row that unrolled a nine-photo post would push every
+ * other record off the screen — and the question a diff answers is "which one was
+ * that", not "let me look through the album".
+ */
+const DIFF_PHOTO_LIMIT = 3;
+
+/**
  * One point on the axis. `keep`/`tier`/`reason` come straight from the retention
  * plan, so the badge here can never disagree with what the settings page says
  * about the same snapshot.
@@ -39,8 +49,23 @@ interface DiffSample {
   readonly preview: string;
   readonly isPrivate: boolean;
   readonly occurredDay?: string;
+  /** Photos of that moment the API can still serve. Absent when there are none. */
+  readonly photos?: readonly string[];
+  /** Of that moment's photos, how many no longer have a file behind them. */
+  readonly photosGone?: number;
   readonly revisions?: { readonly then: number; readonly now: number };
   readonly restorable?: boolean;
+}
+
+/**
+ * The same URL the timeline's grid asks for, at the same width, so a photo shown
+ * in both places costs one download rather than two.
+ *
+ * 400 is one of the only two widths the API derives; anything else is refused
+ * outright rather than rounded, so this number has to stay one of them.
+ */
+function photoThumbUrl(assetId: string): string {
+  return `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=400`;
 }
 
 interface SnapshotReading {
@@ -316,6 +341,58 @@ export function TimeMachine() {
   );
 }
 
+/**
+ * A record's photos, capped and counted.
+ *
+ * The list is what the read layer could still serve for that moment, so an
+ * `<img>` here has somewhere to point. A private record renders nothing at all —
+ * the mask covers the pictures too, or "what disappeared" becomes a way to look
+ * at them.
+ */
+function DiffPhotos({ sample }: { readonly sample: DiffSample }) {
+  const photos = sample.photos ?? [];
+  const gone = sample.photosGone ?? 0;
+  if (sample.isPrivate || (photos.length === 0 && gone === 0)) return null;
+  const shown = photos.slice(0, DIFF_PHOTO_LIMIT);
+  const hidden = photos.length - shown.length;
+  return (
+    <>
+      {shown.length === 0 ? null : (
+        <span className="tm-diff-photos">
+          {shown.map((assetId) => <DiffPhoto key={assetId} assetId={assetId} />)}
+          {hidden > 0 ? <span className="tm-diff-photos-rest">还有 {hidden} 张</span> : null}
+        </span>
+      )}
+      {gone > 0 ? <span className="tm-diff-photos-gone">另有 {gone} 张照片已经不在了</span> : null}
+    </>
+  );
+}
+
+/**
+ * One square.
+ *
+ * The read layer names only photos it can still serve, so the error path means a
+ * file vanished between the query and the paint. A quiet dashed gap is the honest
+ * answer there; better than the icon a browser draws for a broken image, which
+ * reads as "this app is broken" rather than "that photo is gone".
+ */
+function DiffPhoto({ assetId }: { readonly assetId: string }) {
+  const [missing, setMissing] = useState(false);
+  if (missing) {
+    return <span className="tm-diff-photo tm-diff-photo-missing" role="img" aria-label="照片已不在" />;
+  }
+  return (
+    <img
+      className="tm-diff-photo"
+      src={photoThumbUrl(assetId)}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => setMissing(true)}
+    />
+  );
+}
+
 function DiffRow({
   tone,
   title,
@@ -351,6 +428,7 @@ function DiffRow({
                 {sample.revisions === undefined ? "" : ` · v${sample.revisions.then}→v${sample.revisions.now}`}
                 {sample.restorable === true ? " · 回收站里还在" : ""}
               </span>
+              <DiffPhotos sample={sample} />
             </li>
           ))}
           {bucket.total > bucket.samples.length ? (

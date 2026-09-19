@@ -48,7 +48,7 @@
 
 - **`.review/lib/production-guard.mjs` = 生产守卫**：副作用式 import，**必须是第一条 import**。读 `/api/backup/status` 的 `localDirectory`，落在 `data/` 里就 `exit 1`。
   放行 `LIFEOS_ALLOW_PROD_ACCEPTANCE=1`。回归 `node .review/verify-production-guard.mjs`（14 项，夹具在 `.review/guard-fixtures/`）。
-- **跑验收前先看清单 `node .review/audit-toolbox-targets.mjs`**（有未守卫的写入脚本就 exit 1）。豁免要显式写 `@unguarded-on-purpose`（目前只有 `retract-record.mjs`）。
+- **跑验收前先看清单 `node .review/audit-toolbox-targets.mjs`**（有未守卫的写入脚本就 exit 1）。豁免要显式写 `@unguarded-on-purpose`（**目前两个**：`retract-record.mjs` 撤回污染记录、`seed-timemachine-demo.mjs` 往 3011 灌时光机样片 —— 都是「职责就是生产」，两个都自带 `--clean` 出口）。
 - **守卫铁律：只采信它能验证的东西。** 判定用「**包含**」不用「相等」（`localDirectory` 是 `<数据目录>/backups` 子目录）；报不出目录 → **fail-closed 当生产**；显式目标变量只有**入口脚本源码真的读它**（`argv[1]` 取入口、**剥掉注释再 grep**）才采信。
 - 真污染了生产库：`node .review/retract-record.mjs <id> --apply` → `node .review/purge-trash-junk.mjs --apply`。
 - **崩溃必须变成 FAIL**：脚本抛错时结果文件会留着上次的 `RESULT: PASS` → **看到 PASS 先确认断言条数**。
@@ -64,6 +64,18 @@
   → **「有清理调用」≠「清理成功」**；只 grep `rmSync` 在不在会得出「0 泄漏」假结论。
 - 修法必须**同步强杀**（清理块多在 `finish = () => {}` / `process.on("exit")` 里，`await` 非法）：
   `.review/reap-chrome.mjs`（**新脚本一律用它**）、`.review/sweep-profiles.mjs`、`.review/codemod-reap.mjs`。
+
+## 时光机（只读穿越；第一期只读）
+
+- **快照绝不能原地打开**：`DatabaseSync({ readOnly: true })` **照样**会在被打开文件旁边生成 `-wal` / `-shm`（哪怕只是读）。
+  → 先复制到 `<dataDirectory>/derived/snapshots/`，再 `readOnly` 打开，用完**连 sidecar 一起删**。
+  → 「只读」的三条硬证据（缺一不算）：快照**逐字节** sha256 不变、`backups/` 里不冒出 `-wal`/`-shm`、跑完 scratch 目录为空。**只写「我用了 readOnly」不是证据。**
+- **照片只在「今天还画得出来」时才给**：快照里**没有照片字节**（照片在 `LIFEOS_ASSET_ROOT`，不进快照、无备份），读层只能给「图库里现在还在的本地照片」。
+  文件没了 → 报 `photosGone` 的**数字**（判定只认快照自己记录为 photo 的 id，附件 / 录音永远不算），**而不是悄悄少画一格**。**私密记录连照片一起蒙住**——否则「什么消失了」就成了看私密照片的路子。
+- 差异行里的方图**上限 3 张**（`DIFF_PHOTO_LIMIT`），多的折成「还有 N 张」；`<img onError>` 落成虚线占位。
+- **浏览器只看得见轴上「最新」那个快照**（保留策略同天只留最新，更早的当场挪进 `backups/_trash/`）→ **验收脚本的「顺序」本身就是断言的一部分**：「造出差异的那次快照」必须到浏览器那一段跑之前**一直是最新**，**双份备份要排在最后**。否则面板打开的是一个没有任何差异的时间点，所有行断言全报 `实际 undefined`（踩过）。
+- 方图是 `loading="lazy"`：断言 `naturalWidth > 0` 之前先 `scrollIntoView` 走一遍再等 `complete`，否则「还没开始下载」会被判成「图坏了」。
+- **还没做**：刻度尺读不到已进回收站 / 远端 `lifeos-trash/` 的快照；选择性捞回与**照片备份**未开始（界面「捞回」是 disabled 占位）。见 `docs/todo.md`。
 
 ## UI 硬规则
 
