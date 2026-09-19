@@ -10060,6 +10060,11 @@ button.relation-chip {
     gap: 5px;
   }
 
+  /* The older compact header reserved 30px before the first arrow. On a
+     calendar view that made the whole page control look accidentally centred
+     instead of belonging to the left edge of the date block. */
+  .weather-date-navigation > .weather-date-step:first-child { margin-left: 0; }
+
   .weather-date-step {
     display: inline-grid !important;
     flex: 0 0 38px;
@@ -10149,17 +10154,20 @@ button.relation-chip {
   .composer-inline-save {
     display: inline-flex;
     flex: 0 0 auto;
-    width: auto;
+    align-self: start;
+    width: var(--composer-tile);
     align-items: center;
     justify-content: center;
-    min-width: 68px;
+    min-width: var(--composer-tile);
     min-height: var(--composer-tile);
-    padding: 0 12px;
+    margin: 8px 10px 8px 0;
+    padding: 0;
     border-radius: 10px;
     font-size: 0.82rem;
   }
 
   .composer-footer { margin-top: 12px; }
+  .composer-footer .composer-date-control { justify-self: start; width: fit-content; }
 }
 
 @media (max-width: 560px) {
@@ -10183,7 +10191,7 @@ button.relation-chip {
   .weather-header-place { max-width: 88px; }
   .weather-header-condition strong { font-size: 0.76rem; }
   .weather-header-temperature { font-size: 0.78rem; }
-  .composer-inline-save { min-width: 62px; padding: 0 9px; }
+  .composer-inline-save { min-width: var(--composer-tile); padding: 0; }
   .composer-mobile-action-row .shot-clear span { display: none; }
 }
 
@@ -10228,4 +10236,17 @@ button.relation-chip {
 
   .week-card-art.bands-1 .week-card-band { width: 100% !important; }
   .week-card-veil { background: linear-gradient(90deg, rgb(255 255 255 / 0.48) 0%, rgb(255 255 255 / 0.1) 100%); }
+}
+
+/* A phone timeline needs its visual anchor close to the left edge. The prior
+   44px time gutter + 41px marker gutter pushed the cards to the right third of
+   the surface. Keep the chronological reading order, but put the time above
+   the card and turn the left rail into one modest 30px guide. */
+@media (max-width: 700px) {
+  .timeline-list::before { left: 15px; }
+  .timeline-group-title { margin-left: 30px; }
+  .timeline-item { grid-template-columns: 30px minmax(0, 1fr); }
+  .timeline-time { grid-column: 2; grid-row: 1; justify-self: start; text-align: left; }
+  .timeline-marker { grid-column: 1; grid-row: 1 / -1; padding-top: 7px; }
+  .timeline-content { grid-column: 2; grid-row: 2; width: 100%; }
 }

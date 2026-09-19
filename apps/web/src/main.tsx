@@ -1011,7 +1011,7 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
           what actually closes it. */}
       <div className="composer-mobile-action-row">
         <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
-        <button className="primary-button composer-inline-save" type="button" disabled={!content.trim() || saving} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button>
+        <button className="primary-button composer-inline-save" type="button" disabled={!content.trim() || saving} onClick={onSubmit} aria-label={saving ? "正在保存" : "保存"} title={saving ? "正在保存" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className="visually-hidden">{saving ? "保存中" : "保存"}</span></button>
       </div>
     </div>
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
