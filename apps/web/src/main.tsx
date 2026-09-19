@@ -2401,13 +2401,16 @@ interface NoteDraft {
   readonly metadataTouched: boolean;
 }
 
-type NoteSaveHandler = (record: RecordView | null, draft: NoteDraft) => Promise<boolean>;
+type NoteSaveResult = { readonly ok: true } | { readonly ok: false; readonly message: string };
+type NoteSaveHandler = (record: RecordView | null, draft: NoteDraft) => Promise<NoteSaveResult>;
 
 function NoteEditorDialog({ record, createOpen, entities, onCreateEntity, onClose, onSave }: { readonly record: RecordView | null; readonly createOpen: boolean; readonly entities: readonly Entity[]; readonly onCreateEntity: CreateEntity; readonly onClose: () => void; readonly onSave: NoteSaveHandler }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const open = createOpen || record !== null;
   const [draft, setDraft] = useState<NoteDraft>({ format: "fragment", title: "", content: "", source: "", metadataTouched: createOpen });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const recordId = record?.id ?? null;
   useEffect(() => {
     if (!open) return;
@@ -2419,6 +2422,8 @@ function NoteEditorDialog({ record, createOpen, entities, onCreateEntity, onClos
       source: details?.source ?? "",
       metadataTouched: record === null,
     });
+    setSaveError(null);
+    setSaving(false);
   }, [open, recordId, createOpen]);
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -2432,18 +2437,24 @@ function NoteEditorDialog({ record, createOpen, entities, onCreateEntity, onClos
   if (!open) return <dialog ref={dialogRef} className="modal-dialog" />;
   const valid = draft.content.trim().length > 0 && (draft.format !== "article" || draft.title.trim().length > 0);
   const submit = async () => {
-    if (!valid) return;
-    if (await onSave(record, draft)) onClose();
+    if (!valid || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    const result = await onSave(record, draft);
+    setSaving(false);
+    if (result.ok) onClose();
+    else setSaveError(result.message);
   };
-  return <dialog ref={dialogRef} className="modal-dialog note-editor-dialog" aria-labelledby="note-editor-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
+  return <dialog ref={dialogRef} className="modal-dialog note-editor-dialog" aria-labelledby="note-editor-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }} onClose={onClose}>
     <div className="dialog-header"><div><p className="eyebrow">{record === null ? "新建笔记" : "编辑笔记"}</p><h2 id="note-editor-title">{record === null ? "留下一点值得回看的文字" : "更新这条笔记"}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭笔记编辑器"><X size={17} aria-hidden="true" /></button></div>
     <div className="dialog-body note-editor-body" data-note-editor>
-      <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${draft.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={draft.format === item.value} key={item.value} onClick={() => setDraft((current) => ({ ...current, format: item.value, metadataTouched: true }))}><strong>{item.label}</strong><small>{item.hint}</small></button>)}</div>
-      {draft.format === "article" ? <label className="dialog-field note-title-field"><span>标题</span><input data-note-title value={draft.title} maxLength={300} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value, metadataTouched: true }))} placeholder="给文章一个清楚的标题" /></label> : null}
-      <label className="dialog-field note-body-field"><span>{draft.format === "quote" ? "引文" : "正文"}</span><MentionBox textareaRef={bodyRef} value={draft.content} onChange={(value) => setDraft((current) => ({ ...current, content: value }))} entities={entities} onCreateEntity={onCreateEntity} rows={8} ariaLabel={draft.format === "quote" ? "引文正文" : "笔记正文"} placeholder={draft.format === "quote" ? "粘贴或输入值得保存的引文……" : draft.format === "article" ? "写下文章内容……" : "记下此刻的想法……"} /></label>
-      {draft.format === "quote" ? <label className="dialog-field note-source-field"><span>出处（可选）</span><input data-note-source value={draft.source} maxLength={1000} onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value, metadataTouched: true }))} placeholder="书名、作者或网页链接" /></label> : null}
+      <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${draft.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={draft.format === item.value} key={item.value} onClick={() => { setSaveError(null); setDraft((current) => ({ ...current, format: item.value, metadataTouched: true })); }}><span className="note-format-option-title">{item.label}</span><small>{item.hint}</small></button>)}</div>
+      {draft.format === "article" ? <label className="dialog-field note-title-field"><span>标题</span><input data-note-title value={draft.title} maxLength={300} onChange={(event) => { setSaveError(null); setDraft((current) => ({ ...current, title: event.target.value, metadataTouched: true })); }} placeholder="给文章一个清楚的标题" /></label> : null}
+      <label className="dialog-field note-body-field"><span>{draft.format === "quote" ? "引文" : "正文"}</span><MentionBox textareaRef={bodyRef} value={draft.content} onChange={(value) => { setSaveError(null); setDraft((current) => ({ ...current, content: value })); }} entities={entities} onCreateEntity={onCreateEntity} rows={8} ariaLabel={draft.format === "quote" ? "引文正文" : "笔记正文"} placeholder={draft.format === "quote" ? "粘贴或输入值得保存的引文……" : draft.format === "article" ? "写下文章内容……" : "记下此刻的想法……"} /></label>
+      {draft.format === "quote" ? <label className="dialog-field note-source-field"><span>出处（可选）</span><input data-note-source value={draft.source} maxLength={1000} onChange={(event) => { setSaveError(null); setDraft((current) => ({ ...current, source: event.target.value, metadataTouched: true })); }} placeholder="书名、作者或网页链接" /></label> : null}
+      {saveError ? <p className="dialog-error note-editor-error" data-note-save-error role="alert"><CircleHelp size={17} aria-hidden="true" /><span>{saveError}</span></p> : null}
     </div>
-    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" data-note-save type="button" onClick={() => void submit()} disabled={!valid}><Check size={17} aria-hidden="true" /><span>保存笔记</span></button></div>
+    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>取消</button><button className="primary-button" data-note-save type="button" onClick={() => void submit()} disabled={!valid || saving}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{saving ? "保存中" : "保存笔记"}</span></button></div>
   </dialog>;
 }
 
@@ -3804,10 +3815,9 @@ function App() {
         showToast("笔记已更新，原文仍保留");
       }
       refresh();
-      return true;
+      return { ok: true };
     } catch (error) {
-      showToast(errorStatus(error) === 409 ? "笔记版本已变化，请重新打开后保存" : handleRequestError(error, "笔记保存失败，请重试"), "warn");
-      return false;
+      return { ok: false, message: errorStatus(error) === 409 ? "笔记版本已变化，请重新打开后保存" : handleRequestError(error, "笔记保存失败，请重试") };
     }
   };
 

@@ -343,10 +343,9 @@ textarea:focus-visible {
 
 /* The layer is allowed to be nearly opaque now; the scrim is the only thing
    protecting the text, and it has to stay at 0.5 or above all the way to 92%.
-   `.weather-header-summary` is `margin-left: auto`, so the place / condition /
-   temperature run is right-aligned and its last glyph lands at 0.917 of the card
-   width — measured, not guessed. Only the final 8% (empty except for the refresh
-   button, which carries its own translucent white pill) can open up. The old
+   The summary occupies a compact right-aligned two-line block: place above,
+   condition and temperature below. This keeps the header from reading like a
+   row of unrelated status chips. The old
    `backdrop-filter: blur(1px)` is gone: it sat directly on top of a per-frame
    animated layer, so the browser re-read and re-blurred the backdrop on every
    frame — by far the most expensive thing in this stack, for a blur nobody saw. */
@@ -395,7 +394,7 @@ textarea:focus-visible {
 }
 
 .weather-date-step:hover,
-.weather-header-refresh:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.86); transform: translateY(-1px); }
+.weather-header-refresh:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.7); transform: translateY(-1px); }
 .weather-date-step:active,
 .weather-header-refresh:active { transform: translateY(0); }
 
@@ -458,22 +457,21 @@ textarea:focus-visible {
 .weather-return-today { min-height: 32px; margin-left: 2px; padding: 0 8px; border-radius: 8px; color: #45639e; background: rgb(239 244 255 / 0.62); cursor: pointer; font-size: 0.73rem; font-weight: 730; }
 .weather-return-today:hover { background: rgb(229 237 255 / 0.9); }
 
-.weather-header-summary { display: flex; align-items: center; min-width: 0; margin-left: auto; gap: 10px; color: var(--ink); white-space: nowrap; }
-.weather-header-place, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
-.weather-header-place { max-width: 118px; overflow: hidden; color: var(--ink-soft); font-size: 0.76rem; font-weight: 680; text-overflow: ellipsis; }
+.weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--ink); white-space: nowrap; }
+.weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.weather-header-place { max-width: 118px; overflow: hidden; color: var(--ink-soft); font-size: 0.74rem; font-weight: 500; text-overflow: ellipsis; }
+.weather-header-reading { gap: 9px; }
 .weather-header-condition { font-size: 0.88rem; }
-.weather-header-condition strong { font-weight: 760; }
+.weather-header-condition strong { font-weight: 600; }
 .weather-header-emoji { font-size: 1rem; line-height: 1; }
-.weather-header-temperature { font-size: 0.88rem; font-variant-numeric: tabular-nums; font-weight: 760; }
+.weather-header-temperature { font-size: 0.86rem; font-variant-numeric: tabular-nums; font-weight: 600; }
 .weather-header-unavailable { color: var(--muted); font-size: 0.78rem; }
-/* The header reads the day's forecast; the composer pinned one reads the sky
-   right now. Two sources, so the label keeps them from looking contradictory. */
-.weather-header-basis { padding: 1px 5px; border-radius: 5px; color: #5c6f95; background: rgb(233 239 250 / 0.72); font-size: 0.62rem; font-weight: 720; letter-spacing: 0.01em; }
 .weather-header-actions { display: inline-flex; align-items: center; margin-left: 10px; }
 .weather-header-refresh { margin-left: 10px; }
 .weather-header-actions .weather-header-refresh { margin-left: 0; }
 /* Armed by a refused refresh: the next press escalates past the quota. */
-.weather-header-refresh[data-weather-armed="on"] { border-color: #8fa9dc; color: #2c4a86; background: rgb(233 240 255 / 0.92); }
+.weather-header-refresh { background: rgb(255 255 255 / 0.42); }
+.weather-header-refresh[data-weather-armed="on"] { border-color: #8fa9dc; color: #2c4a86; background: rgb(233 240 255 / 0.72); }
 .weather-configure-button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 9px; border: 1px solid rgb(119 135 161 / 0.2); border-radius: 10px; color: var(--ink-soft); background: rgb(255 255 255 / 0.58); cursor: pointer; font-size: 0.78rem; font-weight: 680; }
 .weather-configure-button:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.86); }
 
@@ -596,7 +594,6 @@ textarea:focus-visible {
 }
 
 /* --- Sun by day, moon by night: same three elements either way ------------- */
-@keyframes rays-turn { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .sky-rays {
   position: absolute;
   width: calc(var(--lum-size) * 4.4);
@@ -609,7 +606,7 @@ textarea:focus-visible {
   background: repeating-conic-gradient(from 0deg, var(--rays) 0deg 2.4deg, rgb(255 255 255 / 0) 2.4deg 24deg);
   -webkit-mask-image: radial-gradient(circle, #000 6%, rgb(0 0 0 / 0) 66%);
   mask-image: radial-gradient(circle, #000 6%, rgb(0 0 0 / 0) 66%);
-  animation: rays-turn 120s linear infinite;
+  opacity: 0.48;
 }
 /* Soft by construction: the gradient reaches zero over a long tail, so there is
    no hard circle edge. The hard ring in the old `.sun-core` was most of what
@@ -622,8 +619,8 @@ textarea:focus-visible {
   top: calc(var(--lum-top) - var(--lum-size));
   border-radius: 50%;
   background: radial-gradient(circle, var(--halo) 0%, var(--halo) 30%, rgb(255 255 255 / 0) 72%);
-  opacity: 0.75;
-  animation: lum-breathe 7s ease-in-out infinite;
+  opacity: 0.64;
+  animation: lum-breathe 14s ease-in-out infinite;
 }
 .sky-disc {
   position: absolute;
@@ -634,10 +631,10 @@ textarea:focus-visible {
   border-radius: 50%;
   background: var(--disc);
 }
-@keyframes lum-breathe { 0%, 100% { transform: scale(1); opacity: 0.62; } 50% { transform: scale(1.08); opacity: 0.82; } }
+@keyframes lum-breathe { 0%, 100% { transform: scale(1); opacity: 0.58; } 50% { transform: scale(1.025); opacity: 0.7; } }
 
 /* --- Stars: one element, many painted dots, twinkle on opacity only -------- */
-@keyframes star-breathe { 0%, 100% { opacity: 0.82; } 50% { opacity: 1; } }
+@keyframes star-breathe { 0%, 100% { opacity: 0.76; } 50% { opacity: 0.9; } }
 .sky-stars {
   position: absolute;
   inset: 0;
@@ -657,7 +654,7 @@ textarea:focus-visible {
     radial-gradient(1.1px 1.1px at 76% 80%, #fff, rgb(255 255 255 / 0)),
     radial-gradient(0.9px 0.9px at 61% 74%, #e8eeff, rgb(255 255 255 / 0));
   opacity: 0.9;
-  animation: star-breathe 9s ease-in-out infinite;
+  animation: star-breathe 14s ease-in-out infinite;
 }
 
 /* --- Clouds: one element + two bumps, volume from a lit top and a dark base */
@@ -699,7 +696,7 @@ textarea:focus-visible {
    the field is already mid-fall on the first frame instead of trickling in. */
 @keyframes rain-fall {
   from { transform: translate3d(0, 0, 0); }
-  to { transform: translate3d(0, 156px, 0); }
+  to { transform: translate3d(-12px, 156px, 0); }
 }
 .rain-drop {
   position: absolute;
@@ -733,17 +730,17 @@ textarea:focus-visible {
 /* --- Thunder: a whole-sky flash, not a per-frame filter ------------------- */
 /* Peaks are deliberately modest and the cycle is long. A full-card jump to 0.85
    twice every 6.4s reads as a strobe rather than lightning. */
-@keyframes sky-flash { 0%, 52%, 100% { opacity: 0; } 54% { opacity: 0.55; } 56% { opacity: 0.1; } 58% { opacity: 0.42; } 61% { opacity: 0; } 79% { opacity: 0.32; } 82% { opacity: 0; } }
+@keyframes sky-flash { 0%, 56%, 100% { opacity: 0; } 58% { opacity: 0.34; } 60% { opacity: 0.08; } 62% { opacity: 0.24; } 65% { opacity: 0; } }
 .sky-flash {
   position: absolute;
   inset: 0;
   background: radial-gradient(120% 150% at 76% 0%, rgb(255 250 220 / 0.9) 0%, rgb(255 245 200 / 0) 62%);
   opacity: 0;
-  animation: sky-flash 9s steps(1, end) infinite;
+  animation: sky-flash 11s steps(1, end) infinite;
 }
 /* The glow is a static filter, rasterised once. The old version animated
    `drop-shadow`, which forced a repaint of the blur on every frame. */
-@keyframes bolt-flash { 0%, 53%, 100% { opacity: 0; } 55% { opacity: 0.85; } 57% { opacity: 0.14; } 60% { opacity: 0.6; } 64% { opacity: 0; } 80% { opacity: 0.45; } 83% { opacity: 0; } }
+@keyframes bolt-flash { 0%, 57%, 100% { opacity: 0; } 59% { opacity: 0.68; } 61% { opacity: 0.12; } 63% { opacity: 0.42; } 66% { opacity: 0; } }
 .lightning-bolt {
   position: absolute;
   width: 16px;
@@ -752,10 +749,9 @@ textarea:focus-visible {
   clip-path: polygon(48% 0, 100% 0, 66% 38%, 100% 38%, 32% 100%, 48% 55%, 12% 55%);
   filter: blur(0.4px) drop-shadow(0 0 6px rgb(255 224 130 / 0.6));
   opacity: 0;
-  animation: bolt-flash 9s steps(1, end) infinite;
+  animation: bolt-flash 11s steps(1, end) infinite;
 }
 .lightning-bolt--main { top: 4px; right: 46px; }
-.lightning-bolt--side { top: 16px; right: 88px; width: 11px; height: 22px; animation-delay: .7s; }
 
 /* --- Snow: a drifting far field plus a few close flakes ------------------- */
 @keyframes snow-field-fall {
@@ -1368,29 +1364,29 @@ h2 {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 44px;
-  padding: 0 15px;
-  border-radius: 12px;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
   cursor: pointer;
   font-size: 0.84rem;
-  font-weight: 720;
+  font-weight: 600;
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease, transform 180ms ease, opacity 180ms ease;
 }
 
 .primary-button {
   color: #fff;
   background: var(--primary);
-  box-shadow: 0 6px 14px rgb(49 93 250 / 0.17);
 }
 
 .primary-button:hover {
   background: var(--primary-strong);
-  transform: translateY(-1px);
 }
 
 .primary-button:active,
@@ -1406,7 +1402,6 @@ h2 {
 }
 
 .secondary-button {
-  min-height: 40px;
   margin-top: 14px;
   border: 1px solid #ccd7ff;
   color: var(--primary);
@@ -6141,6 +6136,14 @@ button.relation-chip {
   padding: 18px 25px 24px;
 }
 
+/* Modal actions use colour and wording for priority, never a larger button. */
+.dialog-footer > .primary-button,
+.dialog-footer > .secondary-button,
+.dialog-footer > .danger-button {
+  min-height: 40px;
+  margin-top: 0;
+}
+
 .confirm-dialog {
   width: min(100% - 32px, 470px);
 }
@@ -6166,18 +6169,8 @@ button.relation-chip {
 }
 
 .danger-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 0 15px;
-  border-radius: 12px;
   color: #fff;
   background: var(--danger);
-  cursor: pointer;
-  font-size: 0.84rem;
-  font-weight: 720;
 }
 
 .danger-button:hover {
@@ -6582,6 +6575,10 @@ button.relation-chip {
 
   .primary-button {
     width: 100%;
+  }
+
+  .dialog-footer .primary-button {
+    width: auto;
   }
 
   .timeline-section {
@@ -9763,6 +9760,7 @@ button.relation-chip {
   margin: 4px 0 7px;
   color: var(--ink);
   font-size: clamp(1.55rem, 2.2vw, 2rem);
+  font-weight: 500;
   letter-spacing: -0.04em;
 }
 
@@ -9794,7 +9792,7 @@ button.relation-chip {
   min-height: 36px;
   padding: 0 14px;
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .notes-filter-tab:hover,
@@ -9849,7 +9847,7 @@ button.relation-chip {
   color: var(--ink-soft);
   background: #eaf0f8;
   font-size: 0.68rem;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .note-card h2 {
@@ -9857,6 +9855,7 @@ button.relation-chip {
   overflow: hidden;
   color: var(--ink);
   font-size: 1.06rem;
+  font-weight: 500;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9915,7 +9914,7 @@ button.relation-chip {
 .notes-empty strong {
   color: var(--ink-soft);
   font-size: 0.86rem;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .note-editor-dialog { width: min(680px, calc(100vw - 28px)); }
@@ -9936,14 +9935,18 @@ button.relation-chip {
   text-align: left;
 }
 
-.note-format-option strong { color: var(--ink-soft); font-size: 0.8rem; }
+.note-format-option-title { color: var(--ink-soft); font-size: 0.8rem; font-weight: 500; }
 .note-format-option small { color: var(--muted); font-size: 0.66rem; line-height: 1.35; }
 .note-format-option:hover,
 .note-format-option.is-active { border-color: #aabafa; background: var(--primary-soft); }
-.note-format-option.is-active strong { color: var(--primary); }
-.note-editor-body .dialog-field { margin: 0; }
+.note-format-option.is-active .note-format-option-title { color: var(--primary); }
+.note-editor-body .dialog-field { margin: 0; font-weight: 500; }
 .note-editor-body .dialog-field input,
-.note-editor-body .dialog-field textarea { width: 100%; }
+.note-editor-body .dialog-field textarea { width: 100%; font-family: inherit; font-weight: 400; }
+.note-editor-body .dialog-field input::placeholder,
+.note-editor-body .dialog-field textarea::placeholder { color: #98a2b3; font-weight: 400; opacity: 1; }
+.note-editor-body .note-title-field input { font-size: 1rem; letter-spacing: 0; }
+.note-editor-error { margin: 0; }
 
 @media (max-width: 700px) {
   .notes-grid { grid-template-columns: minmax(0, 1fr); }

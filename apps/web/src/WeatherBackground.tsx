@@ -23,8 +23,10 @@ interface RainPlan {
 }
 
 const RAIN_PLANS: Record<RainCategory, RainPlan> = {
-  rainy: { drops: 14, speed: 0.72, stagger: 0.19 },
-  "moderate-rainy": { drops: 19, speed: 0.62, stagger: 0.15 },
+  // A small card reads better as a weather field than as a waterfall: fewer
+  // drops moving for longer preserve depth without a nervous shimmer.
+  rainy: { drops: 10, speed: 1.28, stagger: 0.23 },
+  "moderate-rainy": { drops: 13, speed: 1.05, stagger: 0.17 },
   // Heavy rain and up used to add two fast-moving stripe sheets for density.
   // A fine periodic pattern (10px stripes) travelling at 226px/s is 22.6 cycles
   // a second, and two sheets at different periods also interfere with each other
@@ -32,9 +34,9 @@ const RAIN_PLANS: Record<RainCategory, RainPlan> = {
   // the sheets multiplied the card's high-frequency energy by 2.9 and left a
   // 19px periodic signal at 0.89 correlation. Drops are aperiodic and measure at
   // the clear-sky noise floor, so the density comes from more, thicker drops.
-  "heavy-rainy": { drops: 19, speed: 0.46, stagger: 0.11 },
-  rainstorm: { drops: 19, speed: 0.38, stagger: 0.09 },
-  thunderstorm: { drops: 15, speed: 0.42, stagger: 0.12 },
+  "heavy-rainy": { drops: 16, speed: 0.85, stagger: 0.13 },
+  rainstorm: { drops: 18, speed: 0.72, stagger: 0.1 },
+  thunderstorm: { drops: 12, speed: 0.92, stagger: 0.15 },
 };
 
 interface CloudSpec {
@@ -119,7 +121,6 @@ function Rain({ category }: { readonly category: RainCategory }) {
     {category === "thunderstorm" ? <>
       <div className="sky-flash" />
       <div className="lightning-bolt lightning-bolt--main" />
-      <div className="lightning-bolt lightning-bolt--side" />
     </> : null}
   </>;
 }

@@ -25,6 +25,12 @@ function dateDigits(value: string): readonly string[] {
   return compact.length === 4 ? compact.split("") : ["0", "0", "0", "0"];
 }
 
+/** Older saved weather profiles kept the district suffix; the header does not
+ * need the administrative form when a shorter, unambiguous label is available. */
+function weatherHeaderLocationLabel(value: string): string {
+  return value === "佛山南海区" ? "佛山南海" : value;
+}
+
 function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void }) {
   const today = localDateToday();
   const previousDateRef = useRef(selectedDate);
@@ -126,7 +132,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   // rides on the same 30-minute refresh as the forecast, so a dawn card can
   // linger a few minutes past sunrise; that is cheaper than a per-minute tick.
   const phase = getWeatherPhase(displayDay, selectedDate, today, localNowInput().slice(11, 16));
-  const locationLabel = payload.location?.name || status?.city || status?.locationId || "未设置地点";
+  const locationLabel = weatherHeaderLocationLabel(payload.location?.name || status?.city || status?.locationId || "未设置地点");
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
   return <section className={`weather-header ${displayDay && decision ? `weather-header--${decision.category}` : "weather-header--empty"}`} aria-label={`${selectedDate} 的天气`}>
@@ -137,8 +143,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       <div className="weather-header-summary">
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>
-          <span className="weather-header-condition"><span className="weather-header-emoji" aria-hidden="true">{getWeatherEmoji(displayDay.iconDay)}</span><strong>{displayDay.textDay}</strong><small className="weather-header-basis">今日预报</small></span>
-          <strong className="weather-header-temperature">{temperature}</strong>
+          <span className="weather-header-reading"><span className="weather-header-condition"><span className="weather-header-emoji" aria-hidden="true">{getWeatherEmoji(displayDay.iconDay)}</span><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
         </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>
