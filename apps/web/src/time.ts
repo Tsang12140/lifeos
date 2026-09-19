@@ -262,45 +262,10 @@ export function timePartOf(input: string): string {
   return /^\d{2}:\d{2}$/.test(time) ? time : "";
 }
 
-/**
- * The value with its time half dropped, or kept if it is well formed.
- *
- * A truncated value (a bare date, no `T`) is a legal state for this field — the
- * picker writes one when a day is chosen before any time — so it is passed
- * through rather than repaired.
- */
-export function keepValidTime(input: string): string {
-  if (!input) return "";
-  const date = datePartOf(input);
-  if (date === "") return "";
-  if (input.length === 10) return date;
-  const time = timePartOf(input);
-  return time === "" ? date : `${date}T${time}`;
-}
-
 /** The two halves back into a `datetime-local` value. */
 export function combineDateTime(date: string, time: string): string {
   if (!validDateKey(date)) return "";
   return time === "" ? date : `${date}T${time}`;
-}
-
-/**
- * The piece of `input` that fires N steps away, or "" at either end.
- *
- * Stepping is done from this piece rather than the value as a whole: shifting
- * the hour of `2026-09-16T23:40` by `-1` has to land on `22:40`, and reading
- * the day off the full string is the only way to know the value is complete
- * enough to carry a time at all.
- */
-export function stepTimePart(input: string, part: "hour" | "minute", step: number): string {
-  const time = timePartOf(input);
-  if (time === "") return "";
-  const [hourText, minuteText] = time.split(":");
-  let hour = Number(hourText);
-  let minute = Number(minuteText);
-  if (part === "hour") hour = (((hour + step) % 24) + 24) % 24;
-  else minute = (((minute + step) % 60) + 60) % 60;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 /** How many days either side of the selected day the quick strip covers. */

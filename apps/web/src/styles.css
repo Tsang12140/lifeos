@@ -1520,7 +1520,15 @@ h2 {
   grid-column: 3;
   grid-row: 2;
   min-width: 0;
-  width: calc(3 * 5 * 1.617rem + 2 * 6px + 28px);
+  /*
+   * 30px, not 28px: `box-sizing: border-box` is global, so this width has to carry the
+   * two 14px paddings AND the 1px border above and below it. The old 28px budgeted for
+   * the padding alone, which left the content box at 398.08px against a grid that needs
+   * 3 × 5 lines + 2 × 6px gaps = 400.08px — exactly 2px short, so the browser clamped
+   * every track to 128.69px and a "five line" square came out 0.66px short, at every
+   * viewport width. `verify-photo-grid.mjs` caught it as five red assertions.
+   */
+  width: calc(3 * 5 * 1.617rem + 2 * 6px + 30px);
   max-width: 100%;
   justify-self: start;
   padding: 13px 14px 12px;
@@ -2794,12 +2802,8 @@ h2 {
   }
 }
 
-/* Delivery-mode homepage cleanup: the demo-data management stays in Settings,
-   while the home view keeps only the date context and the actual journal. */
-.demo-banner {
-  display: none !important;
-}
-
+/* Delivery-mode homepage cleanup: the home view keeps only the date context and
+   the actual journal, so an empty eyebrow must not leave a blank heading. */
 .page-heading:has(.eyebrow:empty) {
   display: none;
 }
@@ -7555,57 +7559,6 @@ button.relation-chip {
   font-size: 0.76rem;
   text-align: center;
 }
-
-/* Example data: always visible as such, and removable in one step. */
-.demo-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px 16px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 14px;
-  background: var(--surface-soft);
-}
-
-.demo-banner-text {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  color: var(--ink-soft);
-}
-
-.demo-banner-text strong {
-  display: block;
-  color: var(--ink);
-  font-size: 0.9rem;
-  font-weight: 650;
-}
-
-.demo-banner-text p {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-
-.demo-banner-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.demo-delete {
-  color: var(--muted);
-}
-
-.demo-delete.is-armed {
-  color: var(--danger);
-  font-weight: 650;
-}
-
 
 /* Relation kinds and inline photo previews on a record chip. */
 .relation-kind {

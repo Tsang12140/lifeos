@@ -1,6 +1,6 @@
 import test from "node:test";
 import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -602,7 +602,14 @@ test("dual backup uploads the same SQLite artifact to a configured object store"
   equal(put.url, `/lifeos/daily/${body.local.fileName}`);
   ok(put.authorization.startsWith("AWS4-HMAC-SHA256 Credential=test-access/"));
   equal(body.s3.location, `http://127.0.0.1:${port}/lifeos/daily/${body.local.fileName}`);
-  deepEqual(received[0]!.body, readFileSync(body.local.location));
+  // Compare against the PUT itself, never against "the first request we saw":
+  // the recycle-bin listing is a request too, and `deepEqual` on two Buffers of
+  // wildly different lengths makes Node try to render the whole diff, which ends
+  // as "RangeError: Array buffer allocation failed" instead of a readable
+  // failure. Length + byte equality reports the same thing without the diff.
+  const expectedBody = readFileSync(body.local.location);
+  equal(put.body.length, expectedBody.length, `PUT carried ${put.body.length} bytes, the artifact is ${expectedBody.length}`);
+  ok(put.body.equals(expectedBody), "the PUT body must be the exact local artifact bytes");
 });
 
 test("dual backup keeps the local success visible when the remote upload fails", async (t) => {
@@ -637,6 +644,98 @@ test("dual backup keeps the local success visible when the remote upload fails",
   equal(body.s3.status, "failed");
   match(body.s3.error ?? "", /拒绝|PutObject/);
   ok(statSync(body.local.location).isFile());
+});
+
+test("retention cleans snapshots into the recycle bin and only then deletes for real", async (t) => {
+  const received: { readonly method: string; readonly url: string; readonly copySource?: string }[] = [];
+  const remote = createServer((req, res) => {
+    const method = req.method ?? "";
+    req.resume();
+    req.once("end", () => {
+      const url = req.url ?? "";
+      const copySource = req.headers["x-amz-copy-source"];
+      received.push({ method, url, ...(typeof copySource === "string" ? { copySource } : {}) });
+      if (method === "GET") {
+        // One aged object sitting in the remote recycle bin. It is the only
+        // object the listing returns, so the purge branch has exactly one job.
+        res.writeHead(200, { "content-type": "application/xml" });
+        res.end("<?xml version=\"1.0\"?><ListBucketResult><Contents><Key>daily-trash/lifeos-ancient.sqlite</Key><LastModified>2026-01-01T00:00:00.000Z</LastModified><Size>10</Size></Contents></ListBucketResult>");
+        return;
+      }
+      if (method === "DELETE") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/xml" });
+      res.end("");
+    });
+  });
+  const port = await listenOnFetchablePort(remote, "127.0.0.1");
+  t.after(async () => {
+    if (remote.listening) {
+      remote.close();
+      await once(remote, "close");
+    }
+  });
+
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const configured = await request(harness.base, "/api/backup/config", {
+    method: "POST",
+    ...json({ enabled: true, endpoint: `http://127.0.0.1:${port}`, region: "local", bucket: "lifeos", prefix: "daily", forcePathStyle: true, accessKeyId: "test-access", secretAccessKey: "test-secret" }),
+  });
+  equal(configured.response.status, 200);
+  const policy = await request(harness.base, "/api/backup/retention", {
+    method: "POST",
+    ...json({ dailyDays: 1, weeklyWeeks: 0, monthlyMonths: 0, trashDays: 30 }),
+  });
+  equal(policy.response.status, 200);
+
+  const first = await request(harness.base, "/api/backup/dual", { method: "POST", ...json({}) });
+  equal(first.response.status, 201);
+  const firstBody = first.body as { local: { fileName: string; location: string }; s3: { status: string } };
+  equal(firstBody.s3.status, "success");
+  ok(existsSync(firstBody.local.location));
+
+  const second = await request(harness.base, "/api/backup/dual", { method: "POST", ...json({}) });
+  equal(second.response.status, 201);
+  const secondBody = second.body as { local: { location: string } };
+
+  // One snapshot per day, so the older one is cleaned — into the recycle bin,
+  // never straight out of existence.
+  const trashDirectory = join(harness.root, "backups", "_trash");
+  const trashedFile = join(trashDirectory, firstBody.local.fileName);
+  ok(existsSync(trashedFile), "the older snapshot must be waiting in the recycle bin");
+  equal(existsSync(firstBody.local.location), false, "the live backup directory must no longer hold it");
+  ok(existsSync(secondBody.local.location), "the newest snapshot must stay exactly where it is");
+
+  // Remote half is a COPY into the trash prefix, and the DELETE may only follow
+  // a copy that actually succeeded.
+  const copyIndex = received.findIndex((item) => item.method === "PUT" && item.copySource !== undefined);
+  const deleteIndex = received.findIndex((item) => item.method === "DELETE" && item.url.endsWith(`/${firstBody.local.fileName}`));
+  ok(copyIndex >= 0, "the remote half must be copied into the trash prefix before anything is deleted");
+  match(received[copyIndex]!.copySource ?? "", /\/daily\//);
+  ok(received[copyIndex]!.url.includes("daily-trash/"), `the copy target must be the trash prefix, got ${received[copyIndex]!.url}`);
+  ok(deleteIndex > copyIndex, "the original object may only be deleted after the copy landed");
+
+  // An object that has aged out of the remote recycle bin is deleted for real.
+  ok(received.some((item) => item.method === "DELETE" && item.url.includes("daily-trash/lifeos-ancient.sqlite")), "aged recycle-bin objects are deleted for real");
+
+  // The ledger says where both halves went, so the UI can offer them back.
+  const ledger = await request(harness.base, "/api/backup/retention");
+  const trashed = (ledger.body as { trashed: { fileName: string; provider: string; trashLocation?: string }[] }).trashed;
+  const cleaned = trashed.filter((entry) => entry.fileName === firstBody.local.fileName);
+  equal(cleaned.length, 2, "both the local and the remote half must be recorded as cleaned");
+  ok(cleaned.every((entry) => typeof entry.trashLocation === "string" && entry.trashLocation.length > 0), "each cleaned half must record its recycle-bin location");
+
+  // Age the local recycle-bin entry past `trashDays`; the next cleanup pass is
+  // what finally removes the bytes.
+  const longAgo = new Date(Date.now() - 60 * 86_400_000);
+  utimesSync(trashedFile, longAgo, longAgo);
+  const third = await request(harness.base, "/api/backup/dual", { method: "POST", ...json({}) });
+  equal(third.response.status, 201);
+  equal(existsSync(trashedFile), false, "a recycle-bin entry past trashDays is deleted for real");
 });
 
 test("backup schedule uses Shanghai wall time and survives API restart", async (t) => {

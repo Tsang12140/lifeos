@@ -349,6 +349,11 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
     }
     return { snapshot: null, location };
   }
+  // Keyed by location only, on purpose: what goes in here is the *forecast
+  // list* (`today` / `tomorrow` / `days`), which is the same answer for every
+  // target date. Which day comes back is decided below by `findWeatherDay`, and
+  // a past day is served from the archive instead of this cache — so sharing
+  // one entry between "yesterday" and "today" cannot return the wrong day.
   const cached = snapshotCache.get(`${location.id}:${runtime.apiHost}`);
   // `force` is the owner asking a second time; skip the TTL but still refresh
   // the entry so the next ordinary read sees the newer snapshot.

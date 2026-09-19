@@ -358,7 +358,29 @@ export async function uploadS3Backup(config: ApiConfig, repository: SqliteRecord
  * exact same bytes to S3. The remote half can fail or be skipped without
  * erasing the local success; both rows share a batch id for the UI/calendar.
  */
+/**
+ * One dual backup, plus the retention pass that follows it.
+ *
+ * Retention is deliberately a *wrapper* around the backup rather than a call in
+ * the middle of it: the recycle-bin sweep issues its own S3 requests, and
+ * letting those interleave with the upload made the request order
+ * non-deterministic (a listing could arrive before the PUT). Running it after
+ * both halves are recorded keeps the sequence local → remote → prune, which is
+ * exactly what the settings page promises.
+ */
 export async function createDualBackup(
+  config: ApiConfig,
+  repository: SqliteRecordRepository,
+  kind: BackupRun["kind"] = "manual",
+): Promise<DualBackupResult> {
+  const result = await runDualBackup(config, repository, kind);
+  try {
+    await pruneBackups(config, repository);
+  } catch { /* retention is best-effort: the snapshots above are already recorded */ }
+  return result;
+}
+
+async function runDualBackup(
   config: ApiConfig,
   repository: SqliteRecordRepository,
   kind: BackupRun["kind"] = "manual",
@@ -371,11 +393,6 @@ export async function createDualBackup(
     artifact = await createBackupArtifact(config, repository);
     local = { status: "success", fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes };
     record(repository, { provider: "local", kind, status: "success", batchId, fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes, startedAt, finishedAt: new Date().toISOString() });
-    // pruneBackups() is wired here once its recycle-bin sweep is proven stable:
-    // an OOM loop inside a fire-and-forget call would take the whole API down,
-    // and it did exactly that in the test run. Manual backups still prune via
-    // the /api/backup/local route.
-    // void pruneBackups(config, repository).catch(() => {});
   } catch (error) {
     const message = error instanceof Error ? error.message : "本地备份失败";
     local = { status: "failed", error: message };

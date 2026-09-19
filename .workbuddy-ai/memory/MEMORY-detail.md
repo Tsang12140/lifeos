@@ -374,3 +374,108 @@ const originIsHonored = originVar !== null && originValue !== ""
 
 本轮所有改动**全部落在 gitignore 内**（`.review/`、`AGENTS.md`、`docs/changelog.md`、`data/`、`.env`）→ `git status` 干净。
 **接力依赖链（规则 + 改动记录 + 交接文档）不在 git 里**，所以「有 git 检查点」不等于「成果被保住了」。
+
+---
+
+## 🔴 密钥与 git：`.workbuddy-ai/memory/` 是公开的，`.env` 不是（2026-09-18 推送前拦下）
+
+### 事故
+
+46 个待推送提交里，`MEMORY-detail.md` 与 `2026-09-18.md` **抄了 `LIFEOS_WEATHER_CONFIG_SECRET` 的真实明文**（与 `.env` 逐字符相同），
+由 `a70b4f1` 引入（距 HEAD 仅 3 个提交），之后每个提交都带着它。
+
+**根因不是「忘了 ignore」** —— `.env` 早就被 ignore 了。
+是**规则只保护了 `.env` 这个文件，没保护「把 `.env` 的内容复制到别处」这个动作**。
+**交接文档写得越详细越容易犯**：写「我把它钉成了 `lifeos-local-weather:<路径>`」很自然，把值抄进去也很自然。
+
+### 处置（主人选「改写历史」）
+
+1. `.review/snapshot-git.mjs --label pre-rewrite` → `.git` **字节级快照 + 自包含 restore 脚本**（336 文件 / 45,714,967 字节，逐项比对一致）。
+   **别用 `git reset --hard` / `git stash`** —— 会连未提交的成果一起抹掉。
+2. 明文换成形状占位符 `lifeos-local-weather:<搬迁前的数据目录>`，各加补记防止再抄回去。
+3. `.review/rewrite-history-redact.mjs`（默认 dry-run）用 `git commit-tree` 重写 `origin/main..HEAD`；**7 项断言全 PASS 才 `--apply`**。
+   断言里特意留一条「**改前确实存在**」—— 否则「改完没有」什么也证明不了。
+4. 推送前门禁：`npm run typecheck` 三 workspace 全绿 + `npm test` 47/47。
+
+**验证数字**：tip 的 tree `210f029a51` → `210f029a51`（**未变**，只换历史）；提交信息/作者/时间戳**逐字节相同**；
+独立复核（不复用脚本判断）`git grep -F` 扫全历史 → **NONE**；推送 `63ddc57..fc622e5`、`fc622e5..f7b93ef` **快进、未用 `--force`**；远端旧提交 4 个全 0 命中。
+
+### 三个坑
+
+1. **`refs/original/…` 写不进去**：`git update-ref refs/original/heads/main <sha>` **返回 0 却什么都没建**（那是 `filter-branch` 的命名空间）。
+   → 用 `refs/backup/pre-rewrite-main`。**回滚点建完必须 `show-ref` 验，别信退出码。**
+   → 它让那 3 个含密钥的旧提交在本地仍可达：`git push --all` 安全，但 **`git push --mirror` 会把它们推上去**。确认不用回滚后 `git update-ref -d refs/backup/pre-rewrite-main`。
+2. **排查脚本先估进程启动次数**：逐文件 `git cat-file` × 46 个提交 = 上千次 spawn，Windows 上直接跑到被杀（**无输出**）。
+   → 用 `git grep -l -F -e <值> <commit>`，一个提交一次。
+3. **提交信息取 `git cat-file commit` 的原始字节**，别用 `%B`（可能多/少一个换行，「信息已保留」就成了假断言）。
+
+### 沙箱行为（不影响推送）
+
+**沙箱会丢 `refs/remotes/` 的写入**：`git fetch` 报 `* [new branch] main -> origin/main`，但 `.git/refs/remotes/origin/main` 落不了盘，`git rev-parse origin/main` 随即失败。
+**推送只依赖远端 URL + 本地 ref**，所以推送正常；自己终端跑一次 `git fetch` 即恢复。`refs/heads/*` 与 `refs/backup/*` 的写入正常。
+
+### 推送前必做清单
+
+① `npm run typecheck` + `npm test`；
+② **按值**搜一遍：`git grep -F -e <密钥值> $(git rev-list origin/main..HEAD)` —— **别只按文件名搜**；
+③ 常规敏感路径：`.env` / `*.sqlite` / `data/` / `pic-test/` / `*config.json` / `.env.example`（占位符可以，真值不行）。
+
+**被 ignore 的**：`.env`、`data/`、`.review/`、`AGENTS.md`、`docs/changelog.md`。
+**没被 ignore 的**：`.workbuddy-ai/memory/**`、`docs/audit-prompt.md`、源码、`.env.example`。
+
+### 同一动作共犯 3 回（2026-09-19 按值全仓扫描）
+
+把「按**值**搜」做成常驻工具 **`.review/scan-secret-leaks.mjs`**（只读，3541 个文本文件）后，**第一次跑又抓到 3 处**：
+
+| 位置 | 性质 | 处置 |
+| --- | --- | --- |
+| `.workbuddy-ai/memory/`（09-18） | **被 git 跟踪** → 差一步推送 | 改占位符 + **改写历史** |
+| `docs/changelog.md:2167` | 上一轮交接记录抄了天气种子明文 | 换占位符 + 补记（**文件被 ignore，纯属运气**） |
+| `.review/rewrite-{dryrun,apply}.txt:3` | **改写工具自己打印的**（`console.log(\`  secret : ${SECRET}\`)`），输出被重定向存档，**还 `present_files` 展示过** | 脱敏 + 修工具 |
+
+→ **「我修好了密钥」的那行日志，本身就是下一个泄漏点。** 凡是被重定向存档 / 贴进交接文档的输出，一律只打印**形状与长度**（`${SECRET.slice(0, idx)}:<redacted, N chars>`）。
+→ **「文件被 ignore」不能当成「可以抄值」的理由** —— 它只改变了后果的严重程度，没改变动作的性质。
+
+**扫描器按爆炸半径分类**（这才是真问题）：`PUBLISHED`（git 跟踪 → 一定 exit 1）vs `local only`（gitignored → 列出但不判失败）；默认只对前者失败，`--all` 才连后者一起失败。
+→ 否则 `.review/recovery/env-backup-….env`（**有意保留的 `.env` 备份**：4 个种子就是解密密钥，`.env` 一丢天气 key 永久解不开）会让检查永远报红 —— **而永远报红的检查等于没有检查**（与生产守卫的豁免口同一条道理）。
+
+---
+
+## 照片回收站：全都没有预览图（2026-09-19，主人报障）
+
+### 主人问的是「为什么咱们的图片全都变成了连预览图都没有的东西？是版本乱了吗？」
+
+**不是版本问题。** 唯一「全都没有预览图」的地方是 **`设置 → 照片回收站`（`settings-asset-trash-card`）：180 个格子，158 个是空的**。
+时间轴 87 张、日历 12 张**全部正常**。
+
+### 健康的那部分（逐层实测）
+
+| 层 | 结果 |
+| --- | --- |
+| 磁盘 | `pic-test/` 241 文件，PNG magic 正确、后缀正确 |
+| `/api/assets/:id/content` | 200，真 PNG 4–6 MB |
+| `/api/assets/:id/thumbnail?w=400\|1200` | 200，webp 24 KB / 163 KB |
+| Vite 代理（5199→3011） | 200 |
+| 真实浏览器 | 时间轴 87/87、日历 12/12 渲染出真实画面；0 失败请求、0 报错 |
+| 构建 | `apps/api/dist`、`apps/web/dist` 均比 `src` 新；5199 走 Vite 源码，无 dist 参与 |
+
+### 坏的那部分：180 = 待清理 87 + 回收站 93
+
+1. **回收站 93 条（`origin: asset-delete`）→ 接口 404**。文件在 `pic-test/uploads/_orphan-trash/2026/09/`，而路由仍按原路径 `uploads/2026/09/...` 找。
+   **`/api/assets/trash/:id/content` 也 404** → 这 93 条**既看不到也恢复不了**，回收站「可以拿回来」目前是空承诺。
+2. **待清理 87 条 → 源文件本身就是空图**。54 条名字就是验收夹具（`r3-9-1.png`、`gap-probe-2.png`、`m-9-4.png`、`phone-4-2.png`、`验收房间-甲.png`…），**136 字节**的 1×1 / 24×24 PNG。
+   另外 20 张 5–8 MB 真照片（`Zenny0XXBlessing.jpg`，约 130 MB）**无任何记录引用、4 天后自动收走**（上传于 09-15 19:01–20:33）。
+
+### 🔑 方法论：「加载成功」≠「画出来有东西」
+
+同一个问题，我连续得到两个**相反的错误结论**：
+
+1. **假阳性**：第一版探针报「75 张 broken」—— 那只是 `loading="lazy"` 的图还没进视口。
+2. **假阴性**：滚动之后 87/87 全绿 —— 但 **1×1 透明 PNG 照样 `complete === true`、`naturalWidth > 0`**，画出来什么都没有。
+
+**正解 = 画布采样**：把每张图缩到 8×8 画到 `<canvas>` 上，数**不透明像素数**与**不同颜色数**；
+`opaque < 8`（几乎全透明）或 `colors < 3`（纯色）即空图，**与请求是否成功无关**。
+→ 新增 `.review/probe-photo-content.mjs`（画布采样）、`.review/probe-photo-render.mjs`（失败请求 / 控制台 / 懒加载滚动）、`.review/probe-settings-images.mjs`（按卡片分组定位）。
+
+**三条断言缺一不可**：① 请求成功 ② 滚动后仍成功 ③ 采样后有内容。少任何一条都会得出相反的错误结论。
+（这与「崩溃必须变成 FAIL」「有清理调用 ≠ 清理成功」是同一条：**只证明你能证明的那一半。**）
