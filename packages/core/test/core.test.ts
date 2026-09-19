@@ -228,6 +228,32 @@ test("date-only, instant, and unresolved local time keep distinct meanings", () 
   throws(() => assertValidTimelineRecord(invalid as never), /must be an instant/);
 });
 
+test("note formats validate their metadata and keep legacy notes compatible", () => {
+  const base = {
+    id: "note-1",
+    kind: "note" as const,
+    createdAt: createInstant("2026-09-19T10:00:00+08:00", "Asia/Shanghai"),
+    body: { original: "正文" },
+    entityRefs: [],
+    relatedRecordIds: [],
+    assetRefs: [],
+    aiDerived: [],
+  };
+  assertValidTimelineRecord({ ...base, note: { format: "article", title: "文章标题" } });
+  assertValidTimelineRecord({ ...base, note: { format: "fragment" } });
+  assertValidTimelineRecord({ ...base, note: { format: "quote", source: "《一本书》" } });
+  // Notes written before V1 have no metadata and must remain readable.
+  assertValidTimelineRecord(base);
+
+  throws(() => assertValidTimelineRecord({ ...base, note: { format: "article" } }), /title/);
+  throws(() => assertValidTimelineRecord({ ...base, note: { format: "quote", title: "不允许" } }), /title/);
+  throws(() => assertValidTimelineRecord({ ...base, note: { format: "fragment", source: "不允许" } }), /source/);
+  throws(() => assertValidTimelineRecord({ ...base, note: { format: "fragment", extra: true } }), /not supported/);
+  throws(() => assertValidTimelineRecord({ ...base, note: { format: "article", title: "x".repeat(301) } }), /at most 300/);
+  throws(() => assertValidTimelineRecord({ ...base, note: { format: "quote", source: "x".repeat(1001) } }), /at most 1000/);
+  throws(() => assertValidTimelineRecord({ ...base, kind: "journal", note: { format: "fragment" } } as never), /only allowed on note/);
+});
+
 test("export validation rejects an unsupported format", () => {
   throws(() => parseExportJson(JSON.stringify({ format: "other", version: 1 })), /Unsupported LifeOS export format or version/);
 });

@@ -18,6 +18,7 @@ import {
   type Entity,
   type EntityKind,
   type LifeTime,
+  type NoteDetails,
   type RecordKind,
   type TimelineRecord,
 } from "@lifeos/core";
@@ -179,6 +180,7 @@ interface RecordRow {
   asset_refs_json: string;
   ai_derived_json: string;
   task_json: string | null;
+  note_json: string | null;
   is_private: number;
   is_demo: number;
   is_backfill: number;
@@ -228,6 +230,7 @@ function readRecordRow(row: Record<string, unknown>): RecordRow {
     asset_refs_json: textColumn(row, "asset_refs_json"),
     ai_derived_json: textColumn(row, "ai_derived_json"),
     task_json: nullableTextColumn(row, "task_json"),
+    note_json: nullableTextColumn(row, "note_json"),
     is_private: isPrivate ? 1 : 0,
     is_demo: isDemo ? 1 : 0,
     is_backfill: isBackfill ? 1 : 0,
@@ -308,6 +311,7 @@ function rowToView(row: RecordRow): RecordView {
     assetRefs: parseJson(row.asset_refs_json, "asset_refs_json"),
     aiDerived: parseJson(row.ai_derived_json, "ai_derived_json"),
     ...(row.task_json === null ? {} : { task: parseJson(row.task_json, "task_json") }),
+    ...(row.note_json === null ? {} : { note: parseJson<NoteDetails>(row.note_json, "note_json") }),
     ...(row.is_private === 1 ? { isPrivate: true } : {}),
     ...(row.is_demo === 1 ? { isDemo: true } : {}),
     ...(row.is_backfill === 1 ? { isBackfill: true } : {}),
@@ -355,6 +359,7 @@ function recordInsertParams(record: TimelineRecord): readonly (string | number |
     JSON.stringify(record.assetRefs),
     JSON.stringify(record.aiDerived),
     jsonOrNull(record.kind === "task" ? record.task : undefined),
+    jsonOrNull(record.kind === "note" ? record.note : undefined),
     record.isPrivate === true ? 1 : 0,
     record.isDemo === true ? 1 : 0,
     record.isBackfill === true ? 1 : 0,
@@ -397,6 +402,7 @@ export class SqliteRecordRepository {
         asset_refs_json TEXT NOT NULL,
         ai_derived_json TEXT NOT NULL,
         task_json TEXT,
+        note_json TEXT,
         is_private INTEGER NOT NULL DEFAULT 0,
         is_demo INTEGER NOT NULL DEFAULT 0,
         is_backfill INTEGER NOT NULL DEFAULT 0,
@@ -526,6 +532,9 @@ export class SqliteRecordRepository {
     }
     if (!recordColumns.some((column) => column.name === "weather_json")) {
       this.#db.exec("ALTER TABLE records ADD COLUMN weather_json TEXT");
+    }
+    if (!recordColumns.some((column) => column.name === "note_json")) {
+      this.#db.exec("ALTER TABLE records ADD COLUMN note_json TEXT");
     }
     const weatherLocationColumns = this.#db.prepare("PRAGMA table_info(weather_device_locations)").all() as readonly Record<string, unknown>[];
     if (!weatherLocationColumns.some((column) => column.name === "profile_id")) {
@@ -983,7 +992,7 @@ export class SqliteRecordRepository {
     }
     if (query.q !== undefined && query.q.length > 0) {
       // instr() treats '%' and '_' literally, unlike LIKE, and keeps Chinese text intact.
-      where.push("instr(body_original || char(10) || coalesce(body_edited, '') || char(10) || id, ?) > 0");
+      where.push("instr(body_original || char(10) || coalesce(body_edited, '') || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0");
       params.push(query.q);
     }
     if (query.entityId !== undefined && query.entityId.length > 0) {
@@ -1022,8 +1031,8 @@ export class SqliteRecordRepository {
       INSERT INTO records (
         id, kind, body_json, body_original, body_edited, created_at_json, updated_at_json,
         occurred_at_json, weather_json, entity_refs_json, related_record_ids_json, asset_refs_json,
-        ai_derived_json, task_json, is_private, is_demo, is_backfill, revision, timeline_sort, deleted_at_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
+        ai_derived_json, task_json, note_json, is_private, is_demo, is_backfill, revision, timeline_sort, deleted_at_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
     `).run(...recordInsertParams(record));
   }
 
@@ -1033,7 +1042,7 @@ export class SqliteRecordRepository {
       UPDATE records SET
         kind = ?, body_json = ?, body_original = ?, body_edited = ?, created_at_json = ?, updated_at_json = ?,
         occurred_at_json = ?, weather_json = ?, entity_refs_json = ?, related_record_ids_json = ?, asset_refs_json = ?,
-        ai_derived_json = ?, task_json = ?, is_private = ?, is_demo = ?, is_backfill = ?, revision = revision + 1, timeline_sort = ?
+        ai_derived_json = ?, task_json = ?, note_json = ?, is_private = ?, is_demo = ?, is_backfill = ?, revision = revision + 1, timeline_sort = ?
       WHERE id = ? AND revision = ? AND deleted_at_json IS NULL
     `).run(
       record.kind,
@@ -1049,6 +1058,7 @@ export class SqliteRecordRepository {
       JSON.stringify(record.assetRefs),
       JSON.stringify(record.aiDerived),
       jsonOrNull(record.kind === "task" ? record.task : undefined),
+      jsonOrNull(record.kind === "note" ? record.note : undefined),
       record.isPrivate === true ? 1 : 0,
       record.isDemo === true ? 1 : 0,
       record.isBackfill === true ? 1 : 0,
@@ -1126,8 +1136,8 @@ export class SqliteRecordRepository {
         INSERT INTO records (
           id, kind, body_json, body_original, body_edited, created_at_json, updated_at_json,
           occurred_at_json, weather_json, entity_refs_json, related_record_ids_json, asset_refs_json,
-          ai_derived_json, task_json, is_private, is_demo, is_backfill, revision, timeline_sort, deleted_at_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
+          ai_derived_json, task_json, note_json, is_private, is_demo, is_backfill, revision, timeline_sort, deleted_at_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
       `);
       for (const record of data.records) {
         insertRecord.run(...recordInsertParams(record));

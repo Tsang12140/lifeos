@@ -9,6 +9,7 @@ import type {
   EntityRef,
   EntityRelation,
   LifeTime,
+  NoteDetails,
   RecordKind,
   RelationKind,
   StorageReference,
@@ -299,6 +300,7 @@ export interface RecordWritePayload {
   readonly isDemo?: boolean;
   readonly isBackfill?: boolean;
   readonly weather?: WeatherAttachment | null;
+  readonly note?: NoteDetails | null;
   readonly status?: "todo" | "in_progress" | "done" | "cancelled";
   readonly entityRefs?: readonly EntityRef[];
   readonly relatedRecordIds?: readonly string[];

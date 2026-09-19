@@ -9746,3 +9746,215 @@ button.relation-chip {
     gap: 24px;
   }
 }
+
+/* Notes are a quiet text library, not a second timeline or a colourful board. */
+.notes-library {
+  display: grid;
+  gap: 22px;
+  margin-top: 42px;
+}
+
+.notes-library-heading {
+  align-items: end;
+  margin: 0;
+}
+
+.notes-library-heading h1 {
+  margin: 4px 0 7px;
+  color: var(--ink);
+  font-size: clamp(1.55rem, 2.2vw, 2rem);
+  letter-spacing: -0.04em;
+}
+
+.notes-library-heading p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.notes-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.notes-filter-tab,
+.note-format-option {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  cursor: pointer;
+  font: inherit;
+}
+
+.notes-filter-tab {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.notes-filter-tab:hover,
+.notes-filter-tab.is-active {
+  border-color: #aabafa;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.notes-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.note-card {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.86);
+  box-shadow: 0 5px 14px rgb(24 36 61 / 0.04);
+}
+
+.note-card-main {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 17px 17px 12px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-card-main:hover .note-card-excerpt { color: var(--ink); }
+
+.note-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.note-format-label {
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: #eaf0f8;
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.note-card h2 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 1.06rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-card-excerpt {
+  display: -webkit-box;
+  min-height: 3.15em;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.58;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.note-card-source {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.note-card-actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.note-card-delete { color: var(--danger); }
+
+.notes-empty {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 70px 20px;
+  border: 1px dashed #cbd5e4;
+  border-radius: 14px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.notes-empty strong {
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.note-editor-dialog { width: min(680px, calc(100vw - 28px)); }
+
+.note-editor-body { display: grid; gap: 18px; }
+
+.note-format-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.note-format-option {
+  display: grid;
+  gap: 4px;
+  min-height: 66px;
+  padding: 10px 11px;
+  text-align: left;
+}
+
+.note-format-option strong { color: var(--ink-soft); font-size: 0.8rem; }
+.note-format-option small { color: var(--muted); font-size: 0.66rem; line-height: 1.35; }
+.note-format-option:hover,
+.note-format-option.is-active { border-color: #aabafa; background: var(--primary-soft); }
+.note-format-option.is-active strong { color: var(--primary); }
+.note-editor-body .dialog-field { margin: 0; }
+.note-editor-body .dialog-field input,
+.note-editor-body .dialog-field textarea { width: 100%; }
+
+@media (max-width: 700px) {
+  .notes-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 390px) {
+  .notes-library { margin-top: 26px; gap: 16px; }
+  .notes-library-heading { align-items: start; gap: 12px; }
+  .notes-library-heading .primary-button { width: 100%; }
+  .notes-filter-tabs { gap: 5px; }
+  .notes-filter-tab { flex: 1 1 0; padding: 0 8px; }
+  .note-format-picker { grid-template-columns: minmax(0, 1fr); }
+  .note-format-option { min-height: 52px; }
+}

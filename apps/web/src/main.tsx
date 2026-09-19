@@ -64,7 +64,7 @@ import {
 import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, SUMMARY_MAX_LENGTH, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, trimSummaryText, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import { clearLogs, copyRecentJson, installDiagnostics, recentLogs, subscribe } from "./diagnostics";
 import { sha256Hex } from "./contentHash";
-import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
+import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, NoteDetails, NoteFormat, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import {
   apiRequest,
   type AssetsResponse,
@@ -507,6 +507,20 @@ function recordText(record: RecordView): string {
 
 function recordLabel(kind: RecordKind): string {
   return COMPOSER_META[kind].label;
+}
+
+const NOTE_FORMATS: readonly { readonly value: NoteFormat; readonly label: string; readonly hint: string }[] = [
+  { value: "article", label: "文章", hint: "有标题的完整内容" },
+  { value: "fragment", label: "碎片", hint: "随手记下一点想法" },
+  { value: "quote", label: "摘抄", hint: "保留引文和出处" },
+];
+
+function noteFormatOf(record: RecordView): NoteFormat {
+  return record.kind === "note" ? record.note?.format ?? "fragment" : "fragment";
+}
+
+function noteUpdatedAt(record: RecordView): string {
+  return shortDate(lifeTimeDate(record.updatedAt ?? record.createdAt) ?? "");
 }
 
 function statusLabel(status: string | undefined): string {
@@ -2378,6 +2392,93 @@ function RecordEditorDialog({ record, saving, reloading, error, entities, assets
   return <dialog ref={dialogRef} className="modal-dialog editor-dialog" aria-labelledby="editor-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">编辑记录</p><h2 id="editor-title">保留原文，更新当前内容</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="dialog-body"><div className="original-block"><div className="original-block-label"><span>原文</span><span>只读保留</span></div><p><RecordText text={record.body.original || "（原文为空）"} entities={mentionVocabulary(record, entities)} /></p></div>{error?.includes("最新版本") ? <div className="server-current-block"><div className="original-block-label"><span>最新服务端内容</span><span>草稿仍在编辑框中</span></div><p><RecordText text={recordText(record)} entities={mentionVocabulary(record, entities)} /></p></div> : null}<label className="dialog-field"><span>当前内容</span><MentionBox textareaRef={editorTextareaRef} autoFocus value={draft.content} onChange={(value) => setDraft((current) => ({ ...current, content: value }))} entities={entities} onCreateEntity={onCreateEntity} rows={5} ariaLabel="当前内容" /></label><div className="dialog-fields-grid"><div className="dialog-field"><span>发生时间</span><DateField value={draft.occurredAt} onChange={(value) => setDraft((current) => ({ ...current, occurredAt: value, occurredDirty: true }))} label="发生时间" showTime capped /></div>{task ? <div className="dialog-field"><span>截止时间</span><DateField value={draft.dueAt} onChange={(value) => setDraft((current) => ({ ...current, dueAt: value, dueDirty: true }))} label="截止时间" showTime /></div> : null}</div><div className="dialog-toggle-row"><label className={`backfill-toggle ${draft.isBackfill ? "is-on" : ""}`}><input type="checkbox" checked={draft.isBackfill} onChange={(event) => setDraft((current) => ({ ...current, isBackfill: event.target.checked }))} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label><label className={`privacy-toggle dialog-privacy-toggle ${draft.isPrivate ? "is-on" : ""}`}><input type="checkbox" checked={draft.isPrivate} onChange={(event) => setDraft((current) => ({ ...current, isPrivate: event.target.checked }))} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私模式</span><small>日历隐藏，时间轴点击后显示</small></label></div>{task ? <label className="dialog-field"><span>任务状态</span><select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as TaskStatus }))}><option value="todo">待办</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label> : null}<RelationPanel entities={entities} assets={assets} candidates={candidates} draft={draft} onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))} onCreateEntity={onCreateEntity} />{error ? <div className="dialog-error" role="alert"><CircleHelp size={17} aria-hidden="true" /><span>{error}</span>{error.includes("冲突") || error.includes("409") || error.includes("最新版本") ? <button className="text-button" type="button" onClick={onReloadLatest} disabled={reloading}>{reloading ? "读取中" : error.includes("最新版本") ? "再次读取最新版本" : "读取最新版本，保留草稿"}</button> : null}</div> : null}</div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => onSave(record, draft)} disabled={!draft.content.trim() || saving}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{saving ? "保存中" : "保存修改"}</span></button></div></dialog>;
 }
 
+interface NoteDraft {
+  readonly format: NoteFormat;
+  readonly title: string;
+  readonly content: string;
+  readonly source: string;
+  /** Legacy notes stay metadata-free unless the owner explicitly edits a format field. */
+  readonly metadataTouched: boolean;
+}
+
+type NoteSaveHandler = (record: RecordView | null, draft: NoteDraft) => Promise<boolean>;
+
+function NoteEditorDialog({ record, createOpen, entities, onCreateEntity, onClose, onSave }: { readonly record: RecordView | null; readonly createOpen: boolean; readonly entities: readonly Entity[]; readonly onCreateEntity: CreateEntity; readonly onClose: () => void; readonly onSave: NoteSaveHandler }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const open = createOpen || record !== null;
+  const [draft, setDraft] = useState<NoteDraft>({ format: "fragment", title: "", content: "", source: "", metadataTouched: createOpen });
+  const recordId = record?.id ?? null;
+  useEffect(() => {
+    if (!open) return;
+    const details = record?.kind === "note" ? record.note : undefined;
+    setDraft({
+      format: details?.format ?? "fragment",
+      title: details?.title ?? "",
+      content: record === null ? "" : recordText(record),
+      source: details?.source ?? "",
+      metadataTouched: record === null,
+    });
+  }, [open, recordId, createOpen]);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (open && !dialog.open) {
+      dialog.showModal();
+      window.requestAnimationFrame(() => bodyRef.current?.focus({ preventScroll: true }));
+    }
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  if (!open) return <dialog ref={dialogRef} className="modal-dialog" />;
+  const valid = draft.content.trim().length > 0 && (draft.format !== "article" || draft.title.trim().length > 0);
+  const submit = async () => {
+    if (!valid) return;
+    if (await onSave(record, draft)) onClose();
+  };
+  return <dialog ref={dialogRef} className="modal-dialog note-editor-dialog" aria-labelledby="note-editor-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
+    <div className="dialog-header"><div><p className="eyebrow">{record === null ? "新建笔记" : "编辑笔记"}</p><h2 id="note-editor-title">{record === null ? "留下一点值得回看的文字" : "更新这条笔记"}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭笔记编辑器"><X size={17} aria-hidden="true" /></button></div>
+    <div className="dialog-body note-editor-body" data-note-editor>
+      <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${draft.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={draft.format === item.value} key={item.value} onClick={() => setDraft((current) => ({ ...current, format: item.value, metadataTouched: true }))}><strong>{item.label}</strong><small>{item.hint}</small></button>)}</div>
+      {draft.format === "article" ? <label className="dialog-field note-title-field"><span>标题</span><input data-note-title value={draft.title} maxLength={300} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value, metadataTouched: true }))} placeholder="给文章一个清楚的标题" /></label> : null}
+      <label className="dialog-field note-body-field"><span>{draft.format === "quote" ? "引文" : "正文"}</span><MentionBox textareaRef={bodyRef} value={draft.content} onChange={(value) => setDraft((current) => ({ ...current, content: value }))} entities={entities} onCreateEntity={onCreateEntity} rows={8} ariaLabel={draft.format === "quote" ? "引文正文" : "笔记正文"} placeholder={draft.format === "quote" ? "粘贴或输入值得保存的引文……" : draft.format === "article" ? "写下文章内容……" : "记下此刻的想法……"} /></label>
+      {draft.format === "quote" ? <label className="dialog-field note-source-field"><span>出处（可选）</span><input data-note-source value={draft.source} maxLength={1000} onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value, metadataTouched: true }))} placeholder="书名、作者或网页链接" /></label> : null}
+    </div>
+    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" data-note-save type="button" onClick={() => void submit()} disabled={!valid}><Check size={17} aria-hidden="true" /><span>保存笔记</span></button></div>
+  </dialog>;
+}
+
+function NotesLibrary({ records, loading, error, entities, onRetry, onCreateEntity, onSave, onDelete }: { readonly records: readonly RecordView[] | null; readonly loading: boolean; readonly error: string | null; readonly entities: readonly Entity[]; readonly onRetry: () => void; readonly onCreateEntity: CreateEntity; readonly onSave: NoteSaveHandler; readonly onDelete: (record: RecordView) => void }) {
+  const [filter, setFilter] = useState<NoteFormat | "all">("all");
+  const [editorRecord, setEditorRecord] = useState<RecordView | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const items = useMemo(() => [...(records ?? [])]
+    .filter((record) => record.kind === "note")
+    .filter((record) => filter === "all" || noteFormatOf(record) === filter)
+    .sort((left, right) => Date.parse(right.updatedAt?.value ?? right.createdAt.value) - Date.parse(left.updatedAt?.value ?? left.createdAt.value)), [records, filter]);
+  const closeEditor = () => { setEditorRecord(null); setCreateOpen(false); };
+  return <section className="notes-library" data-view="notes" aria-labelledby="notes-library-title">
+    <div className="page-heading notes-library-heading"><div><p className="eyebrow">文字资料库</p><h1 id="notes-library-title">笔记</h1><p>按内容浏览、检索和续写文章、碎片与摘抄。</p></div><button className="primary-button" data-note-create type="button" onClick={() => { setEditorRecord(null); setCreateOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建笔记</span></button></div>
+    <div className="notes-filter-tabs" role="tablist" aria-label="笔记格式筛选">{(["all", ...NOTE_FORMATS.map((item) => item.value)] as const).map((value) => { const label = value === "all" ? "全部" : NOTE_FORMATS.find((item) => item.value === value)?.label ?? value; return <button className={`notes-filter-tab ${filter === value ? "is-active" : ""}`} data-note-filter={value} type="button" role="tab" aria-selected={filter === value} key={value} onClick={() => setFilter(value)}>{label}</button>; })}</div>
+    {loading ? <LoadingState /> : null}
+    {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
+    {!loading && !error && items.length === 0 ? <div className="notes-empty" data-note-empty><BookOpen size={24} aria-hidden="true" /><strong>还没有笔记。先记下一点想法或摘抄。</strong></div> : null}
+    {!loading && !error && items.length > 0 ? <div className="notes-grid">{items.map((record) => {
+      const format = noteFormatOf(record);
+      const details = record.kind === "note" ? record.note : undefined;
+      return <article className="note-card" data-note-card data-note-format={format} key={record.id}>
+        <button className="note-card-main" type="button" onClick={() => { setCreateOpen(false); setEditorRecord(record); }}>
+          <div className="note-card-meta"><span className="note-format-label">{NOTE_FORMATS.find((item) => item.value === format)?.label ?? "碎片"}</span><time data-note-updated>{noteUpdatedAt(record)}</time></div>
+          {format === "article" ? <h2 data-note-title>{details?.title}</h2> : null}
+          <p className="note-card-excerpt">{recordText(record)}</p>
+          {format === "quote" && details?.source ? <p className="note-card-source" data-note-source>出处：{details.source}</p> : null}
+        </button>
+        <div className="note-card-actions"><button className="text-button" type="button" onClick={() => { setCreateOpen(false); setEditorRecord(record); }}><Edit3 size={14} aria-hidden="true" /><span>编辑</span></button><button className="text-button note-card-delete" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" /><span>删除</span></button></div>
+      </article>;
+    })}</div> : null}
+    <NoteEditorDialog record={editorRecord} createOpen={createOpen} entities={entities} onCreateEntity={onCreateEntity} onClose={closeEditor} onSave={onSave} />
+  </section>;
+}
+
 function ConfirmDialog({ record, busy, error, onClose, onConfirm }: { record: RecordView | null; busy: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (record && !dialog.open) dialog.showModal(); if (!record && dialog.open) dialog.close(); }, [record]);
@@ -3680,6 +3781,36 @@ function App() {
     try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); setComposerContent(""); setComposerMovieRefs([]); setComposerShots([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { showToast(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
   };
 
+  const noteDetailsPayload = (draft: NoteDraft): NoteDetails => {
+    if (draft.format === "article") return { format: "article", title: draft.title.trim() };
+    if (draft.format === "quote") return { format: "quote", ...(draft.source.trim() ? { source: draft.source.trim() } : {}) };
+    return { format: "fragment" };
+  };
+
+  const handleSaveNote: NoteSaveHandler = async (record, draft) => {
+    const note = noteDetailsPayload(draft);
+    try {
+      if (record === null) {
+        const payload: RecordWritePayload = { kind: "note", content: draft.content, note };
+        await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) });
+        showToast("笔记已保存");
+      } else {
+        const payload: RecordWritePayload = {
+          revision: record.revision,
+          ...(draft.content !== recordText(record) ? { content: draft.content } : {}),
+          ...(draft.metadataTouched ? { note } : {}),
+        };
+        await apiRequest<RecordView>(`/api/records/${encodeURIComponent(record.id)}`, { method: "PATCH", body: JSON.stringify(payload) });
+        showToast("笔记已更新，原文仍保留");
+      }
+      refresh();
+      return true;
+    } catch (error) {
+      showToast(errorStatus(error) === 409 ? "笔记版本已变化，请重新打开后保存" : handleRequestError(error, "笔记保存失败，请重试"), "warn");
+      return false;
+    }
+  };
+
   const handleDemo = async () => {
     if (creatingDemo) return;
     setCreatingDemo(true);
@@ -3758,10 +3889,13 @@ function App() {
   // time machine is one of them — there is nothing to write while reading history,
   // and the composer would push the axis down the page. It keeps the task column,
   // like the calendar does.
-  const hidesComposer = activeView === "settings" || activeView === "entities" || activeView === "timemachine";
+  const hidesComposer = activeView === "settings" || activeView === "entities" || activeView === "timemachine" || activeView === "notes";
   const showComposer = isToday || (!hidesComposer && composerOpen);
-  const showPageActions = Boolean(searchQuery || entityFilterId !== null || (!hidesComposer && !isToday));
-  const visibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
+  const showPageActions = activeView !== "notes" && Boolean(searchQuery || entityFilterId !== null || (!hidesComposer && !isToday));
+  const loadedVisibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
+  // The notes route owns its own library. Other record surfaces deliberately
+  // receive a note-free view even when an old note carries occurredAt.
+  const visibleRecords = activeView === "notes" ? loadedVisibleRecords : loadedVisibleRecords?.filter((record) => record.kind !== "note") ?? loadedVisibleRecords;
   const visibleTasks = hideDemo && tasks ? tasks.filter((record) => !isDemoRecord(record)) : tasks;
   // Which places were written about most recently, so the mention picker can put
   // them first. Derived from the records rather than tracked separately: the
@@ -3810,10 +3944,12 @@ function App() {
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message) => showToast(message, "warn")} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : activeView === "notes" ? "note" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : activeView === "notes" ? "笔记" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message) => showToast(message, "warn")} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
        ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
+      : activeView === "notes"
+        ? <NotesLibrary records={visibleRecords} loading={recordsLoading} error={recordsError} entities={entities} onRetry={() => setRecordsReload((current) => current + 1)} onCreateEntity={handleCreateEntity} onSave={handleSaveNote} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} />
       : activeView === "calendar"
         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
       : activeView === "timemachine"

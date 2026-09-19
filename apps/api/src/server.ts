@@ -13,6 +13,7 @@ import {
   assertValidEntityRef,
   assertValidEntityRelation,
   assertValidLifeTime,
+  assertValidNoteDetails,
   assertValidStorageReference,
   assertValidWeatherAttachment,
   canonicalPersonName,
@@ -39,6 +40,7 @@ import {
   type ExportBundleV1,
   type Movie,
   type MovieExternalIds,
+  type NoteDetails,
   type LifeTime,
   type PlacePeriod,
   type PlaceRole,
@@ -447,6 +449,15 @@ function filterDateRange(items: readonly RecordView[], from: string | undefined,
   });
 }
 
+/** Parse note metadata at the HTTP boundary so all clients receive the same
+ * 400-shaped error instead of a raw core validation exception. */
+export function parseNoteDetails(value: unknown): NoteDetails {
+  return coreValidated("note", () => {
+    assertValidNoteDetails(value);
+    return value;
+  });
+}
+
 /** Every calendar day in an inclusive range, so a month grid can ask for a range once. */
 function datesBetween(from: string, to: string): readonly string[] {
   const dates: string[] = [];
@@ -457,7 +468,7 @@ function datesBetween(from: string, to: string): readonly string[] {
 }
 
 function buildRecord(input: JsonObject, repository: SqliteRecordRepository): TimelineRecord {
-  hasOnlyKeys(input, ["kind", "content", "occurredAt", "dueAt", "isPrivate", "isDemo", "isBackfill", "weather", "entityRefs", "relatedRecordIds", "assetRefs"]);
+  hasOnlyKeys(input, ["kind", "content", "occurredAt", "dueAt", "isPrivate", "isDemo", "isBackfill", "weather", "note", "entityRefs", "relatedRecordIds", "assetRefs"]);
   const kind = enumField(input.kind, RECORD_KINDS, "kind");
   const content = stringField(input.content, "content");
   if (input.occurredAt !== undefined && input.occurredAt === null) throw new HttpError(400, "invalid_time", "occurredAt cannot be null on create");
@@ -471,6 +482,10 @@ function buildRecord(input: JsonObject, repository: SqliteRecordRepository): Tim
     assertValidWeatherAttachment(input.weather);
     return input.weather as WeatherAttachment;
   });
+  const note = input.note === undefined ? undefined : (() => {
+    if (kind !== "note") throw new HttpError(400, "invalid_field", "note is only valid for note records");
+    return parseNoteDetails(input.note);
+  })();
   const id = randomUUID();
   const explicitRefs = input.entityRefs === undefined ? ([] as const) : entityRefsField(input.entityRefs, repository);
   const common = {
@@ -482,6 +497,7 @@ function buildRecord(input: JsonObject, repository: SqliteRecordRepository): Tim
     ...(isDemo === undefined ? {} : { isDemo }),
     ...(isBackfill === undefined ? {} : { isBackfill }),
     ...(weather === undefined ? {} : { weather }),
+    ...(note === undefined ? {} : { note }),
     entityRefs: withMentionRefs(content, explicitRefs, repository),
     relatedRecordIds:
       input.relatedRecordIds === undefined ? ([] as const) : relatedRecordIdsField(input.relatedRecordIds, id, repository),
@@ -498,7 +514,7 @@ function patchRecord(
   input: JsonObject,
   repository: SqliteRecordRepository,
 ): { expectedRevision: number; record: TimelineRecord } {
-  hasOnlyKeys(input, ["revision", "content", "occurredAt", "dueAt", "isPrivate", "isBackfill", "weather", "status", "entityRefs", "relatedRecordIds", "assetRefs"]);
+  hasOnlyKeys(input, ["revision", "content", "occurredAt", "dueAt", "isPrivate", "isBackfill", "weather", "note", "status", "entityRefs", "relatedRecordIds", "assetRefs"]);
   const expectedRevision = revisionField(input.revision);
   const { revision: _revision, ...base } = current;
   let record: TimelineRecord = base;
@@ -518,6 +534,15 @@ function patchRecord(
         return input.weather as WeatherAttachment;
       });
       record = { ...record, weather };
+    }
+  }
+  if (Object.hasOwn(input, "note")) {
+    if (record.kind !== "note") throw new HttpError(400, "invalid_field", "note is only valid for note records");
+    if (input.note === null) {
+      const { note: _note, ...withoutNote } = record;
+      record = withoutNote;
+    } else {
+      record = { ...record, note: parseNoteDetails(input.note) };
     }
   }
   if (input.content !== undefined) {
@@ -1980,7 +2005,11 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       if (status !== undefined) query.status = status;
       if (entityId !== undefined) query.entityId = entityId;
       if (assetId !== undefined) query.assetId = assetId;
-      const scoped = filterDate(repository.list(query), date, timeZone);
+      // Date/range reads feed Today and Calendar. Notes are a separate content
+      // library and must not leak into those time-oriented surfaces.
+      const timeScoped = date !== undefined || from !== undefined || to !== undefined;
+      const sourceRecords = repository.list(query).filter((record) => !(timeScoped && record.kind === "note"));
+      const scoped = filterDate(sourceRecords, date, timeZone);
       const items = sortTimeline(filterDateRange(scoped, from, to, timeZone), timeZone);
       setJson(res, 200, { items });
       return;
@@ -1996,6 +2025,7 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       if (dates.length > 400) throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
       const byDate = new Map<string, RecordView[]>();
       for (const record of repository.list({})) {
+        if (record.kind === "note") continue;
         if (record.isPrivate === true) continue;
         const date = dateForTime(record.occurredAt ?? record.createdAt, timeZone);
         const bucket = byDate.get(date);

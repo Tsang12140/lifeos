@@ -224,6 +224,60 @@ test("SQLite API persists records, preserves original content, filters, conflict
   await reopened.stop();
 });
 
+test("notes persist format metadata, search it, patch it, and round-trip through export/import", async (t) => {
+  const source = await startHarness();
+  t.after(async () => source.stop());
+  const create = async (payload: Record<string, unknown>) => {
+    const result = await request(source.base, "/api/records", { method: "POST", ...json(payload) });
+    equal(result.response.status, 201);
+    return result.body as Record<string, unknown>;
+  };
+  const article = await create({ kind: "note", content: "文章正文", note: { format: "article", title: "我的文章" } });
+  const fragment = await create({ kind: "note", content: "一条碎片" , note: { format: "fragment" } });
+  const quote = await create({ kind: "note", content: "引文正文", note: { format: "quote", source: "《测试书》" } });
+  equal(article.occurredAt, undefined);
+  equal((article.note as { format: string; title: string }).format, "article");
+  equal((fragment.note as { format: string }).format, "fragment");
+  equal((quote.note as { source: string }).source, "《测试书》");
+
+  const titleSearch = await request(source.base, "/api/records?kind=note&q=%E6%88%91%E7%9A%84%E6%96%87%E7%AB%A0");
+  equal(titleSearch.response.status, 200);
+  equal((titleSearch.body as { items: unknown[] }).items.length, 1);
+  const sourceSearch = await request(source.base, "/api/records?kind=note&q=%E6%B5%8B%E8%AF%95%E4%B9%A6");
+  equal((sourceSearch.body as { items: unknown[] }).items.length, 1);
+
+  const patched = await request(source.base, `/api/records/${article.id}`, {
+    method: "PATCH",
+    ...json({ revision: article.revision, content: "编辑后的文章", note: { format: "article", title: "更新标题" } }),
+  });
+  equal(patched.response.status, 200);
+  const patchedBody = patched.body as { revision: number; note: { title: string }; body: { edited?: string } };
+  equal(patchedBody.revision, 2);
+  equal(patchedBody.note.title, "更新标题");
+  equal(patchedBody.body.edited, "编辑后的文章");
+
+  const journal = await create({ kind: "journal", content: "普通记录" });
+  const rejected = await request(source.base, `/api/records/${journal.id}`, { method: "PATCH", ...json({ revision: journal.revision, note: { format: "fragment" } }) });
+  equal(rejected.response.status, 400);
+  const invalidArticle = await request(source.base, "/api/records", { method: "POST", ...json({ kind: "note", content: "缺标题", note: { format: "article" } }) });
+  equal(invalidArticle.response.status, 400);
+
+  const exportResponse = await fetch(`${source.base}/api/export?format=json`);
+  equal(exportResponse.status, 200);
+  const bundle = await exportResponse.json() as Record<string, unknown>;
+  const importedRoot = mkdtempSync(join(tmpdir(), "lifeos-notes-import-"));
+  const target = await startHarness(undefined, 1024 * 1024, importedRoot);
+  t.after(async () => target.stop());
+  const imported = await request(target.base, "/api/import", { method: "POST", ...json({ bundle }) });
+  equal(imported.response.status, 201);
+  const importedNotes = await request(target.base, "/api/records?kind=note");
+  const noteItems = (importedNotes.body as { items: readonly { note?: { format?: string; title?: string; source?: string } }[] }).items;
+  equal(noteItems.length, 3);
+  ok(noteItems.some((item) => item.note?.format === "article" && item.note.title === "更新标题"));
+  ok(noteItems.some((item) => item.note?.format === "quote" && item.note.source === "《测试书》"));
+  ok(noteItems.some((item) => item.note?.format === "fragment"));
+});
+
 test("auth, host/origin checks, import transaction, and malformed writes", async (t) => {
   const harness = await startHarness("secret", 4096);
   t.after(async () => harness.stop());
@@ -474,7 +528,7 @@ test("timeline date filters and ordering respect instant, date-only, and local m
   t.after(async () => harness.stop());
   const records = [
     { kind: "journal", content: "instant", occurredAt: { kind: "instant", value: "2026-09-01T23:30:00Z" } },
-    { kind: "note", content: "local", occurredAt: { kind: "local", value: "2026-09-02T12:00:00" } },
+    { kind: "journal", content: "local", occurredAt: { kind: "local", value: "2026-09-02T12:00:00" } },
     { kind: "event", content: "date", occurredAt: { kind: "date", value: "2026-09-02" } },
   ];
   for (const record of records) {
@@ -1179,7 +1233,7 @@ test("calendar range queries and day summaries mark rule output as a fallback", 
   const range = await request(harness.base, "/api/records?from=2026-09-07&to=2026-09-13&timeZone=Asia%2FShanghai");
   equal(range.response.status, 200);
   const rangeItems = (range.body as { items: Array<{ id: string; revision: number; body: { original: string } }> }).items;
-  deepEqual(rangeItems.map((item) => item.body.original), ["写信给阿彬", "江边散步"]);
+  deepEqual(rangeItems.map((item) => item.body.original), ["江边散步"]);
 
   const bothScopes = await request(harness.base, "/api/records?date=2026-09-08&from=2026-09-07&to=2026-09-13");
   equal(bothScopes.response.status, 400);
@@ -1204,7 +1258,7 @@ test("calendar range queries and day summaries mark rule output as a fallback", 
   equal(summariesBody.ai, false);
   equal(summariesBody.provider, "rule");
   // A day with no records is not answered at all — the grid leaves that cell blank.
-  deepEqual(summariesBody.items.map((item) => item.date), ["2026-09-08", "2026-09-09"]);
+  deepEqual(summariesBody.items.map((item) => item.date), ["2026-09-08"]);
   equal(summariesBody.items[0]?.text, "江边散步");
   equal(summariesBody.items[0]?.status, "fallback");
   equal(summariesBody.items[0]?.provider, "rule");
@@ -1215,7 +1269,7 @@ test("calendar range queries and day summaries mark rule output as a fallback", 
   equal((cached.body as { items: Array<{ generatedAt: { value: string } }> }).items[0]?.generatedAt.value, summariesBody.items[0]?.generatedAt.value);
 
   // Editing the record changes its version, which invalidates the stored summary.
-  const target = rangeItems[1]!;
+  const target = rangeItems[0]!;
   const patched = await request(harness.base, `/api/records/${encodeURIComponent(target.id)}`, {
     method: "PATCH",
     ...json({ revision: target.revision, content: "改成了登山" }),

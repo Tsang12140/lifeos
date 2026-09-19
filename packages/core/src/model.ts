@@ -319,8 +319,20 @@ export interface EventRecord extends TimelineRecordBase {
   readonly kind: "event";
 }
 
+export type NoteFormat = "article" | "fragment" | "quote";
+
+export interface NoteDetails {
+  readonly format: NoteFormat;
+  /** Only article notes may carry a title. */
+  readonly title?: string;
+  /** Only quote notes may carry a source. */
+  readonly source?: string;
+}
+
 export interface NoteRecord extends TimelineRecordBase {
   readonly kind: "note";
+  /** Missing on legacy notes; the UI treats those as fragments without rewriting them. */
+  readonly note?: NoteDetails;
 }
 
 export type TimelineRecord = JournalRecord | TaskRecord | EventRecord | NoteRecord;
@@ -589,6 +601,29 @@ function validateWeatherAttachment(value: unknown): void {
   assertValidInstantTime(weather.capturedAt, "record.weather.capturedAt");
 }
 
+export function assertValidNoteDetails(value: unknown, name = "record.note"): asserts value is NoteDetails {
+  const note = objectValue(value, name);
+  const allowed = new Set(["format", "title", "source"]);
+  for (const key of Object.keys(note)) {
+    if (!allowed.has(key)) throw new Error(`${name}.${key} is not supported`);
+  }
+  const format = enumValue(note.format, ["article", "fragment", "quote"], `${name}.format`);
+  if (note.title !== undefined) {
+    const title = stringValue(note.title, `${name}.title`);
+    if (title.length > 300) throw new Error(`${name}.title must be at most 300 characters`);
+    if (format !== "article") throw new Error(`${name}.title is only allowed for article notes`);
+    if (title.trim().length === 0) throw new Error(`${name}.title must not be empty`);
+  }
+  if (note.source !== undefined) {
+    const source = stringValue(note.source, `${name}.source`);
+    if (source.length > 1_000) throw new Error(`${name}.source must be at most 1000 characters`);
+    if (format !== "quote") throw new Error(`${name}.source is only allowed for quote notes`);
+  }
+  if (format === "article" && (typeof note.title !== "string" || note.title.trim().length === 0)) {
+    throw new Error(`${name}.title must not be empty for article notes`);
+  }
+}
+
 export function assertValidWeatherAttachment(value: unknown, name = "record.weather"): asserts value is WeatherAttachment {
   if (name === "record.weather") {
     validateWeatherAttachment(value);
@@ -636,6 +671,10 @@ export function assertValidTimelineRecord(value: unknown): asserts value is Time
   }
   if (record.occurredAt !== undefined) {
     assertValidLifeTime(record.occurredAt, "record.occurredAt");
+  }
+  if (record.note !== undefined) {
+    if (kind !== "note") throw new Error("record.note is only allowed on note records");
+    assertValidNoteDetails(record.note);
   }
   if (record.weather !== undefined) {
     validateWeatherAttachment(record.weather);
