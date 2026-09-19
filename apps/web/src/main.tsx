@@ -1812,13 +1812,20 @@ function assetThumbUrl(assetId: string, width: ThumbnailWidth): string {
  * The day's photos in the order they were taken (records arrive newest
  * first, so walk the day backwards), each carrying the free story signal:
  * how much text and how many entity refs the owning record has.
+ *
+ * "Photo" has to mean here exactly what it means in the timeline grid —
+ * `isPhotoAsset`, i.e. a *local* image we can actually draw. A record can hold
+ * a `photo` ref whose asset is remote (`sourceId: "remote"`, no bytes on this
+ * machine); asking `/thumbnail` for one answers 404, so anything built from it
+ * renders as a hole. The ref's role alone does not tell you that.
  */
-function dayPhotoCandidates(items: readonly RecordView[]): readonly { assetId: string; story: number }[] {
+function dayPhotoCandidates(items: readonly RecordView[], assets: readonly Asset[]): readonly { assetId: string; story: number }[] {
   const found: { assetId: string; story: number }[] = [];
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const record = items[index];
     for (const ref of record.assetRefs) {
       if (ref.role !== "photo") continue;
+      if (!isPhotoAsset(assets.find((candidate) => candidate.id === ref.assetId))) continue;
       found.push({ assetId: ref.assetId, story: storyWeight(recordText(record).length, record.entityRefs.length) });
     }
   }
@@ -1831,8 +1838,8 @@ function dayPhotoCandidates(items: readonly RecordView[]): readonly { assetId: s
  * shots between them — with no "and N more" badge, because the background is
  * a texture, not an inventory.
  */
-function dayPhotoIds(items: readonly RecordView[]): readonly string[] {
-  const ids = dayPhotoCandidates(items).map((candidate) => candidate.assetId);
+function dayPhotoIds(items: readonly RecordView[], assets: readonly Asset[]): readonly string[] {
+  const ids = dayPhotoCandidates(items, assets).map((candidate) => candidate.assetId);
   if (ids.length <= 4) return ids;
   const picked: string[] = [];
   for (let band = 0; band < 4; band += 1) {
@@ -1938,7 +1945,7 @@ function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather 
   return { text: item.textDay, icon: item.iconDay, tempMin: typeof item.tempMin === "string" ? item.tempMin : "—", tempMax: typeof item.tempMax === "string" ? item.tempMax : "—" };
 }
 
-function CalendarView({ mode, onModeChange, anchor, today, records, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, onOpenCycleModule, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; onOpenCycleModule: () => void; onRetry: () => void; onOpenDay: (date: string) => void }) {
+function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, onOpenCycleModule, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; onOpenCycleModule: () => void; onRetry: () => void; onOpenDay: (date: string) => void }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
   const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
   const buckets = useMemo(() => recordsByDate(dates, publicRecords), [dates, publicRecords]);
@@ -1954,7 +1961,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
     let cancelled = false;
     (async () => {
       for (const date of dates) {
-        for (const candidate of dayPhotoCandidates(buckets.get(date) ?? [])) {
+        for (const candidate of dayPhotoCandidates(buckets.get(date) ?? [], assets)) {
           await scorePhoto(assetThumbUrl(candidate.assetId, 1200));
           if (cancelled) return;
           setPhotoTick((tick) => tick + 1);
@@ -1962,7 +1969,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
       }
     })();
     return () => { cancelled = true; };
-  }, [mode, dates, buckets]);
+  }, [mode, dates, buckets, assets]);
   return <section className="calendar-section" aria-labelledby="calendar-title">
     <div className="section-heading">
       <div><h2 id="calendar-title">{label}</h2></div>
@@ -1983,7 +1990,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
     {!loading && !error ? (mode === "week" ? <div className="week-grid">
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];
-        const photoIds = dayPhotoIds(items);
+        const photoIds = dayPhotoIds(items, assets);
         const highlights = weekCardRecords(items);
         return <button className={`week-card ${date === today ? "is-today" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录`}>
           <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
@@ -2008,7 +2015,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, summaries, a
         const weather = weatherByDate.get(date);
         const dayInfo = calendarDayInfo(date);
         const inMonth = date.slice(0, 7) === anchor.slice(0, 7);
-        const cellPhoto = inMonth ? monthCellPhoto(dayPhotoCandidates(items)) : undefined;
+        const cellPhoto = inMonth ? monthCellPhoto(dayPhotoCandidates(items, assets)) : undefined;
         const summaryText = summary === undefined ? "" : trimSummaryText(summary.text, SUMMARY_MAX_LENGTH);
         const holidayLabel = dayInfo.holiday === undefined ? "" : `${dayInfo.holiday.name} · ${dayInfo.holiday.kind === "holiday" ? "休息日" : "调休上班"}`;
         const weatherLabel = weather === undefined ? "" : `天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`;
@@ -3808,7 +3815,7 @@ function App() {
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "calendar"
-        ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
+        ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
       : activeView === "timemachine"
         ? <TimeMachine />
       : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
