@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, RefreshCw, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
 import { getWeatherDecision, getWeatherEmoji, getWeatherPhase, findWeatherDay, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherSky } from "./WeatherBackground";
@@ -74,7 +74,7 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   </div>;
 }
 
-export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string) => void }) {
+export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void }) {
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
   // Only a manual press spins the refresh button. Stepping through dates also
@@ -103,12 +103,14 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       if (next.throttled === true) {
         const seconds = Math.max(1, Math.ceil((next.retryAfterMs ?? 0) / 1000));
         setArmed(true);
-        onNotice?.(`刷新太快了，${seconds} 秒后再试`);
+        onNotice?.(`刷新太快了，${seconds} 秒后再试`, "warn");
       } else if (options.manual === true) {
         setArmed(false);
+        onNotice?.("天气已刷新", "ok");
       }
     } catch {
       setPayload({ weatherSnapshot: null, location: null });
+      if (isManual) onNotice?.("天气刷新失败，请稍后重试", "warn");
     } finally {
       setLoading(false);
       if (isManual) setManualBusy(false);
@@ -140,15 +142,13 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className="weather-header-content">
       <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} />
-      <div className="weather-header-summary">
+      <div className="weather-header-summary" role={status?.configured ? "button" : undefined} tabIndex={status?.configured ? 0 : undefined} aria-label={status?.configured ? `刷新${selectedDate}天气` : undefined} aria-busy={manualBusy || loading ? "true" : undefined} onClick={status?.configured ? () => void refresh({ manual: true, escalate: armed }) : undefined} onKeyDown={status?.configured ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } } : undefined}>
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>
           <span className="weather-header-reading"><span className="weather-header-condition"><span className="weather-header-emoji" aria-hidden="true">{getWeatherEmoji(displayDay.iconDay)}</span><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
         </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>
-    {status?.configured ? <div className="weather-header-actions">
-      <button className="weather-header-refresh" type="button" onClick={() => void refresh({ manual: true, escalate: armed })} aria-label={`刷新${selectedDate}天气`} title={armed ? "刷新天气（再按一次立即刷新）" : "刷新天气"} data-weather-armed={armed ? "on" : "off"}>{manualBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}</button>
-    </div> : null}
+    {status?.configured && manualBusy ? <span className="weather-header-refresh-status" aria-hidden="true"><LoaderCircle className="spin" size={15} /></span> : null}
   </section>;
 }
