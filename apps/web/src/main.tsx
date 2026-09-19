@@ -94,7 +94,7 @@ import { BackupCalendar } from "./BackupCalendar";
 import { TimeMachine } from "./TimeMachine";
 import { getWeatherEmoji, type WeatherDay, type WeatherProfile } from "./weather";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
-import { describeWeatherLocationByName } from "./weather-locations";
+import { describeWeatherLocationByName, weatherLocationDisplayName } from "./weather-locations";
 import { ScrollSlotStrip } from "./ScrollSlotStrip";
 import {
   combineDateTime,
@@ -1770,13 +1770,16 @@ function groupRecords(records: readonly RecordView[], fallbackDate: string): rea
   return [...groups.entries()].map(([date, items]) => ({ date, records: items }));
 }
 
-function Timeline({ records, assets, entities, loading, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
+function Timeline({ records, assets, entities, loading, refreshing, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled, dataCurrent }: { records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; refreshing: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean; dataCurrent: boolean }) {
   const title = timelineHeading(activeView);
   const empty = emptyCopy(activeView, selectedDate, Boolean(searchQuery));
   const groups = records ? groupRecords(records, selectedDate) : [];
+  const initialLoading = loading && records === null;
+  const showUpdating = error === null && records !== null && (refreshing || !dataCurrent);
+  const showEmpty = !initialLoading && dataCurrent && !error && records !== null && records.length === 0;
   /* `data-view` lets the compact rules tell the three surfaces apart without the
      component having to thread a class name through every branch. */
-  return <section className="timeline-section" data-view={activeView} aria-labelledby="timeline-title"><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{loading ? <LoadingState /> : null}{!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}{!loading && !error && records && records.length === 0 ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!loading && !error && records && records.length > 0 ? <div className="timeline-list">{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} />)}</div>)}</div> : null}</section>;
+  return <section className="timeline-section" data-view={activeView} aria-labelledby="timeline-title" aria-busy={showUpdating ? "true" : undefined}><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{initialLoading ? <LoadingState /> : null}{showUpdating ? <div className="timeline-refresh-state" role="status"><LoaderCircle className="spin" size={16} aria-hidden="true" /><span>正在读取目标日期…</span></div> : null}{error ? <ErrorState message={error} onRetry={onRetry} /> : null}{showEmpty ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!initialLoading && records && records.length > 0 ? <div className={`timeline-list ${interactionDisabled ? "is-stale" : ""}`}>{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} interactionDisabled={interactionDisabled} />)}</div>)}</div> : null}</section>;
 }
 
 const WEEKDAY_LABELS: readonly string[] = ["一", "二", "三", "四", "五", "六", "日"];
@@ -2173,7 +2176,7 @@ function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: readonly s
   </div>;
 }
 
-function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
+function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean }) {
   const Icon = COMPOSER_META[record.kind].icon;
   const task = isTaskRecord(record) ? record : undefined;
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
@@ -2189,8 +2192,8 @@ function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidde
   const relationLine = relationCount > 0 ? masked
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
-  const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{record.weather.city}</small></span></div>;
-  return <article className="timeline-item" data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => onMovieAttachToRecord(record, movie)} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
+  const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{weatherLocationDisplayName({ id: record.weather.locationId, name: record.weather.city })}</small></span></div>;
+  return <article className={`timeline-item ${interactionDisabled ? "is-stale" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><p className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</>}</p>{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className="record-action task-action" type="button" onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
 }
 
 interface TaskUndoEntry { readonly task: TaskRecordView; readonly previousStatus: TaskStatus; }
@@ -3219,10 +3222,27 @@ function SettingsView({ onImport, onLogout, logoutBusy, authRequired, aiStatus, 
   </section>;
 }
 
+const RECORDS_CACHE_LIMIT = 24;
+
+function cacheRecords(
+  cache: Map<string, { readonly items: readonly RecordView[]; readonly selectedDate: string }>,
+  queryPath: string,
+  entry: { readonly items: readonly RecordView[]; readonly selectedDate: string },
+): void {
+  cache.set(queryPath, entry);
+  while (cache.size > RECORDS_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
 function App() {
   const [activeView, setActiveView] = useState<AppView>("today");
   const [selectedDate, setSelectedDate] = useState(localDateToday);
   const [records, setRecords] = useState<readonly RecordView[] | null>(null);
+  const [recordsQueryPath, setRecordsQueryPath] = useState<string | null>(null);
+  const [recordsDisplayedDate, setRecordsDisplayedDate] = useState<string | null>(null);
   const [tasks, setTasks] = useState<readonly RecordView[] | null>(null);
   const [recordsLoading, setRecordsLoading] = useState(true);
   const [tasksLoading, setTasksLoading] = useState(true);
@@ -3286,6 +3306,7 @@ function App() {
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [recordsReload, setRecordsReload] = useState(0);
+  const [recordsErrorQueryPath, setRecordsErrorQueryPath] = useState<string | null>(null);
   const [tasksReload, setTasksReload] = useState(0);
   const [entities, setEntities] = useState<readonly Entity[]>([]);
   const [assets, setAssets] = useState<readonly Asset[]>([]);
@@ -3302,8 +3323,12 @@ function App() {
   const [uiFont, setUiFont] = useState<UiFontId>(readUiFont);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recordsRef = useRef<readonly RecordView[]>([]);
+  const recordsLoadedRef = useRef(false);
   const authRef = useRef<AuthState>({ required: false, authenticated: true });
   const recordsRequestRef = useRef(0);
+  const recordsCacheRef = useRef(new Map<string, { readonly items: readonly RecordView[]; readonly selectedDate: string }>());
+  const recordsPrefetchRef = useRef(new Map<string, AbortController>());
+  const recordsCacheGenerationRef = useRef(0);
   const tasksRequestRef = useRef(0);
 
   useEffect(() => {
@@ -3334,17 +3359,52 @@ function App() {
     return `/api/records?${params.toString()}`;
   }, [activeView, entityFilterId, searchQuery, selectedDate, calendarRange]);
 
+  const invalidateRecordsCache = useCallback(() => {
+    recordsCacheGenerationRef.current += 1;
+    recordsCacheRef.current.clear();
+    for (const controller of recordsPrefetchRef.current.values()) controller.abort();
+    recordsPrefetchRef.current.clear();
+  }, []);
+
+  const reloadRecords = useCallback(() => {
+    // A mutation must invalidate both cached dates and the in-flight request
+    // generation. The effect below starts the replacement request and owns its
+    // loading state, so an old finally() cannot leave the UI stuck as busy.
+    invalidateRecordsCache();
+    recordsRequestRef.current += 1;
+    // Mark the visible payload stale in the same render as the invalidation.
+    // Otherwise a mutation can leave one frame where old records are still
+    // actionable before the replacement effect flips loading on.
+    setRecordsQueryPath(null);
+    setRecordsReload((current) => current + 1);
+  }, [invalidateRecordsCache]);
+
+  const cachedRecordsForQuery = recordsCacheRef.current.get(queryPath);
+  const recordsForQuery = cachedRecordsForQuery?.items ?? records;
+  const recordsForQueryPath = cachedRecordsForQuery === undefined ? recordsQueryPath : queryPath;
+  const recordsForQueryDate = cachedRecordsForQuery?.selectedDate ?? recordsDisplayedDate ?? selectedDate;
+  const recordsErrorForQuery = recordsErrorQueryPath === queryPath ? recordsError : null;
+  const recordsAreCurrent = recordsForQueryPath === queryPath;
+  const recordsRefreshing = recordsLoading && recordsForQuery !== null;
+  const recordsInitialLoading = recordsLoading && recordsForQuery === null;
+  const recordsTargetRefreshing = recordsRefreshing || (!recordsAreCurrent && recordsForQuery !== null);
+  const recordsInteractionEnabled = recordsAreCurrent && !recordsRefreshing && recordsErrorForQuery === null;
+
   const handleRequestError = useCallback((error: unknown, fallback: string): string => {
     if (errorStatus(error) === 401) {
+      invalidateRecordsCache();
       const nextAuth = { required: true, authenticated: false } as const;
       authRef.current = nextAuth;
       setRecords(null);
+      setRecordsQueryPath(null);
+      setRecordsDisplayedDate(null);
+      setRecordsErrorQueryPath(null);
       setTasks(null);
       recordsRef.current = [];
       setAuthState(nextAuth);
     }
     return errorMessage(error, fallback);
-  }, []);
+  }, [invalidateRecordsCache]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -3414,15 +3474,87 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     const requestId = ++recordsRequestRef.current;
-    if (authState.required && !authState.authenticated) { setRecordsLoading(false); return () => controller.abort(); }
-    if (activeView === "settings") { setRecordsLoading(false); setRecords([]); return () => controller.abort(); }
+    recordsCacheGenerationRef.current += 1;
+    const prefetchGeneration = recordsCacheGenerationRef.current;
+    for (const prefetch of recordsPrefetchRef.current.values()) prefetch.abort();
+    recordsPrefetchRef.current.clear();
+    if (authState.required && !authState.authenticated) {
+      setRecordsLoading(false);
+      setRecords(null);
+      setRecordsQueryPath(null);
+      setRecordsDisplayedDate(null);
+      setRecordsError(null);
+      setRecordsErrorQueryPath(null);
+      return () => controller.abort();
+    }
+    if (activeView === "settings") {
+      setRecordsLoading(false);
+      setRecords(null);
+      setRecordsQueryPath(null);
+      setRecordsDisplayedDate(null);
+      setRecordsError(null);
+      setRecordsErrorQueryPath(null);
+      return () => controller.abort();
+    }
+    const cached = recordsCacheRef.current.get(queryPath);
+    if (cached !== undefined) {
+      // The render path also reads this entry directly, while these state
+      // updates make the cached key authoritative for actions and refs before
+      // the background revalidation completes.
+      setRecords(cached.items);
+      setRecordsQueryPath(queryPath);
+      setRecordsDisplayedDate(cached.selectedDate);
+    }
     setRecordsLoading(true);
     setRecordsError(null);
-    apiRequest<RecordsResponse>(queryPath, { signal: controller.signal }).then((payload) => { if (!controller.signal.aborted && requestId === recordsRequestRef.current) setRecords(payload.items); }).catch((error) => { if (controller.signal.aborted || requestId !== recordsRequestRef.current) return; setRecords(null); setRecordsError(handleRequestError(error, "请检查 API 服务是否已启动")); }).finally(() => { if (!controller.signal.aborted && requestId === recordsRequestRef.current) setRecordsLoading(false); });
+    setRecordsErrorQueryPath(null);
+    apiRequest<RecordsResponse>(queryPath, { signal: controller.signal }).then((payload) => {
+      if (controller.signal.aborted || requestId !== recordsRequestRef.current) return;
+      cacheRecords(recordsCacheRef.current, queryPath, { items: payload.items, selectedDate });
+      setRecords(payload.items);
+      setRecordsQueryPath(queryPath);
+      setRecordsDisplayedDate(selectedDate);
+      setRecordsError(null);
+      setRecordsErrorQueryPath(null);
+
+      // Daily navigation is the only path where an adjacent day is useful.
+      // These requests are local records reads, share the full query (search
+      // and entity filters included), and never update the visible list.
+      if (activeView === "today") {
+        const baseQuery = queryPath.indexOf("?") >= 0 ? queryPath.slice(queryPath.indexOf("?") + 1) : "";
+        const prefetch = (date: string) => {
+          const params = new URLSearchParams(baseQuery);
+          params.set("date", date);
+          const targetPath = `/api/records?${params.toString()}`;
+          if (recordsCacheRef.current.has(targetPath) || recordsPrefetchRef.current.has(targetPath)) return;
+          const prefetchController = new AbortController();
+          recordsPrefetchRef.current.set(targetPath, prefetchController);
+          apiRequest<RecordsResponse>(targetPath, { signal: prefetchController.signal }).then((next) => {
+            if (prefetchController.signal.aborted || requestId !== recordsRequestRef.current || prefetchGeneration !== recordsCacheGenerationRef.current || (authState.required && !authState.authenticated)) return;
+            cacheRecords(recordsCacheRef.current, targetPath, { items: next.items, selectedDate: date });
+          }).catch(() => { /* Prefetch is an optimisation; the next visit retries normally. */ }).finally(() => {
+            if (recordsPrefetchRef.current.get(targetPath) === prefetchController) recordsPrefetchRef.current.delete(targetPath);
+          });
+        };
+        prefetch(shiftDate(selectedDate, -1));
+        prefetch(shiftDate(selectedDate, 1));
+      }
+    }).catch((error) => {
+      if (controller.signal.aborted || requestId !== recordsRequestRef.current) return;
+      const message = handleRequestError(error, "请检查 API 服务是否已启动");
+      setRecordsError(message);
+      setRecordsErrorQueryPath(queryPath);
+      if (!recordsLoadedRef.current && cached === undefined) setRecords(null);
+    }).finally(() => {
+      if (!controller.signal.aborted && requestId === recordsRequestRef.current) setRecordsLoading(false);
+    });
     return () => controller.abort();
   }, [activeView, authState.authenticated, authState.required, handleRequestError, queryPath, recordsReload]);
 
-  useEffect(() => { recordsRef.current = records ?? []; }, [records]);
+  useEffect(() => {
+    recordsRef.current = recordsForQuery ?? [];
+    recordsLoadedRef.current = recordsForQuery !== null;
+  }, [recordsForQuery]);
 
   /**
    * Month cells carry a one-line summary. The server owns the cache — it keys on
@@ -3533,7 +3665,7 @@ function App() {
   // Moving to another day starts with a clean, explicit backfill choice.
   useEffect(() => setComposerBackfill(false), [selectedDate]);
 
-  const refresh = () => { setRecordsReload((current) => current + 1); setTasksReload((current) => current + 1); setRelationReload((current) => current + 1); setCycleModuleReload((current) => current + 1); };
+  const refresh = () => { reloadRecords(); setTasksReload((current) => current + 1); setRelationReload((current) => current + 1); setCycleModuleReload((current) => current + 1); };
   const navigate = (view: AppView) => { setActiveView(view); setMobileMenuOpen(false); if (view !== "timeline") setEntityFilterId(null); if (view === "tasks") setComposerKind("task"); if (view === "notes") setComposerKind("note"); };
   /** A calendar cell is a way back into the day it stands for. */
   const openDay = (date: string) => { setSelectedDate(date); setActiveView("today"); setMobileMenuOpen(false); };
@@ -3602,6 +3734,7 @@ function App() {
         updated = await patchRecord(latest);
       }
       rememberMovieEntity(movie);
+      reloadRecords();
       setRecords((current) => current === null ? current : current.map((item) => item.id === updated.id ? updated : item));
       showToast("影片已添加到记录");
     } catch (error) {
@@ -3856,6 +3989,7 @@ function App() {
   };
 
   const syncTaskRecord = (updated: RecordView) => {
+    reloadRecords();
     setRecords((current) => current === null ? current : current.map((item) => item.id === updated.id ? updated : item));
     setTasks((current) => current === null ? current : current.map((item) => item.id === updated.id ? updated : item));
   };
@@ -3876,19 +4010,19 @@ function App() {
     if (!importFile || importBusy) return;
     setImportBusy(true);
     setImportError(null);
-    try { const bundle = JSON.parse(await importFile.text()) as unknown; await apiRequest<unknown>("/api/import", { method: "POST", body: JSON.stringify({ bundle }) }); setImportFile(null); showToast("备份已导入"); refresh(); } catch (error) { setImportError(errorMessage(error, "导入失败，请检查 JSON 文件")); if (errorStatus(error) === 401) { const nextAuth = { required: true, authenticated: false } as const; authRef.current = nextAuth; setRecords(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); } } finally { setImportBusy(false); }
+    try { const bundle = JSON.parse(await importFile.text()) as unknown; await apiRequest<unknown>("/api/import", { method: "POST", body: JSON.stringify({ bundle }) }); setImportFile(null); showToast("备份已导入"); refresh(); } catch (error) { setImportError(errorMessage(error, "导入失败，请检查 JSON 文件")); if (errorStatus(error) === 401) { invalidateRecordsCache(); const nextAuth = { required: true, authenticated: false } as const; authRef.current = nextAuth; setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); } } finally { setImportBusy(false); }
   };
 
   const handleLogout = async () => {
     if (logoutBusy) return;
     setLogoutBusy(true);
-    try { await apiRequest<unknown>("/api/auth/logout", { method: "POST" }); const nextAuth: AuthState = { required: true, authenticated: false }; authRef.current = nextAuth; setRecords(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); setMobileMenuOpen(false); } catch (error) { showToast(handleRequestError(error, "退出失败，请重试")); } finally { setLogoutBusy(false); }
+    try { await apiRequest<unknown>("/api/auth/logout", { method: "POST" }); invalidateRecordsCache(); const nextAuth: AuthState = { required: true, authenticated: false }; authRef.current = nextAuth; setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); setMobileMenuOpen(false); } catch (error) { showToast(handleRequestError(error, "退出失败，请重试")); } finally { setLogoutBusy(false); }
   };
 
   const handleLogin = async (password: string) => {
     setLoginLoading(true);
     setAuthError(null);
-    try { const state = await apiRequest<AuthState>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) }); authRef.current = state; setAuthState(state); } catch (error) { setAuthError(errorMessage(error, "密码不正确")); } finally { setLoginLoading(false); }
+    try { const state = await apiRequest<AuthState>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) }); invalidateRecordsCache(); setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); authRef.current = state; setAuthState(state); } catch (error) { setAuthError(errorMessage(error, "密码不正确")); } finally { setLoginLoading(false); }
   };
 
   if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
@@ -3902,7 +4036,7 @@ function App() {
   const hidesComposer = activeView === "settings" || activeView === "entities" || activeView === "timemachine" || activeView === "notes";
   const showComposer = isToday || (!hidesComposer && composerOpen);
   const showPageActions = activeView !== "notes" && Boolean(searchQuery || entityFilterId !== null || (!hidesComposer && !isToday));
-  const loadedVisibleRecords = hideDemo && records ? records.filter((record) => !isDemoRecord(record)) : records;
+  const loadedVisibleRecords = hideDemo && recordsForQuery ? recordsForQuery.filter((record) => !isDemoRecord(record)) : recordsForQuery;
   // The notes route owns its own library. Other record surfaces deliberately
   // receive a note-free view even when an old note carries occurredAt.
   const visibleRecords = activeView === "notes" ? loadedVisibleRecords : loadedVisibleRecords?.filter((record) => record.kind !== "note") ?? loadedVisibleRecords;
@@ -3953,6 +4087,7 @@ function App() {
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
+  const onNavigate = navigate;
 
   return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><button className="mobile-menu-button icon-button" type="button" onClick={() => setMobileMenuOpen(true)} aria-label="打开导航"><Menu size={19} strokeWidth={1.9} aria-hidden="true" /></button><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => setActiveView("settings")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message) => showToast(message, "warn")} /><div className="topbar-actions"><button className="mobile-search-button icon-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="打开搜索"><Search size={18} strokeWidth={1.8} aria-hidden="true" /></button><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
        ? <SettingsView onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} openAiConfig={aiConfigOpen || activeView === "settings"} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} />
@@ -3964,7 +4099,7 @@ function App() {
         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
       : activeView === "timemachine"
         ? <TimeMachine />
-      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsLoading} error={recordsError} selectedDate={selectedDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={() => setRecordsReload((current) => current + 1)} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={handleEdit} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => void handleTaskStatus(record, status)} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={navigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(records ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) { setImportFile(null); setImportError(null); } }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
+      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={onNavigate} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(recordsForQuery ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) setImportFile(null); }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;
 }
 
 export default App;

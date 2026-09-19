@@ -4,6 +4,7 @@ import { apiRequest } from "./api";
 import { getWeatherDecision, getWeatherEmoji, getWeatherPhase, findWeatherDay, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherSky } from "./WeatherBackground";
 import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
+import { weatherLocationDisplayName } from "./weather-locations";
 
 interface WeatherPayload {
   readonly weatherSnapshot: WeatherSnapshot | null;
@@ -23,12 +24,6 @@ interface DateFlipState {
 function dateDigits(value: string): readonly string[] {
   const compact = value.slice(5).replace("-", "");
   return compact.length === 4 ? compact.split("") : ["0", "0", "0", "0"];
-}
-
-/** Older saved weather profiles kept the district suffix; the header does not
- * need the administrative form when a shorter, unambiguous label is available. */
-function weatherHeaderLocationLabel(value: string): string {
-  return value === "佛山南海区" ? "佛山南海" : value;
 }
 
 function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void }) {
@@ -132,7 +127,12 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   // rides on the same 30-minute refresh as the forecast, so a dawn card can
   // linger a few minutes past sunrise; that is cheaper than a per-minute tick.
   const phase = getWeatherPhase(displayDay, selectedDate, today, localNowInput().slice(11, 16));
-  const locationLabel = weatherHeaderLocationLabel(payload.location?.name || status?.city || status?.locationId || "未设置地点");
+  // Use the location returned with this day's weather.  A historical response
+  // must not inherit the currently configured city merely because its label is
+  // missing or encoded as a legacy numeric ID.
+  const locationLabel = payload.location === null
+    ? "地点未知"
+    : weatherLocationDisplayName(payload.location);
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
   return <section className={`weather-header ${displayDay && decision ? `weather-header--${decision.category}` : "weather-header--empty"}`} aria-label={`${selectedDate} 的天气`}>

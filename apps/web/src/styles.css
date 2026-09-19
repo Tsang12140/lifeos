@@ -1820,6 +1820,24 @@ h2 {
   font-size: 0.85rem;
 }
 
+.timeline-refresh-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin: -8px 0 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.timeline-list.is-stale {
+  pointer-events: none;
+}
+
+.timeline-list.is-stale .record-action {
+  cursor: wait;
+}
+
 .state-error {
   border-style: solid;
   border-color: #efd6d8;

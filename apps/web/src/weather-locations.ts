@@ -183,6 +183,100 @@ export function describeWeatherLocation(locationId: string): {
 }
 
 /**
+ * The compact label used by weather surfaces.  Keep this formatter beside the
+ * catalog so the header and historical record chips cannot grow their own
+ * slightly-different province/city rules.
+ */
+function shortWeatherLocationName(location: {
+  readonly province: string;
+  readonly city: string;
+  readonly district: string | null;
+}): string {
+  if (location.district === null) return location.city;
+  const bareCity = location.city.replace(/(特别行政区|自治区|省|市)$/u, "");
+  const bareProvince = location.province.replace(/(特别行政区|自治区|省|市)$/u, "");
+  const municipality = bareCity !== "" && bareCity === bareProvince;
+  return `${municipality ? bareProvince : bareCity}${location.district}`;
+}
+
+export interface WeatherLocationDisplayValue {
+  readonly id?: string;
+  readonly name?: string;
+  readonly adm2?: string;
+  readonly adm1?: string;
+}
+
+/** Exact aliases only; unlike describeWeatherLocationByName this never turns an
+ * unrecognised long string into its nearest city. */
+function describeWeatherLocationByExactName(name: string): {
+  readonly province: string;
+  readonly city: string;
+  readonly district: string | null;
+} | null {
+  const needle = name.trim();
+  if (needle === "") return null;
+  for (const province of catalog.provinces) {
+    for (const city of province.cities) {
+      const bareCity = city.name.replace(/(特别行政区|自治区|省|市)$/u, "");
+      const cityNames = new Set([city.name, bareCity]);
+      if (cityNames.has(needle)) return { province: province.name, city: city.name, district: null };
+      for (const district of city.districts) {
+        const bareDistrict = district.name.replace(/(特别行政区|自治区|省|市|区|县)$/u, "");
+        const districtNames = new Set([
+          district.name,
+          bareDistrict,
+          `${city.name}${district.name}`,
+          `${city.name}${bareDistrict}`,
+          `${city.name}${bareDistrict}区`,
+          `${bareCity}${district.name}`,
+          `${bareCity}${bareDistrict}`,
+          `${bareCity}${bareDistrict}区`,
+        ]);
+        if (districtNames.has(needle)) return { province: province.name, city: city.name, district: district.name };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve a weather response's own location into the label shown to the owner.
+ *
+ * A response may be an old archive row whose `name` accidentally contains the
+ * numeric Location ID.  The response ID is authoritative in that case, and a
+ * strict catalog lookup prevents a fuzzy city-name match from silently
+ * replacing a historical location with today's configured city.  Unknown
+ * numeric values are codes, not names, so they deliberately become “地点未知”;
+ * non-code names (including foreign locations) remain visible as supplied.
+ */
+export function weatherLocationDisplayName(value: WeatherLocationDisplayValue | null | undefined): string {
+  const id = value?.id?.trim() ?? "";
+  const name = value?.name?.trim() ?? "";
+  const nameIsNumericCode = /^\d+$/u.test(name);
+  if (name !== "") {
+    if (!nameIsNumericCode) {
+      const exactName = describeWeatherLocationByExactName(name);
+      if (exactName !== null) return shortWeatherLocationName(exactName);
+      // A real name wins over an unresolved (or accidentally mismatched)
+      // numeric ID.  This is important for foreign locations, whose provider
+      // IDs are not in the China catalog.
+      return name;
+    }
+    const byId = id === "" ? null : describeWeatherLocation(id);
+    if (byId !== null) return shortWeatherLocationName(byId);
+    const nameAsId = describeWeatherLocation(name);
+    if (nameAsId !== null) return shortWeatherLocationName(nameAsId);
+    const administrativeName = value?.adm2?.trim() || value?.adm1?.trim() || "";
+    if (administrativeName !== "") return administrativeName;
+    return "地点未知";
+  }
+  const byId = id === "" ? null : describeWeatherLocation(id);
+  if (byId !== null) return shortWeatherLocationName(byId);
+  const administrativeName = value?.adm2?.trim() || value?.adm1?.trim() || "";
+  return administrativeName === "" ? "地点未知" : administrativeName;
+}
+
+/**
  * Same as above, but accepts a city *name* too. The project's existing configs
  * often store a human name ("佛山南海区") with no ID, so Settings has to be able
  * to point the dropdown at something.
