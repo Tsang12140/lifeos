@@ -2203,6 +2203,31 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       if (!format.matches(bytes)) {
         throw new HttpError(415, "content_type_mismatch", "The uploaded bytes are not the declared image type");
       }
+      // The hash is computed from the bytes we actually received, never taken
+      // from the request. A client that lied about it could otherwise poison the
+      // index and be handed a different photo back the next time it asked.
+      const contentHash: ContentHash = { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") };
+      // The copy the library already holds wins over writing another file. The
+      // composer asks /api/assets/resolve before it spends the bandwidth, but
+      // that is a courtesy, not a guard: a script, a second tab, or a resolve
+      // that missed all arrive here with bytes the library already has. Reusing
+      // the row is what keeps one photo to one file on disk -- the basis of the
+      // content-addressed plan, and of the time machine's promise that a photo
+      // from a past moment is still resolvable.
+      //
+      // The reuse answers 201 with the existing asset, identical to a fresh
+      // upload. `.review/photo-grid-seed.mjs` reads the id out of a 201, and a
+      // separate shape would only make callers branch on something they do not
+      // act on differently.
+      const existing = repository.findAssetByContentHash(contentHash.algorithm, contentHash.value);
+      if (existing !== null) {
+        // Taking the photo back into use moves the collector's anchor forward,
+        // so the grace period restarts from now -- the same rule /resolve uses.
+        const reused: Asset = { ...existing, lastUsedAt: nowInstant() };
+        repository.updateAsset(reused);
+        setJson(res, 201, reused);
+        return;
+      }
       let sourceRef: string;
       try {
         sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format);
@@ -2210,10 +2235,6 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
       }
       const originalName = uploadOriginalName(url.searchParams.get("name"));
-      // The hash is computed from the bytes we actually received, never taken
-      // from the request. A client that lied about it could otherwise poison the
-      // index and be handed a different photo back the next time it asked.
-      const contentHash: ContentHash = { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") };
       const uploadRef = coreValidated("storageRefs", () => {
         const candidate: StorageReference = { sourceId: "local", sourceRef, mediaType, contentHash };
         assertValidStorageReference(candidate, "storageRefs[0]");

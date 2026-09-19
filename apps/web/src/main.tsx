@@ -3646,7 +3646,11 @@ function App() {
         headers: { "Content-Type": file.type },
         body: file,
       });
-      setAssets((current) => [...current, asset]);
+      // The upload route reuses the row the library already holds, so this can
+      // hand back an asset that is already in the list — the resolve above is a
+      // courtesy, not a guarantee. Appending it again would put one id in twice,
+      // which is the same collision the drop zone guards against, one level up.
+      setAssets((current) => current.some((held) => held.id === asset.id) ? current : [...current, asset]);
       return { asset, reused: false };
     } catch (error) {
       showToast(handleRequestError(error, "照片上传失败，请重试"), "warn");

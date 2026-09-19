@@ -2412,6 +2412,72 @@ test("an uploaded photo carries a server-computed sha256, and resolve hands the 
   equal((badValue.body as { error: string }).error, "invalid_hash");
 });
 
+test("the upload route reuses what the library holds instead of writing a second file", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-upload-reuse-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  // The bytes on disk are the invariant that matters. The composer asks /resolve
+  // before it spends the bandwidth, but that is a courtesy and not a guard: a
+  // script, a second tab, or a resolve that missed all arrive at this route with
+  // bytes the library already holds.
+  const filesUnder = () => {
+    let count = 0;
+    const walk = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const full = join(directory, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else count += 1;
+      }
+    };
+    walk(assetRoot);
+    return count;
+  };
+  const library = async () => ((await request(harness.base, "/api/assets", { method: "GET" })).body as {
+    items: Array<{ id: string; lastUsedAt?: { value: string }; storageRefs: Array<{ sourceRef: string }> }>;
+  }).items;
+  const upload = (name: string, bytes: Buffer) => request(harness.base, `/api/assets/uploads?name=${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(bytes),
+  });
+
+  const first = await upload("first.png", TINY_PNG);
+  equal(first.response.status, 201);
+  const firstAsset = first.body as { id: string; lastUsedAt?: { value: string }; storageRefs: Array<{ sourceRef: string }> };
+  equal(firstAsset.lastUsedAt, undefined, "a first upload has nothing to reuse");
+  equal(filesUnder(), 1, "the first upload writes one file");
+
+  // The same bytes under a different name: one asset, one file, and the server
+  // says so itself by stamping lastUsedAt.
+  const again = await upload("second.png", TINY_PNG);
+  equal(again.response.status, 201, "a reuse answers exactly like any other upload, so callers need no second branch");
+  const againAsset = again.body as { id: string; lastUsedAt?: { value: string }; storageRefs: Array<{ sourceRef: string }> };
+  equal(againAsset.id, firstAsset.id, "the second upload hands back the asset that already exists");
+  ok(againAsset.lastUsedAt !== undefined, "the server, not the client, is what moved the grace period");
+  equal(againAsset.storageRefs[0]?.sourceRef, firstAsset.storageRefs[0]?.sourceRef);
+  equal(filesUnder(), 1, "the bytes were never written a second time");
+  equal((await library()).length, 1);
+
+  // A genuinely different photo still becomes its own asset, so a stuck
+  // "always reuse" could not pass the assertions above on its own.
+  const otherBytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 47, g: 158, b: 107 } } }).png().toBuffer();
+  ok(!otherBytes.equals(TINY_PNG), "the control photo has to differ from the fixture");
+  const other = await upload("other.png", otherBytes);
+  equal(other.response.status, 201);
+  ok((other.body as { id: string }).id !== firstAsset.id, "different bytes are a different asset");
+  equal(filesUnder(), 2);
+  equal((await library()).length, 2);
+
+  // Reuse happens between LIVE assets only. Removing one must not make a later
+  // upload of those bytes quietly put it back.
+  equal((await request(harness.base, `/api/assets/${encodeURIComponent(firstAsset.id)}`, { method: "DELETE" })).response.status, 204);
+  const afterDelete = await upload("after-delete.png", TINY_PNG);
+  equal(afterDelete.response.status, 201);
+  ok((afterDelete.body as { id: string }).id !== firstAsset.id, "a removed photo must not come back through an upload");
+});
+
 test("reusing an upload restarts its orphan grace period instead of letting it be collected", async (t) => {
   const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-reuse-"));
   t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
