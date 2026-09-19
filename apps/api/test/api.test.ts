@@ -1,8 +1,8 @@
 import test from "node:test";
 import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
@@ -1741,9 +1741,13 @@ test("a dropped photo is written into the asset root, served back, and linked to
   equal(asset.sizeBytes, TINY_PNG.length);
   equal(asset.storageRefs.length, 1);
   equal(asset.storageRefs[0]?.sourceId, "local");
-  // The stored name is generated, never taken from the request.
+  // The stored name is generated, never taken from the request: it is the photo's
+  // own sha256, so the path is content-addressed and the same bytes can never be
+  // written under a second name.
   const sourceRef = asset.storageRefs[0]?.sourceRef ?? "";
-  ok(/^uploads\/\d{4}\/\d{2}\/[0-9a-f-]{36}\.png$/.test(sourceRef), `unexpected stored path: ${sourceRef}`);
+  const digest = createHash("sha256").update(TINY_PNG).digest("hex");
+  ok(/^uploads\/\d{4}\/\d{2}\/[0-9a-f]{64}\.png$/.test(sourceRef), `unexpected stored path: ${sourceRef}`);
+  equal(sourceRef.endsWith(`/${digest}.png`), true, "the file is named by its own content hash");
   ok(existsSync(join(assetRoot, ...sourceRef.split("/"))), "the photo should be on disk");
 
   const content = await fetch(`${harness.base}/api/assets/${encodeURIComponent(asset.id)}/content`);
@@ -2292,6 +2296,159 @@ test("the collector leaves referenced uploads alone, including records in the re
   equal(removed.response.status, 204);
   equal(harness.app.assetGcScheduler.runOnce(far)?.collected.length, 0);
   ok(existsSync(originalPath), "a record in the recycle bin still owns its photo");
+});
+
+test("a photo a kept snapshot still shows is not orphaned, and loses that protection when the snapshot goes", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-gc-snap-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=只在快照里.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const asset = upload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  const originalPath = join(assetRoot, ...((asset.storageRefs[0]?.sourceRef ?? "").split("/")));
+
+  const created = await request(harness.base, "/api/records", {
+    method: "POST",
+    ...json({ kind: "journal", content: "这张图只在快照里还画得出来", assetRefs: [{ assetId: asset.id, role: "photo" }] }),
+  });
+  equal(created.response.status, 201);
+  const createdBody = created.body as { id: string; revision?: number };
+
+  // The snapshot is taken while the entry still pointed at the picture.
+  const snapshot = await request(harness.base, "/api/backup/local", { method: "POST", ...json({}) });
+  equal(snapshot.response.status, 201);
+  const fileName = String((snapshot.body as { location?: string }).location ?? "").match(/lifeos-\d{8}-\d{6}-[0-9a-f]{8}\.sqlite$/)?.[0];
+  ok(fileName !== undefined, "a local backup has to carry a time-machine-readable name");
+  const snapshotPath = join(harness.root, "backups", fileName ?? "");
+  ok(existsSync(snapshotPath), "the snapshot has to be on disk for this test to mean anything");
+
+  // Then the picture leaves the *timeline*: the entry stays, its photo does not.
+  const edited = await request(harness.base, `/api/records/${encodeURIComponent(createdBody.id)}`, {
+    method: "PATCH",
+    ...json({ revision: createdBody.revision ?? 1, assetRefs: [] }),
+  });
+  equal(edited.response.status, 200);
+
+  const far = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000);
+  // Nothing live references it any more -- but the snapshot still draws it. The
+  // collector's old rule ("no record points at it") would have eaten the picture
+  // and left the time machine showing an empty frame.
+  equal(harness.app.assetGcScheduler.runOnce(far)?.collected.length, 0);
+  ok(existsSync(originalPath), "a photo a kept snapshot still shows must not be collected");
+
+  // Take the snapshot off the shelf the way retention does, and the very same pass
+  // collects it: what protected the file was the snapshot, nothing about the asset.
+  const run = harness.app.repository.listAllBackupRuns().find((entry) => entry.fileName === fileName || entry.location === snapshotPath);
+  ok(run !== undefined, "the snapshot run has to be on record");
+  harness.app.repository.markBackupRunPruned(run?.id ?? 0, new Date().toISOString(), join(harness.root, "backups", "_trash", fileName ?? ""));
+  deepEqual(harness.app.assetGcScheduler.runOnce(far)?.collected, [asset.id]);
+  equal(existsSync(originalPath), false);
+});
+
+test("a collected file is put back by its content hash when the remembered path no longer holds it", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-restore-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=要捞回来的.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const asset = upload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  const relative = asset.storageRefs[0]?.sourceRef ?? "";
+  const originalPath = join(assetRoot, ...relative.split("/"));
+  // The stored name really is the content's own address; the restore below rests on it.
+  equal(basename(relative), `${createHash("sha256").update(TINY_PNG).digest("hex")}.png`);
+
+  deepEqual(harness.app.assetGcScheduler.runOnce(new Date(Date.now() + 8 * 24 * 60 * 60 * 1000))?.collected, [asset.id]);
+  const trashedPath = join(assetRoot, ...(trashPathFor(relative) ?? "").split("/"));
+  ok(existsSync(trashedPath), "the collected file has to be waiting in the trash");
+  equal(existsSync(originalPath), false);
+
+  // Now the memory is wrong: the file sits a level deeper than the row remembers,
+  // which is exactly what a path-only restore cannot survive.
+  const movedAside = join(dirname(trashedPath), "moved-aside", basename(relative));
+  mkdirSync(dirname(movedAside), { recursive: true });
+  renameSync(trashedPath, movedAside);
+  equal(existsSync(trashedPath), false);
+
+  const restored = await request(harness.base, `/api/assets/trash/${encodeURIComponent(asset.id)}/restore`, { method: "POST" });
+  equal(restored.response.status, 204);
+  ok(existsSync(originalPath), "the bytes have to come back to the path the row names");
+  equal(existsSync(movedAside), false);
+  const content = await fetch(`${harness.base}/api/assets/${encodeURIComponent(asset.id)}/content`);
+  equal(content.status, 200);
+  equal((await content.arrayBuffer()).byteLength, TINY_PNG.length);
+});
+
+test("a collected file whose bytes are gone is not pretended back, and never taken from a live photo", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-asset-restore-gone-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot, 25 * 1024 * 1024, 7, 30);
+  t.after(async () => harness.stop());
+
+  const upload = await request(harness.base, "/api/assets/uploads?name=先被收走的.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(upload.response.status, 201);
+  const asset = upload.body as { id: string; storageRefs: Array<Record<string, unknown>> };
+  const september = String(asset.storageRefs[0]?.["sourceRef"] ?? "");
+  const digest = createHash("sha256").update(TINY_PNG).digest("hex");
+  equal(basename(september), `${digest}.png`);
+
+  // This test cannot wait until January, so the photo is aged by hand: its row is
+  // told the file arrived in January and the file is moved to match. Being collected
+  // from an older month is exactly what makes the row's memory stale later on.
+  const january = `uploads/2026/01/${basename(september)}`;
+  mkdirSync(dirname(join(assetRoot, ...january.split("/"))), { recursive: true });
+  renameSync(join(assetRoot, ...september.split("/")), join(assetRoot, ...january.split("/")));
+  const patched = await request(harness.base, `/api/assets/${encodeURIComponent(asset.id)}`, {
+    method: "PATCH",
+    ...json({ storageRefs: [{ ...asset.storageRefs[0], sourceRef: january }] }),
+  });
+  equal(patched.response.status, 200);
+
+  deepEqual(harness.app.assetGcScheduler.runOnce(new Date(Date.now() + 8 * 24 * 60 * 60 * 1000))?.collected, [asset.id]);
+  // The bytes are lost -- and the panel would still list the entry, so a restore that
+  // answered 204 here would hand back a row pointing at nothing.
+  rmSync(join(assetRoot, ...(trashPathFor(january) ?? "").split("/")), { force: true });
+
+  // Meanwhile the same picture was uploaded again this month, so a live photo owns
+  // those bytes at a *different* content-addressed path -- the very file a hash
+  // search turns up first. Taking it is the mistake this guard exists to prevent.
+  const again = await request(harness.base, "/api/assets/uploads?name=重新上传同一张.png", {
+    method: "POST",
+    headers: { "content-type": "image/png" },
+    body: new Uint8Array(TINY_PNG),
+  });
+  equal(again.response.status, 201);
+  const live = again.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  ok(live.id !== asset.id, "a re-upload must not revive the collected row");
+  const livePath = join(assetRoot, ...((live.storageRefs[0]?.sourceRef ?? "").split("/")));
+  ok(livePath !== join(assetRoot, ...january.split("/")), "the live copy has to live somewhere else");
+  ok(existsSync(livePath), "the re-upload has to own that path now");
+
+  const restored = await request(harness.base, `/api/assets/trash/${encodeURIComponent(asset.id)}/restore`, { method: "POST" });
+  equal(restored.response.status, 404);
+  const panel = await request(harness.base, "/api/assets/trash", { method: "GET" });
+  const body = panel.body as { trashed: Array<{ asset: { id: string } }> };
+  equal(body.trashed.some((entry) => entry.asset.id === asset.id), true, "an entry with no bytes stays on the list");
+  // The control: a file *does* carry that content-addressed name on disk, so the 404
+  // above can only come from the live-reference guard -- not from an empty search.
+  equal(basename(livePath), `${digest}.png`);
+  ok(existsSync(livePath), "the live photo keeps its file");
+  equal((await fetch(`${harness.base}/api/assets/${encodeURIComponent(live.id)}/content`)).status, 200);
 });
 
 test("deleting an asset parks its file in the orphan trash instead of leaving it behind", async (t) => {

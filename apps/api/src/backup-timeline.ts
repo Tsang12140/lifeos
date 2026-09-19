@@ -625,3 +625,104 @@ export async function readSnapshot(
     diff: classifyRecords(read.value.records, readLiveRecords(source, drawable), sampleLimit),
   };
 }
+
+/** One snapshot as the collector sees it: what it is, and where it lives. */
+export interface ShelfSnapshot {
+  readonly provider: string;
+  readonly status: string;
+  readonly location?: string;
+  readonly prunedAt?: string;
+}
+
+export interface SnapshotAssetReferences {
+  /** Every asset id any snapshot still on the shelf points at. */
+  readonly ids: ReadonlySet<string>;
+  /** Snapshots that could not be read. Non-empty means "we do not know". */
+  readonly unreadable: readonly string[];
+}
+
+/** The asset ids one snapshot's records point at, timeline and recycle bin alike. */
+function referencedIdsInSnapshot(db: DatabaseSync): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!snapshotTables(db).has("records")) return ids;
+  for (const row of db.prepare("SELECT asset_refs_json FROM records").all()) {
+    for (const id of referencedAssetIds(row["asset_refs_json"])) ids.add(id);
+  }
+  return ids;
+}
+
+/**
+ * The synchronous twin of `withSnapshot`, for a file that is already on this disk.
+ *
+ * The collector has no `await` to hang a remote fetch on, and it never needs one:
+ * only snapshots that are *still on the shelf locally* get a say, and a snapshot
+ * retention has already pruned is out of the window by definition.
+ */
+function withLocalSnapshotCopy<T>(config: ApiConfig, fileName: string, work: (db: DatabaseSync) => T): T {
+  const directory = snapshotCacheDirectory(config);
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, fileName);
+  clearSnapshotSidecars(path);
+  copyFileSync(join(backupDirectoryOf(config), fileName), path);
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+  } catch (error) {
+    discardCachedCopy(path);
+    throw error;
+  }
+  try {
+    return work(db);
+  } finally {
+    try {
+      db.close();
+    } finally {
+      discardCachedCopy(path);
+    }
+  }
+}
+
+/**
+ * Every asset id the snapshots still on the shelf point at.
+ *
+ * The collector's old rule was "no record points at it", which forgets that a
+ * picture can be gone from the timeline and still be in the time machine: delete a
+ * record today and its photos stop being referenced, so the orphan scan would
+ * collect them once the grace period ran out — while a snapshot from last week
+ * still draws them. "A photo from a past moment is still resolvable" only holds if
+ * a reference from a snapshot that has not been pruned weighs exactly as much as a
+ * live one.
+ *
+ * A pruned snapshot is out of the window on purpose: retention has already called
+ * it gone, and the collector looks after the present, not the whole history.
+ *
+ * Unreadable snapshots are *reported*, never skipped quietly. Swallowing the failure
+ * would silently lower the reference count, and the next thing that happens to a
+ * picture with no references is deletion — while a file kept another day costs
+ * almost nothing. So the caller is told what could not be read instead of being
+ * left to assume the best.
+ */
+export function collectSnapshotAssetIds(
+  config: ApiConfig,
+  shelf: readonly ShelfSnapshot[],
+): SnapshotAssetReferences {
+  const ids = new Set<string>();
+  const unreadable: string[] = [];
+  for (const entry of shelf) {
+    if (entry.provider !== "local" || entry.status !== "success" || entry.prunedAt !== undefined) continue;
+    const fileName = (entry.location ?? "").split(/[\\/]/).pop() ?? "";
+    if (!SNAPSHOT_FILE_NAME_PATTERN.test(fileName)) continue;
+    // A row whose file is not on this disk protects nothing: there are no bytes to
+    // read, so there is nothing the time machine could draw from it either. That is
+    // *not* the same as unreadable, and it must not be — a snapshot file the owner
+    // deleted by hand would otherwise wedge collection forever, because a row
+    // retention cannot find is a row retention never prunes.
+    if (!existsSync(join(backupDirectoryOf(config), fileName))) continue;
+    try {
+      for (const id of withLocalSnapshotCopy(config, fileName, referencedIdsInSnapshot)) ids.add(id);
+    } catch {
+      unreadable.push(fileName);
+    }
+  }
+  return { ids, unreadable };
+}

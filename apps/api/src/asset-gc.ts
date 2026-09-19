@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, type Dirent } from "node:fs";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import type { Asset, StorageReference } from "@lifeos/core";
+import { collectSnapshotAssetIds } from "./backup-timeline.js";
 import type { ApiConfig } from "./config.js";
 import type { AssetTrashEntry, AssetTrashOrigin, SqliteRecordRepository } from "./repository.js";
 
@@ -78,6 +79,67 @@ export function resolveWithinRoot(root: string, relativePath: string): string | 
   const full = resolve(base, normalizeRelative(relativePath));
   if (full === base || !full.startsWith(base + sep)) return null;
   return full;
+}
+
+/**
+ * How many directory entries one hash search may look at. A restore is something a
+ * person is waiting on, so the walk is bounded rather than exhaustive: past this
+ * many entries the answer is "not in a place I look", which is honest and quick.
+ */
+const FILE_SEARCH_LIMIT = 5000;
+
+interface SearchBudget {
+  left: number;
+}
+
+/** Depth-first look for one file name, returning its path relative to `directory`. */
+function searchForFileName(directory: string, wanted: string, budget: SearchBudget): string | null {
+  if (budget.left <= 0) return null;
+  let entries: readonly Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    // A subdirectory that cannot be listed is one place the file is not.
+    return null;
+  }
+  for (const entry of entries) {
+    if (budget.left <= 0) return null;
+    budget.left -= 1;
+    if (entry.isDirectory()) {
+      const nested = searchForFileName(join(directory, entry.name), wanted, budget);
+      if (nested !== null) return `${entry.name}/${nested}`;
+      continue;
+    }
+    if (entry.isFile() && entry.name.toLowerCase() === wanted) return entry.name;
+  }
+  return null;
+}
+
+/**
+ * Where a collected file actually is, found by content rather than by memory.
+ *
+ * A file LifeOS wrote after content-addressing is named by its own sha256, which
+ * makes the bytes their own address: a restore does not have to trust the path the
+ * trash row remembered, because a second collection, a different month folder, or a
+ * folder the owner rearranged by hand can all invalidate that memory while the bytes
+ * sit exactly where they always did. Both halves of the collector's own territory
+ * are searched — `uploads/` and `uploads/_orphan-trash/` — because "which of the
+ * two is it in" is precisely what the caller does not know.
+ *
+ * Returns a root-relative path, or null when no file carries that name.
+ */
+export function findOwnedFileByHash(root: string, hash: string, extension: string): string | null {
+  if (!/^[0-9a-f]{64}$/.test(hash) || !/^\.[a-z0-9]+$/.test(extension)) return null;
+  const wanted = `${hash}${extension}`;
+  const budget: SearchBudget = { left: FILE_SEARCH_LIMIT };
+  for (const prefix of [ASSET_UPLOAD_PREFIX, `${ASSET_UPLOAD_PREFIX}${ASSET_TRASH_SEGMENT}/`]) {
+    const start = resolveWithinRoot(root, prefix);
+    if (start === null) continue;
+    const found = searchForFileName(start, wanted, budget);
+    if (found !== null) return `${prefix}${found}`;
+    if (budget.left <= 0) return null;
+  }
+  return null;
 }
 
 export interface UnreferencedUpload {
@@ -211,6 +273,11 @@ export interface AssetGcReport {
   readonly collected: readonly string[];
   readonly purged: readonly string[];
   readonly failed: readonly string[];
+  /**
+   * Snapshots whose references could not be read. Non-empty means the reference
+   * count was not knowable, so the collection half was skipped for this pass.
+   */
+  readonly snapshotUnreadable: readonly string[];
 }
 
 /**
@@ -221,6 +288,10 @@ export interface AssetGcReport {
  * Both halves are best-effort per asset — a single unreadable file must not
  * stop the rest of the pass, and the caller gets the ids back so a failure is
  * visible instead of silent.
+ *
+ * "Unreferenced" counts a reference from any snapshot still on the shelf too, not
+ * just the live timeline: a photo the time machine can still draw is not orphaned,
+ * however thoroughly its record was deleted. See `collectSnapshotAssetIds`.
  */
 export function runAssetGc(
   config: ApiConfig,
@@ -228,25 +299,34 @@ export function runAssetGc(
   now: Date = new Date(),
 ): AssetGcReport {
   const root = config.assetRoot;
-  if (root === undefined) return { collected: [], purged: [], failed: [] };
+  if (root === undefined) return { collected: [], purged: [], failed: [], snapshotUnreadable: [] };
 
   const collected: string[] = [];
   const purged: string[] = [];
   const failed: string[] = [];
 
-  const uploads = planUnreferencedUploads(
-    repository.listAssets(),
-    repository.referencedAssetIds(),
-    now,
-    config.assetOrphanGraceDays,
-  );
-  for (const upload of uploads) {
-    if (!upload.overdue) continue;
-    try {
-      trashAsset(root, repository, upload.asset, "orphan-scan", now);
-      collected.push(upload.asset.id);
-    } catch {
-      failed.push(upload.asset.id);
+  // A snapshot we cannot open leaves us not knowing what it holds, and "not
+  // knowing" must never be read as "nothing references it": the next step after
+  // that reading is a deleted photo. So collection is skipped for the whole pass
+  // and the unreadable names are handed back, while the trash half below — which
+  // no snapshot has a say in — still runs and still frees disk.
+  const snapshots = collectSnapshotAssetIds(config, repository.listAllBackupRuns());
+  if (snapshots.unreadable.length === 0) {
+    const referenced = new Set([...repository.referencedAssetIds(), ...snapshots.ids]);
+    const uploads = planUnreferencedUploads(
+      repository.listAssets(),
+      referenced,
+      now,
+      config.assetOrphanGraceDays,
+    );
+    for (const upload of uploads) {
+      if (!upload.overdue) continue;
+      try {
+        trashAsset(root, repository, upload.asset, "orphan-scan", now);
+        collected.push(upload.asset.id);
+      } catch {
+        failed.push(upload.asset.id);
+      }
     }
   }
 
@@ -258,7 +338,7 @@ export function runAssetGc(
     }
   }
 
-  return { collected, purged, failed };
+  return { collected, purged, failed, snapshotUnreadable: snapshots.unreadable };
 }
 
 /**
@@ -287,7 +367,15 @@ export function purgeTrashedAsset(
 
 /**
  * Puts a collected file back where it was and re-registers its asset row, so a
- * record can reference it again. Returns false when there is nothing to undo.
+ * record can reference it again.
+ *
+ * The recorded trash path is the first guess, not the only one. A file named by its
+ * own sha256 carries its address with it, so when that memory turns out to be wrong
+ * — a second collection into a different month folder, a folder the owner tidied by
+ * hand — the restore goes looking for the bytes by hash instead of giving up. Only
+ * when no file anywhere carries that name is there genuinely nothing to restore, and
+ * then it says so (false) rather than re-registering a row that points at nothing: a
+ * "restored" photo whose bytes are gone would only surface as a 404 later.
  */
 export function restoreTrashedAsset(
   config: ApiConfig,
@@ -300,9 +388,34 @@ export function restoreTrashedAsset(
   const entry = repository.findAssetTrash(assetId);
   if (entry === null || entry.restoredAt !== undefined || entry.purgedAt !== undefined) return false;
   const trashed = trashPathFor(entry.relativePath);
-  if (trashed !== null) moveWithinRoot(root, trashed, entry.relativePath);
+  const restored = (trashed !== null && moveWithinRoot(root, trashed, entry.relativePath))
+    || recoverCollectedByHash(root, repository, entry);
+  if (!restored) return false;
   if (repository.findAssetById(entry.asset.id) === null) repository.insertAsset(entry.asset);
   else repository.updateAsset(entry.asset);
   repository.markAssetTrashRestored(assetId, instantOf(now));
   return true;
+}
+
+/**
+ * The last resort for a restore: the bytes are on disk under the name their own
+ * sha256 gives them, wherever in the collector's territory that happens to be.
+ *
+ * The guard is the whole reason this is safe to do at all. Once files are named by
+ * their content, re-uploading a photo that was collected earlier lands on *the same
+ * path* — so the first file the hash turns up may be one a live asset is using right
+ * now. Moving it out from under that row would break a photo that was never in
+ * question, which is a far worse outcome than leaving a collected file where it is.
+ */
+function recoverCollectedByHash(root: string, repository: SqliteRecordRepository, entry: AssetTrashEntry): boolean {
+  const hash = entry.asset.storageRefs.find((reference) => reference.sourceId === "local")?.contentHash;
+  if (hash === undefined) return false;
+  const found = findOwnedFileByHash(root, hash.value, extname(entry.relativePath).toLowerCase());
+  if (found === null) return false;
+  // Already back where it belongs: nothing to move, and the row still needs writing.
+  if (normalizeRelative(found) === normalizeRelative(entry.relativePath)) return true;
+  const claimed = repository.listAssets().some((asset) =>
+    asset.storageRefs.some((reference) => reference.sourceId === "local" && normalizeRelative(reference.sourceRef) === normalizeRelative(found)));
+  if (claimed) return false;
+  return moveWithinRoot(root, found, entry.relativePath);
 }

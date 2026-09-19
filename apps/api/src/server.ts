@@ -1224,7 +1224,7 @@ function baseMediaType(value: string | undefined): string {
 
 /**
  * Keeps the name a person recognises, minus anything that could steer a path.
- * The stored file is named by UUID; this is metadata for display only.
+ * The stored file is named by its content hash; this is metadata for display only.
  */
 function uploadOriginalName(raw: string | null): string | undefined {
   if (raw === null) return undefined;
@@ -1235,17 +1235,35 @@ function uploadOriginalName(raw: string | null): string | undefined {
 /**
  * Writes one dropped photo under `<assetRoot>/uploads/YYYY/MM/`, dated in
  * Shanghai so a photo taken late at night lands in the folder its owner
- * expects. The file name is a fresh UUID, which is what makes a hostile
- * original name harmless: nothing from the request reaches the path.
+ * expects. The file name is the picture's own sha256 — the same digest the
+ * asset row carries — which is what makes the path content-addressed: the same
+ * bytes can only ever land at one path, so "do I already have this picture?"
+ * is answered by the name rather than by a scan. Nothing from the request
+ * reaches the path, so a hostile original name is still harmless.
+ *
+ * A file already sitting at the target path is left untouched. The caller
+ * checks the asset table for this digest first, so an existing file means the
+ * same bytes written by an earlier run that died before its row landed:
+ * rewriting it gains nothing, and `wx` would report that as a collision.
+ * Only files written from here on are named this way — the rows already in the
+ * database keep their UUID paths, and nothing moves them.
  */
-function storeUploadedPhoto(root: string, bytes: Buffer, format: { readonly extension: string }): string {
+function storeUploadedPhoto(root: string, bytes: Buffer, format: { readonly extension: string }, digest: string): string {
   const day = shanghaiDateKey(new Date());
   const relativeDirectory = `uploads/${day.slice(0, 4)}/${day.slice(5, 7)}`;
   const directory = resolve(root, relativeDirectory);
   mkdirSync(directory, { recursive: true });
-  // `wx` refuses to overwrite: a UUID collision must fail loudly, not eat a photo.
-  const fileName = `${randomUUID()}${format.extension}`;
-  writeFileSync(resolve(directory, fileName), bytes, { flag: "wx" });
+  const fileName = `${digest}${format.extension}`;
+  const target = resolve(directory, fileName);
+  if (!existsSync(target)) {
+    // `wx` refuses to overwrite: a racing writer must not be able to eat a photo,
+    // and losing that race is the same "the bytes are already there" answer.
+    try {
+      writeFileSync(target, bytes, { flag: "wx" });
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EEXIST") throw error;
+    }
+  }
   return `${relativeDirectory}/${fileName}`;
 }
 
@@ -1323,6 +1341,18 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     repository,
     config,
     onError: (error) => console.error("[asset-gc] collection pass failed:", error),
+    onReport: (report) => {
+      // Silence is the normal outcome: most passes find nothing to do. The one thing
+      // that must never pass unnoticed is a snapshot that could not be read, because
+      // that is the pass where the reference count was unknowable and collection was
+      // skipped on purpose.
+      if (report.snapshotUnreadable.length > 0) {
+        console.error(`[asset-gc] collection skipped: ${report.snapshotUnreadable.length} snapshot(s) could not be read`, report.snapshotUnreadable);
+      }
+      if (report.collected.length > 0 || report.purged.length > 0 || report.failed.length > 0) {
+        console.log(`[asset-gc] collected ${report.collected.length}, purged ${report.purged.length}, failed ${report.failed.length}`);
+      }
+    },
   });
   assetGcScheduler.start();
   // One provider for the process: it holds no per-request state, and the summaries
@@ -2230,7 +2260,10 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       }
       let sourceRef: string;
       try {
-        sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format);
+        // The digest goes into the path, so the file lands under a name that is
+        // the picture's own identity rather than a fresh UUID: a second copy of
+        // these bytes cannot be written under a different name later on.
+        sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format, contentHash.value);
       } catch {
         throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
       }
