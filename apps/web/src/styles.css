@@ -585,26 +585,24 @@ textarea:focus-visible {
   display: grid;
   height: 26px;
   padding: 0 5px 0 8px;
-  border-top: 1px solid rgb(255 245 219 / 0.72);
-  border-right: 1px solid rgb(101 67 21 / 0.2);
-  border-radius: 0 11px 0 0;
   place-items: center;
-  color: #563812;
-  background: linear-gradient(135deg, #ecd093 0%, #d9a854 100%);
+  color: var(--weather-header-ink);
+  background: transparent;
   font: inherit;
   font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 0.01em;
   line-height: 1;
   pointer-events: none;
+  text-shadow: var(--weather-header-text-shadow);
   user-select: none;
 }
 
 .weather-corner-today.is-current { padding-left: 10px; }
 .weather-corner-today.is-return { letter-spacing: 0; }
 
-/* The visible amber part stays deliberately small; this transparent wrapper
-   supplies a dependable touch target without drawing a second button shape. */
+/* The transparent wrapper supplies a dependable touch target without drawing
+   a second button shape; only the weather-colored text remains visible. */
 .weather-corner-today-hit {
   height: 44px;
   padding: 0;
@@ -612,10 +610,9 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.weather-corner-today-hit:hover .weather-corner-today { background: linear-gradient(135deg, #f0d9a6 0%, #dfb464 100%); }
-.weather-corner-today-hit:active .weather-corner-today { background: linear-gradient(135deg, #e7c782 0%, #d19b48 100%); }
-.weather-corner-today-hit:focus-visible { outline: none; }
-.weather-corner-today-hit:focus-visible .weather-corner-today { outline: 2px solid rgb(255 238 195 / 0.92); outline-offset: -3px; }
+.weather-corner-today-hit:hover .weather-corner-today { opacity: 0.78; }
+.weather-corner-today-hit:active .weather-corner-today { opacity: 0.64; }
+.weather-corner-today-hit:focus-visible { outline: 2px solid var(--weather-header-ink); outline-offset: -3px; }
 
 .weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -10902,7 +10899,7 @@ button.relation-chip {
 @media (max-width: 560px) {
   .weather-corner-today,
   .weather-corner-today-hit { width: 70px; }
-  .weather-corner-today { height: 24px; padding-right: 4px; padding-left: 7px; border-radius: 0 10px 0 0; font-size: 0.78rem; }
+  .weather-corner-today { height: 24px; padding-right: 4px; padding-left: 7px; font-size: 0.78rem; }
   .weather-corner-today.is-current { padding-left: 9px; }
 }
 
