@@ -10278,3 +10278,70 @@ button.relation-chip {
   cursor: grabbing;
   transform: none;
 }
+
+/* The phone composer is one compact control rail, not a stack of incidental
+   fields. Keep each action discoverable through its icon and accessible name;
+   the verbose labels are the first thing to yield when the rail is tight. */
+@media (max-width: 900px) {
+  .weather-date-context {
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    line-height: 1;
+  }
+
+  .weather-date-context small {
+    padding: 0;
+    border-radius: 0;
+    color: #7181a0;
+    background: transparent;
+    font-size: 0.58rem;
+    font-weight: 650;
+    line-height: 1;
+  }
+
+  .composer-fields {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .composer-fields .place-anchor {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .composer-fields .place-anchor .compact-icon-button,
+  .composer-fields .composer-date-control,
+  .composer-fields .privacy-toggle,
+  .composer-fields .weather-pin-toggle,
+  .composer-fields .backfill-toggle {
+    box-sizing: border-box;
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .composer-fields .date-trigger {
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+  }
+
+  .composer-fields .date-trigger-value,
+  .composer-fields .date-trigger-time,
+  .composer-fields .privacy-toggle > span,
+  .composer-fields .weather-pin-toggle > span,
+  .composer-fields .backfill-toggle > span {
+    display: none;
+  }
+}
