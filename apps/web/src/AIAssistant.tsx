@@ -17,6 +17,7 @@ interface StoredChat {
 interface AIAssistantProps {
   readonly status: AiStatus;
   readonly onOpenSettings: () => void;
+  readonly visible?: boolean;
 }
 
 interface LauncherPosition { readonly x: number; readonly y: number; }
@@ -69,7 +70,7 @@ function restoreMessages(configured: boolean): readonly ChatMessage[] {
   }
 }
 
-export function AIAssistant({ status, onOpenSettings }: AIAssistantProps) {
+export function AIAssistant({ status, onOpenSettings, visible = true }: AIAssistantProps) {
   const [open, setOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
@@ -160,6 +161,11 @@ export function AIAssistant({ status, onOpenSettings }: AIAssistantProps) {
     window.addEventListener("lifeos:close-ai", closeForSettings);
     return () => window.removeEventListener("lifeos:close-ai", closeForSettings);
   }, []);
+
+  // Keep the component mounted while hidden so restoring the assistant does
+  // not discard its in-memory panel state. The chat/local position effects
+  // above intentionally keep using their existing storage keys.
+  if (!visible) return null;
 
   return <>
     {open ? <button className="ai-assistant-backdrop" type="button" aria-label="关闭 AI 助手背景" onClick={close} /> : null}

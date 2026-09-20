@@ -197,17 +197,17 @@ interface SkySpec {
  * layer is kept on top and faded away; the incoming sky is already in place
  * underneath, so nothing ever blanks out and no other element has to move.
  */
-export function WeatherSky({ category, phase }: { readonly category: WeatherCategory; readonly phase: WeatherPhase }) {
+export function WeatherSky({ category, phase, animate = true }: { readonly category: WeatherCategory; readonly phase: WeatherPhase; readonly animate?: boolean }) {
   const key = `${category}|${phase}`;
   const [shown, setShown] = useState<SkySpec>({ key, category, phase });
   const [outgoing, setOutgoing] = useState<SkySpec | null>(null);
 
   useEffect(() => {
-    if (shown.key === key) return;
+    if (!animate || shown.key === key) return;
     // Hand the layer that is on screen over to the outgoing slot, then swap.
     setOutgoing(shown);
     setShown({ key, category, phase });
-  }, [key, category, phase, shown]);
+  }, [animate, key, category, phase, shown]);
 
   useEffect(() => {
     if (outgoing === null) return;
@@ -215,6 +215,7 @@ export function WeatherSky({ category, phase }: { readonly category: WeatherCate
     return () => window.clearTimeout(timer);
   }, [outgoing]);
 
+  if (!animate) return <div className="weather-bg-layer is-current"><WeatherBackground category={category} phase={phase} /></div>;
   return <>
     <div className="weather-bg-layer is-current"><WeatherBackground category={shown.category} phase={shown.phase} /></div>
     {outgoing === null ? null : <div className="weather-bg-layer is-leaving"><WeatherBackground category={outgoing.category} phase={outgoing.phase} /></div>}

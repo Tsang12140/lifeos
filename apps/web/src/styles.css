@@ -10564,3 +10564,269 @@ button.relation-chip {
     display: none;
   }
 }
+
+/* Settings v2: one secondary navigation with one visible page at a time. */
+.settings-page-header {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 22px;
+}
+
+.settings-page-header h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.45rem, 2vw, 1.8rem);
+  letter-spacing: -0.03em;
+}
+
+.settings-page-header > p:last-child {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+  min-width: 0;
+}
+
+.settings-nav {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  position: sticky;
+  top: 20px;
+}
+
+.settings-nav-group {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-nav-group h2 {
+  margin: 0 0 3px 10px;
+  color: var(--muted);
+  font-size: 0.67rem;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-nav-group button {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.settings-nav-group button:hover,
+.settings-nav-group button:focus-visible {
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+}
+
+.settings-nav-group button.is-active {
+  border-color: #d8e1f2;
+  color: var(--primary-strong);
+  background: #f3f6ff;
+  box-shadow: inset 2px 0 0 #587cff;
+}
+
+.settings-mobile-selector { display: none; }
+
+.settings-page-content {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-page-content > .settings-section-heading {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 3px;
+}
+
+.settings-page-content > .settings-section-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  outline: none;
+}
+
+.settings-page-content > .settings-section-heading h2:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px rgb(88 124 255 / 0.15);
+}
+
+.settings-page-content > .settings-section-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.settings-subsection-heading {
+  display: grid;
+  gap: 3px;
+  margin-top: 3px;
+}
+
+.settings-subsection-heading strong { color: var(--ink-soft); font-size: 0.78rem; }
+.settings-subsection-heading small { color: var(--muted); font-size: 0.68rem; line-height: 1.45; }
+
+.settings-about-card { align-items: flex-start; }
+.settings-about-card .settings-card-copy { display: grid; gap: 5px; }
+
+.settings-ai-visibility {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid #dfe6f3;
+  border-radius: 10px;
+  background: #f8faff;
+  cursor: pointer;
+}
+
+.settings-ai-visibility input { flex: 0 0 auto; margin: 2px 0 0; accent-color: #587cff; }
+.settings-ai-visibility span { display: grid; gap: 3px; }
+.settings-ai-visibility strong { color: var(--ink-soft); font-size: 0.78rem; }
+.settings-ai-visibility small { color: var(--muted); font-size: 0.68rem; line-height: 1.45; }
+
+.settings-ai-advanced,
+.settings-weather-advanced,
+.settings-backup-advanced {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.settings-ai-advanced > summary,
+.settings-weather-advanced > summary,
+.settings-backup-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 680;
+  list-style: none;
+}
+
+.settings-ai-advanced > summary::-webkit-details-marker,
+.settings-weather-advanced > summary::-webkit-details-marker,
+.settings-backup-advanced > summary::-webkit-details-marker { display: none; }
+
+.settings-ai-advanced > summary svg:last-child,
+.settings-weather-advanced > summary svg:last-child,
+.settings-backup-advanced > summary svg:last-child { margin-left: auto; transition: transform 180ms ease; }
+
+.settings-ai-advanced[open] > summary svg:last-child,
+.settings-weather-advanced[open] > summary svg:last-child,
+.settings-backup-advanced[open] > summary svg:last-child { transform: rotate(180deg); }
+
+.settings-ai-advanced .settings-ai-form { margin-top: 0; }
+
+.settings-weather-advanced-body { display: grid; gap: 10px; padding-top: 8px; }
+.settings-weather-advanced-body > label:not(.settings-backup-checkbox) { display: grid; gap: 5px; }
+.settings-weather-advanced-body > label:not(.settings-backup-checkbox) > span { color: var(--muted); font-size: 0.69rem; font-weight: 680; }
+
+.settings-backup-advanced > summary { border-radius: 7px; }
+.settings-backup-advanced > summary:focus-visible { outline: 2px solid rgb(88 124 255 / 0.35); outline-offset: 2px; }
+.settings-backup-history { padding-top: 0; }
+.settings-backup-history > summary { padding-top: 9px; }
+
+.cycle-settings-card {
+  display: grid;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.cycle-settings-card .settings-card-copy { align-self: center; }
+.cycle-settings-card .dialog-fields-grid { width: 100%; }
+.cycle-settings-card .dialog-field { display: grid; gap: 5px; }
+.cycle-settings-card .dialog-field > span { color: var(--muted); font-size: 0.69rem; font-weight: 680; }
+.cycle-settings-card .dialog-field input { width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface); font: inherit; font-size: 0.75rem; }
+
+.weather-preview-dialog { width: min(100% - 32px, 620px); }
+.weather-preview-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 0.75fr); gap: 12px; margin-bottom: 14px; }
+.weather-preview-phase { min-width: 0; margin: 0; padding: 0; border: 0; }
+.weather-preview-phase legend,
+.weather-preview-category > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 0.7rem; font-weight: 680; }
+.weather-preview-segmented { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.weather-preview-segmented button { min-height: 36px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 0.74rem; font-weight: 680; }
+.weather-preview-segmented button.is-selected { color: var(--primary-strong); background: var(--surface); box-shadow: var(--shadow-soft); }
+.weather-preview-category { display: grid; gap: 0; }
+.weather-preview-category select { width: 100%; min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft); background: var(--surface); font: inherit; font-size: 0.75rem; }
+.weather-preview-scene { position: relative; min-height: 210px; overflow: hidden; border: 1px solid rgb(255 255 255 / 0.55); border-radius: 14px; isolation: isolate; background: #dce7f1; }
+.weather-preview-scene .weather-bg-layer { overflow: hidden; border-radius: inherit; }
+.weather-preview-scene .weather-bg { border-radius: inherit; }
+.weather-preview-scene-label { position: absolute; right: 12px; bottom: 10px; z-index: 4; padding: 5px 8px; border: 1px solid rgb(255 255 255 / 0.48); border-radius: 999px; color: #fff; background: rgb(18 35 67 / 0.62); font-size: 0.68rem; font-weight: 720; }
+.weather-preview-note { margin: 10px 0 0; color: var(--muted); font-size: 0.69rem; line-height: 1.5; }
+
+@container settings-page (max-width: 720px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .settings-nav { display: none; }
+  .settings-mobile-selector { display: block; }
+  .settings-mobile-selector label { display: grid; gap: 5px; }
+  .settings-mobile-selector label > span { color: var(--muted); font-size: 0.68rem; font-weight: 680; }
+  .settings-mobile-selector select { width: 100%; min-height: 42px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft); background: var(--surface); font: inherit; font-size: 0.76rem; }
+}
+
+@container settings-page (max-width: 480px) {
+  .settings-page-header { margin-bottom: 16px; }
+  .settings-page-header h1 { font-size: 1.35rem; }
+  .weather-preview-controls { grid-template-columns: minmax(0, 1fr); }
+  .weather-preview-dialog { width: min(100% - 20px, 620px); }
+  .weather-preview-scene { min-height: 180px; }
+}
+
+/* The main content column reserves space for the task rail, so the settings
+   article can be narrower than the viewport even on desktop. Three compact
+   summary columns prevent the AI status row from becoming a horizontal scroll
+   trap beside the internal nav. */
+.settings-page-content .settings-ai-effective {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-page-content .settings-ai-effective-item.is-wide {
+  grid-column: span 2;
+}
+
+.settings-weather-overview {
+  flex-wrap: wrap;
+}
+
+.settings-weather-overview .settings-card-copy {
+  flex: 1 1 160px;
+}
+
+.settings-weather-overview .settings-action {
+  flex: 0 0 auto;
+}
+
+.cycle-settings-card .settings-card-icon {
+  align-self: start;
+}
+
+.settings-backup-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@container settings-page (max-width: 480px) {
+  .settings-page-content .settings-ai-effective { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-page-content .settings-ai-effective-item.is-wide { grid-column: 1 / -1; }
+  .settings-backup-stats { grid-template-columns: minmax(0, 1fr); }
+}
