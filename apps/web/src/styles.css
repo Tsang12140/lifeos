@@ -1778,7 +1778,7 @@ h2 {
 .record-action.task-action-complete {
   color: #28735f;
   background: #e7f5ef;
-  box-shadow: 0 4px 10px rgb(40 115 95 / 0.14);
+  box-shadow: 0 1px 2px rgb(40 115 95 / 0.06);
   transition: color 180ms ease, background-color 180ms ease, box-shadow 180ms ease, transform 120ms ease;
 }
 
@@ -1786,17 +1786,17 @@ h2 {
   color: #205d4d;
   background: #def1e9;
   border-color: transparent;
-  box-shadow: 0 6px 14px rgb(40 115 95 / 0.2);
+  box-shadow: 0 2px 4px rgb(40 115 95 / 0.1);
 }
 
 .record-action.task-action-complete:active {
   background: #d5ebe2;
-  box-shadow: 0 2px 5px rgb(40 115 95 / 0.14);
+  box-shadow: none;
   transform: translateY(1px);
 }
 
 .record-action.task-action-complete:focus-visible {
-  box-shadow: var(--shadow-focus), 0 4px 10px rgb(40 115 95 / 0.14);
+  box-shadow: var(--shadow-focus), 0 1px 2px rgb(40 115 95 / 0.06);
 }
 
 .record-action-danger:hover {
