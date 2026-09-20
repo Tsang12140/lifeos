@@ -565,10 +565,57 @@ textarea:focus-visible {
 .weather-date-context strong { font-weight: 760; }
 .weather-date-calendar { margin-left: 8px; color: #62779e; }
 
-.weather-today-command { position: relative; z-index: 3; display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; min-width: 58px; height: 38px; margin: 0 0 0 1px; padding: 0 9px; border: 1px solid rgb(103 127 174 / 0.28); border-radius: 11px; color: var(--weather-header-ink); background: rgb(255 255 255 / 0.32); cursor: pointer; font: inherit; font-size: 0.74rem; font-weight: 720; transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; }
-.weather-today-command:hover:not(:disabled) { border-color: rgb(79 109 165 / 0.48); background: rgb(255 255 255 / 0.58); }
-.weather-today-command:focus-visible { outline: 2px solid rgb(88 124 255 / 0.48); outline-offset: 2px; }
-.weather-today-command.is-current { border-color: rgb(103 127 174 / 0.14); color: var(--weather-header-muted); background: rgb(255 255 255 / 0.14); cursor: default; }
+/* The badge starts at the literal card corner.  The header clips its lower-left
+   edge with the same radius as the card, so this is an inset corner detail—not
+   a tab attached below the card.  The modest left inset makes the short word
+   look centred after that corner has been clipped away. */
+.weather-corner-today,
+.weather-corner-today-hit {
+  position: absolute;
+  z-index: 3;
+  bottom: 0;
+  left: 0;
+  width: 82px;
+  margin: 0;
+  border: 0;
+}
+
+.weather-corner-today {
+  box-sizing: border-box;
+  display: grid;
+  height: 31px;
+  padding: 0 6px 0 10px;
+  border-top: 1px solid rgb(255 245 219 / 0.72);
+  border-right: 1px solid rgb(101 67 21 / 0.2);
+  border-radius: 0 13px 0 0;
+  place-items: center;
+  color: #563812;
+  background: linear-gradient(135deg, #ecd093 0%, #d9a854 100%);
+  font: inherit;
+  font-size: 0.73rem;
+  font-weight: 740;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.weather-corner-today.is-current { padding-left: 12px; }
+.weather-corner-today.is-return { letter-spacing: 0; }
+
+/* The visible amber part stays deliberately small; this transparent wrapper
+   supplies a dependable touch target without drawing a second button shape. */
+.weather-corner-today-hit {
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.weather-corner-today-hit:hover .weather-corner-today { background: linear-gradient(135deg, #f0d9a6 0%, #dfb464 100%); }
+.weather-corner-today-hit:active .weather-corner-today { background: linear-gradient(135deg, #e7c782 0%, #d19b48 100%); }
+.weather-corner-today-hit:focus-visible { outline: none; }
+.weather-corner-today-hit:focus-visible .weather-corner-today { outline: 2px solid rgb(255 238 195 / 0.92); outline-offset: -3px; }
 
 .weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -609,9 +656,6 @@ textarea:focus-visible {
 .weather-header--night .date-flap::after { background: rgb(211 224 255 / 0.18); box-shadow: 0 1px 0 rgb(4 10 25 / 0.5); }
 .weather-header--night .date-flap-leaf { background: linear-gradient(180deg, rgb(37 55 93 / 0.94), rgb(15 28 58 / 0.9)); }
 .weather-header--night .weather-date-context { color: #dce7ff; }
-.weather-header--night .weather-today-command { border-color: rgb(165 188 235 / 0.3); color: #dce7ff; background: rgb(14 28 59 / 0.68); }
-.weather-header--night .weather-today-command:hover:not(:disabled) { border-color: rgb(181 202 246 / 0.56); background: rgb(28 48 88 / 0.82); }
-.weather-header--night .weather-today-command.is-current { border-color: rgb(165 188 235 / 0.18); color: #aebddd; background: rgb(14 28 59 / 0.32); }
 .weather-header--night .weather-configure-button { border-color: rgb(165 188 235 / 0.3); color: #e2eaff; background: rgb(14 28 59 / 0.68); }
 .weather-header--night .weather-configure-button:hover { border-color: rgb(181 202 246 / 0.56); background: rgb(28 48 88 / 0.82); }
 
@@ -10429,7 +10473,6 @@ button.relation-chip {
   .weather-date-step { flex-basis: 30px; width: 30px; height: 30px; }
   .weather-date-picker { padding-right: 0; padding-left: 0; }
   .weather-date-context { margin-left: 2px; font-size: 0.66rem; }
-  .weather-return-today { min-width: 44px; min-height: 30px; padding-right: 3px; padding-left: 3px; font-size: 0.67rem; }
   .weather-header-summary { min-width: 76px; }
   .weather-header-place { max-width: 88px; }
   .weather-header-condition strong { font-size: 0.76rem; }
@@ -10856,35 +10899,15 @@ button.relation-chip {
   .settings-backup-stats { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* A date is context; returning to today is a command. On a phone they still
-   share the existing weekday column vertically, but never trade two- and
-   three-character labels inside the same geometry. */
-@media (max-width: 900px) {
-  .weather-date-navigation {
-    --weather-date-arrow-slot: 38px;
-    display: grid;
-    grid-template-columns: var(--weather-date-arrow-slot) max-content 32px var(--weather-date-arrow-slot);
-    grid-template-rows: 30px 28px;
-    align-items: center;
-    gap: 1px 2px;
-    min-height: 60px;
-  }
-
-  .weather-date-navigation > .weather-date-step { grid-row: 1 / -1; align-self: center; }
-  .weather-date-navigation > .weather-date-step:first-child { grid-column: 1; margin-left: 0; }
-  .weather-date-picker { grid-column: 2; grid-row: 1 / -1; }
-  .weather-date-context { grid-column: 3; grid-row: 1; align-self: end; min-width: 32px; margin-left: 0; }
-  .weather-date-step--next { grid-column: 4; }
-  .weather-today-command { grid-column: 3; grid-row: 2; align-self: start; justify-self: center; width: 28px; min-width: 28px; height: 26px; margin: 0; padding: 0; border-radius: 8px; }
-  .weather-today-command-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
-  .weather-today-command svg { width: 15px; height: 15px; }
-}
-
 @media (max-width: 560px) {
-  .weather-date-navigation { --weather-date-arrow-slot: 34px; }
+  .weather-corner-today,
+  .weather-corner-today-hit { width: 76px; }
+  .weather-corner-today { height: 28px; padding-right: 5px; padding-left: 9px; border-radius: 0 12px 0 0; font-size: 0.68rem; }
+  .weather-corner-today.is-current { padding-left: 11px; }
 }
 
 @media (max-width: 390px) {
-  .weather-date-navigation { --weather-date-arrow-slot: 30px; grid-template-columns: var(--weather-date-arrow-slot) max-content 28px var(--weather-date-arrow-slot); }
-  .weather-date-context { min-width: 28px; }
+  .weather-corner-today,
+  .weather-corner-today-hit { width: 72px; }
+  .weather-corner-today { height: 27px; font-size: 0.65rem; }
 }
