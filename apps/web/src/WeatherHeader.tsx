@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
-import { getWeatherDecision, getWeatherEmoji, getWeatherPhase, findWeatherDay, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
+import { getWeatherDecision, getWeatherPhase, findWeatherDay, type WeatherCategory, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherSky } from "./WeatherBackground";
 import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
 import { weatherLocationDisplayName } from "./weather-locations";
@@ -24,6 +24,19 @@ interface DateFlipState {
 function dateDigits(value: string): readonly string[] {
   const compact = value.slice(5).replace("-", "");
   return compact.length === 4 ? compact.split("") : ["0", "0", "0", "0"];
+}
+
+function WeatherConditionGlyph({ category }: { readonly category: WeatherCategory }) {
+  const cloud = <path d="M5.1 17.1h12.2a3.6 3.6 0 0 0 .4-7.18 5.65 5.65 0 0 0-10.86 1.2A3.02 3.02 0 0 0 5.1 17.1Z" />;
+  const frame = { className: "weather-header-glyph", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.55, strokeLinecap: "round", strokeLinejoin: "round", width: 18, height: 18, "aria-hidden": true } as const;
+
+  if (category === "sunny") return <svg {...frame}><circle cx="12" cy="12" r="3.35" fill="currentColor" stroke="none" /><path d="M12 2.7v2.15M12 19.15v2.15M2.7 12h2.15M19.15 12h2.15M5.44 5.44l1.52 1.52M17.04 17.04l1.52 1.52M18.56 5.44l-1.52 1.52M6.96 17.04l-1.52 1.52" /></svg>;
+  if (category === "partly-cloudy") return <svg {...frame}><circle cx="8.6" cy="8.1" r="3" fill="currentColor" stroke="none" /><path d="M8.6 3.1v1.1M8.6 12v1.1M3.6 8.1h1.1M12.5 8.1h1.1M5.1 4.6l.8.8M12.1 11.6l.8.8M12.1 4.6l-.8.8M5.9 11.6l-.8.8" /><path d="M6.3 18h11.1a3.35 3.35 0 0 0 .3-6.68 5.1 5.1 0 0 0-9.72 1.12A2.7 2.7 0 0 0 6.3 18Z" fill="currentColor" stroke="none" opacity=".9" /></svg>;
+  if (category === "thunderstorm") return <svg {...frame}>{cloud}<path d="M13.3 14.6h3.15l-3.72 5.45.47-3.1H10l3.3-4.65Z" fill="currentColor" stroke="none" /></svg>;
+  if (category === "rainy" || category === "moderate-rainy" || category === "heavy-rainy" || category === "rainstorm") return <svg {...frame}>{cloud}<path d="M8.1 19.05l-.7 1.8M12.05 19.05l-.7 1.8M16 19.05l-.7 1.8" /></svg>;
+  if (category === "snowy") return <svg {...frame}>{cloud}<path d="M8.1 19.2v2M7.1 20.2h2M11.9 19.2v2M10.9 20.2h2M15.7 19.2v2M14.7 20.2h2" /></svg>;
+  if (category === "foggy") return <svg {...frame}><path d="M4 8.5h16M3 12h18M5 15.5h14" /></svg>;
+  return <svg {...frame}>{cloud}</svg>;
 }
 
 function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void }) {
@@ -139,7 +152,8 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
     : weatherLocationDisplayName(payload.location);
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
-  return <section className={`weather-header ${displayDay && decision ? `weather-header--${decision.category}` : "weather-header--empty"}`} aria-label={`${selectedDate} 的天气`}>
+  const weatherSceneClass = displayDay && decision ? `weather-header--${decision.category} weather-header--${phase}` : "weather-header--empty";
+  return <section className={`weather-header ${weatherSceneClass}`} aria-label={`${selectedDate} 的天气`}>
     {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className="weather-header-content">
@@ -147,7 +161,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       <div className="weather-header-summary" role={status?.configured ? "button" : undefined} tabIndex={status?.configured ? 0 : undefined} aria-label={status?.configured ? `刷新${selectedDate}天气` : undefined} aria-busy={manualBusy || loading ? "true" : undefined} onClick={status?.configured ? () => void refresh({ manual: true, escalate: armed }) : undefined} onKeyDown={status?.configured ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } } : undefined}>
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>
-          <span className="weather-header-reading"><span className="weather-header-condition"><span className="weather-header-emoji" aria-hidden="true">{getWeatherEmoji(displayDay.iconDay)}</span><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
+          <span className="weather-header-reading"><span className="weather-header-condition"><WeatherConditionGlyph category={decision.category} /><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
         </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>

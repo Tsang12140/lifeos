@@ -162,7 +162,7 @@ export function WeatherBackground({ category, phase }: { readonly category: Weat
             fontSize: `${10 + (index % 3) * 4}px`,
             opacity: `${(0.5 + (index % 4) * 0.14).toFixed(2)}`,
           } satisfies CSSProperties}
-        >❄</div>
+        />
       ))}
     </div>;
   }
