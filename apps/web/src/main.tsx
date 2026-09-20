@@ -1041,17 +1041,9 @@ function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, wea
 const REVIEW_EXPAND_MS = 300;
 
 /**
- * Past-date composer. The collapsed bar is a mirror of the editor's own first
- * row — the same kind chips, a preview of the draft, and the same primary button
- * — and the whole bar is one click target. Nothing inside it is separately
- * interactive on purpose: the owner asked for it to be a "placebo" that only
- * announces "you are not on today, this is a backfill". The primary button reads
- * 补记 while collapsed and 保存 once the real editor is open, because it is the
- * same action at two stages.
- *
- * The expansion animates: the bar folds away and the editor grows to its
- * measured height, then hands the height back to `auto` so the editor keeps its
- * own size when the kind changes or a photo is added.
+ * Past-date composer. The collapsed bar is a single, compact entry point: it
+ * names the journal, keeps a short draft preview, and offers 补记. The whole
+ * row is one click target; the real editor remains unchanged once expanded.
  */
 function ReviewComposer(props: ComposerProps) {
   const [expanded, setExpanded] = useState(false);
@@ -1096,22 +1088,22 @@ function ReviewComposer(props: ComposerProps) {
     return () => window.cancelAnimationFrame(frame);
   }, [expanded]);
 
-  const open = () => { setBodyMounted(true); setExpanded(true); };
+  const open = () => {
+    // A past-date tap means "write a journal backfill". Preserve the draft,
+    // but establish both flags before the full editor mounts so the first save
+    // cannot accidentally be sent as another kind or as a normal record.
+    props.onKindChange("journal");
+    props.onBackfillChange(true);
+    setBodyMounted(true);
+    setExpanded(true);
+  };
   const draft = props.content.trim();
 
   return <div className="review-composer" data-expanded={expanded ? "true" : "false"}>
     <button className="review-composer-bar" type="button" onClick={open} aria-label="补记这一天的记录，展开完整编辑器">
-      {/* The chips and the primary button reuse the editor's own classes rather
-          than restating their metrics: the bar has to sit exactly on top of the
-          editor's geometry, so it is the same styles, not the same numbers. */}
-      <span className="kind-switcher review-composer-kinds" aria-hidden="true">
-        {(Object.keys(COMPOSER_META) as ComposerKind[]).map((item) => {
-          const Icon = COMPOSER_META[item].icon;
-          return <span className={`kind-option ${item === props.kind ? "is-active" : ""}`} key={item}><Icon size={15} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></span>;
-        })}
-      </span>
-      <span className={`review-composer-preview ${draft ? "has-draft" : ""}`} aria-hidden="true">{draft || COMPOSER_META[props.kind].placeholder}</span>
-      <span className="primary-button review-composer-cta" aria-hidden="true"><Send size={17} strokeWidth={1.8} aria-hidden="true" /><span>补记</span></span>
+      <span className="review-composer-kind" aria-hidden="true"><NotebookPen size={15} strokeWidth={1.8} /><span>日记</span></span>
+      <span className={`review-composer-preview ${draft ? "has-draft" : ""}`} aria-hidden="true">{draft || "写点什么…"}</span>
+      <span className="review-composer-cta" aria-hidden="true"><Send size={16} strokeWidth={1.8} /><span>补记</span></span>
     </button>
     <div className="review-composer-slot" ref={slotRef}>
       <div className="review-composer-body" ref={bodyRef} inert={!expanded}>
