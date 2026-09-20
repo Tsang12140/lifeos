@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ArrowRight, Check, ChevronLeft, ClipboardCopy, History, LoaderCircle, Settings2, Square, X } from "lucide-react";
 import type { AiStatus, AssistantReply } from "./api";
 
@@ -19,9 +19,35 @@ interface AIAssistantProps {
   readonly onOpenSettings: () => void;
 }
 
+interface LauncherPosition { readonly x: number; readonly y: number; }
+
 const STORAGE_KEY = "lifeos.ai.chat";
+const LAUNCHER_POSITION_KEY = "lifeos.ai.launcher-position.v1";
 const CHAT_SESSION_TTL_MS = 30 * 60 * 1000;
 const QUICK_PROMPTS = ["今天有什么记录？", "最近有哪些任务？", "这周主要发生了什么？"] as const;
+const LAUNCHER_SIZE = 56;
+const LAUNCHER_EDGE = 12;
+
+function constrainLauncherPosition(x: number, y: number): LauncherPosition {
+  const maxX = Math.max(LAUNCHER_EDGE, window.innerWidth - LAUNCHER_SIZE - LAUNCHER_EDGE);
+  // On a phone the last 64px are the solid bottom navigation. Keep the
+  // launcher 12px above that rail, whatever position a previous drag saved.
+  const reservedBottom = window.matchMedia("(max-width: 900px)").matches ? 76 : LAUNCHER_EDGE;
+  const maxY = Math.max(LAUNCHER_EDGE, window.innerHeight - LAUNCHER_SIZE - reservedBottom);
+  return { x: Math.min(maxX, Math.max(LAUNCHER_EDGE, x)), y: Math.min(maxY, Math.max(LAUNCHER_EDGE, y)) };
+}
+
+function restoreLauncherPosition(): LauncherPosition | null {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(LAUNCHER_POSITION_KEY) ?? "null") as Partial<LauncherPosition> | null;
+    const x = value?.x;
+    const y = value?.y;
+    if (typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return constrainLauncherPosition(x, y);
+  } catch {
+    return null;
+  }
+}
 
 function AssistantLogo() {
   const gradientId = `lifeos-ai-logo-${useId().replace(/:/g, "")}`;
@@ -51,12 +77,28 @@ export function AIAssistant({ status, onOpenSettings }: AIAssistantProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [launcherPosition, setLauncherPosition] = useState<LauncherPosition | null>(restoreLauncherPosition);
+  const [draggingLauncher, setDraggingLauncher] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const launcherDragRef = useRef<{ readonly pointerId: number; readonly offsetX: number; readonly offsetY: number; readonly startX: number; readonly startY: number; moved: boolean } | null>(null);
+  const suppressLauncherClickRef = useRef(false);
   const history = useMemo(() => messages.filter((message) => message.id !== "welcome").slice(-8).map((message) => ({ role: message.role, text: message.text })), [messages]);
 
   useEffect(() => { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ savedAt: Date.now(), messages } satisfies StoredChat)); }, [messages]);
   useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading, showHistory]);
+  useEffect(() => {
+    try {
+      if (launcherPosition === null) window.localStorage.removeItem(LAUNCHER_POSITION_KEY);
+      else window.localStorage.setItem(LAUNCHER_POSITION_KEY, JSON.stringify(launcherPosition));
+    } catch { /* storage is an optional convenience */ }
+  }, [launcherPosition]);
+  useEffect(() => {
+    if (launcherPosition === null) return;
+    const keepInBounds = () => setLauncherPosition((current) => current === null ? null : constrainLauncherPosition(current.x, current.y));
+    window.addEventListener("resize", keepInBounds);
+    return () => window.removeEventListener("resize", keepInBounds);
+  }, [launcherPosition]);
 
   const copyMessage = async (message: ChatMessage) => {
     try { await navigator.clipboard.writeText(message.text); setCopiedId(message.id); window.setTimeout(() => setCopiedId(null), 1600); } catch { /* clipboard permissions are optional */ }
@@ -85,6 +127,34 @@ export function AIAssistant({ status, onOpenSettings }: AIAssistantProps) {
   const clear = () => { setMessages([welcomeMessage(status.configured)]); setShowHistory(false); setInput(""); };
   const close = () => { setOpen(false); setShowHistory(false); setShowSetupGuide(false); };
   const openAssistant = () => { setOpen(true); setShowSetupGuide(!status.configured); };
+  const beginLauncherDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    launcherDragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingLauncher(true);
+  };
+  const moveLauncher = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = launcherDragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    if (Math.abs(event.clientX - drag.startX) > 4 || Math.abs(event.clientY - drag.startY) > 4) drag.moved = true;
+    setLauncherPosition(constrainLauncherPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY));
+  };
+  const endLauncherDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = launcherDragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.moved) suppressLauncherClickRef.current = true;
+    launcherDragRef.current = null;
+    setDraggingLauncher(false);
+  };
+  const activateLauncher = () => {
+    if (suppressLauncherClickRef.current) {
+      suppressLauncherClickRef.current = false;
+      return;
+    }
+    openAssistant();
+  };
   useEffect(() => {
     const closeForSettings = () => close();
     window.addEventListener("lifeos:close-ai", closeForSettings);
@@ -99,6 +169,6 @@ export function AIAssistant({ status, onOpenSettings }: AIAssistantProps) {
       {showHistory ? <div className="ai-assistant-history"><div className="ai-history-note">最近 30 分钟的本地对话</div>{messages.filter((message) => message.id !== "welcome").length === 0 ? <div className="ai-empty-history">还没有历史对话</div> : messages.filter((message) => message.id !== "welcome").map((message) => <div className="ai-history-item" key={message.id}><small>{message.role === "user" ? "我" : "AI"}</small><span>{message.text}</span></div>)}</div> : <div className="ai-assistant-messages">{messages.map((message) => <div className={`ai-message-row ${message.role === "user" ? "is-user" : "is-assistant"}`} key={message.id}>{message.role === "user" ? <div className="ai-user-message"><span>{message.text}</span><button className="ai-copy-button" type="button" onClick={() => void copyMessage(message)} aria-label="复制问题">{copiedId === message.id ? <Check size={11} aria-hidden="true" /> : <ClipboardCopy size={11} aria-hidden="true" />}</button></div> : <div className="ai-assistant-message"><span>{message.text}</span><div className="ai-message-tools"><button className="ai-copy-button" type="button" onClick={() => void copyMessage(message)} aria-label="复制回答">{copiedId === message.id ? <Check size={11} aria-hidden="true" /> : <ClipboardCopy size={11} aria-hidden="true" />}</button>{message.mode === "ai" ? <em>AI</em> : null}</div></div>}</div>)}{loading ? <div className="ai-message-row is-assistant"><div className="ai-loading"><LoaderCircle className="spin" size={14} aria-hidden="true" /><span>正在整理你的 LifeOS…</span></div></div> : null}<div ref={chatBottomRef} /></div>}
       {!showHistory ? <div className="ai-assistant-footer"><div className="ai-quick-prompts">{QUICK_PROMPTS.map((prompt) => <button type="button" key={prompt} onClick={() => void ask(prompt)} disabled={loading}>{prompt}</button>)}</div><form className="ai-assistant-composer" onSubmit={(event) => { event.preventDefault(); void ask(input); }}><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(input); } }} placeholder="输入你想了解的内容" rows={1} aria-label="询问 AI 助手" />{loading ? <button className="ai-send-button is-stop" type="button" onClick={stopAsk} aria-label="停止"><Square size={15} fill="currentColor" strokeWidth={0} /></button> : <button className="ai-send-button" type="submit" disabled={!input.trim()} aria-label="发送">发送</button>}<button className="ai-collapse-button" type="button" onClick={close} aria-label="收起 AI 助手"><AssistantLogo /></button></form></div> : null}
     </section>
-    <button className={`ai-assistant-launcher ${open ? "is-hidden" : ""}`} type="button" onClick={openAssistant} aria-label="打开 AI 助手"><AssistantLogo /></button>
+    <button className={`ai-assistant-launcher ${open ? "is-hidden" : ""} ${draggingLauncher ? "is-dragging" : ""}`} type="button" style={launcherPosition === null ? undefined : { left: `${launcherPosition.x}px`, top: `${launcherPosition.y}px`, right: "auto", bottom: "auto" }} onPointerDown={beginLauncherDrag} onPointerMove={moveLauncher} onPointerUp={endLauncherDrag} onPointerCancel={endLauncherDrag} onClick={activateLauncher} aria-label="打开 AI 助手，可拖拽移动"><AssistantLogo /></button>
   </>;
 }

@@ -10250,3 +10250,31 @@ button.relation-chip {
   .timeline-marker { grid-column: 1; grid-row: 1 / -1; padding-top: 7px; }
   .timeline-content { grid-column: 2; grid-row: 2; width: 100%; }
 }
+
+/* The AI launcher is intentionally just an icon. It is translucent enough to
+   sit over content quietly, and its position is supplied inline after a drag.
+   `touch-action: none` makes the same direct-manipulation gesture work on a
+   phone without the page interpreting it as a scroll. */
+.ai-assistant-launcher {
+  border: 1px solid rgb(152 177 245 / 0.56);
+  background: rgb(255 255 255 / 0.68);
+  box-shadow: 0 5px 16px rgb(51 112 255 / 0.16), 0 1px 3px rgb(15 23 42 / 0.07);
+  backdrop-filter: blur(9px);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 200ms ease, transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ai-assistant-launcher:hover:not(.is-dragging),
+.ai-assistant-launcher:focus-visible {
+  background: rgb(255 255 255 / 0.9);
+  box-shadow: 0 7px 18px rgb(51 112 255 / 0.21), 0 0 0 3px rgb(51 112 255 / 0.1);
+  transform: translateY(-1px);
+}
+
+.ai-assistant-launcher.is-dragging {
+  cursor: grabbing;
+  transform: none;
+}

@@ -14,7 +14,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
-  ClipboardCopy,
   CloudUpload,
   CloudSun,
   ContactRound,
@@ -62,7 +61,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, SUMMARY_MAX_LENGTH, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, trimSummaryText, type PlacePeriod, type PlaceRole } from "@lifeos/core";
-import { clearLogs, copyRecentJson, installDiagnostics, recentLogs, subscribe } from "./diagnostics";
+import { installDiagnostics } from "./diagnostics";
 import { sha256Hex } from "./contentHash";
 import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, NoteDetails, NoteFormat, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import {
@@ -1751,35 +1750,10 @@ function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEn
 
 function LoadingState() { return <div className="timeline-state state-loading" role="status"><LoaderCircle className="spin" size={23} aria-hidden="true" /><span>正在读取时间轴……</span></div>; }
 
-const DIAG_COPY_COUNT = 50;
-
-/**
- * The debug log the user asked for: every console error, uncaught exception,
- * and failed API call lands in a ring buffer; the drawer exports only the
- * most recent 50 entries as JSON, so a bug report stays small.
- */
-function DiagnosticsDrawer() {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [, forceRender] = useState(0);
-  useEffect(() => subscribe(() => forceRender((current) => current + 1)), []);
-  const entries = recentLogs(DIAG_COPY_COUNT);
-  return <>
-    <button className={`diag-toggle ${entries.length > 0 ? "has-entries" : ""}`} type="button" onClick={() => setOpen((current) => !current)} aria-label="诊断日志" aria-expanded={open}><Activity size={16} strokeWidth={1.9} aria-hidden="true" />{entries.length > 0 ? <span className="diag-badge">{entries.length}</span> : null}</button>
-    {open ? <div className="diag-panel" role="dialog" aria-label="诊断日志">
-      <div className="diag-head">
-        <strong>诊断日志</strong>
-        <span className="diag-count">最近 {entries.length} 条</span>
-        <button className="diag-action" type="button" onClick={async () => { const copiedOk = await copyRecentJson(); setCopied(copiedOk); window.setTimeout(() => setCopied(false), 2000); }}>{copied ? "已复制" : <><ClipboardCopy size={13} strokeWidth={1.8} aria-hidden="true" />复制近期 JSON</>}</button>
-        <button className="diag-action" type="button" onClick={() => clearLogs()}>清空</button>
-        <button className="diag-action" type="button" onClick={() => setOpen(false)} aria-label="关闭诊断日志"><X size={14} strokeWidth={1.9} aria-hidden="true" /></button>
-      </div>
-      <div className="diag-list">
-        {entries.length === 0 ? <p className="diag-empty">暂无记录。页面报错、接口失败都会自动收进来。</p> : entries.slice().reverse().map((entry, index) => <div className={`diag-entry diag-${entry.level}`} key={`${entry.at}-${index}`}><time>{entry.at.slice(11, 19)}</time><div><span>{entry.message}</span>{entry.detail === undefined ? null : <small>{entry.detail}</small>}</div></div>)}
-      </div>
-    </div> : null}
-  </>;
-}
+// Diagnostics continue collecting browser errors for support, but the floating
+// Activity/heartbeat switch was a developer affordance that does not belong in
+// the everyday product surface.
+function DiagnosticsDrawer() { return null; }
 
 function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) { return <div className="timeline-state state-error" role="alert"><div className="state-icon state-icon-error"><CircleHelp size={21} strokeWidth={1.8} aria-hidden="true" /></div><div><strong>暂时无法读取记录</strong><p>{message}</p><button className="text-button" type="button" onClick={onRetry}>重试</button></div></div>; }
 
