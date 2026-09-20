@@ -329,9 +329,13 @@ textarea:focus-visible {
   color: var(--weather-header-muted, var(--ink-soft));
   background: var(--weather-header-base, var(--surface));
   box-shadow: 0 6px 18px rgb(24 36 61 / 0.05);
-  --weather-header-ink: var(--ink);
-  --weather-header-muted: var(--ink-soft);
+  /* Daylight stays navy rather than application-black. The tiny white lift
+     separates it from moving sky without making the reading look embossed. */
+  --weather-header-ink: #1e3a60;
+  --weather-header-muted: #536d8f;
   --weather-header-glyph: #2f6a78;
+  --weather-header-text-shadow: 0 1px 0 rgb(255 255 255 / 0.46);
+  --weather-header-muted-text-shadow: 0 1px 0 rgb(255 255 255 / 0.34);
   --weather-header-base: #f3f8fc;
   --weather-scrim-strong: rgb(255 255 255 / 0.46);
   --weather-scrim-mid: rgb(255 255 255 / 0.34);
@@ -404,6 +408,23 @@ textarea:focus-visible {
   --weather-scrim-edge: rgb(255 255 255 / 0.3);
 }
 
+/* Sunrise still benefits from the daylight navy treatment. At dusk, the
+   central sky becomes plum enough that moonlit text reads more quietly than
+   forcing near-black type over it. */
+.weather-header--dawn {
+  --weather-header-ink: #203b63;
+  --weather-header-muted: #496784;
+  --weather-header-glyph: #355c83;
+}
+
+.weather-header--dusk {
+  --weather-header-ink: #f7f3f2;
+  --weather-header-muted: #eadfe4;
+  --weather-header-glyph: #ffe4bd;
+  --weather-header-text-shadow: 0 1px 2px rgb(19 31 58 / 0.48);
+  --weather-header-muted-text-shadow: 0 1px 2px rgb(19 31 58 / 0.4);
+}
+
 /* Night is a different material, not a daylight scene with a darker wash.
    These tokens also recolour the controls so the moonlit field stays visible
    behind the date without turning the content into a black-on-grey strip. */
@@ -411,6 +432,8 @@ textarea:focus-visible {
   --weather-header-ink: #f0f4ff;
   --weather-header-muted: #c4d2ee;
   --weather-header-glyph: #d7e4ff;
+  --weather-header-text-shadow: 0 1px 2px rgb(2 9 27 / 0.56);
+  --weather-header-muted-text-shadow: 0 1px 2px rgb(2 9 27 / 0.46);
   --weather-header-base: #09132b;
   --weather-scrim-strong: rgb(5 12 29 / 0.18);
   --weather-scrim-mid: rgb(5 12 29 / 0.1);
@@ -538,23 +561,23 @@ textarea:focus-visible {
 @keyframes date-flip-forward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(-76deg); filter: brightness(.82); } 100% { transform: rotateX(-90deg); opacity: .08; } }
 @keyframes date-flip-backward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(76deg); filter: brightness(.82); } 100% { transform: rotateX(90deg); opacity: .08; } }
 
-.weather-date-context { position: relative; z-index: 4; display: inline-flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; min-width: 0; margin-left: 9px; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.1; white-space: nowrap; }
+.weather-date-context { position: relative; z-index: 4; display: inline-flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; min-width: 0; margin-left: 9px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); font-size: 0.78rem; line-height: 1.1; white-space: nowrap; }
 .weather-date-context strong { font-weight: 760; }
-.weather-date-context small { padding: 2px 5px; border-radius: 6px; color: #516998; background: rgb(238 243 255 / 0.78); font-size: 0.67rem; font-weight: 720; }
+.weather-date-context small { padding: 2px 5px; border-radius: 6px; color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); background: rgb(238 243 255 / 0.78); font-size: 0.67rem; font-weight: 720; }
 .weather-date-calendar { margin-left: 8px; color: #62779e; }
 
 .weather-return-today { position: relative; z-index: 5; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 32px; margin: 0; padding: 0 7px; border: 1px solid rgb(109 133 190 / 0.22); border-radius: 8px; color: #45639e; background: rgb(239 244 255 / 0.62); cursor: pointer; font-size: 0.73rem; font-weight: 730; pointer-events: auto; }
 .weather-return-today:hover { background: rgb(229 237 255 / 0.9); }
 
-.weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink, var(--ink)); white-space: nowrap; }
+.weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
-.weather-header-place { max-width: 118px; overflow: hidden; color: var(--weather-header-muted, var(--ink-soft)); font-size: 0.74rem; font-weight: 500; text-overflow: ellipsis; }
+.weather-header-place { max-width: 118px; overflow: hidden; color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.74rem; font-weight: 500; text-overflow: ellipsis; }
 .weather-header-reading { gap: 9px; }
 .weather-header-condition { font-size: 0.88rem; }
-.weather-header-condition strong { color: var(--weather-header-ink, var(--ink)); font-weight: 600; }
+.weather-header-condition strong { color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); font-weight: 600; }
 .weather-header-glyph { flex: 0 0 18px; width: 18px; height: 18px; color: var(--weather-header-glyph, #2f6a78); }
-.weather-header-temperature { color: var(--weather-header-ink, var(--ink)); font-size: 0.86rem; font-variant-numeric: tabular-nums; font-weight: 600; }
-.weather-header-unavailable { color: var(--weather-header-muted, var(--muted)); font-size: 0.78rem; }
+.weather-header-temperature { color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); font-size: 0.86rem; font-variant-numeric: tabular-nums; font-weight: 600; }
+.weather-header-unavailable { color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.78rem; }
 .weather-header-actions { display: inline-flex; align-items: center; margin-left: 10px; }
 .weather-header-refresh { margin-left: 10px; }
 .weather-header-actions .weather-header-refresh { margin-left: 0; }
@@ -10512,7 +10535,8 @@ button.relation-chip {
   .weather-date-context small {
     padding: 0;
     border-radius: 0;
-    color: #7181a0;
+    color: var(--weather-header-muted);
+    text-shadow: var(--weather-header-muted-text-shadow);
     background: transparent;
     font-size: 0.58rem;
     font-weight: 650;
