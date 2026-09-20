@@ -585,6 +585,9 @@ textarea:focus-visible {
   display: grid;
   height: 26px;
   padding: 0 5px 0 8px;
+  border-top: 1.5px solid rgb(255 255 255 / 0.72);
+  border-right: 1.5px solid rgb(255 255 255 / 0.72);
+  border-radius: 0 11px 0 0;
   place-items: center;
   color: var(--weather-header-ink);
   background: transparent;
@@ -10899,12 +10902,12 @@ button.relation-chip {
 @media (max-width: 560px) {
   .weather-corner-today,
   .weather-corner-today-hit { width: 70px; }
-  .weather-corner-today { height: 24px; padding-right: 4px; padding-left: 7px; font-size: 0.78rem; }
+  .weather-corner-today { height: 24px; padding-right: 4px; padding-left: 7px; border-radius: 0 10px 0 0; font-size: 0.78rem; }
   .weather-corner-today.is-current { padding-left: 9px; }
 }
 
 @media (max-width: 390px) {
   .weather-corner-today,
   .weather-corner-today-hit { width: 66px; }
-  .weather-corner-today { height: 23px; font-size: 0.76rem; }
+  .weather-corner-today { height: 23px; border-radius: 0 9px 0 0; font-size: 0.76rem; }
 }
