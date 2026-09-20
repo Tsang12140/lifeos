@@ -18,6 +18,7 @@ import {
   CloudSun,
   ContactRound,
   Download,
+  Dumbbell,
   Archive,
   Edit3,
   ExternalLink,
@@ -72,6 +73,7 @@ import {
   type BackupStatus,
   type BackupRetentionPolicy,
   type BackupRetentionView,
+  type CycleModuleResponse,
   type EntitiesResponse,
   type MovieEntity,
   type MovieModuleStatus,
@@ -1928,9 +1930,11 @@ function CalendarDayMarkers({ date, today, module }: { readonly date: string; re
   if (!module?.config.enabled) return null;
   const period = periodMoonForDate(date, today, module);
   const intimate = module.events.some((event) => event.date === date && event.kind === "intimacy");
+  const fitness = module.events.some((event) => event.date === date && event.kind === "fitness");
   const markers: CalendarMarker[] = [];
   if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预计经期" : "已记录经期", content: <span className={`calendar-moon is-${period.phase} ${period.forecast ? "is-forecast" : ""}`} aria-hidden="true" /> });
   if (intimate) markers.push({ id: `intimacy-${date}`, label: "已记录亲密", content: <Heart className="calendar-heart" size={13} strokeWidth={1.9} aria-hidden="true" /> });
+  if (fitness) markers.push({ id: `fitness-${date}`, label: "已记录健身", content: <Dumbbell className="calendar-fitness" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   const visible = markers.length > 4 ? [...markers.slice(0, 3), { id: `more-${date}`, label: `还有 ${markers.length - 3} 个日历事件`, content: <span className="calendar-marker-more" aria-hidden="true">+{markers.length - 3}</span> }] : markers;
   if (visible.length === 0) return null;
   return <span className="calendar-day-markers" aria-label={visible.map((marker) => marker.label).join("，")}>{visible.map((marker, index) => <span className="calendar-day-marker" key={marker.id} style={{ gridColumnStart: 5 - visible.length + index }}>{marker.content}</span>)}</span>;
@@ -1957,7 +1961,7 @@ function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather 
   return { text: item.textDay, icon: item.iconDay, tempMin: typeof item.tempMin === "string" ? item.tempMin : "—", tempMax: typeof item.tempMax === "string" ? item.tempMax : "—" };
 }
 
-function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, onOpenCycleModule, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; onOpenCycleModule: () => void; onRetry: () => void; onOpenDay: (date: string) => void }) {
+function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
   const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
   const buckets = useMemo(() => recordsByDate(dates, publicRecords), [dates, publicRecords]);
@@ -1987,8 +1991,8 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
       <div><h2 id="calendar-title">{label}</h2></div>
       <div className="calendar-heading-tools">
         {records !== null ? <span className="record-count">{inWindow} 条</span> : null}
-        <button className={`calendar-module-button ${cycleModule?.config.enabled ? "is-enabled" : ""}`} type="button" onClick={onOpenCycleModule} aria-label="打开伴侣周期与亲密模块">
-          <SlidersHorizontal size={15} strokeWidth={1.9} aria-hidden="true" /><span>{cycleModule?.config.enabled ? "周期与亲密" : "启用周期模块"}</span>
+        <button className={`calendar-module-button ${cyclePanelOpen || cycleModule?.config.enabled ? "is-enabled" : ""}`} type="button" onClick={onOpenCycleModule} aria-expanded={cyclePanelOpen} aria-controls="cycle-entry-panel" aria-label="打开周期记录面板">
+          <CalendarDays size={15} strokeWidth={1.9} aria-hidden="true" /><span>周期</span>
         </button>
         <div className="mode-switcher" role="tablist" aria-label="日历范围">
           <button className={`mode-option ${mode === "week" ? "is-active" : ""}`} type="button" role="tab" aria-selected={mode === "week"} onClick={() => onModeChange("week")}>周</button>
@@ -1997,6 +2001,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
       </div>
     </div>
     {mode === "month" ? <div className="calendar-note"><span className="calendar-holiday-legend"><span className="month-day-status is-holiday">休</span><span>法定休息</span><span className="month-day-status is-workday">班</span><span>调休上班</span></span></div> : null}
+    {cyclePanelOpen ? <CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} /> : null}
     {loading ? <LoadingState /> : null}
     {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
     {!loading && !error ? (mode === "week" ? <div className="week-grid">
@@ -2044,14 +2049,55 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
   </section>;
 }
 
-function CycleModuleDialog({ open, module, selectedDate, onClose, onSaveConfig, onAddEvent, onDeleteEvent }: { open: boolean; module: CycleIntimacyModuleData | null; selectedDate: string; onClose: () => void; onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; onAddEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteEvent: (id: string) => Promise<void> }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [draft, setDraft] = useState<CycleIntimacyModuleConfig | null>(null);
+function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEvent, onDeleteEvent }: { module: CycleIntimacyModuleData | null; selectedDate: string; today: string; onOpenSettings: () => void; onAddEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteEvent: (id: string) => Promise<void> }) {
   const [entryDate, setEntryDate] = useState(selectedDate);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => setEntryDate(selectedDate), [selectedDate]);
+  if (!module) return <section id="cycle-entry-panel" className="cycle-inline-panel" aria-label="周期记录"><span className="muted">周期模块正在加载…</span></section>;
+  const quickDates = [
+    { label: "前天", date: shiftDate(today, -2) },
+    { label: "昨天", date: shiftDate(today, -1) },
+    { label: "今天", date: today },
+  ];
+  const eventsForDate = module.events.filter((event) => event.date === entryDate);
+  const eventFor = (kind: CycleIntimacyEventKind) => eventsForDate.find((event) => event.kind === kind);
+  const perform = async (operation: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try { await operation(); } catch (caught) { setError(errorMessage(caught, "周期记录暂时无法保存，请重试")); } finally { setBusy(false); }
+  };
+  const toggleEvent = (kind: CycleIntimacyEventKind) => {
+    const existing = eventFor(kind);
+    void perform(() => existing ? onDeleteEvent(existing.id) : onAddEvent(entryDate, kind));
+  };
+  const options: readonly { kind: CycleIntimacyEventKind; label: string; activeLabel: string; icon: ReactNode }[] = [
+    { kind: "period_start", label: "经期开始", activeLabel: "已记录经期开始", icon: <span className="cycle-option-moon is-start" aria-hidden="true" /> },
+    { kind: "period_end", label: "经期结束", activeLabel: "已记录经期结束", icon: <span className="cycle-option-moon is-end" aria-hidden="true" /> },
+    { kind: "intimacy", label: "亲密", activeLabel: "已记录亲密", icon: <Heart size={17} strokeWidth={1.9} aria-hidden="true" /> },
+    { kind: "fitness", label: "健身", activeLabel: "已记录健身", icon: <Dumbbell size={17} strokeWidth={1.9} aria-hidden="true" /> },
+  ];
+  return <section id="cycle-entry-panel" className="cycle-inline-panel" aria-labelledby="cycle-inline-title">
+    <div className="cycle-inline-head"><div><p className="eyebrow">私密记录</p><h3 id="cycle-inline-title">周期</h3></div><button className="cycle-settings-link" type="button" onClick={onOpenSettings} aria-label="打开周期设置"><SlidersHorizontal size={15} aria-hidden="true" /><span>设置</span></button></div>
+    {!module.config.enabled ? <div className="cycle-disabled-note" role="status"><span>周期记录尚未启用</span><button type="button" onClick={onOpenSettings}>去设置并启用</button></div> : null}
+    <div className="cycle-date-row" aria-label="选择记录日期">
+      {quickDates.map((item) => <button className={`cycle-date-option ${entryDate === item.date ? "is-selected" : ""}`} type="button" key={item.date} onClick={() => setEntryDate(item.date)} aria-pressed={entryDate === item.date}>{item.label}<small>{item.date.slice(5)}</small></button>)}
+      <label className={`cycle-date-picker ${quickDates.some((item) => item.date === entryDate) ? "" : "is-selected"}`}><span>选择日期</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} aria-label="选择周期记录日期" /></label>
+    </div>
+    <div className="cycle-event-row" aria-label={`${entryDate} 的周期事件`}>
+      {options.map((option) => { const active = eventFor(option.kind) !== undefined; return <button className={`cycle-event-option ${active ? "is-active" : ""}`} type="button" key={option.kind} onClick={() => toggleEvent(option.kind)} disabled={busy || !module.config.enabled} aria-pressed={active} aria-label={`${active ? option.activeLabel : `记录${option.label}`}，${active ? "再次点击移除" : "点击记录"}`} title={active ? `${option.activeLabel}（再次点击移除）` : `记录${option.label}`}><span className="cycle-event-icon">{option.icon}</span><span>{active ? option.activeLabel : option.label}</span></button>; })}
+    </div>
+    {error ? <p className="cycle-inline-error" role="alert"><CircleHelp size={16} aria-hidden="true" />{error}</p> : null}
+  </section>;
+}
+
+function CycleModuleDialog({ open, module, onClose, onSaveConfig }: { open: boolean; module: CycleIntimacyModuleData | null; onClose: () => void; onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; selectedDate?: string; onAddEvent?: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteEvent?: (id: string) => Promise<void> }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [draft, setDraft] = useState<CycleIntimacyModuleConfig | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => { if (module) setDraft(module.config); }, [module]);
-  useEffect(() => setEntryDate(selectedDate), [selectedDate, open]);
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
@@ -2059,20 +2105,14 @@ function CycleModuleDialog({ open, module, selectedDate, onClose, onSaveConfig, 
     if ((!open || !module) && dialog.open) dialog.close();
   }, [open, module]);
   if (!module || !draft) return <dialog ref={dialogRef} className="modal-dialog" />;
-  const eventsForDate = module.events.filter((event) => event.date === entryDate);
-  const eventFor = (kind: CycleIntimacyEventKind) => eventsForDate.find((event) => event.kind === kind);
   const perform = async (operation: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
     setError(null);
-    try { await operation(); } catch (caught) { setError(errorMessage(caught, "私密日历暂时无法保存，请重试")); } finally { setBusy(false); }
-  };
-  const toggleEvent = (kind: CycleIntimacyEventKind) => {
-    const existing = eventFor(kind);
-    void perform(() => existing ? onDeleteEvent(existing.id) : onAddEvent(entryDate, kind));
+    try { await operation(); } catch (caught) { setError(errorMessage(caught, "周期设置暂时无法保存，请重试")); } finally { setBusy(false); }
   };
   return <dialog ref={dialogRef} className="modal-dialog cycle-module-dialog" aria-labelledby="cycle-module-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
-    <div className="dialog-header"><div><p className="eyebrow">可选模块</p><h2 id="cycle-module-title">伴侣周期与亲密</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭模块设置"><X size={17} aria-hidden="true" /></button></div>
+    <div className="dialog-header"><div><p className="eyebrow">周期</p><h2 id="cycle-module-title">周期设置</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭周期设置"><X size={17} aria-hidden="true" /></button></div>
     <div className="dialog-body">
       <label className="cycle-enable"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => current ? { ...current, enabled: event.target.checked } : current)} /><span><strong>在日历中启用</strong><small>关闭后不显示月亮或爱心，已有私密记录会保留。</small></span></label>
       <div className="dialog-fields-grid">
@@ -2081,8 +2121,7 @@ function CycleModuleDialog({ open, module, selectedDate, onClose, onSaveConfig, 
       </div>
       <label className="dialog-field"><span>最近一次经期开始（可选）</span><input type="date" value={draft.anchorStart ?? ""} onChange={(event) => setDraft((current) => { if (!current) return current; const { anchorStart: _anchorStart, ...rest } = current; return event.target.value ? { ...rest, anchorStart: event.target.value } : rest; })} /></label>
       <p className="cycle-dialog-note">虚影月亮只表示按以上间隔推算的预计日期；确认开始或结束后，会以实心月亮覆盖它。</p>
-      <div className="cycle-settings-actions"><button className="primary-button" type="button" onClick={() => void perform(() => onSaveConfig(draft))} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{busy ? "保存中" : "保存模块设置"}</span></button></div>
-      {draft.enabled ? <section className="cycle-entry-panel" aria-labelledby="cycle-entry-title"><div><p className="eyebrow">私密记录</p><h3 id="cycle-entry-title">标记一天</h3></div><label className="dialog-field"><span>日期</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} /></label><div className="cycle-entry-options"><button className={`cycle-entry-option ${eventFor("intimacy") ? "is-active" : ""}`} type="button" onClick={() => toggleEvent("intimacy")} disabled={busy}><Heart size={17} strokeWidth={1.9} aria-hidden="true" /><span>{eventFor("intimacy") ? "已记录亲密（点此移除）" : "记录亲密"}</span></button><button className={`cycle-entry-option ${eventFor("period_start") ? "is-active" : ""}`} type="button" onClick={() => toggleEvent("period_start")} disabled={busy}><span className="cycle-option-moon is-start" aria-hidden="true" /><span>{eventFor("period_start") ? "经期开始已记录" : "记录经期开始"}</span></button><button className={`cycle-entry-option ${eventFor("period_end") ? "is-active" : ""}`} type="button" onClick={() => toggleEvent("period_end")} disabled={busy}><span className="cycle-option-moon is-end" aria-hidden="true" /><span>{eventFor("period_end") ? "经期结束已记录" : "记录经期结束"}</span></button></div></section> : null}
+      <div className="cycle-settings-actions"><button className="primary-button" type="button" onClick={() => void perform(() => onSaveConfig(draft))} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{busy ? "保存中" : "保存周期设置"}</span></button></div>
       {error ? <p className="dialog-error" role="alert"><CircleHelp size={17} aria-hidden="true" />{error}</p> : null}
     </div>
   </dialog>;
@@ -3248,6 +3287,7 @@ function App() {
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("week");
   const [cycleModule, setCycleModule] = useState<CycleIntimacyModuleData | null>(null);
   const [cycleModuleOpen, setCycleModuleOpen] = useState(false);
+  const [cyclePanelOpen, setCyclePanelOpen] = useState(false);
   const [summaries, setSummaries] = useState<readonly DaySummary[]>([]);
   const [aiSummaries, setAiSummaries] = useState(false);
   const [weatherArchive, setWeatherArchive] = useState<ReadonlyMap<string, CalendarWeather>>(new Map());
@@ -3612,7 +3652,7 @@ function App() {
       setCycleModule(null);
       return () => controller.abort();
     }
-    apiRequest<CycleIntimacyModuleData>("/api/modules/cycle-intimacy", { signal: controller.signal })
+    apiRequest<CycleModuleResponse>("/api/modules/cycle-intimacy", { signal: controller.signal })
       .then((module) => { if (!controller.signal.aborted) setCycleModule(module); })
       .catch(() => { if (!controller.signal.aborted) setCycleModule(null); });
     return () => controller.abort();
@@ -3759,22 +3799,22 @@ function App() {
     }
   };
   const saveCycleModuleConfig = async (config: CycleIntimacyModuleConfig) => {
-    const module = await apiRequest<CycleIntimacyModuleData>("/api/modules/cycle-intimacy/config", {
+    const module = await apiRequest<CycleModuleResponse>("/api/modules/cycle-intimacy/config", {
       method: "PUT",
       body: JSON.stringify({ ...config, anchorStart: config.anchorStart ?? null }),
     });
     setCycleModule(module);
-    showToast(config.enabled ? "周期与亲密模块已保存" : "周期与亲密模块已关闭，记录仍被保留");
+    showToast(config.enabled ? "周期设置已保存" : "周期已关闭，记录仍被保留");
   };
   const addCycleModuleEvent = async (date: string, kind: CycleIntimacyEventKind) => {
-    const module = await apiRequest<CycleIntimacyModuleData>("/api/modules/cycle-intimacy/events", { method: "POST", body: JSON.stringify({ date, kind }) });
+    const module = await apiRequest<CycleModuleResponse>("/api/modules/cycle-intimacy/events", { method: "POST", body: JSON.stringify({ date, kind }) });
     setCycleModule(module);
-    showToast("私密日历标记已保存");
+    showToast("周期记录已保存");
   };
   const deleteCycleModuleEvent = async (id: string) => {
-    const module = await apiRequest<CycleIntimacyModuleData>(`/api/modules/cycle-intimacy/events/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const module = await apiRequest<CycleModuleResponse>(`/api/modules/cycle-intimacy/events/${encodeURIComponent(id)}`, { method: "DELETE" });
     setCycleModule(module);
-    showToast("私密日历标记已移除");
+    showToast("周期记录已移除");
   };
 
   useEffect(() => { installDiagnostics(); }, []);
@@ -4091,7 +4131,7 @@ function App() {
       : activeView === "notes"
         ? <NotesLibrary records={visibleRecords} loading={recordsLoading} error={recordsError} entities={entities} onRetry={() => setRecordsReload((current) => current + 1)} onCreateEntity={handleCreateEntity} onSave={handleSaveNote} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} />
       : activeView === "calendar"
-        ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} onOpenCycleModule={() => setCycleModuleOpen(true)} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
+         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={() => setCyclePanelOpen((current) => !current)} onOpenCycleSettings={() => setCycleModuleOpen(true)} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
       : activeView === "timemachine"
         ? <TimeMachine />
       : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} onMore={() => setMobileMenuOpen(true)} moreOpen={mobileMenuOpen} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={onNavigate} onOpenSearch={() => setSearchDialogOpen(true)} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(recordsForQuery ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) setImportFile(null); }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} onOpenSettings={() => setActiveView("settings")} /></div>;

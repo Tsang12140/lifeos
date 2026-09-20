@@ -1944,6 +1944,8 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
   equal(start.response.status, 201);
   const intimate = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-03", kind: "intimacy" }) });
   equal(intimate.response.status, 201);
+  const fitness = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-04", kind: "fitness" }) });
+  equal(fitness.response.status, 201);
   const end = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-06", kind: "period_end" }) });
   equal(end.response.status, 201);
   const duplicate = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-03", kind: "intimacy" }) });
@@ -1954,7 +1956,7 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
   const exported = exportResponse.body as { modules?: { cycleIntimacy?: { config: { enabled: boolean; cycleLength: number }; events: Array<{ id: string; date: string; kind: string }> } } };
   equal(exported.modules?.cycleIntimacy?.config.enabled, true);
   equal(exported.modules?.cycleIntimacy?.config.cycleLength, 29);
-  deepEqual(exported.modules?.cycleIntimacy?.events.map((event) => `${event.date}:${event.kind}`), ["2026-09-01:period_start", "2026-09-03:intimacy", "2026-09-06:period_end"]);
+  deepEqual(exported.modules?.cycleIntimacy?.events.map((event) => `${event.date}:${event.kind}`), ["2026-09-01:period_start", "2026-09-03:intimacy", "2026-09-04:fitness", "2026-09-06:period_end"]);
 
   const imported = await request(restored.base, "/api/import", { method: "POST", ...json({ bundle: exported }) });
   equal(imported.response.status, 201);
@@ -1965,7 +1967,7 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
   ok(eventId);
   const removed = await request(harness.base, `/api/modules/cycle-intimacy/events/${encodeURIComponent(eventId)}`, { method: "DELETE" });
   equal(removed.response.status, 200);
-  equal((removed.body as { events: unknown[] }).events.length, 2);
+  equal((removed.body as { events: unknown[] }).events.length, 3);
 });
 
 test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and upserts refs", async (t) => {

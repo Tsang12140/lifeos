@@ -79,7 +79,7 @@ const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "ca
 const ENTITY_KINDS: readonly EntityKind[] = ["person", "project", "place", "topic", "movie"];
 const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
 const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
-const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "period_start", "period_end"];
+const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "fitness", "period_start", "period_end"];
 
 class HttpError extends Error {
   public constructor(readonly status: number, readonly code: string, message: string) {

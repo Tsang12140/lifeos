@@ -443,6 +443,8 @@ export class SqliteRecordRepository {
       CREATE TABLE IF NOT EXISTS cycle_intimacy_events (
         id TEXT PRIMARY KEY NOT NULL,
         date TEXT NOT NULL,
+        -- The application/core enum owns validation; keeping this column open
+        -- lets newer private habits (fitness) read old databases unchanged.
         kind TEXT NOT NULL,
         UNIQUE (date, kind)
       ) STRICT;

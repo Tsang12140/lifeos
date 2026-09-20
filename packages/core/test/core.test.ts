@@ -2,6 +2,7 @@ import test from "node:test";
 import { deepStrictEqual, equal, match, ok, throws } from "node:assert/strict";
 import {
   assertValidEntity,
+  assertValidCycleIntimacyModuleData,
   assertValidTimelineRecord,
   canonicalPersonName,
   createDateOnly,
@@ -22,6 +23,17 @@ import {
   type Entity,
   type TaskRecord,
 } from "../src/index.js";
+
+test("cycle module accepts the independent fitness habit while preserving period markers", () => {
+  assertValidCycleIntimacyModuleData({
+    config: { enabled: true, cycleLength: 28, periodLength: 5 },
+    events: [
+      { id: "period", date: "2026-09-01", kind: "period_start" },
+      { id: "fitness", date: "2026-09-02", kind: "fitness" },
+      { id: "intimacy", date: "2026-09-03", kind: "intimacy" },
+    ],
+  });
+});
 
 const originalText = "今天试记一段原文：\"引号\"、冒号:、井号 #、反斜杠 \\\\，以及\n第二行。";
 

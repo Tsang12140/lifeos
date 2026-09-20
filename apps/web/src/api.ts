@@ -3,6 +3,7 @@ import type {
   AssetKind,
   AssetLink,
   AssetRole,
+  CycleIntimacyModuleData,
   DaySummary,
   Entity,
   EntityKind,
@@ -16,6 +17,9 @@ import type {
   TimelineRecord,
   WeatherAttachment,
 } from "@lifeos/core";
+
+/** Response shared by the calendar's private cycle panel and its settings view. */
+export type CycleModuleResponse = CycleIntimacyModuleData;
 import { logApiFailure } from "./diagnostics";
 import type { WeatherConfigStatus, WeatherProfile } from "./weather";
 

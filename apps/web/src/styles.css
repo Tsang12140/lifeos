@@ -8382,6 +8382,7 @@ button.relation-chip {
 .calendar-moon.is-end, .cycle-option-moon.is-end { background: linear-gradient(90deg, #fdf2f6 0 50%, #c66586 50% 100%); }
 .calendar-moon.is-forecast { opacity: 0.34; border-style: dashed; }
 .calendar-heart { fill: transparent; }
+.calendar-fitness { color: #557a71; }
 .calendar-marker-more { color: var(--muted); font-size: 0.58rem; font-weight: 760; letter-spacing: -0.04em; }
 .month-cell .calendar-day-markers { right: 7px; bottom: 6px; z-index: 1; }
 .month-cell.is-outside .calendar-day-markers { display: none; }
@@ -8390,6 +8391,39 @@ button.relation-chip {
   .month-cell .calendar-day-markers { right: 4px; bottom: 3px; transform: scale(0.88); transform-origin: bottom right; }
   .cycle-entry-options { grid-template-columns: 1fr; }
   .cycle-entry-option { min-height: 0; flex-direction: row; align-items: center; }
+}
+
+/* The calendar is the daily entry point; settings stay in the secondary dialog. */
+.cycle-inline-panel { display: grid; gap: 10px; margin: 0 0 16px; padding: 12px; border: 1px solid #ead9e0; border-radius: 12px; background: #fffafb; }
+.cycle-inline-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cycle-inline-head h3 { margin: 1px 0 0; color: var(--ink); font-size: 0.98rem; }
+.cycle-settings-link { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); cursor: pointer; font-size: 0.74rem; }
+.cycle-settings-link:hover, .cycle-settings-link:focus-visible { border-color: #d7a2b5; color: #8e4560; }
+.cycle-date-row { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 6px; min-width: 0; overflow-x: auto; }
+.cycle-date-option, .cycle-date-picker { flex: 1 1 0; min-width: 58px; min-height: 48px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft); background: var(--surface); }
+.cycle-date-option { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 5px 6px; cursor: pointer; font-size: 0.76rem; white-space: nowrap; }
+.cycle-date-option small { color: var(--muted); font-size: 0.64rem; }
+.cycle-date-option.is-selected, .cycle-date-picker.is-selected { border-color: #b85d7d; color: #8e4560; background: #fff5f8; box-shadow: inset 0 0 0 1px #b85d7d; }
+.cycle-date-picker { position: relative; display: flex; flex: 1.45 1 112px; align-items: center; justify-content: center; gap: 4px; padding: 0 7px; cursor: pointer; font-size: 0.72rem; white-space: nowrap; }
+.cycle-date-picker input { min-width: 0; width: 100%; min-height: 42px; border: 0; padding: 0; color: inherit; background: transparent; cursor: pointer; font: inherit; }
+.cycle-date-picker span { position: absolute; left: 7px; top: 4px; color: var(--muted); font-size: 0.58rem; pointer-events: none; }
+.cycle-date-picker input { padding-top: 11px; }
+.cycle-event-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.cycle-event-option { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; min-height: 48px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft); background: var(--surface); cursor: pointer; font-size: 0.75rem; line-height: 1.25; text-align: center; }
+.cycle-event-option:hover, .cycle-event-option:focus-visible, .cycle-event-option.is-active { border-color: #d7a2b5; color: #8e4560; background: #fff7fa; }
+.cycle-event-option.is-active { box-shadow: inset 0 0 0 1px #d7a2b5; }
+.cycle-event-option:disabled { cursor: not-allowed; opacity: 0.56; }
+.cycle-event-icon { display: inline-grid; place-items: center; flex: 0 0 auto; min-width: 18px; }
+.cycle-disabled-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border-radius: 8px; color: var(--muted); background: var(--surface-soft); font-size: 0.72rem; }
+.cycle-disabled-note button { min-height: 36px; padding: 0 9px; border: 1px solid #d7a2b5; border-radius: 7px; color: #8e4560; background: transparent; cursor: pointer; font-size: 0.72rem; }
+.cycle-inline-error { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: #a34f62; font-size: 0.74rem; }
+
+@media (max-width: 560px) {
+  .cycle-inline-panel { padding: 10px; }
+  .cycle-date-option, .cycle-date-picker { min-width: 55px; }
+  .cycle-date-picker { flex-basis: 106px; }
+  .cycle-event-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cycle-event-option { min-height: 48px; }
 }
 
 /* Final relationship-chip overrides live at EOF because the original

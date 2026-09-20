@@ -220,12 +220,14 @@ export interface WeatherAttachment {
 
 /**
  * An optional, private calendar overlay. It deliberately models a few stable
- * facts instead of copying a health app's entire schema: a confirmed period
- * boundary and an intimacy marker are enough for the calendar to derive its
- * moon shapes and non-medical cycle estimate.
+ * facts instead of copying a health app's entire schema: confirmed period
+ * boundaries plus independent daily habits are enough for the calendar to
+ * derive its moon shapes and non-medical cycle estimate.
  */
-export type CycleIntimacyEventKind = "intimacy" | "period_start" | "period_end";
-export const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "period_start", "period_end"];
+/** Private, day-level markers. `intimacy` and `fitness` are independent habits;
+ * the period boundaries retain their historical names for export compatibility. */
+export type CycleIntimacyEventKind = "intimacy" | "fitness" | "period_start" | "period_end";
+export const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "fitness", "period_start", "period_end"];
 
 export interface CycleIntimacyModuleConfig {
   readonly enabled: boolean;
