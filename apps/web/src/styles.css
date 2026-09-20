@@ -575,7 +575,7 @@ textarea:focus-visible {
   z-index: 3;
   bottom: 0;
   left: 0;
-  width: 82px;
+  width: 74px;
   margin: 0;
   border: 0;
 }
@@ -583,24 +583,24 @@ textarea:focus-visible {
 .weather-corner-today {
   box-sizing: border-box;
   display: grid;
-  height: 31px;
-  padding: 0 6px 0 10px;
+  height: 26px;
+  padding: 0 5px 0 8px;
   border-top: 1px solid rgb(255 245 219 / 0.72);
   border-right: 1px solid rgb(101 67 21 / 0.2);
-  border-radius: 0 13px 0 0;
+  border-radius: 0 11px 0 0;
   place-items: center;
   color: #563812;
   background: linear-gradient(135deg, #ecd093 0%, #d9a854 100%);
   font: inherit;
-  font-size: 0.73rem;
-  font-weight: 740;
+  font-size: 0.8rem;
+  font-weight: 800;
   letter-spacing: 0.01em;
   line-height: 1;
   pointer-events: none;
   user-select: none;
 }
 
-.weather-corner-today.is-current { padding-left: 12px; }
+.weather-corner-today.is-current { padding-left: 10px; }
 .weather-corner-today.is-return { letter-spacing: 0; }
 
 /* The visible amber part stays deliberately small; this transparent wrapper
@@ -10901,13 +10901,13 @@ button.relation-chip {
 
 @media (max-width: 560px) {
   .weather-corner-today,
-  .weather-corner-today-hit { width: 76px; }
-  .weather-corner-today { height: 28px; padding-right: 5px; padding-left: 9px; border-radius: 0 12px 0 0; font-size: 0.68rem; }
-  .weather-corner-today.is-current { padding-left: 11px; }
+  .weather-corner-today-hit { width: 70px; }
+  .weather-corner-today { height: 24px; padding-right: 4px; padding-left: 7px; border-radius: 0 10px 0 0; font-size: 0.78rem; }
+  .weather-corner-today.is-current { padding-left: 9px; }
 }
 
 @media (max-width: 390px) {
   .weather-corner-today,
-  .weather-corner-today-hit { width: 72px; }
-  .weather-corner-today { height: 27px; font-size: 0.65rem; }
+  .weather-corner-today-hit { width: 66px; }
+  .weather-corner-today { height: 23px; font-size: 0.76rem; }
 }
