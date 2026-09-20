@@ -4020,8 +4020,6 @@ function App() {
     try { const state = await apiRequest<AuthState>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) }); invalidateRecordsCache(); setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); authRef.current = state; setAuthState(state); } catch (error) { setAuthError(errorMessage(error, "密码不正确")); } finally { setLoginLoading(false); }
   };
 
-  if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
-
   const isToday = activeView === "today";
   const isReviewingPast = isToday && selectedDate < localDateToday();
   // Views that own their column outright: no composer bar, no page actions. The
@@ -4081,6 +4079,7 @@ function App() {
     onClose: () => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); },
   };
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
+  if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
   const onNavigate = navigate;
