@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, RotateCcw, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
 import { getWeatherDecision, getWeatherPhase, findWeatherDay, type WeatherCategory, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherSky } from "./WeatherBackground";
@@ -66,6 +66,7 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   }, [selectedDate]);
 
   const accessibleDate = `${Number(selectedDate.slice(5, 7))}月${Number(selectedDate.slice(8, 10))}日${weekdayShort(selectedDate)}`;
+  const isToday = selectedDate === today;
   return <div className="weather-date-navigation" aria-label="日期导航">
     <button className="weather-date-step" type="button" onClick={() => step(-1)} aria-label="前一天"><ArrowLeft size={18} strokeWidth={2} aria-hidden="true" /></button>
     <label className="weather-date-picker" aria-label={`选择日期，当前${accessibleDate}`}>
@@ -81,11 +82,9 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
       <CalendarDays className="weather-date-calendar" size={15} strokeWidth={1.9} aria-hidden="true" />
       <input type="date" value={selectedDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
     </label>
-    <span className="weather-date-context">
-      <strong>{weekdayShort(selectedDate)}</strong>
-      {selectedDate === today ? <small>今天</small> : <button className="weather-return-today" type="button" onClick={() => onChange(today)} aria-label="回到今天">回今天</button>}
-    </span>
-    <button className="weather-date-step" type="button" onClick={() => step(1)} aria-label="后一天"><ArrowRight size={18} strokeWidth={2} aria-hidden="true" /></button>
+    <span className="weather-date-context"><strong>{weekdayShort(selectedDate)}</strong></span>
+    <button className="weather-date-step weather-date-step--next" type="button" onClick={() => step(1)} aria-label="后一天"><ArrowRight size={18} strokeWidth={2} aria-hidden="true" /></button>
+    <button className={`weather-today-command ${isToday ? "is-current" : ""}`} type="button" onClick={() => onChange(today)} disabled={isToday} aria-label={isToday ? "已是今天" : "回到今天"} title={isToday ? "已是今天" : "回到今天"}><RotateCcw size={16} strokeWidth={1.9} aria-hidden="true" /><span className="weather-today-command-label">今天</span></button>
   </div>;
 }
 

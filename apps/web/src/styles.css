@@ -561,13 +561,14 @@ textarea:focus-visible {
 @keyframes date-flip-forward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(-76deg); filter: brightness(.82); } 100% { transform: rotateX(-90deg); opacity: .08; } }
 @keyframes date-flip-backward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(76deg); filter: brightness(.82); } 100% { transform: rotateX(90deg); opacity: .08; } }
 
-.weather-date-context { position: relative; z-index: 4; display: inline-flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; min-width: 0; margin-left: 9px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); font-size: 0.78rem; line-height: 1.1; white-space: nowrap; }
+.weather-date-context { position: relative; z-index: 4; display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 32px; margin-left: 9px; color: var(--weather-header-ink); text-align: center; text-shadow: var(--weather-header-text-shadow); font-size: 0.78rem; line-height: 1.1; white-space: nowrap; }
 .weather-date-context strong { font-weight: 760; }
-.weather-date-context small { padding: 2px 5px; border-radius: 6px; color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); background: rgb(238 243 255 / 0.78); font-size: 0.67rem; font-weight: 720; }
 .weather-date-calendar { margin-left: 8px; color: #62779e; }
 
-.weather-return-today { position: relative; z-index: 5; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 32px; margin: 0; padding: 0 7px; border: 1px solid rgb(109 133 190 / 0.22); border-radius: 8px; color: #45639e; background: rgb(239 244 255 / 0.62); cursor: pointer; font-size: 0.73rem; font-weight: 730; pointer-events: auto; }
-.weather-return-today:hover { background: rgb(229 237 255 / 0.9); }
+.weather-today-command { position: relative; z-index: 3; display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; min-width: 58px; height: 38px; margin: 0 0 0 1px; padding: 0 9px; border: 1px solid rgb(103 127 174 / 0.28); border-radius: 11px; color: var(--weather-header-ink); background: rgb(255 255 255 / 0.32); cursor: pointer; font: inherit; font-size: 0.74rem; font-weight: 720; transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; }
+.weather-today-command:hover:not(:disabled) { border-color: rgb(79 109 165 / 0.48); background: rgb(255 255 255 / 0.58); }
+.weather-today-command:focus-visible { outline: 2px solid rgb(88 124 255 / 0.48); outline-offset: 2px; }
+.weather-today-command.is-current { border-color: rgb(103 127 174 / 0.14); color: var(--weather-header-muted); background: rgb(255 255 255 / 0.14); cursor: default; }
 
 .weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -608,9 +609,9 @@ textarea:focus-visible {
 .weather-header--night .date-flap::after { background: rgb(211 224 255 / 0.18); box-shadow: 0 1px 0 rgb(4 10 25 / 0.5); }
 .weather-header--night .date-flap-leaf { background: linear-gradient(180deg, rgb(37 55 93 / 0.94), rgb(15 28 58 / 0.9)); }
 .weather-header--night .weather-date-context { color: #dce7ff; }
-.weather-header--night .weather-date-context small { color: #b8c9f1; background: rgb(91 120 183 / 0.24); }
-.weather-header--night .weather-return-today { border-color: rgb(165 188 235 / 0.32); color: #dce7ff; background: rgb(30 51 92 / 0.7); }
-.weather-header--night .weather-return-today:hover { background: rgb(46 72 123 / 0.86); }
+.weather-header--night .weather-today-command { border-color: rgb(165 188 235 / 0.3); color: #dce7ff; background: rgb(14 28 59 / 0.68); }
+.weather-header--night .weather-today-command:hover:not(:disabled) { border-color: rgb(181 202 246 / 0.56); background: rgb(28 48 88 / 0.82); }
+.weather-header--night .weather-today-command.is-current { border-color: rgb(165 188 235 / 0.18); color: #aebddd; background: rgb(14 28 59 / 0.32); }
 .weather-header--night .weather-configure-button { border-color: rgb(165 188 235 / 0.3); color: #e2eaff; background: rgb(14 28 59 / 0.68); }
 .weather-header--night .weather-configure-button:hover { border-color: rgb(181 202 246 / 0.56); background: rgb(28 48 88 / 0.82); }
 
@@ -10853,4 +10854,37 @@ button.relation-chip {
   .settings-page-content .settings-ai-effective { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-page-content .settings-ai-effective-item.is-wide { grid-column: 1 / -1; }
   .settings-backup-stats { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* A date is context; returning to today is a command. On a phone they still
+   share the existing weekday column vertically, but never trade two- and
+   three-character labels inside the same geometry. */
+@media (max-width: 900px) {
+  .weather-date-navigation {
+    --weather-date-arrow-slot: 38px;
+    display: grid;
+    grid-template-columns: var(--weather-date-arrow-slot) max-content 32px var(--weather-date-arrow-slot);
+    grid-template-rows: 30px 28px;
+    align-items: center;
+    gap: 1px 2px;
+    min-height: 60px;
+  }
+
+  .weather-date-navigation > .weather-date-step { grid-row: 1 / -1; align-self: center; }
+  .weather-date-navigation > .weather-date-step:first-child { grid-column: 1; margin-left: 0; }
+  .weather-date-picker { grid-column: 2; grid-row: 1 / -1; }
+  .weather-date-context { grid-column: 3; grid-row: 1; align-self: end; min-width: 32px; margin-left: 0; }
+  .weather-date-step--next { grid-column: 4; }
+  .weather-today-command { grid-column: 3; grid-row: 2; align-self: start; justify-self: center; width: 28px; min-width: 28px; height: 26px; margin: 0; padding: 0; border-radius: 8px; }
+  .weather-today-command-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .weather-today-command svg { width: 15px; height: 15px; }
+}
+
+@media (max-width: 560px) {
+  .weather-date-navigation { --weather-date-arrow-slot: 34px; }
+}
+
+@media (max-width: 390px) {
+  .weather-date-navigation { --weather-date-arrow-slot: 30px; grid-template-columns: var(--weather-date-arrow-slot) max-content 28px var(--weather-date-arrow-slot); }
+  .weather-date-context { min-width: 28px; }
 }
