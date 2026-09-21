@@ -20,8 +20,12 @@ export interface SummarySourceRecord {
   readonly labels?: readonly string[];
 }
 
-/** How a day's summary came to be. A fallback is shown as such, never as AI output. */
-export type DaySummaryStatus = "generated" | "fallback";
+/**
+ * How a day's summary came to be. A fallback is shown as such, never as AI
+ * output. `manual` is text the owner typed in the calendar's edit mode; it is
+ * the only one that is not derived, so it outranks the other two.
+ */
+export type DaySummaryStatus = "generated" | "fallback" | "manual";
 
 /**
  * Derived data, stored apart from the records it describes: requirements §6.1

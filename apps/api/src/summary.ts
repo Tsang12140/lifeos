@@ -10,6 +10,7 @@ import {
   type DaySummaryProvider,
   type SummarySourceRecord,
 } from "@lifeos/core";
+import { readRuntimeAiConfig } from "./ai-config.js";
 import type { ApiConfig } from "./config.js";
 import type { RecordView } from "./repository.js";
 
@@ -81,11 +82,14 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
   public readonly model: string;
   readonly #apiKey: string;
   readonly #baseUrl: string;
+  /** Overridable so the prompt can be edited from settings instead of only in code. */
+  readonly #systemPrompt: string;
 
-  public constructor(apiKey: string, baseUrl: string, model: string) {
+  public constructor(apiKey: string, baseUrl: string, model: string, systemPrompt: string = SYSTEM_PROMPT) {
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl;
     this.model = model;
+    this.#systemPrompt = systemPrompt;
   }
 
   public async summarizeDays(days: readonly DaySummaryInput[]): Promise<readonly DaySummaryDraft[]> {
@@ -98,7 +102,7 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
         temperature: 0.2,
         stream: false,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: this.#systemPrompt },
           { role: "user", content: buildUserPrompt(days) },
         ],
       }),
@@ -112,9 +116,20 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
   }
 }
 
+/**
+ * The provider the server asks for, resolved **per request** rather than once at
+ * boot: the AI key lives in the settings file, and a provider frozen at startup
+ * would keep using whatever key (or lack of one) the process happened to see.
+ *
+ * Before this, summaries read LIFEOS_DEEPSEEK_API_KEY only, while the assistant
+ * read the settings file. Two answers to the same question — so a key typed into
+ * the settings screen worked everywhere except the calendar, which silently kept
+ * falling back to the offline rule.
+ */
 export function createDaySummaryProvider(config: ApiConfig): DaySummaryProvider {
-  if (config.deepseekApiKey === undefined) return new RuleDaySummaryProvider();
-  return new DeepSeekDaySummaryProvider(config.deepseekApiKey, config.deepseekBaseUrl, config.deepseekModel);
+  const runtime = readRuntimeAiConfig(config);
+  if (!runtime.enabled || runtime.apiKey === undefined) return new RuleDaySummaryProvider();
+  return new DeepSeekDaySummaryProvider(runtime.apiKey, runtime.baseUrl, runtime.model);
 }
 
 export interface DaySummaryRequest {

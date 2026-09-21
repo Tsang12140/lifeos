@@ -1380,9 +1380,11 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     },
   });
   assetGcScheduler.start();
-  // One provider for the process: it holds no per-request state, and the summaries
-  // it produces are cached per day, so a month view does not re-ask on every open.
-  const daySummaryProvider = createDaySummaryProvider(config);
+  // The summary provider is built per request from the AI settings (see
+  // createDaySummaryProvider): the key lives in a file, so one provider frozen at
+  // boot would keep using whatever key the process happened to start with. The
+  // summaries it produces are still cached per day, so opening a month does not
+  // re-ask for days that have not changed.
   // Derived thumbnails live under the data directory and are rebuilt on demand, so
   // nothing has to be migrated, migrated back, or backed up: deleting the directory
   // is a supported operation, not a repair.
@@ -2032,6 +2034,10 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         if (bucket === undefined) byDate.set(date, [record]);
         else bucket.push(record);
       }
+      // Resolved per request, not per process: the AI key lives in the settings
+      // file, so reading it here is what makes "save the key, reopen the calendar"
+      // work without restarting the API.
+      const daySummaryProvider = createDaySummaryProvider(config);
       const items = await resolveDaySummaries({
         dates,
         recordsForDate: (date) => byDate.get(date) ?? [],
