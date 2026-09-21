@@ -3972,6 +3972,413 @@ h2 {
   box-shadow: var(--shadow-focus);
 }
 
+/*
+ * 任务定时：一个范围选择器，两个端点各是一个「目标」。
+ *
+ * 它替掉的是任务原来的两个单日选择器（发生时间 + 截止时间）。两处是主人点名的：
+ * 跨月要「先点月份标题展开、再点下月」两步；以及开始时间被钉在「现在」以前，
+ * 于是「一个月后才开始的任务」根本设不出来。
+ *
+ * 所以这里的月份箭头是常驻的（一次点击换一个月），并且给了四个快捷日
+ * （今天 / 明天 / 一周后 / 一个月后）。范围用一条 `--primary-soft` 的带子画出来，
+ * 两个端点填成实心；带子在换行处收圆角，读起来是连续的一条，而不是七个方块。
+ */
+.task-schedule {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.task-schedule-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.task-schedule-trigger > svg {
+  flex: 0 0 auto;
+}
+
+.task-schedule-part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.task-schedule-part.is-blank {
+  color: var(--muted);
+}
+
+.task-schedule-clock {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* 「结束」 with no day yet should read as one word, not as a day plus a time. */
+.task-schedule-part.is-blank .task-schedule-clock {
+  display: none;
+}
+
+.task-schedule-arrow {
+  color: var(--line-strong);
+}
+
+.task-schedule.is-open .task-schedule-trigger,
+.task-schedule:hover .task-schedule-trigger {
+  color: var(--ink-soft);
+}
+
+.task-schedule-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 47;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 296px;
+  max-width: calc(100vw - 32px);
+  max-height: var(--task-panel-room, 380px);
+  padding: 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 16px 38px rgb(24 36 61 / 0.16);
+}
+
+/* 往下开：上方没地方时才走这条。两边都是量出来的（见组件里的 openPanel）。 */
+.task-schedule-panel.is-below {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.task-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-panel-step {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.task-panel-step:hover {
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+}
+
+.task-panel-month {
+  flex: 1 1 auto;
+  padding-left: 3px;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-panel-anchor {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+
+.task-panel-anchor:hover {
+  border-color: #bdcbfa;
+  color: var(--primary-strong);
+}
+
+/* The two ends, side by side. The lit one is the end the next calendar click
+   writes; the dim one is one tap away. */
+.task-panel-targets {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.task-target {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.task-target:hover {
+  border-color: #bdcbfa;
+}
+
+.task-target-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.task-target-value {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.task-target.is-blank .task-target-value {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.task-target.is-active {
+  border-color: #bdcbfa;
+  background: var(--primary-soft);
+}
+
+.task-target.is-active .task-target-label {
+  color: var(--primary-strong);
+}
+
+/* The month grid is the tall row, so it is the one that scrolls: the header
+   carries the arrows and the time row is where the edit lands next. */
+.task-cal {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.task-cal::-webkit-scrollbar {
+  display: none;
+}
+
+.task-cal-weekdays,
+.task-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.task-cal-weekdays > span {
+  padding-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.task-cal-day {
+  position: relative;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.task-cal-day:hover {
+  background: var(--surface-soft);
+}
+
+.task-cal-day.is-outside {
+  color: var(--line-strong);
+}
+
+.task-cal-day.is-weekend {
+  color: var(--muted);
+}
+
+.task-cal-day.is-band {
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+}
+
+/* Round the band where it meets the edge of a week, so a range that wraps looks
+   like one continuous run rather than a bar running into the panel's border. */
+.task-cal-day.is-band:not(.is-start):not(.is-end):nth-child(7n + 1) {
+  border-radius: 9px 0 0 9px;
+}
+
+.task-cal-day.is-band:not(.is-start):not(.is-end):nth-child(7n) {
+  border-radius: 0 9px 9px 0;
+}
+
+.task-cal-day.is-start,
+.task-cal-day.is-end {
+  color: #fff;
+  background: var(--primary);
+  font-weight: 650;
+}
+
+.task-cal-day.is-start {
+  border-radius: 9px 0 0 9px;
+}
+
+.task-cal-day.is-end {
+  border-radius: 0 9px 9px 0;
+}
+
+.task-cal-day.is-start.is-end {
+  border-radius: 9px;
+}
+
+.task-cal-day.is-today {
+  box-shadow: inset 0 0 0 1.5px var(--primary);
+}
+
+.task-cal-day.is-today.is-start,
+.task-cal-day.is-today.is-end {
+  box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / 0.85);
+}
+
+.task-quick {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-quick-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.task-quick-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.task-quick-chip:hover {
+  border-color: #bdcbfa;
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+}
+
+.task-panel-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* Shorter than the single-day panel's 132px: this panel carries a second row
+   (the two ends) and a range band above the same columns. 88px is four slots,
+   which is what a coarse five-minute column needs to look scrollable rather
+   than cramped — and the height it gives back is what keeps all six weeks of
+   the month grid on screen without scrolling. */
+.task-panel-time .date-time-column {
+  height: 88px;
+}
+
+.task-panel-time-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.task-panel-fine {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.task-panel-time-side .text-button {
+  padding: 3px 7px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.task-panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-panel-note {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.task-panel-foot .text-button {
+  padding: 3px 7px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.task-panel-foot .text-button:disabled {
+  color: var(--line-strong);
+  cursor: default;
+}
+
+.task-schedule .task-schedule-trigger,
+.task-schedule .task-schedule-trigger:focus,
+.task-schedule .task-schedule-trigger:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.task-schedule.is-open,
+.task-schedule:focus-within {
+  border-color: #bdcbfa;
+  box-shadow: var(--shadow-focus);
+}
+
 .privacy-toggle {
   min-height: 36px;
   padding: 0 10px;
@@ -4727,6 +5134,14 @@ button.relation-chip {
   }
 
   .date-panel-time-side {
+    display: none;
+  }
+
+  .task-schedule-panel {
+    width: min(320px, calc(100vw - 24px));
+  }
+
+  .task-panel-time-side {
     display: none;
   }
 
@@ -10705,6 +11120,16 @@ button.relation-chip {
     height: 100%;
   }
 
+  .composer-fields .task-schedule-trigger {
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* The rail is icons only. The range read-out is the widest text in the row,
+     so it is the first thing to go. */
+  .composer-fields .task-schedule-part,
+  .composer-fields .task-schedule-arrow,
   .composer-fields .date-trigger-value,
   .composer-fields .date-trigger-time,
   .composer-fields .privacy-toggle > span,
