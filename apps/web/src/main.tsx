@@ -1903,41 +1903,34 @@ function monthCellPhoto(candidates: readonly { assetId: string; story: number }[
   return bestId;
 }
 
-type PeriodMoonPhase = "start" | "middle" | "end";
-
 interface PeriodMoonMarker {
-  readonly phase: PeriodMoonPhase;
   readonly forecast: boolean;
 }
 
-function phaseForPeriodDay(date: string, start: string, end: string, explicitEnd: string | undefined): PeriodMoonPhase {
-  if (start === end) return "middle";
-  if (date === start) return "start";
-  if (explicitEnd === date) return "end";
-  return "middle";
-}
-
-/** Confirmed boundaries win; an unclosed run stops at the configured duration. */
+/**
+ * A moon means one thing: this day was recorded as period. Start and end look
+ * identical now, and a recorded day never grows neighbours — the owner marks
+ * the days she wants marked. Only the forecast run is still computed, and it
+ * deliberately skips any cycle whose start day is a recorded day, so a marked
+ * start can never spill four unmarked days into the calendar.
+ */
 function periodMoonForDate(date: string, today: string, module: CycleIntimacyModuleData | null): PeriodMoonMarker | undefined {
   if (!module?.config.enabled) return undefined;
   const starts = module.events.filter((event) => event.kind === "period_start").map((event) => event.date).sort();
-  const ends = module.events.filter((event) => event.kind === "period_end").map((event) => event.date).sort();
-  for (let index = 0; index < starts.length; index += 1) {
-    const start = starts[index]!;
-    const nextStart = starts[index + 1];
-    const explicitEnd = ends.find((end) => end >= start && (nextStart === undefined || end < nextStart));
-    let end = explicitEnd ?? shiftDate(start, module.config.periodLength - 1);
-    if (nextStart !== undefined && end >= nextStart) end = shiftDate(nextStart, -1);
-    if (date >= start && date <= end) return { phase: phaseForPeriodDay(date, start, end, explicitEnd), forecast: false };
-  }
+  const recorded = new Set([
+    ...starts,
+    ...module.events.filter((event) => event.kind === "period_end").map((event) => event.date),
+  ]);
+  if (recorded.has(date)) return { forecast: false };
   const baseline = starts[starts.length - 1] ?? module.config.anchorStart;
   if (baseline === undefined || date < today) return undefined;
   const difference = Math.floor((new Date(`${date}T12:00:00`).getTime() - new Date(`${baseline}T12:00:00`).getTime()) / 86_400_000);
   const nearestCycle = Math.max(0, Math.floor(difference / module.config.cycleLength));
   for (let index = Math.max(0, nearestCycle - 1); index <= nearestCycle + 1; index += 1) {
     const start = shiftDate(baseline, index * module.config.cycleLength);
+    if (recorded.has(start)) continue;
     const end = shiftDate(start, module.config.periodLength - 1);
-    if (date >= start && date <= end) return { phase: phaseForPeriodDay(date, start, end, undefined), forecast: true };
+    if (date >= start && date <= end) return { forecast: true };
   }
   return undefined;
 }
@@ -1951,7 +1944,7 @@ function CalendarDayMarkers({ date, today, module }: { readonly date: string; re
   const intimate = module.events.some((event) => event.date === date && event.kind === "intimacy");
   const fitness = module.events.some((event) => event.date === date && event.kind === "fitness");
   const markers: CalendarMarker[] = [];
-  if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预计经期" : "已记录经期", content: <span className={`calendar-moon is-${period.phase} ${period.forecast ? "is-forecast" : ""}`} aria-hidden="true" /> });
+  if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预计经期" : "已记录经期", content: <span className={`calendar-moon ${period.forecast ? "is-forecast" : ""}`} aria-hidden="true" /> });
   if (intimate) markers.push({ id: `intimacy-${date}`, label: "已记录亲密", content: <Heart className="calendar-heart" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   if (fitness) markers.push({ id: `fitness-${date}`, label: "已记录健身", content: <Dumbbell className="calendar-fitness" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   const visible = markers.length > 4 ? [...markers.slice(0, 3), { id: `more-${date}`, label: `还有 ${markers.length - 3} 个日历事件`, content: <span className="calendar-marker-more" aria-hidden="true">+{markers.length - 3}</span> }] : markers;
@@ -2028,7 +2021,8 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
         const items = buckets.get(date) ?? [];
         const photoIds = dayPhotoIds(items, assets);
         const highlights = weekCardRecords(items);
-        return <button className={`week-card ${date === today ? "is-today" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录`}>
+        const picked = cyclePanelOpen && date === anchor;
+        return <button className={`week-card ${date === today ? "is-today" : ""} ${picked ? "is-picked" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${picked ? "，已选为周期记录日期" : ""}`}>
           <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
           <span className="week-card-body">
             {items.length === 0 ? <span className="week-card-empty">没有记录</span> : highlights.map((record) => <span className="week-card-line" key={record.id}><span className="week-card-time">{lifeTimeTime(record.occurredAt ?? record.createdAt)}</span><span className="week-card-text">{recordText(record)}</span></span>)}
@@ -2056,7 +2050,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
         const holidayLabel = dayInfo.holiday === undefined ? "" : `${dayInfo.holiday.name} · ${dayInfo.holiday.kind === "holiday" ? "休息日" : "调休上班"}`;
         const weatherLabel = weather === undefined ? "" : `天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`;
         const titleParts = [holidayLabel, dayInfo.solarTerm ? `节气：${dayInfo.solarTerm}` : "", weatherLabel, summaryText === "" ? "" : `${summaryText}（${summary?.status === "generated" ? `AI · ${summary?.provider}` : "规则生成"}）`].filter(Boolean);
-        return <button className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${items.length === 0 ? "is-empty" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`} title={titleParts.length > 0 ? titleParts.join(" · ") : undefined}>
+        return <button className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${cyclePanelOpen && date === anchor ? "is-picked" : ""} ${items.length === 0 ? "is-empty" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${cyclePanelOpen && date === anchor ? "，已选为周期记录日期" : ""}${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`} title={titleParts.length > 0 ? titleParts.join(" · ") : undefined}>
           {cellPhoto !== undefined ? <span className="month-cell-art" aria-hidden="true"><img src={assetThumbUrl(cellPhoto, 1200)} alt="" loading="lazy" decoding="async" /><span className="month-cell-veil" /></span> : null}
           <span className="month-cell-head"><span className="month-day-number">{Number(date.slice(8, 10))}</span><span className="month-day-meta">{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{items.length > 0 ? <span className="month-day-count">{items.length}</span> : null}{weather !== undefined ? <span className="month-day-weather" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null}</span></span>
           {summaryText !== "" ? <span className={`month-day-summary ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}
@@ -2092,8 +2086,8 @@ function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEv
     void perform(() => existing ? onDeleteEvent(existing.id) : onAddEvent(entryDate, kind));
   };
   const options: readonly { kind: CycleIntimacyEventKind; label: string; activeLabel: string; icon: ReactNode }[] = [
-    { kind: "period_start", label: "经期开始", activeLabel: "已记录经期开始", icon: <span className="cycle-option-moon is-start" aria-hidden="true" /> },
-    { kind: "period_end", label: "经期结束", activeLabel: "已记录经期结束", icon: <span className="cycle-option-moon is-end" aria-hidden="true" /> },
+    { kind: "period_start", label: "经期开始", activeLabel: "已记录经期开始", icon: <span className="cycle-option-moon" aria-hidden="true" /> },
+    { kind: "period_end", label: "经期结束", activeLabel: "已记录经期结束", icon: <span className="cycle-option-moon" aria-hidden="true" /> },
     { kind: "intimacy", label: "亲密", activeLabel: "已记录亲密", icon: <Heart size={17} strokeWidth={1.9} aria-hidden="true" /> },
     { kind: "fitness", label: "健身", activeLabel: "已记录健身", icon: <Dumbbell size={17} strokeWidth={1.9} aria-hidden="true" /> },
   ];
@@ -2104,6 +2098,7 @@ function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEv
       {quickDates.map((item) => <button className={`cycle-date-option ${entryDate === item.date ? "is-selected" : ""}`} type="button" key={item.date} onClick={() => setEntryDate(item.date)} aria-pressed={entryDate === item.date}>{item.label}<small>{item.date.slice(5)}</small></button>)}
       <label className={`cycle-date-picker ${quickDates.some((item) => item.date === entryDate) ? "" : "is-selected"}`}><span>选择日期</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} aria-label="选择周期记录日期" /></label>
     </div>
+    <p className="cycle-entry-target">记录到 <strong>{displayDate(entryDate)}</strong></p>
     <div className="cycle-event-row" aria-label={`${entryDate} 的周期事件`}>
       {options.map((option) => { const active = eventFor(option.kind) !== undefined; return <button className={`cycle-event-option ${active ? "is-active" : ""}`} type="button" key={option.kind} onClick={() => toggleEvent(option.kind)} disabled={busy || !module.config.enabled} aria-pressed={active} aria-label={`${active ? option.activeLabel : `记录${option.label}`}，${active ? "再次点击移除" : "点击记录"}`} title={active ? `${option.activeLabel}（再次点击移除）` : `记录${option.label}`}><span className="cycle-event-icon">{option.icon}</span><span>{active ? option.activeLabel : option.label}</span></button>; })}
     </div>
@@ -3852,8 +3847,17 @@ function App() {
     if (window.location.hash.startsWith("#settings")) window.history.pushState(null, "", `${window.location.pathname}${window.location.search}`);
     setActiveView(view); setMobileMenuOpen(false); if (view !== "timeline") setEntityFilterId(null); if (view === "tasks") setComposerKind("task"); if (view === "notes") setComposerKind("note");
   };
-  /** A calendar cell is a way back into the day it stands for. */
-  const openDay = (date: string) => { setSelectedDate(date); setActiveView("today"); setMobileMenuOpen(false); };
+  /**
+   * A calendar cell is a way back into the day it stands for — except while the
+   * cycle panel is open. There a cell only picks the date a private record
+   * lands on, so the panel and the grid stay in front of you.
+   */
+  const openDay = (date: string) => {
+    setSelectedDate(date);
+    if (cyclePanelOpen) return;
+    setActiveView("today");
+    setMobileMenuOpen(false);
+  };
   /**
    * One line of feedback, bottom right. With an `undo` it also carries a way
    * back: clearing a hand of photos is a single tap, so the tap has to be
