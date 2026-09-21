@@ -17,10 +17,13 @@
 3. **搬数据目录 / 改 `LIFEOS_PASSWORD` 会静默废掉已存的 API key。**
    种子 = `LIFEOS_<模块>_CONFIG_SECRET || LIFEOS_PASSWORD || \`lifeos-local-<模块>:${dataDirectory}\``。
    → `.env` 里 4 个 `LIFEOS_*_CONFIG_SECRET` **别删别改**（删了 = 换密钥）；动完目录回看 `/api/weather/status` 的 `hasKey`。
-   → ★ **换种子只是「解不开」（密文还在文件里，改回去还能救）；在解不开的状态下再点一次「保存」才会真丢** ——
-   `saveRuntimeAiConfig` 里 `nextKey = input.apiKey?.trim() || current.apiKey`，解不开时 `current.apiKey` 是 `undefined`
-   → 密文三件套被**静默从文件里删掉**、零报错零警告（`.review/verify-ai-key-persist.mjs` 19 条断言钉住了这条）。
-   **换了种子之后、没改回来之前，别在设置页点「保存」。**
+   → ★（**2026-09-21 晚已修**）现在**解不开也不会丢**：`saveRuntimeAiConfig` 的 `nextKeyFields` 把盘上密文**原样抄回**
+   （只有显式 `clearApiKey:true` 才删），且 `publicAiConfig.keyUnreadable=true` 让界面明说「文件里那把读不出来」，
+   状态徽标多一档「密钥读不出来」。守它的两条量尺：`.review/verify-ai-key-persist.mjs`（**25 条**，D 段=回归哨兵）
+   + api 测试「a saved key that cannot be decrypted is reported, and a later save never drops it」。
+   → **`.env` 的 key 不会被抄进文件**（旧行为已改）：文件里只有主人亲手填过的 key，`.env` 始终是真源 ——
+   以前在 UI 里保存一次就把 env key 加密落盘，之后改 `.env` 会被文件里的旧副本压住。
+   → 想绕开 UI 就写 `.env` 的 `LIFEOS_DEEPSEEK_API_KEY`（用 `.review/set-ai-key-env.mjs`：key 从 stdin 读、不回显值），**改完必须重启 API**。
    → 「测试连接」**不落盘**（字节与 mtime 都不动）⇒ 「测试成功」≠「已保存」，这是最容易让人误以为设好了的一步。
    → AI 配置的 key 不是明文：`data/ai-config.json` 存 AES-256-GCM 密文，种子 = `.env` 的 `LIFEOS_AI_CONFIG_SECRET`
    （scrypt + salt `lifeos-ai-config-v1`）→ **手写配置文件无效**；想绕开 UI 就写 `.env` 的 `LIFEOS_DEEPSEEK_API_KEY`（要重启 API；

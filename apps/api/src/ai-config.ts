@@ -140,13 +140,43 @@ export function readRuntimeAiConfig(config: ApiConfig): RuntimeAiConfig {
   return runtimeConfig({ enabled: true, baseUrl: config.deepseekBaseUrl, model: config.deepseekModel, thinking, ...(config.deepseekApiKey ? { apiKey: config.deepseekApiKey } : {}), source: config.deepseekApiKey === undefined ? "none" : "env" });
 }
 
-export function publicAiConfig(config: ApiConfig): { readonly enabled: boolean; readonly configured: boolean; readonly keyConfigured: boolean; readonly provider: "deepseek"; readonly model: string; readonly baseUrl: string; readonly thinking: boolean; readonly reasoningEffort: AiReasoningEffort | null; readonly preset: AiPresetId; readonly keySource: RuntimeAiConfig["source"]; readonly summaryPrompt: string; readonly summaryPromptCustom: boolean } {
+/**
+ * The key fields to write. Spelled out — instead of inlined — because of the
+ * third rule, which is the whole point:
+ *   · a key typed into the form always replaces what is on disk;
+ *   · `clearApiKey` is the only way to drop it;
+ *   · otherwise whatever is on disk is copied back **verbatim**, even when it
+ *     cannot be decrypted (the encryption secret changed, or the file was
+ *     hand-edited). Re-encrypting from the decrypted value is impossible then,
+ *     and simply omitting the fields would destroy the owner's key without a
+ *     word — that is exactly the "I set it once, why is it gone again" report.
+ *     A key that came from the environment is deliberately **not** copied into
+ *     the file: `.env` stays the single source of truth for it, and a later
+ *     `.env` edit keeps working instead of being shadowed by a stale copy.
+ */
+function nextKeyFields(config: ApiConfig, input: { readonly apiKey?: string; readonly clearApiKey?: boolean }, existing: StoredAiConfig | undefined): Pick<StoredAiConfig, "encryptedApiKey" | "apiKeyIv" | "apiKeyTag"> | Record<string, never> {
+  if (input.clearApiKey === true) return {};
+  const typed = input.apiKey?.trim();
+  if (typed !== undefined && typed !== "") return encryptApiKey(config, typed);
+  if (existing !== undefined && existing.encryptedApiKey !== undefined && existing.apiKeyIv !== undefined && existing.apiKeyTag !== undefined) {
+    return { encryptedApiKey: existing.encryptedApiKey, apiKeyIv: existing.apiKeyIv, apiKeyTag: existing.apiKeyTag };
+  }
+  return {};
+}
+
+export function publicAiConfig(config: ApiConfig): { readonly enabled: boolean; readonly configured: boolean; readonly keyConfigured: boolean; readonly keyUnreadable: boolean; readonly provider: "deepseek"; readonly model: string; readonly baseUrl: string; readonly thinking: boolean; readonly reasoningEffort: AiReasoningEffort | null; readonly preset: AiPresetId; readonly keySource: RuntimeAiConfig["source"]; readonly summaryPrompt: string; readonly summaryPromptCustom: boolean } {
   const runtime = readRuntimeAiConfig(config);
-  return { enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source, summaryPrompt: runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: runtime.summaryPrompt !== undefined };
+  const existing = readStored(config);
+  /** 密文还在、却解不开（换过加密种子 / 文件被手改坏）。
+   *  这时只报 `keyConfigured:false` 会让界面显示「未配置」——主人既不知道自己
+   *  的钥匙其实还躺在文件里，也想不到「重新填一次」就能救。所以要单独说出来。 */
+  const keyUnreadable = existing !== undefined && existing.encryptedApiKey !== undefined && decryptApiKey(config, existing) === undefined;
+  return { enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, keyUnreadable, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source, summaryPrompt: runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: runtime.summaryPrompt !== undefined };
 }
 
 export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled: boolean; readonly baseUrl: string; readonly model: string; readonly thinking?: boolean; readonly reasoningEffort?: AiReasoningEffort | null; readonly apiKey?: string; readonly clearApiKey?: boolean; readonly summaryPrompt?: string | null }): ReturnType<typeof publicAiConfig> {
   const current = readRuntimeAiConfig(config);
+  const existing = readStored(config);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const model = input.model.trim();
   if (!model) throw new Error("AI 模型不能为空");
@@ -158,12 +188,11 @@ export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled
     : input.reasoningEffort === undefined || input.reasoningEffort === null
       ? current.reasoningEffort ?? "high"
       : input.reasoningEffort;
-  const nextKey = input.clearApiKey ? undefined : input.apiKey?.trim() || current.apiKey;
   // `null` means "go back to the shipped wording", so it clears the field rather
   // than storing the default text — a later change to the constant then flows
   // through. An omitted field leaves the current wording untouched.
   const requestedPrompt = input.summaryPrompt === undefined ? current.summaryPrompt : input.summaryPrompt?.trim() || undefined;
-  const stored: StoredAiConfig = { enabled: input.enabled, provider: "deepseek", baseUrl, model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(nextKey ? encryptApiKey(config, nextKey) : {}), ...(requestedPrompt === undefined ? {} : { summaryPrompt: requestedPrompt }) };
+  const stored: StoredAiConfig = { enabled: input.enabled, provider: "deepseek", baseUrl, model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...nextKeyFields(config, input, existing), ...(requestedPrompt === undefined ? {} : { summaryPrompt: requestedPrompt }) };
   mkdirSync(config.dataDirectory, { recursive: true });
   writeFileSync(configPath(config), `${JSON.stringify(stored, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return publicAiConfig(config);

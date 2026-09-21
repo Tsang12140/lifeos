@@ -59,6 +59,13 @@ export interface AiStatus {
   readonly enabled: boolean;
   readonly configured: boolean;
   readonly keyConfigured: boolean;
+  /**
+   * True when the saved key is on disk but cannot be decrypted (the encryption
+   * secret changed, or the file was hand-edited). `keyConfigured` is false then,
+   * and the settings page must say so out loud — otherwise the owner only sees
+   * 「未配置」 and concludes the key was thrown away.
+   */
+  readonly keyUnreadable: boolean;
   readonly provider: string;
   readonly model: string;
   readonly baseUrl: string;
@@ -67,7 +74,11 @@ export interface AiStatus {
   readonly keySource?: "env" | "file" | "none";
   /** The wording the calendar sends the model, already resolved to a default if unset. */
   readonly summaryPrompt: string;
-  /** False means the shipped default is in force, not text the owner wrote. */
+  /**
+   * ⚠️ It means「文件里带着一份提示词」，**不是**「主人改过措辞」—— 设置面板点一次「保存配置」
+   * 就会把文本框里的内容原样写回文件，于是默认措辞也会让这一位变成 `true`（实测过）。
+   * 要判断「是否与内置默认不同」，得拿 `summaryPrompt !== SUMMARY_SYSTEM_PROMPT` 自己比。
+   */
   readonly summaryPromptCustom: boolean;
 }
 

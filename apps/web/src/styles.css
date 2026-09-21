@@ -173,7 +173,12 @@ select,
   user-select: text;
 }
 
-/* 正文白名单：主人写下的话、以及从她的记录里生成出来的正文 —— 这些要能选中复制。 */
+/* 正文白名单：主人写下的话、以及从她的记录里生成出来的正文 —— 这些要能选中复制。
+   其中 `.settings-ai-effective-item strong` 是**只读的配置回显值**（当前模型 / 思考 /
+   推理强度 / 服务地址 / API Key 状态）：它们不是装饰，是主人自己的配置，她要抄下来
+   （比如把 baseUrl 贴给我）就该抄得下来 —— 所以算「内容」不算「界面」。
+   ⚠️ 只放值那一层 `strong`，**不放 `.settings-ai-effective-item` 这个容器**：容器里还有
+   标签（`<span>当前模型</span>`）与其它节点，放容器等于把界面文字也一起放回来。 */
 .timeline-text,
 .original-block,
 .note-card-excerpt,
@@ -182,6 +187,7 @@ select,
 .task-summary-copy,
 .server-current-block,
 .settings-ai-preset-id,
+.settings-ai-effective-item strong,
 .entity-library-address,
 .person-card-field {
   -webkit-user-select: text;

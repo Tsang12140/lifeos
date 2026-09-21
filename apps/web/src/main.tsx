@@ -2982,7 +2982,7 @@ function AiSettingsCard({ status, open = false, assistantVisible, onAssistantVis
     setBusy(true); setMessage(null); setError(null);
     try {
       const next = await call("/api/ai/config", { enabled, baseUrl, model, thinking, reasoningEffort: thinking ? reasoningEffort ?? "high" : null, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
-      const nextStatus: AiStatus = { preset: next.preset, enabled: next.enabled, configured: next.configured, keyConfigured: next.keyConfigured, provider: next.provider, model: next.model, baseUrl: next.baseUrl, thinking: next.thinking, reasoningEffort: next.reasoningEffort, keySource: next.keySource, summaryPrompt: next.summaryPrompt, summaryPromptCustom: next.summaryPromptCustom };
+      const nextStatus: AiStatus = { preset: next.preset, enabled: next.enabled, configured: next.configured, keyConfigured: next.keyConfigured, keyUnreadable: next.keyUnreadable, provider: next.provider, model: next.model, baseUrl: next.baseUrl, thinking: next.thinking, reasoningEffort: next.reasoningEffort, keySource: next.keySource, summaryPrompt: next.summaryPrompt, summaryPromptCustom: next.summaryPromptCustom };
       setApiKey(""); onChanged(nextStatus); setMessage("AI 配置已保存");
     } catch (cause) { setError(errorMessage(cause, "AI 配置保存失败，请重试")); }
     finally { setBusy(false); }
@@ -2995,11 +2995,11 @@ function AiSettingsCard({ status, open = false, assistantVisible, onAssistantVis
     finally { setBusy(false); }
   };
   const keyConfigured = status.keyConfigured;
-  const stateLabel = !status.enabled ? "已关闭" : keyConfigured ? "已启用" : "规则回退";
+  const stateLabel = !status.enabled ? "已关闭" : keyConfigured ? "已启用" : status.keyUnreadable ? "密钥读不出来" : "规则回退";
   return <div className="settings-card settings-ai-card">
     <div className="settings-ai-head">
       <div className="settings-card-icon"><Bot size={18} aria-hidden="true" /></div>
-      <div className="settings-card-copy"><strong>DeepSeek AI</strong><small>API Key：{keyConfigured ? "已配置" : "未配置"} · provider：DeepSeek</small></div>
+      <div className="settings-card-copy"><strong>DeepSeek AI</strong><small>API Key：{keyConfigured ? "已配置" : "未配置"}{status.keyUnreadable ? "（文件里那把现在读不出来，重新填一次即可覆盖）" : ""} · provider：DeepSeek</small></div>
       <span className={`settings-status ${status.enabled && keyConfigured ? "is-ready" : ""}`}>{stateLabel}</span>
       <button className="secondary-button settings-action" type="button" onClick={() => setExpanded((current) => !current)}>{expanded ? "收起配置" : "配置 AI"}</button>
     </div>
@@ -3702,7 +3702,7 @@ function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
-  const [aiStatus, setAiStatus] = useState<AiStatus>({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false });
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ preset: "quick", enabled: true, configured: false, keyConfigured: false, keyUnreadable: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false });
   const [assistantVisible, setAssistantVisible] = useState(readAssistantVisibility);
   const [weatherStatus, setWeatherStatus] = useState<WeatherStatus | null>(null);
   const [weatherProfiles, setWeatherProfiles] = useState<readonly WeatherProfile[]>([]);
@@ -3869,10 +3869,10 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     if (authState.required && !authState.authenticated) {
-      setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false });
+      setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, keyUnreadable: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false });
       return () => controller.abort();
     }
-    apiRequest<AiStatus>("/api/ai/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setAiStatus(status); }).catch(() => { if (!controller.signal.aborted) setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false }); });
+    apiRequest<AiStatus>("/api/ai/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setAiStatus(status); }).catch(() => { if (!controller.signal.aborted) setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, keyUnreadable: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false }); });
     return () => controller.abort();
   }, [authState.authenticated, authState.required]);
 

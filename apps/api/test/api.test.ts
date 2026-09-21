@@ -399,6 +399,7 @@ test("login sessions persist in SQLite and AI assistant falls back without a key
     reasoningEffort: null,
     preset: "quick",
     keySource: "none",
+    keyUnreadable: false,
     summaryPrompt: SUMMARY_SYSTEM_PROMPT,
     summaryPromptCustom: false,
   });
@@ -423,6 +424,7 @@ test("AI config exposes effective presets, validates reasoning, and never return
     reasoningEffort: null,
     preset: "quick",
     keySource: "none",
+    keyUnreadable: false,
     summaryPrompt: SUMMARY_SYSTEM_PROMPT,
     summaryPromptCustom: false,
   });
@@ -451,6 +453,7 @@ test("AI config exposes effective presets, validates reasoning, and never return
     reasoningEffort: null,
     preset: "quick",
     keySource: "file",
+    keyUnreadable: false,
     summaryPrompt: SUMMARY_SYSTEM_PROMPT,
     summaryPromptCustom: false,
   });
@@ -474,6 +477,49 @@ test("AI config exposes effective presets, validates reasoning, and never return
   equal(custom.response.status, 200);
   equal((custom.body as { preset: string }).preset, "custom");
   equal((custom.body as { keyConfigured: boolean }).keyConfigured, true);
+});
+
+test("a saved key that cannot be decrypted is reported, and a later save never drops it", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const path = join(harness.root, "ai-config.json");
+
+  const saved = await request(harness.base, "/api/ai/config", {
+    method: "POST",
+    ...json({ enabled: true, baseUrl: "https://api.deepseek.com", model: "deepseek-flash", apiKey: "unit-test-secret" }),
+  });
+  equal(saved.response.status, 200);
+  equal((saved.body as { keyUnreadable: boolean }).keyUnreadable, false);
+  const onDisk = JSON.parse(readFileSync(path, "utf8")) as { encryptedApiKey: string; apiKeyIv: string; apiKeyTag: string };
+  ok(!readFileSync(path, "utf8").includes("unit-test-secret"));
+
+  // 把密文换成「另一把种子加出来的」，等价于加密种子变过（或文件被手改坏）。
+  const tampered = JSON.stringify({ ...onDisk, encryptedApiKey: Buffer.from("not-our-ciphertext").toString("base64") }, null, 2) + "\n";
+  writeFileSync(path, tampered, "utf8");
+
+  const unreadable = await request(harness.base, "/api/ai/status");
+  equal((unreadable.body as { keyConfigured: boolean }).keyConfigured, false);
+  equal((unreadable.body as { keyUnreadable: boolean }).keyUnreadable, true);
+  equal((unreadable.body as { keySource: string }).keySource, "none");
+
+  // 再保存一次（不带 key）→ 那把读不出来的密文必须**原样留着**。
+  const again = await request(harness.base, "/api/ai/config", {
+    method: "POST",
+    ...json({ enabled: true, baseUrl: "https://api.deepseek.com", model: "deepseek-flash" }),
+  });
+  equal(again.response.status, 200);
+  equal((again.body as { keyUnreadable: boolean }).keyUnreadable, true);
+  const afterAgain = JSON.parse(readFileSync(path, "utf8")) as { encryptedApiKey: string };
+  equal(afterAgain.encryptedApiKey, (JSON.parse(tampered) as { encryptedApiKey: string }).encryptedApiKey);
+
+  // 只有显式清除才允许把它删掉。
+  const cleared = await request(harness.base, "/api/ai/config", {
+    method: "POST",
+    ...json({ enabled: true, baseUrl: "https://api.deepseek.com", model: "deepseek-flash", clearApiKey: true }),
+  });
+  equal(cleared.response.status, 200);
+  equal((cleared.body as { keyUnreadable: boolean }).keyUnreadable, false);
+  ok(!("encryptedApiKey" in (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)));
 });
 
 test("assistant sends DeepSeek thinking and reasoning fields according to the saved mode", async (t) => {

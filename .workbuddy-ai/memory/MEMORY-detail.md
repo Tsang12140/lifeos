@@ -647,3 +647,47 @@ headless CDP 为什么不一定暴露它：`Input.dispatchMouseEvent` 只在派�
 - **高峰时段 = 北京时间 09:00–12:00 与 14:00–18:00（周一至周五）**，费率翻倍 ⇒ 批量重算 56 天小结这种活值得避开这两段。
 - 「按功能分模型」要落地：`ai-config.json` 加可选字段（如 `summaryModel` / `assistantModel`，缺省回落全局 `model`）+ UI 两个下拉。**消费方只有两个**：`summary.ts`（日历小结）与 `assistant.ts`（助手对话）。**好消息**：小结的缓存指纹 `contextKey = ai:{baseUrl}|{model}|{promptHash}` **已经含 model** ⇒ 换小结模型会自动让旧小结失效重算，不用另动缓存。
 
+
+## 落地（同日晚，蛋妞「按你推荐的来」）：静默删除修掉 + 配置回显值可选中 + `.env` 直填
+
+### 改动
+
+1. **`saveRuntimeAiConfig`**：密钥字段来源抽成 `nextKeyFields(config, input, existing)`，三条规则 ——
+   ① 表单给了 key → 覆盖；② `clearApiKey:true` → 删；③ **否则把盘上已有的密文三件套原样抄回**（哪怕当前解不开也照抄）。
+   ★顺带改掉一条旧行为：**来自 `.env` 的 key 不再被抄进文件**。旧行为是「UI 保存一次就把 env key 加密落盘」，
+   之后改 `.env` 会被文件里的旧副本压住（`decryptedKey ?? (stored.encryptedApiKey === undefined ? envKey : undefined)`
+   —— 一旦文件里有密文，`.env` 就被无视）。现在文件里只有主人亲手填过的 key，`.env` 始终是真源。
+2. **`publicAiConfig.keyUnreadable`**：密文在、解不开（种子变过 / 文件被手改坏）→ `true`。
+   web 侧 `AiStatus` 加同名字段；AI 卡片状态徽标多一档「**密钥读不出来**」，小字补「（文件里那把现在读不出来，重新填一次即可覆盖）」。
+   修之前这种情况只显示「未配置」，主人分不清「没配过」和「配过但读不出来」。
+3. **白名单加 `.settings-ai-effective-item strong`**（只读配置回显值：当前模型 / 思考 / 推理强度 / 服务地址 / API Key 状态）。
+   **只放值那一层，不放 `.settings-ai-effective-item` 容器** —— 容器里还有 `<span>当前模型</span>` 这类标签，放容器等于把界面文字也放回来。
+4. **`.review/set-ai-key-env.mjs`**：key 写进 `.env` 的 `LIFEOS_DEEPSEEK_API_KEY`。key 只从 **stdin** 读（不进命令行参数/历史）、
+   全程不回显值（只打印长度与「是否以 sk- 开头」）、重复执行是替换不是堆两行、`--dry-run` / `--unset`、
+   写回按**检测到的换行符**拼回（本机 `.env` 实测纯 LF、无 BOM —— 但要防主人哪天用记事本存一下变 CRLF）。
+   **改完必须重启 API**（`ApiConfig` 在 boot 时读）。
+
+### 验收数字
+
+core **28/28**、api **57/57**（新增「a saved key that cannot be decrypted is reported, and a later save never drops it」——
+把密文换成别的种子加出来的 → `keyConfigured:false`+`keyUnreadable:true`+`keySource:"none"`；再保存一次 → 密文**逐字节**不变；
+显式 `clearApiKey:true` 才删）、web `tsc` 0 错；`verify-ai-key-persist.mjs` 19 → **25 条 PASS**；
+`verify-selectability.mjs` 50 → **59 条 PASS**（新增设置页一段：AI 卡片 89 个可见文字节点 = 81 不可选 + 8 白名单/表单 + **漏网 0**，
+配置回显 5 个值 = `text`、真手势拖蓝拖出 `deepseek-flash`，标签仍 `none` 拖不出字）；
+回归 `verify-calendar-edit-ui.mjs` **89/89 PASS**。预览重启后线上 `GET /api/ai/status` 带 `keyUnreadable`。
+
+**反向用例两条都做了**：① 调用点把 `existing` 改传 `undefined`（= 旧行为）→ **8 FAIL**，还原 25/25；
+② 停掉 CSS 白名单那一行 → 正好红那两条（值变 `none` + 拖不出字），还原 59/59。
+
+### 这轮的两个坑（都会重犯）
+
+1. **做反向用例别用 `&& false` 塞进条件里**：TS 的窄化立刻失效（`existing` 变 possibly undefined → TS2375/TS18048），
+   **编译直接失败、什么都没测到**。改从**调用点**下手（把 `existing` 改传 `undefined`）—— 既保住窄化，又更贴近旧行为的语义。
+2. **改 hash ≠ 换页面**：`Page.navigate` 到同站不同 hash 是**同文档导航**，React 只在挂载时读一次 `location.hash`，
+   不 `Page.reload` 就永远停在原来那一屏。设置页类验收都要 navigate + reload。
+
+### 还欠一件事
+
+**她的 key 还没进 `.env`**：工具已备好（`node .review/set-ai-key-env.mjs`，key 走 stdin），等她把 key 给过来
+（或她自己加那一行）→ 写入 → 重启 API → `GET /api/ai/status` 应报 `keyConfigured:true` + `keySource:"env"`。
+
