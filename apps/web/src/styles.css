@@ -8642,8 +8642,10 @@ button.relation-chip {
 /* One moon means one recorded day. The start/end halves are gone because a
    start and an end are now the same mark; only the forecast keeps a second
    look (pale) so a calculation never reads as something she entered. The glyph
-   is lucide's line-art crescent, mirrored left-right so it opens the other way. */
-.calendar-moon, .cycle-option-moon { color: #c66586; transform: scaleX(-1); transform-origin: center; }
+   is lucide's line-art crescent, mirrored left-right so it opens the other way.
+   It inks the same pink as the heart: the calendar carries exactly one cycle
+   pink, and the two marks are told apart by shape, not by colour. */
+.calendar-moon, .cycle-option-moon { color: #a45270; transform: scaleX(-1); transform-origin: center; }
 .calendar-moon.is-forecast { opacity: 0.34; }
 .calendar-heart { fill: transparent; }
 .calendar-fitness { color: #557a71; }
