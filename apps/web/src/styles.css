@@ -137,6 +137,58 @@ body {
   overflow-x: hidden;
 }
 
+/* ============================ 可选中性（2026-09-21 定案） ============================
+   界面文字不是内容：全站**默认不可选中**，只有下面两张白名单能被选。
+   为什么反过来做（默认禁、按需放）而不是列一份「要禁用的东西」：后者每加一个
+   按钮/菜单/徽标都得记得补一条规则，迟早漏；默认禁掉之后，以后新加的界面元素
+   **天生就选不中**，不用维护。蛋妞原话：「把页面里不该能选中的全都设成不可选中，
+   比如说天气卡的时候东西啊，那些菜单按钮啊之类的各种东西占位符啊」。
+   要放回来的只有两类：① 表单控件；② 她自己写下/从她记录里生成的正文。
+   ⚠️ 不要把「容器」加进正文白名单（例如 .timeline-content、.task-summary）：那会把
+      它里面的大标题、计数徽标、状态、时间戳一起放回来，而那些都是界面。
+      **只列真正承载文字的那个叶子节点。**
+      真实教训：第一版把 `.task-summary`（一个 `<aside>`）加了进来，于是它里面的
+      `<h2>接下来要做</h2>` 和计数徽标 `.summary-badge` 也一起变成可选中的 ——
+      `.review/verify-selectability.mjs` 的全量扫描当场抓出来。正确的是那一行文字自己的
+      类名 `.task-summary-copy`。 */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 按钮永远不可选中 —— 哪怕它长在正文块里面（记录正文里的「隐私记录已隐藏」蒙版
+   就是个 `<button>****`），因为按钮上的字是界面，不是内容。 */
+button {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 祖先的 user-select:none 会连输入框一起禁掉 —— 输入控件必须单独放回来，
+   否则整站输入框会变得选不中、没法全选替换。 */
+input,
+textarea,
+select,
+[contenteditable]:not([contenteditable="false"]) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 正文白名单：主人写下的话、以及从她的记录里生成出来的正文 —— 这些要能选中复制。 */
+.timeline-text,
+.original-block,
+.note-card-excerpt,
+.week-card-text,
+.summary-message,
+.task-summary-copy,
+.server-current-block,
+.settings-ai-preset-id,
+.entity-library-address,
+.person-card-field {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* ================================================================================= */
+
 button,
 input,
 textarea {
@@ -598,7 +650,6 @@ textarea:focus-visible {
   line-height: 1;
   pointer-events: none;
   text-shadow: var(--weather-header-text-shadow);
-  user-select: none;
 }
 
 .weather-corner-today.is-current { padding-left: 10px; }
@@ -1566,7 +1617,6 @@ h2 {
   font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
-  user-select: none;
 }
 
 .privacy-toggle input {
@@ -4000,7 +4050,6 @@ h2 {
   font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
-  user-select: none;
 }
 
 .backfill-toggle input {
@@ -10576,8 +10625,6 @@ button.relation-chip {
   backdrop-filter: blur(9px);
   cursor: grab;
   touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
   transition: opacity 200ms ease, transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
 }
 

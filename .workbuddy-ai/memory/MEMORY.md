@@ -90,6 +90,11 @@
 - **布局稳定性**：`animation-fill-mode:none` + 正延迟期间按基准样式渲染 → 基准位置本身要在屏幕外（或改用负延迟）；`html{scrollbar-gutter:stable}`；CSS `auto` 高度不可插值（`useLayoutEffect` + 直接写 `style.height` + 强制回流）。
 - 天气天空两根轴：`category` 决定**画什么**、`phase` 只决定**色/光**；硬预算由 `verify-weather-art.mjs` 守。
 - **补记条 = 安慰剂**（整条一个点击目标，子控件 `aria-hidden`）；**不出截图**（主人明确要求）。
+- **界面文字一律不可选中，只有「主人自己写的正文」和表单控件例外**（2026-09-21 定案）。
+  - `apps/web/src/styles.css` **顶部一块集中规则**：`body` + `button` 默认 `-webkit-user-select / user-select: none`；白名单**两条** —— ① 表单控件 `input / textarea / select / [contenteditable]:not([contenteditable="false"])`（**必须有** —— 祖先的 `none` 会连输入框一起禁掉，否则整站输入框没法全选替换）；② 正文叶子 `.timeline-text / .original-block / .note-card-excerpt / .week-card-text / .summary-message / .task-summary-copy / .server-current-block / .settings-ai-preset-id / .entity-library-address / .person-card-field`。
+  - **白名单只能放「承载文字的叶子」，绝不能放容器** —— 放 `.task-summary`（`<aside>`）会连带 `<h2>接下来要做</h2>` 与计数徽标 `.summary-badge` 一起可选（第一版就是这么错的）。
+  - 机制是**默认禁 + 白名单放**，不是列黑名单：以后新加的按钮 / 菜单 / 徽标 / 占位符**天生就选不中**，不用维护。**别为了「某个元素要禁」去加单条 `user-select: none`**（原先那 4 条零散规则已删）。
+  - 验收 `.review/verify-selectability.mjs`（**只读贴 5199**，50 项；**不 spawn 隔离实例** —— 「天气卡」要有天气数据才画得出来，隔离实例里没有它，断言会空转成假绿）。三层判据缺一不可：全量扫描（可见文字节点漏网必须 0）/ 点名对账 / **真手势拖蓝**。
 - **改动前先勘察、先问**：设计/规则类先出方案等确认；主人说「**听你的**」才是授权点。
 
 ## 日历的两个入口（2026-09-21 定案，动手前先对表）
