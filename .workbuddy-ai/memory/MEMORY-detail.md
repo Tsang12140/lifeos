@@ -586,3 +586,64 @@ headless CDP 为什么不一定暴露它：`Input.dispatchMouseEvent` 只在派�
 大多数 CDP 验收脚本都自起隔离实例（更干净、不碰生产）。**这个不行**：判据里点名要测「天气卡」和「日历上的真实记录」，而天气卡**只有在有天气数据时才画得出来** —— 隔离实例是空库、没有天气配置，天气卡根本不渲染，那几条断言会变成**空转的假绿**（找不到元素 → 跳过 → 照样 PASS）。
 → 本脚本**只读**贴主人预览 5199：不 spawn、不造夹具、不发任何写请求，只读 DOM + 发鼠标事件。先例 `probe-timemachine-live.mjs` 同样是「只读贴主人预览」。**代价是它依赖预览在线，且不能进全隔离的回归批次。**
 
+
+## API Key「我已经设置过，怎么又丢了」：三条事实与一个静默删除的隐患（2026-09-21）
+
+### 主人问的
+
+「为什么目前的 AI 助手设置之类的，基本上都是不可选的状态，比如说 API Key 根本就没有办法选。然后我记得我已经设置过，怎么现在又丢了？到底在哪个配置文件设置的，我能不能直接去配置文件改？」
+
+### 事实一：设置页的字选不中，是「全站界面文字不可选中」那条规则的直接结果
+
+不是 bug，是有意为之 —— 但它把**「只读的配置值」**（当前模型 `deepseek-flash`、服务地址 `https://api.deepseek.com`）也一起关掉了，而这两处严格说是**主人自己的配置**，不是界面装饰。实测：AI 卡片 48 个可见文字节点里 38 个已不可选中。**要不要为「配置回显值」破例，是个取舍，得主人定。**
+探针：`.review/probe-select-settings.mjs`（A 段本地静态页做对照 + B 段贴 5199 数节点）。
+
+### 事实二：密码框选不中 = **浏览器原生行为**，跟 CSS 无关
+
+用一张与 LifeOS 无关的本地静态页（套同一套 `body:none` + `input:text`）做对照实验：
+
+| 探测点 | 拖蓝 | Ctrl+A |
+|---|---|---|
+| 填了值的密码框 | ✅ 内部选区 15 字 | ✅ 15/15 |
+| **只有 placeholder 的密码框** | ❌ 0 字 | ❌ 0 字 |
+| 只有 placeholder 的文本框 | ❌ 0 字 | — |
+| 填了值的文本框 | ✅ 14 字 | ✅ 14/14 |
+| 普通界面文字（`none`，阴性对照） | ❌ 0 字 | — |
+| 白名单正文（`text`，阳性对照） | ✅ | — |
+
+**`placeholder` 是灰字提示，天生不是可选中文本**（任何浏览器、任何 CSS 都一样）。而主人的 key 字段现在**是空的**（`已填=0 字`）→ 她能看见的只有 placeholder ⇒ 结论：**「选不中」是因为框里没有字，不是因为被禁选。** 若真有 key 在，那 15 个圆点是拖得出来的。
+
+**量尺自身的坑（第一版就把阴性对照判错了）**：只清 `window.getSelection()` 不够 —— 输入框内部的选区**不属于文档选区**，但 Chrome 会把它当文档选区报出来，于是**上一次拖出来的字污染了下一次的读数**（把一段 `none` 的界面文字误判成「能选中」）。修正：每次测量前把所有输入框 `setSelectionRange(0,0)` + blur + 清文档选区。**「怎么量」比「量什么」更容易出错。**
+
+### 事实三：文件里**从来就没有过**密钥字段；「又丢了」唯一可行的机制是个静默删除
+
+证据链（全部只读或对临时目录演练）：
+- `data/ai-config.json` 现在没有 `encryptedApiKey/apiKeyIv/apiKeyTag`；`GET /api/ai/status` → `keyConfigured:false`、`keySource:"none"`。
+- 文件里那份 `summaryPrompt` 与内置默认**逐字相同**（251 字）⇒ 写它的是 UI 的常规保存，不是主人改过提示词（`summaryPromptCustom:true` 因此是**假阳性**：这个标志只能说明「字段存在」，说明不了「主人定制过」）。
+- 09-18 迁移留下的两份副本（`pre-move` / `pre-restore`）**也都没有**密钥字段 ⇒ 时间线上找不到「曾经有过」的一刻。
+- 结合当天上午的排查（58 条小结全是 `provider:"rule"` 规则回退）⇒ **AI 从来没真跑过**。
+- `.env` 的 `LIFEOS_AI_CONFIG_SECRET` 自 09-18 13:54 起就在 ⇒ **「种子变了」这条路对 09-18 之后的任何一次保存都不成立**。
+
+`saveRuntimeAiConfig` 的真实语义（`.review/verify-ai-key-persist.mjs` 19/19 PASS 钉住）：
+1. 带 key 保存 → 写密文三件套，`keySource:"file"`（**不是明文**）。
+2. 再保存但 key 留空 → **key 不丢**（`nextKey = input.apiKey?.trim() || current.apiKey`）；UI 那句「留空表示继续使用」是真的。
+3. 换种子 → 解不开、`keySource` **静默**变 `none`、界面显示「未配置」，**但密文还在文件里**（种子改回还能救）。
+4. ★ **在解不开的状态下再保存一次** → 密文三件套被**静默从文件里删掉**，此后种子改回**也救不回**。零报错零警告。→ 这就是「已经设置过、怎么又丢了」唯一可行的成因，**是个该修的隐患**：应当 fail loudly（或至少拒绝在解不开时覆盖），而不是把钥匙默默抹掉。
+5. 对照组：`testRuntimeAiConfig`（「测试连接」）**字节与 mtime 都不动** ⇒ **不落盘**。「测试连接成功」≠「已保存」—— 两个并排按钮，最容易让人以为已经设好了。
+
+**「能不能直接去配置文件改」**：能改的是 `data/ai-config.json`，但 key 存的是 **AES-256-GCM 密文**，种子 = `.env` 的 `LIFEOS_AI_CONFIG_SECRET`（scrypt + salt `lifeos-ai-config-v1`）⇒ **手写明文无效**。合法近路：`.env` 加 `LIFEOS_DEEPSEEK_API_KEY=<key>`（当前文件里没有密文字段 ⇒ 运行时会 fallback 到它，`keySource:"env"`），代价是**要重启 API**（`ApiConfig` 在 boot 时读取）。**优先级**：一旦 UI 再存过密钥，文件里的密文**压过** `.env`（`decryptedKey ?? (stored.encryptedApiKey === undefined ? config.deepseekApiKey : undefined)`）。
+
+### 附：DeepSeek 当前只有两个 model id，且 Pro 已经被路由到 Flash
+
+查于 2026-09-21（api-docs.deepseek.com + 官方定价页）：
+
+| model id | 实际模型 | 输入（非高峰/高峰，每 1M） | 输出 |
+|---|---|---|---|
+| `deepseek-flash` | **DeepSeek-V4.1-Flash** | $0.15 / $0.3 | $0.6 / $1.2 |
+| `deepseek-v4-pro` | DeepSeek-V4-Pro-0813 | $1.32 | $3.96 |
+
+- `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 是**已退役的旧名**：仍接受，实际由 V4.1-Flash 服务、按 Flash 价计费。`deepseek-chat` / `deepseek-reasoner` 在 2026-07-24 已被**彻底退休**（用它们会直接失败）。
+- ★ **自 2026-09-14 12:00（北京）起，`deepseek-v4-pro` 的请求全部被路由到 V4.1 Flash、并按 Flash 价格计费**（V4 Pro 在有序退役，等 V4.1 Pro）⇒ **现在选 Pro 既拿不到 Pro 的质量、也不会更贵**：产品里那个叫「重要复盘 → deepseek-v4-pro」的档位**名不副实**。要不要保留它，值得问主人。
+- **高峰时段 = 北京时间 09:00–12:00 与 14:00–18:00（周一至周五）**，费率翻倍 ⇒ 批量重算 56 天小结这种活值得避开这两段。
+- 「按功能分模型」要落地：`ai-config.json` 加可选字段（如 `summaryModel` / `assistantModel`，缺省回落全局 `model`）+ UI 两个下拉。**消费方只有两个**：`summary.ts`（日历小结）与 `assistant.ts`（助手对话）。**好消息**：小结的缓存指纹 `contextKey = ai:{baseUrl}|{model}|{promptHash}` **已经含 model** ⇒ 换小结模型会自动让旧小结失效重算，不用另动缓存。
+

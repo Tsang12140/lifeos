@@ -17,6 +17,14 @@
 3. **搬数据目录 / 改 `LIFEOS_PASSWORD` 会静默废掉已存的 API key。**
    种子 = `LIFEOS_<模块>_CONFIG_SECRET || LIFEOS_PASSWORD || \`lifeos-local-<模块>:${dataDirectory}\``。
    → `.env` 里 4 个 `LIFEOS_*_CONFIG_SECRET` **别删别改**（删了 = 换密钥）；动完目录回看 `/api/weather/status` 的 `hasKey`。
+   → ★ **换种子只是「解不开」（密文还在文件里，改回去还能救）；在解不开的状态下再点一次「保存」才会真丢** ——
+   `saveRuntimeAiConfig` 里 `nextKey = input.apiKey?.trim() || current.apiKey`，解不开时 `current.apiKey` 是 `undefined`
+   → 密文三件套被**静默从文件里删掉**、零报错零警告（`.review/verify-ai-key-persist.mjs` 19 条断言钉住了这条）。
+   **换了种子之后、没改回来之前，别在设置页点「保存」。**
+   → 「测试连接」**不落盘**（字节与 mtime 都不动）⇒ 「测试成功」≠「已保存」，这是最容易让人误以为设好了的一步。
+   → AI 配置的 key 不是明文：`data/ai-config.json` 存 AES-256-GCM 密文，种子 = `.env` 的 `LIFEOS_AI_CONFIG_SECRET`
+   （scrypt + salt `lifeos-ai-config-v1`）→ **手写配置文件无效**；想绕开 UI 就写 `.env` 的 `LIFEOS_DEEPSEEK_API_KEY`（要重启 API；
+   但文件里一旦有密文，密文优先于 `.env`）。查状态用只读的 `GET /api/ai/status`（`keyConfigured` / `keySource`）。
 
 ## 环境
 
