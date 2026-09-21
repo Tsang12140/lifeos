@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -62,7 +62,8 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, SUMMARY_MAX_LENGTH, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, trimSummaryText, type PlacePeriod, type PlaceRole } from "@lifeos/core";
+import { MENTION_MARKERS, PLACE_MARKER, PLACE_ROLES, SUMMARY_SYSTEM_PROMPT,
+  SUMMARY_MAX_LENGTH, clampSummaryText, entitySearchTerms, findEntityMentions, normalizeEntitySearchTerm, trimSummaryText, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import { installDiagnostics } from "./diagnostics";
 import { sha256Hex } from "./contentHash";
 import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, NoteDetails, NoteFormat, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
@@ -82,6 +83,7 @@ import {
   type RecordsResponse,
   type RecordWritePayload,
   type SummariesResponse,
+  type SummaryManualResponse,
   type TaskRecordView,
   type WeatherCurrentResponse,
   type WeatherArchiveResponse,
@@ -2012,8 +2014,140 @@ function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather 
   return { text: item.textDay, icon: item.iconDay, tempMin: typeof item.tempMin === "string" ? item.tempMin : "—", tempMax: typeof item.tempMax === "string" ? item.tempMax : "—" };
 }
 
-function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSavePeriodLength, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void }) {
+/**
+ * The calendar's own settings, behind the gear beside the cycle button.
+ *
+ * Only two things live here: how the calendar's summaries are produced, and
+ * whether its text is editable. The prompt is shown in full on purpose — it is
+ * the one knob that changes what every cell says, and hiding it behind a rebuild
+ * would make tuning it a code change.
+ */
+function CalendarSettingsPanel({ status, onStatusChange, editMode, onEditModeChange }: { status: AiStatus | null; onStatusChange: (status: AiStatus) => void; editMode: boolean; onEditModeChange: (value: boolean) => void }) {
+  const [enabled, setEnabled] = useState(status?.enabled ?? true);
+  const [baseUrl, setBaseUrl] = useState(status?.baseUrl ?? "https://api.deepseek.com");
+  const [model, setModel] = useState(status?.model ?? "deepseek-flash");
+  const [apiKey, setApiKey] = useState("");
+  const [prompt, setPrompt] = useState(status?.summaryPrompt ?? "");
+  const [busy, setBusy] = useState<null | "save" | "test">(null);
+  const [message, setMessage] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
+
+  useEffect(() => {
+    if (status === null) return;
+    setEnabled(status.enabled);
+    setBaseUrl(status.baseUrl);
+    setModel(status.model);
+    setPrompt(status.summaryPrompt);
+  }, [status]);
+
+  /** The key is write-only: it is sent only when a new one has been typed. */
+  const body = () => JSON.stringify({ enabled, baseUrl, model, ...(apiKey.trim() === "" ? {} : { apiKey: apiKey.trim() }) });
+  const run = async (kind: "save" | "test", request: () => Promise<AiStatus | { ok?: boolean; message?: string }>, done: (next: AiStatus | { ok?: boolean; message?: string }) => void, failure: string) => {
+    if (busy !== null) return;
+    setBusy(kind);
+    setMessage(null);
+    try {
+      done(await request());
+    } catch (error) {
+      setMessage({ text: errorMessage(error, failure), tone: "bad" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const save = () => run("save", () => apiRequest<AiStatus>("/api/ai/config", { method: "POST", body: JSON.stringify({ enabled, baseUrl, model, summaryPrompt: prompt, ...(apiKey.trim() === "" ? {} : { apiKey: apiKey.trim() }) }) }), (next) => {
+    const saved = next as AiStatus;
+    setApiKey("");
+    onStatusChange(saved);
+    setPrompt(saved.summaryPrompt);
+    setMessage({ text: saved.keyConfigured ? "已保存。回到日历，下一屏的小结就用新设置。" : "已保存。还没有密钥，暂时用离线规则兜底。", tone: "ok" });
+  }, "保存失败，请重试");
+  const resetPrompt = () => run("save", () => apiRequest<AiStatus>("/api/ai/config", { method: "POST", body: JSON.stringify({ enabled, baseUrl, model, summaryPrompt: null, ...(apiKey.trim() === "" ? {} : { apiKey: apiKey.trim() }) }) }), (next) => {
+    const saved = next as AiStatus;
+    setApiKey("");
+    onStatusChange(saved);
+    setPrompt(saved.summaryPrompt);
+    setMessage({ text: "已换回内置的提示词。", tone: "ok" });
+  }, "换回默认失败，请重试");
+  const test = () => run("test", () => apiRequest<{ ok?: boolean; message?: string }>("/api/ai/config/test", { method: "POST", body: JSON.stringify({ baseUrl, ...(apiKey.trim() === "" ? {} : { apiKey: apiKey.trim() }) }) }), (next) => {
+    setMessage({ text: (next as { message?: string }).message ?? "连接成功", tone: "ok" });
+  }, "连接失败");
+
+  const keyConfigured = status?.keyConfigured === true;
+  const custom = status?.summaryPromptCustom === true;
+  return <section id="calendar-settings-panel" className="calendar-settings-panel" aria-labelledby="calendar-settings-title">
+    <div className="cycle-inline-head"><div><p className="eyebrow">日历设置</p><h3 id="calendar-settings-title">小结与编辑</h3></div>{custom ? <span className="calendar-settings-badge">自定义提示词</span> : null}</div>
+    <div className="calendar-settings-block">
+      <div className="calendar-settings-switch"><span>编辑模式</span><button className={"toggle-button" + (editMode ? " is-on" : "")} type="button" role="switch" aria-checked={editMode} onClick={() => onEditModeChange(!editMode)} aria-label="编辑模式"><span className="toggle-knob" /></button></div>
+      <p className="settings-ai-note">打开后，月历与周历里的小结变成可改的文字；改完点底部的保存才生效。右键某一天，可以重新生成或恢复原样。</p>
+    </div>
+    <div className="calendar-settings-block">
+      <p className="eyebrow">AI 小结</p>
+      <div className="calendar-settings-switch"><span>用 AI 生成小结<small>{keyConfigured ? "已配置密钥" : "还没有密钥，暂时用离线规则"}</small></span><button className={"toggle-button" + (enabled ? " is-on" : "")} type="button" role="switch" aria-checked={enabled} onClick={() => setEnabled(!enabled)} aria-label="用 AI 生成小结"><span className="toggle-knob" /></button></div>
+      <div className="calendar-settings-grid">
+        <label><span>服务地址</span><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com" aria-label="AI 服务地址" /></label>
+        <label><span>模型</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-flash" aria-label="AI 模型" /></label>
+        <label className="calendar-settings-wide"><span>API Key{keyConfigured ? "（留空则沿用已存的）" : ""}</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={keyConfigured ? "已保存，留空不修改" : "填入密钥"} aria-label="AI API Key" autoComplete="off" /></label>
+      </div>
+      <label className="calendar-settings-prompt"><span>给 AI 的提示词</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={9} spellCheck={false} aria-label="给 AI 的提示词" /></label>
+      <div className="calendar-settings-actions">
+        <button className="primary-button" type="button" onClick={() => void save()} disabled={busy !== null}>{busy === "save" ? "保存中…" : "保存"}</button>
+        <button className="secondary-button" type="button" onClick={() => void test()} disabled={busy !== null}>{busy === "test" ? "测试中…" : "测试连接"}</button>
+        <button className="secondary-button" type="button" onClick={() => void resetPrompt()} disabled={busy !== null || !custom}>换回内置提示词</button>
+      </div>
+      {message !== null ? <p className={"settings-ai-note " + (message.tone === "bad" ? "settings-inline-error" : "settings-inline-success")} role="status">{message.text}</p> : null}
+      <p className="settings-ai-note">密钥保存在这台机器的数据目录里（加密存放），不会随日历一起显示。</p>
+    </div>
+  </section>;
+}
+
+/** The right-click menu on a day, available only while the calendar is editable. */
+function CalendarSummaryMenu({ x, y, busy, onRegenerate, onRevert, onClose }: { x: number; y: number; busy: boolean; onRegenerate: () => void; onRevert: () => void; onClose: () => void }) {
+  useEffect(() => {
+    const close = () => onClose();
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [onClose]);
+  return <div className="calendar-summary-menu" role="menu" aria-label="小结操作" style={{ left: x, top: y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+    {/* Picking an action dismisses the menu. The window listener cannot do it:
+        a click inside the panel stops its `pointerdown` from reaching the window. */}
+    <button role="menuitem" type="button" disabled={busy} onClick={() => { onClose(); onRegenerate(); }}><RotateCcw size={14} strokeWidth={1.9} aria-hidden="true" /><span>重新生成小结</span></button>
+    <button role="menuitem" type="button" disabled={busy} onClick={() => { onClose(); onRevert(); }}><Eraser size={14} strokeWidth={1.9} aria-hidden="true" /><span>恢复原样</span></button>
+    <button role="menuitem" type="button" onClick={onClose}><X size={14} strokeWidth={1.9} aria-hidden="true" /><span>取消</span></button>
+  </div>;
+}
+
+function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSavePeriodLength, onRetry, onOpenDay, settingsOpen, onToggleSettings, aiStatus, onAiStatusChange, editMode, onEditModeChange, drafts, onDraftChange, summarySaving, onSaveDrafts, onDiscardDrafts, onRegenerateSummary, onRevertSummary, busyDate }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void; settingsOpen: boolean; onToggleSettings: () => void; aiStatus: AiStatus | null; onAiStatusChange: (status: AiStatus) => void; editMode: boolean; onEditModeChange: (value: boolean) => void; drafts: ReadonlyMap<string, string>; onDraftChange: (date: string, text: string) => void; summarySaving: boolean; onSaveDrafts: () => void; onDiscardDrafts: () => void; onRegenerateSummary: (date: string) => Promise<void>; onRevertSummary: (date: string) => Promise<void>; busyDate: string | null }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
+  // Editing lives in the calendar, so the only state it needs of its own is where
+  // the right-click menu sits; the drafts are owned above, because saving them is
+  // one request and the count has to survive a re-render.
+  const [summaryMenu, setSummaryMenu] = useState<{ date: string; x: number; y: number } | null>(null);
+  const closeSummaryMenu = useCallback(() => setSummaryMenu(null), []);
+  const openSummaryMenu = (date: string, event: ReactMouseEvent) => {
+    event.preventDefault();
+    setSummaryMenu({ date, x: event.clientX, y: event.clientY });
+  };
+  // An editable field cannot live inside a <button>, so in edit mode the cell
+  // renders as a plain container: same box, no navigation, one editable line.
+  const CellTag = (editMode ? "div" : "button") as "button";
+  const draftCount = drafts.size;
+  /**
+   * How a day's summary is shown. Derived text is stripped of markers and
+   * punctuation — that noise comes from records, not from a person. Text the
+   * owner typed in edit mode is shown exactly as typed: if the box rewrote
+   * 「风很大，走了很久」 into 「风很大走了很久」 the save would look like a loss.
+   */
+  const summaryDisplay = (summary: DaySummary): string =>
+    summary.status === "manual" ? clampSummaryText(summary.text, SUMMARY_MAX_LENGTH) : trimSummaryText(summary.text, SUMMARY_MAX_LENGTH);
+  /** What a field shows: the unsaved draft if there is one, otherwise the stored text. */
+  const summaryValue = (date: string, summary: DaySummary | undefined): string =>
+    drafts.get(date) ?? (summary === undefined ? "" : summaryDisplay(summary));
   const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
   const buckets = useMemo(() => recordsByDate(dates, publicRecords), [dates, publicRecords]);
   const inWindow = [...buckets.values()].reduce((total, items) => total + items.length, 0);
@@ -2045,6 +2179,9 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
         <button className={`calendar-module-button ${cyclePanelOpen || cycleModule?.config.enabled ? "is-enabled" : ""}`} type="button" onClick={onOpenCycleModule} aria-expanded={cyclePanelOpen} aria-controls="cycle-entry-panel" aria-label="打开周期记录面板">
           <CalendarDays size={15} strokeWidth={1.9} aria-hidden="true" /><span>周期</span>
         </button>
+        <button className={`calendar-module-button calendar-gear-button ${settingsOpen ? "is-enabled" : ""}`} type="button" onClick={onToggleSettings} aria-expanded={settingsOpen} aria-controls="calendar-settings-panel" aria-label="打开日历设置" title="日历设置：AI 小结与编辑模式">
+          <Settings size={15} strokeWidth={1.9} aria-hidden="true" />
+        </button>
         <div className="mode-switcher" role="tablist" aria-label="日历范围">
           <button className={`mode-option ${mode === "week" ? "is-active" : ""}`} type="button" role="tab" aria-selected={mode === "week"} onClick={() => onModeChange("week")}>周</button>
           <button className={`mode-option ${mode === "month" ? "is-active" : ""}`} type="button" role="tab" aria-selected={mode === "month"} onClick={() => onModeChange("month")}>月</button>
@@ -2053,17 +2190,27 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
     </div>
     {mode === "month" ? <div className="calendar-note"><span className="calendar-holiday-legend"><span className="month-day-status is-holiday">休</span><span>法定休息</span><span className="month-day-status is-workday">班</span><span>调休上班</span></span></div> : null}
     {cyclePanelOpen ? <CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} onSavePeriodLength={onSavePeriodLength} /> : null}
+    {settingsOpen ? <CalendarSettingsPanel status={aiStatus} onStatusChange={onAiStatusChange} editMode={editMode} onEditModeChange={onEditModeChange} /> : null}
+    {editMode ? <div className="calendar-edit-bar" role="status">
+      <span className="calendar-edit-hint"><Edit3 size={14} strokeWidth={1.9} aria-hidden="true" /><span>{draftCount === 0 ? "点小结就能改；右键某一天可以重新生成" : `${draftCount} 处改动待保存`}</span></span>
+      <span className="calendar-edit-actions">
+        <button className="secondary-button" type="button" disabled={draftCount === 0 || summarySaving} onClick={onDiscardDrafts}>放弃</button>
+        <button className="primary-button" type="button" disabled={draftCount === 0 || summarySaving} onClick={onSaveDrafts}>{summarySaving ? "保存中…" : "保存"}</button>
+      </span>
+    </div> : null}
     {loading ? <LoadingState /> : null}
     {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
     {!loading && !error ? (mode === "week" ? <div className="week-grid">
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];
         const photoIds = dayPhotoIds(items, assets);
+        const summary = summaries.get(date);
         const highlights = weekCardRecords(items);
         const picked = cyclePanelOpen && date === anchor;
-        return <button className={`week-card ${date === today ? "is-today" : ""} ${picked ? "is-picked" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${picked ? "，已选为周期记录日期" : ""}`}>
+        return <CellTag className={`week-card ${date === today ? "is-today" : ""} ${picked ? "is-picked" : ""} ${editMode ? "is-editing" : ""}`} key={date} type={editMode ? undefined : "button"} onClick={editMode ? undefined : () => onOpenDay(date)} onContextMenu={editMode ? (event: ReactMouseEvent) => openSummaryMenu(date, event) : undefined} aria-label={`${displayDate(date)}，${items.length} 条记录${picked ? "，已选为周期记录日期" : ""}`}>
           <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
           <span className="week-card-body">
+            {editMode && (summary !== undefined || items.length > 0) ? <textarea className="summary-field week-card-summary-field" value={summaryValue(date, summary)} maxLength={SUMMARY_MAX_LENGTH} rows={2} placeholder="写一句小结" onChange={(event) => onDraftChange(date, event.target.value)} onContextMenu={(event) => openSummaryMenu(date, event)} aria-label={`${displayDate(date)} 的小结`} /> : null}
             {items.length === 0 ? <span className="week-card-empty">没有记录</span> : highlights.map((record) => <span className="week-card-line" key={record.id}><span className="week-card-time">{lifeTimeTime(record.occurredAt ?? record.createdAt)}</span><span className="week-card-text">{recordText(record)}</span></span>)}
           </span>
           <span className="week-card-foot">{items.length === 0 ? "—" : `${items.length} 条`}</span>
@@ -2074,7 +2221,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
             </span>)}
             <span className="week-card-veil" />
           </span> : null}
-        </button>;
+        </CellTag>;
       })}
     </div> : <div className="month-grid">
       {WEEKDAY_LABELS.map((label) => <span className="month-weekday" key={label}>{label}</span>)}
@@ -2085,19 +2232,22 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
         const dayInfo = calendarDayInfo(date);
         const inMonth = date.slice(0, 7) === anchor.slice(0, 7);
         const cellPhoto = inMonth ? monthCellPhoto(dayPhotoCandidates(items, assets)) : undefined;
-        const summaryText = summary === undefined ? "" : trimSummaryText(summary.text, SUMMARY_MAX_LENGTH);
+        const summaryText = summary === undefined ? "" : summaryDisplay(summary);
         const holidayLabel = dayInfo.holiday === undefined ? "" : `${dayInfo.holiday.name} · ${dayInfo.holiday.kind === "holiday" ? "休息日" : "调休上班"}`;
         const weatherLabel = weather === undefined ? "" : `天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`;
         const titleParts = [holidayLabel, dayInfo.solarTerm ? `节气：${dayInfo.solarTerm}` : "", weatherLabel, summaryText === "" ? "" : `${summaryText}（${summary?.status === "generated" ? `AI · ${summary?.provider}` : summary?.status === "manual" ? "手写" : "规则生成"}）`].filter(Boolean);
-        return <button className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${cyclePanelOpen && date === anchor ? "is-picked" : ""} ${items.length === 0 ? "is-empty" : ""}`} key={date} type="button" onClick={() => onOpenDay(date)} aria-label={`${displayDate(date)}，${items.length} 条记录${cyclePanelOpen && date === anchor ? "，已选为周期记录日期" : ""}${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`} title={titleParts.length > 0 ? titleParts.join(" · ") : undefined}>
+        return <CellTag className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${cyclePanelOpen && date === anchor ? "is-picked" : ""} ${items.length === 0 ? "is-empty" : ""} ${editMode ? "is-editing" : ""}`} key={date} type={editMode ? undefined : "button"} onClick={editMode ? undefined : () => onOpenDay(date)} onContextMenu={editMode && inMonth ? (event: ReactMouseEvent) => openSummaryMenu(date, event) : undefined} aria-label={`${displayDate(date)}，${items.length} 条记录${cyclePanelOpen && date === anchor ? "，已选为周期记录日期" : ""}${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`} title={titleParts.length > 0 ? titleParts.join(" · ") : undefined}>
           {cellPhoto !== undefined ? <span className="month-cell-art" aria-hidden="true"><img src={assetThumbUrl(cellPhoto, 1200)} alt="" loading="lazy" decoding="async" /><span className="month-cell-veil" /></span> : null}
           <span className="month-cell-head"><span className="month-day-number">{Number(date.slice(8, 10))}</span><span className="month-day-meta">{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{items.length > 0 ? <span className="month-day-count">{items.length}</span> : null}{weather !== undefined ? <span className="month-day-weather" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null}</span></span>
-          {summaryText !== "" ? <span className={`month-day-summary ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}
+          {editMode && inMonth && (summary !== undefined || items.length > 0)
+            ? <textarea className="summary-field month-day-summary-field" value={summaryValue(date, summary)} maxLength={SUMMARY_MAX_LENGTH} rows={2} placeholder="写一句小结" onChange={(event) => onDraftChange(date, event.target.value)} onContextMenu={(event) => openSummaryMenu(date, event)} aria-label={`${displayDate(date)} 的小结`} />
+            : summaryText !== "" ? <span className={`month-day-summary ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}
           {dayInfo.solarTerm ? <span className="month-day-solar" aria-label={`节气：${dayInfo.solarTerm}`}>{dayInfo.solarTerm}</span> : null}
           <CalendarDayMarkers date={date} today={today} module={cycleModule} />
-        </button>;
+        </CellTag>;
       })}
     </div>) : null}
+    {summaryMenu !== null ? <CalendarSummaryMenu x={summaryMenu.x} y={summaryMenu.y} busy={busyDate === summaryMenu.date} onClose={closeSummaryMenu} onRegenerate={() => { void onRegenerateSummary(summaryMenu.date); }} onRevert={() => { void onRevertSummary(summaryMenu.date); }} /> : null}
   </section>;
 }
 
@@ -2766,7 +2916,7 @@ function AiSettingsCard({ status, open = false, assistantVisible, onAssistantVis
     setBusy(true); setMessage(null); setError(null);
     try {
       const next = await call("/api/ai/config", { enabled, baseUrl, model, thinking, reasoningEffort: thinking ? reasoningEffort ?? "high" : null, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
-      const nextStatus: AiStatus = { preset: next.preset, enabled: next.enabled, configured: next.configured, keyConfigured: next.keyConfigured, provider: next.provider, model: next.model, baseUrl: next.baseUrl, thinking: next.thinking, reasoningEffort: next.reasoningEffort, keySource: next.keySource };
+      const nextStatus: AiStatus = { preset: next.preset, enabled: next.enabled, configured: next.configured, keyConfigured: next.keyConfigured, provider: next.provider, model: next.model, baseUrl: next.baseUrl, thinking: next.thinking, reasoningEffort: next.reasoningEffort, keySource: next.keySource, summaryPrompt: next.summaryPrompt, summaryPromptCustom: next.summaryPromptCustom };
       setApiKey(""); onChanged(nextStatus); setMessage("AI 配置已保存");
     } catch (cause) { setError(errorMessage(cause, "AI 配置保存失败，请重试")); }
     finally { setBusy(false); }
@@ -3450,6 +3600,15 @@ function App() {
   const [cyclePanelOpen, setCyclePanelOpen] = useState(false);
   const [summaries, setSummaries] = useState<readonly DaySummary[]>([]);
   const [aiSummaries, setAiSummaries] = useState(false);
+  // Calendar-local settings and the edit mode they can switch on. Drafts are keyed
+  // by date and hold only days that were actually touched, so the save bar's count
+  // is the number of edits rather than the number of cells.
+  const [calendarSettingsOpen, setCalendarSettingsOpen] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [summaryDrafts, setSummaryDrafts] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [summarySaving, setSummarySaving] = useState(false);
+  const [summaryBusyDate, setSummaryBusyDate] = useState<string | null>(null);
+  const [summariesReload, setSummariesReload] = useState(0);
   const [weatherArchive, setWeatherArchive] = useState<ReadonlyMap<string, CalendarWeather>>(new Map());
   const [photoPreview, setPhotoPreview] = useState<{ assetIds: readonly string[]; index: number } | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -3477,7 +3636,7 @@ function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
-  const [aiStatus, setAiStatus] = useState<AiStatus>({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none" });
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false });
   const [assistantVisible, setAssistantVisible] = useState(readAssistantVisibility);
   const [weatherStatus, setWeatherStatus] = useState<WeatherStatus | null>(null);
   const [weatherProfiles, setWeatherProfiles] = useState<readonly WeatherProfile[]>([]);
@@ -3644,10 +3803,10 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     if (authState.required && !authState.authenticated) {
-      setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none" });
+      setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false });
       return () => controller.abort();
     }
-    apiRequest<AiStatus>("/api/ai/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setAiStatus(status); }).catch(() => { if (!controller.signal.aborted) setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none" }); });
+    apiRequest<AiStatus>("/api/ai/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setAiStatus(status); }).catch(() => { if (!controller.signal.aborted) setAiStatus({ preset: "quick", enabled: true, configured: false, keyConfigured: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false }); });
     return () => controller.abort();
   }, [authState.authenticated, authState.required]);
 
@@ -3786,14 +3945,17 @@ function App() {
   }, [recordsForQuery]);
 
   /**
-   * Month cells carry a one-line summary. The server owns the cache — it keys on
-   * the record versions behind each day — so this asks for the visible window and
-   * refetches after a write. A failure here is not surfaced: the grid still knows
-   * every day number and record count, and a summary is an extra, not the point.
+   * Month cells always carry a one-line summary, and the week grid carries it in
+   * edit mode, where the day's existing sentence is the thing being edited — so
+   * the window is fetched whenever either of those is on screen. The server owns
+   * the cache — it keys on the record versions behind each day — so this asks for
+   * the visible window and refetches after a write. A failure here is not
+   * surfaced: the grid still knows every day number and record count, and a
+   * summary is an extra, not the point.
    */
   useEffect(() => {
     const controller = new AbortController();
-    if (activeView !== "calendar" || calendarMode !== "month" || (authState.required && !authState.authenticated)) {
+    if (activeView !== "calendar" || (calendarMode !== "month" && !editMode) || (authState.required && !authState.authenticated)) {
       setSummaries([]);
       return () => controller.abort();
     }
@@ -3814,7 +3976,7 @@ function App() {
         setAiSummaries(false);
       });
     return () => controller.abort();
-  }, [activeView, calendarMode, calendarRange, selectedDate, authState.authenticated, authState.required, recordsReload]);
+  }, [activeView, calendarMode, editMode, calendarRange, selectedDate, authState.authenticated, authState.required, recordsReload, summariesReload]);
 
   // Month cells read all weather rows in one range request. The API endpoint
   // only reads SQLite, so browsing history never causes one fetch per day.
@@ -4027,6 +4189,70 @@ function App() {
     const module = await apiRequest<CycleModuleResponse>(`/api/modules/cycle-intimacy/events/${encodeURIComponent(id)}`, { method: "DELETE" });
     setCycleModule(module);
     showToast("周期记录已移除");
+  };
+  /** Leaving edit mode with unsaved text asks first; nothing is thrown away silently. */
+  const changeEditMode = (value: boolean) => {
+    if (!value && summaryDrafts.size > 0 && !window.confirm(`还有 ${summaryDrafts.size} 处改动没有保存，确定要退出编辑模式吗？`)) return;
+    if (!value) setSummaryDrafts(new Map());
+    setEditMode(value);
+  };
+  const editSummaryDraft = (date: string, text: string) => {
+    const stored = summaries.find((summary) => summary.date === date);
+    const original = stored === undefined ? "" : trimSummaryText(stored.text, SUMMARY_MAX_LENGTH);
+    setSummaryDrafts((current) => {
+      const next = new Map(current);
+      // Typing it back to what was already there is not a change, so it drops out of
+      // the pending count instead of forcing a pointless write.
+      if (text === original) next.delete(date);
+      else next.set(date, text);
+      return next;
+    });
+  };
+  const discardSummaryDrafts = () => setSummaryDrafts(new Map());
+  const saveSummaryDrafts = async () => {
+    if (summaryDrafts.size === 0 || summarySaving) return;
+    setSummarySaving(true);
+    const entries = [...summaryDrafts].map(([date, text]) => ({ date, text }));
+    try {
+      await apiRequest<SummaryManualResponse>("/api/summaries/manual", { method: "POST", body: JSON.stringify({ entries, timeZone: USER_TIME_ZONE }) });
+      setSummaryDrafts(new Map());
+      setSummariesReload((current) => current + 1);
+      showToast(entries.length === 1 ? "小结已保存" : `已保存 ${entries.length} 天的小结`);
+    } catch (error) {
+      // The drafts stay put: a failed save must not look like a successful one.
+      showToast(handleRequestError(error, "小结保存失败，请重试"), "warn");
+    } finally {
+      setSummarySaving(false);
+    }
+  };
+  /** Regenerating replaces whatever text is there, including text the owner typed. */
+  const regenerateDaySummary = async (date: string) => {
+    setSummaryBusyDate(date);
+    try {
+      const payload = await apiRequest<SummariesResponse>("/api/summaries/regenerate", { method: "POST", body: JSON.stringify({ date, timeZone: USER_TIME_ZONE }) });
+      const updated = payload.items[0];
+      if (updated !== undefined) setSummaries((current) => [...current.filter((item) => item.date !== date), updated]);
+      setSummaryDrafts((current) => { const next = new Map(current); next.delete(date); return next; });
+      showToast(`${displayDate(date)} 的小结已重新生成`);
+    } catch (error) {
+      showToast(handleRequestError(error, "重新生成失败，请重试"), "warn");
+    } finally {
+      setSummaryBusyDate(null);
+    }
+  };
+  /** Restoring hands the day back to the automatic summary. */
+  const revertDaySummary = async (date: string) => {
+    setSummaryBusyDate(date);
+    try {
+      await apiRequest<SummaryManualResponse>("/api/summaries/manual", { method: "POST", body: JSON.stringify({ entries: [{ date, text: "" }], timeZone: USER_TIME_ZONE }) });
+      setSummaryDrafts((current) => { const next = new Map(current); next.delete(date); return next; });
+      setSummariesReload((current) => current + 1);
+      showToast(`${displayDate(date)} 的小结已恢复原样`);
+    } catch (error) {
+      showToast(handleRequestError(error, "恢复原样失败，请重试"), "warn");
+    } finally {
+      setSummaryBusyDate(null);
+    }
   };
 
   useEffect(() => { installDiagnostics(); }, []);
@@ -4343,7 +4569,7 @@ function App() {
       : activeView === "notes"
         ? <NotesLibrary records={visibleRecords} loading={recordsLoading} error={recordsError} entities={entities} onRetry={() => setRecordsReload((current) => current + 1)} onCreateEntity={handleCreateEntity} onSave={handleSaveNote} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} />
       : activeView === "calendar"
-         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={() => setCyclePanelOpen((current) => !current)} onOpenCycleSettings={() => openSettingsPage("private/cycle")} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onSavePeriodLength={saveCyclePeriodLength} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
+         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={() => setCyclePanelOpen((current) => !current)} onOpenCycleSettings={() => openSettingsPage("private/cycle")} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onSavePeriodLength={saveCyclePeriodLength} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} settingsOpen={calendarSettingsOpen} onToggleSettings={() => setCalendarSettingsOpen((current) => !current)} aiStatus={aiStatus} onAiStatusChange={setAiStatus} editMode={editMode} onEditModeChange={changeEditMode} drafts={summaryDrafts} onDraftChange={editSummaryDraft} summarySaving={summarySaving} onSaveDrafts={() => void saveSummaryDrafts()} onDiscardDrafts={discardSummaryDrafts} onRegenerateSummary={regenerateDaySummary} onRevertSummary={revertDaySummary} busyDate={summaryBusyDate} />
       : activeView === "timemachine"
         ? <TimeMachine />
       : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} onMore={() => setMobileMenuOpen(true)} moreOpen={mobileMenuOpen} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={onNavigate} onOpenSearch={() => setSearchDialogOpen(true)} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(recordsForQuery ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) setImportFile(null); }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} visible={assistantVisible} onOpenSettings={() => openSettingsPage("integrations/ai")} /></div>;

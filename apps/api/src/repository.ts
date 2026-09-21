@@ -1388,6 +1388,15 @@ export class SqliteRecordRepository {
       .run(summary.date, summary.sourceRevision, JSON.stringify(summary));
   }
 
+  /**
+   * Drops a day's summary so the next read recomputes it. Used when the owner
+   * clears text they typed: the row has to go, not become an empty string, or the
+   * day would keep answering with a blank summary that no provider can refresh.
+   */
+  public deleteDaySummary(date: string): void {
+    this.#db.prepare("DELETE FROM day_summaries WHERE date = ?").run(date);
+  }
+
   #referenceRecordIds(column: "entity_refs_json" | "asset_refs_json", key: string, value: string): readonly string[] {
     const rows = this.#db.prepare(`SELECT id, ${column} AS refs_json FROM records WHERE deleted_at_json IS NULL ORDER BY id`).all();
     const ids: string[] = [];

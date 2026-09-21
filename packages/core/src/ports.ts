@@ -104,6 +104,12 @@ export interface DaySummaryProvider {
    */
   readonly kind: "ai" | "rule";
   readonly model?: string;
+  /**
+   * Which machinery produced a draft: provider kind, model, and prompt. A cached
+   * summary is only reused while this still matches, so changing the model or the
+   * prompt actually rewrites the text instead of leaving the old wording in place.
+   */
+  readonly contextKey?: string;
   summarizeDays(days: readonly DaySummaryInput[]): Promise<readonly DaySummaryDraft[]>;
 }
 

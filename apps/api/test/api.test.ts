@@ -14,7 +14,7 @@ import { SqliteRecordRepository } from "../src/repository.js";
 import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
 import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
 import { OBSERVATION_KEEP_LIMIT, selectDayObservations } from "../src/weather-selection.js";
-import { createInstant, type Asset } from "@lifeos/core";
+import { SUMMARY_SYSTEM_PROMPT, createInstant, type Asset } from "@lifeos/core";
 import sharp from "sharp";
 
 // WHATWG fetch rejects a small set of historically reserved ports even when
@@ -399,6 +399,8 @@ test("login sessions persist in SQLite and AI assistant falls back without a key
     reasoningEffort: null,
     preset: "quick",
     keySource: "none",
+    summaryPrompt: SUMMARY_SYSTEM_PROMPT,
+    summaryPromptCustom: false,
   });
   const aiReply = await request(harness.base, "/api/ai/assistant", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ message: "有几条记录？", history: [] }) });
   equal(aiReply.response.status, 200);
@@ -421,6 +423,8 @@ test("AI config exposes effective presets, validates reasoning, and never return
     reasoningEffort: null,
     preset: "quick",
     keySource: "none",
+    summaryPrompt: SUMMARY_SYSTEM_PROMPT,
+    summaryPromptCustom: false,
   });
 
   const invalidReasoning = await request(harness.base, "/api/ai/config", {
@@ -447,6 +451,8 @@ test("AI config exposes effective presets, validates reasoning, and never return
     reasoningEffort: null,
     preset: "quick",
     keySource: "file",
+    summaryPrompt: SUMMARY_SYSTEM_PROMPT,
+    summaryPromptCustom: false,
   });
   const persisted = readFileSync(join(harness.root, "ai-config.json"), "utf8");
   ok(!persisted.includes("unit-test-secret"));
@@ -1251,18 +1257,22 @@ test("calendar range queries and day summaries mark rule output as a fallback", 
   const summaries = await request(harness.base, "/api/summaries?from=2026-09-07&to=2026-09-13&timeZone=Asia%2FShanghai");
   equal(summaries.response.status, 200);
   const summariesBody = summaries.body as {
-    items: Array<{ date: string; text: string; provider: string; status: string; sourceRevision: string; generatedAt: { value: string } }>;
+    items: Array<{ date: string; text: string; provider: string; status: string; sourceRevision: string; contextRevision?: string; generatedAt: { value: string } }>;
     provider: string;
     ai: boolean;
   };
   equal(summariesBody.ai, false);
   equal(summariesBody.provider, "rule");
-  // A day with no records is not answered at all — the grid leaves that cell blank.
-  deepEqual(summariesBody.items.map((item) => item.date), ["2026-09-08"]);
+  // A day whose only material is a note is still answered, with the note standing
+  // in as filler; a day with nothing at all stays blank.
+  deepEqual(summariesBody.items.map((item) => item.date), ["2026-09-08", "2026-09-09"]);
   equal(summariesBody.items[0]?.text, "江边散步");
   equal(summariesBody.items[0]?.status, "fallback");
   equal(summariesBody.items[0]?.provider, "rule");
   ok((summariesBody.items[0]?.sourceRevision.length ?? 0) > 0);
+  equal(summariesBody.items[1]?.text, "写信给阿彬");
+  equal(summariesBody.items[1]?.status, "fallback");
+  equal(summariesBody.items[1]?.contextRevision, "rule:v1");
 
   // An unchanged day is served from the store, so opening a month twice is cheap.
   const cached = await request(harness.base, "/api/summaries?from=2026-09-08&to=2026-09-08&timeZone=Asia%2FShanghai");
@@ -1279,6 +1289,64 @@ test("calendar range queries and day summaries mark rule output as a fallback", 
   const refreshedItem = (refreshed.body as { items: Array<{ text: string; sourceRevision: string }> }).items[0];
   equal(refreshedItem?.text, "改成了登山");
   ok(refreshedItem !== undefined && refreshedItem.sourceRevision !== summariesBody.items[0]!.sourceRevision);
+});
+
+test("owner-written summaries outlive their records and can be regenerated or cleared", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+
+  const created = await request(harness.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "江边散步", occurredAt: { kind: "date", value: "2026-09-08" } }) });
+  equal(created.response.status, 201);
+  const record = created.body as { id: string; revision: number };
+  const range = "from=2026-09-08&to=2026-09-08&timeZone=Asia%2FShanghai";
+
+  const written = await request(harness.base, "/api/summaries/manual", {
+    method: "POST",
+    ...json({ timeZone: "Asia/Shanghai", entries: [{ date: "2026-09-08", text: "在江边坐了很久。" }] }),
+  });
+  equal(written.response.status, 200);
+  const writtenBody = written.body as { items: Array<{ date: string; text: string; status: string; provider: string }>; cleared: string[] };
+  deepEqual(writtenBody.cleared, []);
+  // Owner text keeps its punctuation; the sanitiser is for derived text only.
+  equal(writtenBody.items[0]?.text, "在江边坐了很久。");
+  equal(writtenBody.items[0]?.status, "manual");
+  equal(writtenBody.items[0]?.provider, "manual");
+
+  const readBack = await request(harness.base, `/api/summaries?${range}`);
+  equal((readBack.body as { items: Array<{ text: string; status: string }> }).items[0]?.status, "manual");
+  equal((readBack.body as { items: Array<{ text: string }> }).items[0]?.text, "在江边坐了很久。");
+
+  // Editing the record must not recompute over what the owner wrote.
+  const patched = await request(harness.base, `/api/records/${encodeURIComponent(record.id)}`, { method: "PATCH", ...json({ revision: record.revision, content: "改成了登山" }) });
+  equal(patched.response.status, 200);
+  const afterEdit = await request(harness.base, `/api/summaries?${range}`);
+  equal((afterEdit.body as { items: Array<{ text: string; status: string }> }).items[0]?.status, "manual");
+  equal((afterEdit.body as { items: Array<{ text: string }> }).items[0]?.text, "在江边坐了很久。");
+
+  // Regenerating steps over it and writes a fresh derived summary.
+  const regenerated = await request(harness.base, "/api/summaries/regenerate", { method: "POST", ...json({ date: "2026-09-08", timeZone: "Asia/Shanghai" }) });
+  equal(regenerated.response.status, 200);
+  const regeneratedBody = regenerated.body as { items: Array<{ date: string; text: string; status: string; provider: string }> };
+  deepEqual(regeneratedBody.items.map((item) => item.date), ["2026-09-08"]);
+  equal(regeneratedBody.items[0]?.status, "fallback");
+  equal(regeneratedBody.items[0]?.text, "改成了登山");
+
+  // Emptying the field is a revert: the row goes, and the next read recomputes.
+  const cleared = await request(harness.base, "/api/summaries/manual", { method: "POST", ...json({ timeZone: "Asia/Shanghai", entries: [{ date: "2026-09-08", text: "   " }] }) });
+  equal(cleared.response.status, 200);
+  deepEqual((cleared.body as { cleared: string[] }).cleared, ["2026-09-08"]);
+  const afterClear = await request(harness.base, `/api/summaries?${range}`);
+  equal((afterClear.body as { items: Array<{ status: string }> }).items[0]?.status, "fallback");
+
+  // A day with nothing at all has no summary to regenerate.
+  const empty = await request(harness.base, "/api/summaries/regenerate", { method: "POST", ...json({ date: "2026-09-30" }) });
+  equal(empty.response.status, 200);
+  deepEqual((empty.body as { items: unknown[] }).items, []);
+  // The range form is accepted too, and rejects a malformed request.
+  const badRange = await request(harness.base, "/api/summaries/regenerate", { method: "POST", ...json({ from: "2026-09-30" }) });
+  equal(badRange.response.status, 400);
+  const badDate = await request(harness.base, "/api/summaries/manual", { method: "POST", ...json({ entries: [{ date: "9/8", text: "x" }] }) });
+  equal(badDate.response.status, 400);
 });
 
 test("weather status and encrypted configuration stay usable without a weather key", async (t) => {

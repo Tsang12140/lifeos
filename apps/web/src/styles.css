@@ -10939,3 +10939,77 @@ button.relation-chip {
   .weather-corner-today-hit { width: 66px; }
   .weather-corner-today { height: 23px; border-radius: 0 9px 0 0; font-size: 0.76rem; }
 }
+
+/* ── 日历自己的设置（周期旁边那个齿轮） ────────────────────────────────────────
+   日历只留两个旋钮：小结怎么产生、文字能不能就地改。面板沿用周期面板那套
+   「内联卡片」语言，好让点开齿轮看起来是同一类表面，不是另一个页面。 */
+.calendar-module-button.calendar-gear-button { padding: 0 8px; }
+.calendar-settings-panel { display: grid; gap: 12px; margin: 0 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.calendar-settings-badge { padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 0.68rem; font-weight: 620; }
+.calendar-settings-block { display: grid; gap: 8px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.calendar-settings-block:first-of-type { padding-top: 0; border-top: 0; }
+.calendar-settings-block .eyebrow { margin: 0; }
+.calendar-settings-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ink); font-size: 0.84rem; font-weight: 620; }
+.calendar-settings-switch small { display: block; margin-top: 2px; color: var(--muted); font-size: 0.68rem; font-weight: 500; }
+.calendar-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.calendar-settings-grid label,
+.calendar-settings-prompt { display: grid; gap: 4px; }
+.calendar-settings-grid label > span,
+.calendar-settings-prompt > span { color: var(--muted); font-size: 0.7rem; font-weight: 600; }
+.calendar-settings-wide { grid-column: 1 / -1; }
+.calendar-settings-panel input,
+.calendar-settings-panel textarea { box-sizing: border-box; width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font-family: inherit; font-size: 0.8rem; }
+.calendar-settings-panel textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; line-height: 1.6; }
+/* 面板是圆角表面，全局 :focus-visible 会在里面画一个方框 —— 焦点改落在字段自己的描边上。 */
+.calendar-settings-panel input:focus,
+.calendar-settings-panel input:focus-visible,
+.calendar-settings-panel textarea:focus,
+.calendar-settings-panel textarea:focus-visible { outline: none; box-shadow: none; border-color: var(--primary); }
+.calendar-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.calendar-settings-actions .primary-button,
+.calendar-settings-actions .secondary-button { min-height: 34px; padding: 0 12px; font-size: 0.78rem; }
+
+/* 开关不是复选框：一眼要能看出状态，所以位置和颜色同时变。 */
+.toggle-button { position: relative; flex: 0 0 auto; width: 40px; height: 22px; padding: 0; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease; }
+.toggle-button .toggle-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #ffffff; box-shadow: 0 1px 2px rgb(24 36 61 / 0.22); transition: transform 160ms ease; }
+.toggle-button.is-on { border-color: var(--primary); background: var(--primary); }
+.toggle-button.is-on .toggle-knob { transform: translateX(18px); }
+.toggle-button:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+
+/* ── 编辑模式 ────────────────────────────────────────────────────────────────
+   小结位变成可改的字段，但保持摘要自己那块地方的尺寸（0.75rem 两行），
+   这样打开编辑模式不会把整个网格重新排一遍。 */
+.summary-field { position: relative; z-index: 1; display: block; box-sizing: border-box; width: 100%; min-height: 2.7em; max-height: 2.7em; padding: 2px 5px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink-soft); background: rgb(255 255 255 / 0.94); font-family: inherit; font-size: 0.75rem; font-weight: 580; line-height: 1.35; overflow: hidden; resize: none; }
+.summary-field::placeholder { color: var(--muted); opacity: 0.72; }
+.summary-field:focus,
+.summary-field:focus-visible { outline: none; box-shadow: none; border-color: var(--primary); background: var(--surface); }
+.week-card-summary-field { min-height: 3.2em; max-height: 3.2em; margin-bottom: 2px; font-size: 0.8rem; line-height: 1.45; }
+/* 编辑模式下格子是容器不是链接，所以悬停不再「抬起来」。 */
+.month-cell.is-editing,
+.week-card.is-editing { cursor: default; }
+.month-cell.is-editing:hover,
+.week-card.is-editing:hover { box-shadow: none; transform: none; }
+
+.calendar-edit-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid #c9d4ea; border-radius: 12px; background: var(--primary-soft); }
+.calendar-edit-hint { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.78rem; font-weight: 580; }
+.calendar-edit-actions { display: inline-flex; gap: 8px; }
+.calendar-edit-actions .primary-button,
+.calendar-edit-actions .secondary-button { min-height: 34px; padding: 0 14px; font-size: 0.8rem; }
+
+/* 右键菜单：定位在指针处，所以是 fixed 而不是绝对定位到某一格。 */
+.calendar-summary-menu { position: fixed; z-index: 62; display: grid; min-width: 168px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
+.calendar-summary-menu button { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; cursor: pointer; font-family: inherit; font-size: 0.8rem; text-align: left; }
+.calendar-summary-menu button:hover,
+.calendar-summary-menu button:focus-visible { outline: none; color: var(--ink); background: var(--surface-soft); }
+.calendar-summary-menu button:disabled { color: var(--muted); cursor: default; }
+
+@media (max-width: 760px) {
+  .calendar-settings-grid { grid-template-columns: minmax(0, 1fr); }
+}
+/* 跟着月格摘要自己的字号走，否则窄屏下字段会比它替代的那行字大一截。 */
+@media (max-width: 560px) {
+  .month-day-summary-field { font-size: 0.63rem; }
+}
+@media (max-width: 360px) {
+  .month-day-summary-field { font-size: 0.58rem; }
+}

@@ -33,6 +33,7 @@ import {
   type CycleIntimacyEventKind,
   type CycleIntimacyModuleConfig,
   type ContentHash,
+  type DaySummary,
   type Entity,
   type EntityKind,
   type EntityRef,
@@ -55,7 +56,7 @@ import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
 import { isCollectableAsset, planUnreferencedUploads, purgeTrashedAsset, resolveWithinRoot, restoreTrashedAsset, trashAsset, trashDaysRemaining, trashPathFor } from "./asset-gc.js";
 import { AssetGcScheduler, nextAssetGcAt } from "./asset-gc-scheduler.js";
-import { createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
+import { buildManualDaySummary, createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
 import { answerLifeosAssistant, type AssistantHistoryItem } from "./assistant.js";
 import { createDualBackup, createLocalBackup, pruneBackups, testS3Backup, uploadS3Backup } from "./backup.js";
 import { BackupScheduler, BACKUP_TIME_ZONE, publicNextBackupAt, shanghaiDateKey } from "./backup-scheduler.js";
@@ -1348,6 +1349,36 @@ export interface LifeosApp {
   readonly close: () => void;
 }
 
+/** The shape every summaries endpoint answers with: the rows plus whose they are. */
+function summaryPayload(items: readonly DaySummary[], provider: { readonly providerId: string; readonly model?: string; readonly kind: "ai" | "rule" }): Record<string, unknown> {
+  return {
+    items,
+    provider: provider.providerId,
+    ...(provider.model === undefined ? {} : { model: provider.model }),
+    ai: provider.kind === "ai",
+  };
+}
+
+/**
+ * Every record a day summary may read, bucketed by the caller's calendar day.
+ *
+ * Notes are included rather than filtered out, because a day that has nothing
+ * else still deserves a cell: the summariser treats them as filler and is told
+ * not to describe them as events. Private records stay out either way — a
+ * summary is shown on the grid.
+ */
+function collectSummarisableRecords(repository: SqliteRecordRepository, timeZone: string): Map<string, RecordView[]> {
+  const byDate = new Map<string, RecordView[]>();
+  for (const record of repository.list({})) {
+    if (record.isPrivate === true) continue;
+    const date = dateForTime(record.occurredAt ?? record.createdAt, timeZone);
+    const bucket = byDate.get(date);
+    if (bucket === undefined) byDate.set(date, [record]);
+    else bucket.push(record);
+  }
+  return byDate;
+}
+
 export function createApp(config: ApiConfig, repository = new SqliteRecordRepository(config.databasePath)): LifeosApp {
   const loginFailures = new Map<string, { failures: number; blockedUntil: number }>();
   const backupScheduler = new BackupScheduler({
@@ -1639,7 +1670,7 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
     if (pathname === "/api/ai/config" && req.method === "POST") {
       requireJsonContentType(req, true);
       const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["enabled", "baseUrl", "model", "thinking", "reasoningEffort", "apiKey", "clearApiKey"]);
+      hasOnlyKeys(input, ["enabled", "baseUrl", "model", "thinking", "reasoningEffort", "apiKey", "clearApiKey", "summaryPrompt"]);
       try {
         const status = saveRuntimeAiConfig(config, {
           enabled: input.enabled === undefined ? true : booleanField(input.enabled, "enabled"),
@@ -1649,6 +1680,8 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
           ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort === null ? null : enumField(input.reasoningEffort, AI_REASONING_EFFORTS, "reasoningEffort") }),
           ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
           ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
+          // `null` restores the shipped wording; omitting it leaves the current one alone.
+          ...(input.summaryPrompt === undefined ? {} : { summaryPrompt: input.summaryPrompt === null ? null : stringField(input.summaryPrompt, "summaryPrompt") }),
         });
         setJson(res, 200, status);
       } catch (error) {
@@ -2025,15 +2058,7 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
       assertTimeZone(timeZone);
       const dates = datesBetween(from, to);
       if (dates.length > 400) throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
-      const byDate = new Map<string, RecordView[]>();
-      for (const record of repository.list({})) {
-        if (record.kind === "note") continue;
-        if (record.isPrivate === true) continue;
-        const date = dateForTime(record.occurredAt ?? record.createdAt, timeZone);
-        const bucket = byDate.get(date);
-        if (bucket === undefined) byDate.set(date, [record]);
-        else bucket.push(record);
-      }
+      const byDate = collectSummarisableRecords(repository, timeZone);
       // Resolved per request, not per process: the AI key lives in the settings
       // file, so reading it here is what makes "save the key, reopen the calendar"
       // work without restarting the API.
@@ -2045,12 +2070,71 @@ export function createApp(config: ApiConfig, repository = new SqliteRecordReposi
         provider: daySummaryProvider,
         force: url.searchParams.get("force") === "1",
       });
-      setJson(res, 200, {
-        items,
-        provider: daySummaryProvider.providerId,
-        ...(daySummaryProvider.model === undefined ? {} : { model: daySummaryProvider.model }),
-        ai: daySummaryProvider.kind === "ai",
+      setJson(res, 200, summaryPayload(items, daySummaryProvider));
+      return;
+    }
+    if (pathname === "/api/summaries/manual" && req.method === "POST") {
+      requireJsonContentType(req, true);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["entries", "timeZone"]);
+      const entries = Array.isArray(input.entries) ? input.entries : null;
+      if (entries === null) throw new HttpError(400, "invalid_entries", "entries must be an array");
+      if (entries.length > 400) throw new HttpError(400, "invalid_entries", "entries must not exceed 400 items");
+      const timeZone = typeof input.timeZone === "string" ? input.timeZone : "UTC";
+      assertTimeZone(timeZone);
+      const byDate = collectSummarisableRecords(repository, timeZone);
+      const saved: DaySummary[] = [];
+      const cleared: string[] = [];
+      for (const entry of entries) {
+        const item = jsonObject(entry, "entries[]");
+        hasOnlyKeys(item, ["date", "text"]);
+        const date = stringField(item.date, "date", { nonEmpty: true });
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "invalid_date", `entries[].date must be YYYY-MM-DD, received ${date}`);
+        const text = stringField(item.text, "text");
+        // An emptied field is a revert, not a blank summary: the row is dropped so
+        // the next read recomputes it from the records.
+        if (text.trim() === "") {
+          repository.deleteDaySummary(date);
+          cleared.push(date);
+          continue;
+        }
+        const summary = buildManualDaySummary(date, text, byDate.get(date) ?? []);
+        repository.writeDaySummary(summary);
+        saved.push(summary);
+      }
+      setJson(res, 200, { items: saved, cleared });
+      return;
+    }
+    if (pathname === "/api/summaries/regenerate" && req.method === "POST") {
+      requireJsonContentType(req, true);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["date", "from", "to", "timeZone"]);
+      const single = input.date === undefined ? undefined : parseDateQuery(stringField(input.date, "date", { nonEmpty: true }), "date");
+      let from = single;
+      let to = single;
+      if (single === undefined) {
+        if (input.from === undefined || input.to === undefined) throw new HttpError(400, "invalid_range", "date, or both from and to, are required");
+        from = parseDateQuery(stringField(input.from, "from", { nonEmpty: true }), "from");
+        to = parseDateQuery(stringField(input.to, "to", { nonEmpty: true }), "to");
+      }
+      if (from === undefined || to === undefined) throw new HttpError(400, "invalid_range", "date, or both from and to, are required");
+      if (from > to) throw new HttpError(400, "invalid_range", "from must not be after to");
+      const timeZone = typeof input.timeZone === "string" ? input.timeZone : "UTC";
+      assertTimeZone(timeZone);
+      const dates = datesBetween(from, to);
+      if (dates.length > 400) throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
+      const byDate = collectSummarisableRecords(repository, timeZone);
+      const daySummaryProvider = createDaySummaryProvider(config);
+      // Forcing is what makes this a regenerate rather than a read: it steps over
+      // the cached row — including one the owner typed — and writes a fresh one.
+      const items = await resolveDaySummaries({
+        dates,
+        recordsForDate: (date) => byDate.get(date) ?? [],
+        cache: repository,
+        provider: daySummaryProvider,
+        force: true,
       });
+      setJson(res, 200, summaryPayload(items, daySummaryProvider));
       return;
     }
     if (pathname === "/api/records" && req.method === "POST") {

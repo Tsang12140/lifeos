@@ -65,6 +65,16 @@ export interface AiStatus {
   readonly thinking: boolean;
   readonly reasoningEffort: "low" | "high" | "max" | null;
   readonly keySource?: "env" | "file" | "none";
+  /** The wording the calendar sends the model, already resolved to a default if unset. */
+  readonly summaryPrompt: string;
+  /** False means the shipped default is in force, not text the owner wrote. */
+  readonly summaryPromptCustom: boolean;
+}
+
+/** What the calendar's edit mode writes: new owner text, plus the days it cleared. */
+export interface SummaryManualResponse {
+  readonly items: readonly DaySummary[];
+  readonly cleared: readonly string[];
 }
 
 export interface AssistantReply {

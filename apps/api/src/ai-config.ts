@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { SUMMARY_SYSTEM_PROMPT } from "@lifeos/core";
 import type { ApiConfig } from "./config.js";
 
 export const AI_REASONING_EFFORTS = ["low", "high", "max"] as const;
@@ -17,6 +18,18 @@ export interface RuntimeAiConfig {
   readonly preset: AiPresetId;
   readonly apiKey?: string;
   readonly source: "env" | "file" | "none";
+  /**
+   * The instruction the calendar sends when summarising days. Absent means the
+   * built-in default is in force. It is part of the AI settings rather than a
+   * constant so the wording can be tuned without a rebuild — and because it is
+   * part of the provider's identity, editing it rewrites stale summaries.
+   */
+  readonly summaryPrompt?: string;
+}
+
+/** The prompt actually in force: the owner's wording, or the shipped default. */
+export function effectiveSummaryPrompt(config: ApiConfig): string {
+  return readRuntimeAiConfig(config).summaryPrompt ?? SUMMARY_SYSTEM_PROMPT;
 }
 
 interface StoredAiConfig {
@@ -30,6 +43,7 @@ interface StoredAiConfig {
   readonly encryptedApiKey?: string;
   readonly apiKeyIv?: string;
   readonly apiKeyTag?: string;
+  readonly summaryPrompt?: string;
 }
 
 const DEFAULT_AI_BASE_URL = "https://api.deepseek.com";
@@ -69,6 +83,7 @@ function readStored(config: ApiConfig): StoredAiConfig | undefined {
     if (typeof value.enabled !== "boolean" || value.provider !== "deepseek" || typeof value.baseUrl !== "string" || typeof value.model !== "string") return undefined;
     if (value.thinking !== undefined && typeof value.thinking !== "boolean") return undefined;
     if (value.reasoningEffort !== undefined && !isAiReasoningEffort(value.reasoningEffort)) return undefined;
+    if (value.summaryPrompt !== undefined && typeof value.summaryPrompt !== "string") return undefined;
     return value as StoredAiConfig;
   } catch {
     return undefined;
@@ -87,7 +102,7 @@ function presetForAiConfig(baseUrl: string, model: string, thinking: boolean, re
   return "custom";
 }
 
-function runtimeConfig(values: { readonly enabled: boolean; readonly baseUrl: string; readonly model: string; readonly thinking: boolean; readonly reasoningEffort?: AiReasoningEffort; readonly apiKey?: string; readonly source: RuntimeAiConfig["source"] }): RuntimeAiConfig {
+function runtimeConfig(values: { readonly enabled: boolean; readonly baseUrl: string; readonly model: string; readonly thinking: boolean; readonly reasoningEffort?: AiReasoningEffort; readonly apiKey?: string; readonly source: RuntimeAiConfig["source"]; readonly summaryPrompt?: string }): RuntimeAiConfig {
   return {
     enabled: values.enabled,
     provider: "deepseek",
@@ -97,6 +112,7 @@ function runtimeConfig(values: { readonly enabled: boolean; readonly baseUrl: st
     ...(values.thinking && values.reasoningEffort !== undefined ? { reasoningEffort: values.reasoningEffort } : {}),
     preset: presetForAiConfig(values.baseUrl, values.model, values.thinking, values.reasoningEffort),
     ...(values.apiKey === undefined ? {} : { apiKey: values.apiKey }),
+    ...(values.summaryPrompt === undefined ? {} : { summaryPrompt: values.summaryPrompt }),
     source: values.source,
   };
 }
@@ -118,18 +134,18 @@ export function readRuntimeAiConfig(config: ApiConfig): RuntimeAiConfig {
     const baseUrl = normalizeBaseUrl(stored.baseUrl);
     const thinking = stored.thinking ?? false;
     const reasoningEffort = thinking ? stored.reasoningEffort ?? "high" : undefined;
-    return runtimeConfig({ enabled: stored.enabled, baseUrl, model: stored.model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(apiKey === undefined ? {} : { apiKey }), source });
+    return runtimeConfig({ enabled: stored.enabled, baseUrl, model: stored.model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(apiKey === undefined ? {} : { apiKey }), ...(stored.summaryPrompt === undefined ? {} : { summaryPrompt: stored.summaryPrompt }), source });
   }
   const thinking = false;
   return runtimeConfig({ enabled: true, baseUrl: config.deepseekBaseUrl, model: config.deepseekModel, thinking, ...(config.deepseekApiKey ? { apiKey: config.deepseekApiKey } : {}), source: config.deepseekApiKey === undefined ? "none" : "env" });
 }
 
-export function publicAiConfig(config: ApiConfig): { readonly enabled: boolean; readonly configured: boolean; readonly keyConfigured: boolean; readonly provider: "deepseek"; readonly model: string; readonly baseUrl: string; readonly thinking: boolean; readonly reasoningEffort: AiReasoningEffort | null; readonly preset: AiPresetId; readonly keySource: RuntimeAiConfig["source"] } {
+export function publicAiConfig(config: ApiConfig): { readonly enabled: boolean; readonly configured: boolean; readonly keyConfigured: boolean; readonly provider: "deepseek"; readonly model: string; readonly baseUrl: string; readonly thinking: boolean; readonly reasoningEffort: AiReasoningEffort | null; readonly preset: AiPresetId; readonly keySource: RuntimeAiConfig["source"]; readonly summaryPrompt: string; readonly summaryPromptCustom: boolean } {
   const runtime = readRuntimeAiConfig(config);
-  return { enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source };
+  return { enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source, summaryPrompt: runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: runtime.summaryPrompt !== undefined };
 }
 
-export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled: boolean; readonly baseUrl: string; readonly model: string; readonly thinking?: boolean; readonly reasoningEffort?: AiReasoningEffort | null; readonly apiKey?: string; readonly clearApiKey?: boolean }): ReturnType<typeof publicAiConfig> {
+export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled: boolean; readonly baseUrl: string; readonly model: string; readonly thinking?: boolean; readonly reasoningEffort?: AiReasoningEffort | null; readonly apiKey?: string; readonly clearApiKey?: boolean; readonly summaryPrompt?: string | null }): ReturnType<typeof publicAiConfig> {
   const current = readRuntimeAiConfig(config);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const model = input.model.trim();
@@ -143,7 +159,11 @@ export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled
       ? current.reasoningEffort ?? "high"
       : input.reasoningEffort;
   const nextKey = input.clearApiKey ? undefined : input.apiKey?.trim() || current.apiKey;
-  const stored: StoredAiConfig = { enabled: input.enabled, provider: "deepseek", baseUrl, model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(nextKey ? encryptApiKey(config, nextKey) : {}) };
+  // `null` means "go back to the shipped wording", so it clears the field rather
+  // than storing the default text — a later change to the constant then flows
+  // through. An omitted field leaves the current wording untouched.
+  const requestedPrompt = input.summaryPrompt === undefined ? current.summaryPrompt : input.summaryPrompt?.trim() || undefined;
+  const stored: StoredAiConfig = { enabled: input.enabled, provider: "deepseek", baseUrl, model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(nextKey ? encryptApiKey(config, nextKey) : {}), ...(requestedPrompt === undefined ? {} : { summaryPrompt: requestedPrompt }) };
   mkdirSync(config.dataDirectory, { recursive: true });
   writeFileSync(configPath(config), `${JSON.stringify(stored, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return publicAiConfig(config);

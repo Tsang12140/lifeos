@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
 import {
   SUMMARY_MAX_LENGTH,
+  SUMMARY_SYSTEM_PROMPT,
+  clampSummaryText,
   createInstant,
+  isNoteOnlyDay,
   ruleSummaryText,
   summaryFingerprint,
+  summaryUsableSources,
   trimSummaryText,
   type DaySummary,
   type DaySummaryDraft,
@@ -27,30 +32,41 @@ export function summarySources(records: readonly RecordView[]): readonly Summary
     revision: record.revision,
     text: record.body.edited ?? record.body.original,
     labels: record.entityRefs.map((ref) => ref.label ?? ref.entityId),
+    kind: record.kind === "note" ? "note" : "record",
   }));
+}
+
+/**
+ * Identifies the machinery behind a draft. Summaries written by different models,
+ * or by one model under a different instruction, are not interchangeable — but the
+ * record fingerprint cannot see either change, so this travels with the row.
+ */
+function summaryContextKey(baseUrl: string, model: string, prompt: string): string {
+  const promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 10);
+  return `ai:${baseUrl}|${model}|${promptHash}`;
 }
 
 /** Used when no provider is configured, and for any day an AI call did not cover. */
 export class RuleDaySummaryProvider implements DaySummaryProvider {
   public readonly providerId = "rule";
   public readonly kind = "rule" as const;
+  /** Bump when the offline rule's wording changes, so stale fallbacks recompute. */
+  public readonly contextKey = "rule:v1";
 
   public summarizeDays(days: readonly DaySummaryInput[]): Promise<readonly DaySummaryDraft[]> {
     return Promise.resolve(days.map((day) => ({ date: day.date, text: ruleSummaryText(day.records) })));
   }
 }
 
-const SYSTEM_PROMPT = [
-  "你是一个生活记录的时间轴摘要器。",
-  `用户会给你若干天的记录，请你为每一天写一个不超过 ${SUMMARY_MAX_LENGTH} 个 Unicode 字符的短标签，说明那天最主要的一件事或状态。超长内容由系统截断并追加两个英文句点，不要自行添加省略号。`,
-  "只用一个短语，不要标点，不要解释，不要复述具体时间。",
-  '只输出 JSON，形如 {"2026-09-01":"江边散步"}，键必须是给出的日期。',
-].join("\n");
-
 function buildUserPrompt(days: readonly DaySummaryInput[]): string {
   return days
     .map((day) => {
-      const lines = day.records.map((record) => `- ${record.text.replace(/\s+/g, " ").slice(0, 200)}`);
+      // Only what the day should actually be read from: its own records when it has
+      // any, its notes as a stand-in when it does not. A clipping never travels
+      // next to a record, so the model cannot mistake it for something that happened.
+      const usable = summaryUsableSources(day.records);
+      const noteOnly = isNoteOnlyDay(usable);
+      const lines = usable.map((record) => `- ${noteOnly ? "[笔记] " : ""}${record.text.replace(/\s+/g, " ").slice(0, 200)}`);
       return `${day.date}\n${lines.join("\n")}`;
     })
     .join("\n\n");
@@ -80,16 +96,19 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
   public readonly providerId = "deepseek";
   public readonly kind = "ai" as const;
   public readonly model: string;
+  /** Provider, model, and prompt, so a change to any of them rewrites the text. */
+  public readonly contextKey: string;
   readonly #apiKey: string;
   readonly #baseUrl: string;
   /** Overridable so the prompt can be edited from settings instead of only in code. */
   readonly #systemPrompt: string;
 
-  public constructor(apiKey: string, baseUrl: string, model: string, systemPrompt: string = SYSTEM_PROMPT) {
+  public constructor(apiKey: string, baseUrl: string, model: string, systemPrompt: string = SUMMARY_SYSTEM_PROMPT) {
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl;
     this.model = model;
     this.#systemPrompt = systemPrompt;
+    this.contextKey = summaryContextKey(baseUrl, model, systemPrompt);
   }
 
   public async summarizeDays(days: readonly DaySummaryInput[]): Promise<readonly DaySummaryDraft[]> {
@@ -120,6 +139,8 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
  * The provider the server asks for, resolved **per request** rather than once at
  * boot: the AI key lives in the settings file, and a provider frozen at startup
  * would keep using whatever key (or lack of one) the process happened to see.
+ * The prompt it will use comes from the same settings file (SUMMARY_SYSTEM_PROMPT
+ * when none is stored), and is part of the provider's contextKey.
  *
  * Before this, summaries read LIFEOS_DEEPSEEK_API_KEY only, while the assistant
  * read the settings file. Two answers to the same question — so a key typed into
@@ -129,7 +150,23 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
 export function createDaySummaryProvider(config: ApiConfig): DaySummaryProvider {
   const runtime = readRuntimeAiConfig(config);
   if (!runtime.enabled || runtime.apiKey === undefined) return new RuleDaySummaryProvider();
-  return new DeepSeekDaySummaryProvider(runtime.apiKey, runtime.baseUrl, runtime.model);
+  return new DeepSeekDaySummaryProvider(runtime.apiKey, runtime.baseUrl, runtime.model, runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT);
+}
+
+/**
+ * A summary the owner typed. It is the only kind that is not derived, so it names
+ * no provider and is never recomputed on its own — only the record versions it was
+ * written next to are recorded, so the row can be shown as belonging to that day.
+ */
+export function buildManualDaySummary(date: string, text: string, records: readonly RecordView[]): DaySummary {
+  return {
+    date,
+    text: clampSummaryText(text),
+    provider: "manual",
+    generatedAt: createInstant(new Date().toISOString()),
+    status: "manual",
+    sourceRevision: summaryFingerprint(summarySources(records)),
+  };
 }
 
 export interface DaySummaryRequest {
@@ -154,14 +191,22 @@ export interface DaySummaryRequest {
 export async function resolveDaySummaries(request: DaySummaryRequest): Promise<readonly DaySummary[]> {
   const settled: DaySummary[] = [];
   const stale: DaySummaryInput[] = [];
+  const context = request.provider.contextKey ?? request.provider.providerId;
 
   for (const date of request.dates) {
     const records = request.recordsForDate(date);
+    const cached = request.force === true ? null : request.cache.readDaySummary(date);
+    // Owner-written text outranks everything and outlives the records beside it:
+    // it is the only summary nobody derived, so nothing recomputes over it. Only
+    // an explicit regenerate (which forces) or an explicit clear removes it.
+    if (cached !== null && cached.status === "manual") {
+      settled.push(cached);
+      continue;
+    }
     if (records.length === 0) continue;
     const sources = summarySources(records);
     const fingerprint = summaryFingerprint(sources);
-    const cached = request.force === true ? null : request.cache.readDaySummary(date);
-    if (cached !== null && cached.sourceRevision === fingerprint) {
+    if (cached !== null && cached.sourceRevision === fingerprint && cached.contextRevision === context) {
       settled.push(cached);
       continue;
     }
@@ -194,6 +239,10 @@ export async function resolveDaySummaries(request: DaySummaryRequest): Promise<r
       generatedAt: createInstant(new Date().toISOString()),
       status: provider.kind === "ai" ? "generated" : "fallback",
       sourceRevision: summaryFingerprint(day.records),
+      // Stamped from the provider that actually produced the text, not the one that
+      // was asked: a fallback recorded as "ai" would be reused forever after one
+      // network blip, and a fallback recorded as "rule" is retried until it works.
+      contextRevision: provider.contextKey ?? provider.providerId,
     };
     request.cache.writeDaySummary(summary);
     settled.push(summary);

@@ -14,10 +14,13 @@ import {
   exportRecordMarkdown,
   findEntityMentions,
   normalizeEntitySearchTerm,
+  clampSummaryText,
+  isNoteOnlyDay,
   parseExportJson,
   ruleSummaryText,
   serializeExportJson,
   summaryFingerprint,
+  summaryUsableSources,
   trimSummaryText,
   type Asset,
   type Entity,
@@ -552,6 +555,37 @@ test("the offline summary prefers a theme the day returns to", () => {
   // A label seen twice inside one record is still only one record about it.
   equal(ruleSummaryText([{ id: "r1", revision: 1, text: "小雨小雨", labels: ["小雨", "小雨"] }]), "小雨小雨");
 });
+
+test("notes only stand in for a day that has nothing else, and never lead", () => {
+  const journal = { id: "r1", revision: 1, text: "去江边走了一段", labels: ["江边"] };
+  const note = { id: "n1", revision: 1, text: "摘抄：山不过来，我就过去", labels: ["摘抄"], kind: "note" as const };
+  // A day with its own records ignores its notes entirely — a clipping must not
+  // outrank what actually happened.
+  deepStrictEqual(summaryUsableSources([journal, note]), [journal]);
+  equal(ruleSummaryText([note, journal]), "去江边走了一段");
+  // A day with nothing but notes still gets a stand-in rather than a blank cell.
+  deepStrictEqual(summaryUsableSources([note]), [note]);
+  equal(ruleSummaryText([note]), "摘抄山不过来我就过去");
+  // Order in the input does not change which source wins.
+  equal(summaryUsableSources([note, journal]).length, 1);
+  equal(isNoteOnlyDay([note]), true);
+  equal(isNoteOnlyDay([journal, note]), false);
+  equal(isNoteOnlyDay([]), false);
+  // Absent `kind` keeps its old meaning: a plain record.
+  equal(isNoteOnlyDay([{ id: "r9", revision: 1, text: "x" }]), false);
+});
+
+test("clamping keeps owner-typed punctuation while trimming clips derived text", () => {
+  // An owner writes sentences; the sanitiser must not eat their punctuation.
+  equal(clampSummaryText("今天和@阿彬 去了巷口面馆。"), "今天和@阿彬 去了巷口面馆。");
+  equal(clampSummaryText("  两头留白  "), "两头留白");
+  equal(clampSummaryText("要多长有多长的一个句子推过去", 8), "要多长有多长..");
+  equal(clampSummaryText("", 4), "");
+  // Derived text still loses markers and punctuation.
+  equal(trimSummaryText("今天和@阿彬 去了巷口面馆。"), "今天和阿彬去了巷口面馆");
+});
+
+
 
 test("the fingerprint tracks record versions, not insertion order", () => {
   const a = [{ id: "r1", revision: 1 }, { id: "r2", revision: 3 }];
