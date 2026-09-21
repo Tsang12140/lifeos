@@ -10943,7 +10943,8 @@ button.relation-chip {
 /* ── 日历自己的设置（周期旁边那个齿轮） ────────────────────────────────────────
    日历只留两个旋钮：小结怎么产生、文字能不能就地改。面板沿用周期面板那套
    「内联卡片」语言，好让点开齿轮看起来是同一类表面，不是另一个页面。 */
-.calendar-module-button.calendar-gear-button { padding: 0 8px; }
+.calendar-module-button.calendar-gear-button,
+.calendar-module-button.calendar-edit-button { padding: 0 8px; }
 .calendar-settings-panel { display: grid; gap: 12px; margin: 0 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
 .calendar-settings-badge { padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 0.68rem; font-weight: 620; }
 .calendar-settings-block { display: grid; gap: 8px; padding-top: 10px; border-top: 1px dashed var(--line); }
@@ -10983,12 +10984,9 @@ button.relation-chip {
 .summary-field::placeholder { color: var(--muted); opacity: 0.72; }
 .summary-field:focus,
 .summary-field:focus-visible { outline: none; box-shadow: none; border-color: var(--primary); background: var(--surface); }
-.week-card-summary-field { min-height: 3.2em; max-height: 3.2em; margin-bottom: 2px; font-size: 0.8rem; line-height: 1.45; }
-/* 编辑模式下格子是容器不是链接，所以悬停不再「抬起来」。 */
-.month-cell.is-editing,
-.week-card.is-editing { cursor: default; }
-.month-cell.is-editing:hover,
-.week-card.is-editing:hover { box-shadow: none; transform: none; }
+/* 周卡没有小结行，编辑模式只存在于月历，所以这里只留月格。 */
+.month-cell.is-editing { cursor: default; }
+.month-cell.is-editing:hover { box-shadow: none; transform: none; }
 
 .calendar-edit-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid #c9d4ea; border-radius: 12px; background: var(--primary-soft); }
 .calendar-edit-hint { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.78rem; font-weight: 580; }
@@ -11002,6 +11000,15 @@ button.relation-chip {
 .calendar-summary-menu button:hover,
 .calendar-summary-menu button:focus-visible { outline: none; color: var(--ink); background: var(--surface-soft); }
 .calendar-summary-menu button:disabled { color: var(--muted); cursor: default; }
+/* 「周期」那一行自己不长动作，它下面的二级菜单才长；贴着父行右侧展开，
+   靠右边缘时翻到左边（.is-flipped），否则会跑到屏幕外。 */
+.calendar-summary-submenu-host { position: relative; }
+.calendar-summary-caret { margin-left: auto; color: var(--muted); }
+.calendar-summary-menu button.is-open { color: var(--ink); background: var(--surface-soft); }
+.calendar-summary-submenu { position: absolute; top: -5px; left: 100%; z-index: 1; display: grid; min-width: 132px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
+.calendar-summary-submenu.is-flipped { left: auto; right: 100%; }
+.calendar-summary-check { display: inline-flex; justify-content: center; width: 13px; color: var(--primary); }
+.calendar-summary-submenu button.is-checked { color: var(--ink); font-weight: 640; }
 
 @media (max-width: 760px) {
   .calendar-settings-grid { grid-template-columns: minmax(0, 1fr); }
