@@ -686,8 +686,16 @@ core **28/28**、api **57/57**（新增「a saved key that cannot be decrypted i
 2. **改 hash ≠ 换页面**：`Page.navigate` 到同站不同 hash 是**同文档导航**，React 只在挂载时读一次 `location.hash`，
    不 `Page.reload` 就永远停在原来那一屏。设置页类验收都要 navigate + reload。
 
-### 还欠一件事
+### key 已进 `.env` 并实测通了（同日 22:3x，蛋妞自己写的）
 
-**她的 key 还没进 `.env`**：工具已备好（`node .review/set-ai-key-env.mjs`，key 走 stdin），等她把 key 给过来
-（或她自己加那一行）→ 写入 → 重启 API → `GET /api/ai/status` 应报 `keyConfigured:true` + `keySource:"env"`。
+- 蛋妞选了 B 方案自己往 `.env` 加了一行 `LIFEOS_DEEPSEEK_API_KEY`（实测：纯 LF、无 BOM 没被破坏，值不带引号、以 `sk-` 开头）。
+- 重启 API 后 `GET /api/ai/status` → **`keyConfigured:true` + `keySource:"env"` + `keyUnreadable:false`**；
+  `POST /api/ai/config/test`（= 设置页「测试连接」那个只读调用）**HTTP 200「AI 服务连接成功」**，158ms —— key 真的能认证。
+- **host 与 model 不用也不该写进 `.env`**：优先级是 `data/ai-config.json`（存在就全用它，key 除外）→ `.env` 兜底 → 代码默认值。
+  文件里已经有 `"baseUrl":"https://api.deepseek.com"` 和 `"model":"deepseek-flash"`（**这两个字段是明文**，只有 key 是密文），
+  所以往 `.env` 写 `LIFEOS_DEEPSEEK_BASE_URL` / `LIFEOS_DEEPSEEK_MODEL` 在文件存在期间**完全不生效**。
+  当前分工：**key 住 `.env`，host/model/提示词住 `data/ai-config.json`（明文可直接改，或走设置页）**。
+- 修复后的行为顺带验证了：现在在界面里点「保存配置」**不会**把 env key 加密挪进文件 —— `.env` 始终是真源。
+- 影响：`aiConfigFingerprint` 含「key 有无」→ key 从无到有会让**非手写**的小结在下次请求时真用 AI 重算；
+  56 条 `manual` 手写小结按契约永不重算，不受影响。
 
