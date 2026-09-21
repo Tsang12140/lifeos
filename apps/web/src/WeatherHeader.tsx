@@ -86,7 +86,7 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   </div>;
 }
 
-export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void }) {
+export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice, showDateNavigation = true }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void; readonly showDateNavigation?: boolean }) {
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
   // Only a manual press spins the refresh button. Stepping through dates also
@@ -152,11 +152,11 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   const weatherSceneClass = displayDay && decision ? `weather-header--${decision.category} weather-header--${phase}` : "weather-header--empty";
   const isToday = selectedDate === today;
   const cornerBadge = <span className={`weather-corner-today ${isToday ? "is-current" : "is-return"}`}>{isToday ? "今天" : "回今天"}</span>;
-  return <section className={`weather-header ${weatherSceneClass}`} aria-label={`${selectedDate} 的天气`}>
+  return <section className={`weather-header ${weatherSceneClass} ${showDateNavigation ? "" : "weather-header--summary-only"}`} aria-label={`${selectedDate} 的天气`}>
     {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
-    <div className="weather-header-content">
-      <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} />
+    <div className={`weather-header-content ${showDateNavigation ? "" : "weather-header-content--summary-only"}`}>
+      {showDateNavigation ? <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} /> : null}
       <div className="weather-header-summary" role={status?.configured ? "button" : undefined} tabIndex={status?.configured ? 0 : undefined} aria-label={status?.configured ? `刷新${selectedDate}天气` : undefined} aria-busy={manualBusy || loading ? "true" : undefined} onClick={status?.configured ? () => void refresh({ manual: true, escalate: armed }) : undefined} onKeyDown={status?.configured ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } } : undefined}>
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>

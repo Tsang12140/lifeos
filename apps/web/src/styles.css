@@ -11504,3 +11504,39 @@ button.relation-chip {
 @media (max-width: 360px) {
   .month-day-summary-field { font-size: 0.58rem; }
 }
+
+/* Calendar's range and writing action live together below the weather card.
+   This replaces the generic mostly-empty page header while keeping the range
+   visibly anchored to the calendar it controls. */
+.calendar-section { touch-action: pan-y; }
+.calendar-section-heading { align-items: center; margin-bottom: 16px; }
+.calendar-heading-primary { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
+.calendar-range-navigation { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.calendar-range-step { display: inline-grid; flex: 0 0 32px; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--surface); cursor: pointer; }
+.calendar-range-step:hover { border-color: var(--line-strong); color: var(--ink); background: var(--surface-soft); }
+.calendar-range-label { min-width: 88px; margin: 0; color: var(--ink); font-size: 0.92rem; font-weight: 720; letter-spacing: 0.02em; line-height: 1; text-align: center; white-space: nowrap; }
+.calendar-heading-tools { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.calendar-backfill-button { border-color: #c6d4ef; color: #496b9d; background: #f7faff; }
+.calendar-backfill-button:hover { border-color: #a9c0e8; color: #365987; background: #eef4ff; }
+
+/* The weather card no longer has to reserve room for four date flaps while the
+   calendar is open. Centering the weather reading keeps that compact card from
+   gaining a new blank side after the range moves into the calendar control bar. */
+.weather-header.weather-header--summary-only { min-height: 84px; }
+.weather-header-content.weather-header-content--summary-only { justify-content: center; }
+.weather-header-content--summary-only .weather-header-summary { margin-left: 0; justify-items: center; }
+
+@media (max-width: 900px) {
+  .calendar-section-heading { flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .calendar-heading-primary { width: 100%; justify-content: space-between; }
+  .calendar-heading-tools { width: 100%; margin-left: 0; }
+  .weather-header.weather-header--summary-only { min-height: 86px; }
+  .weather-header-content.weather-header-content--summary-only { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 560px) {
+  .calendar-heading-primary { gap: 8px; }
+  .calendar-range-label { min-width: 82px; font-size: 0.86rem; }
+  .calendar-heading-tools { gap: 6px; }
+  .calendar-heading-tools .record-count { display: none; }
+}
