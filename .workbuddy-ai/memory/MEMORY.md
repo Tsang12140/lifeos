@@ -1,7 +1,7 @@
 # LifeOS 项目长期记忆（硬规则速查）
 
-> 规则全文 `AGENTS.md` · 改动记录 `docs/changelog.md` · **「为什么」/根因/实例全在 `.workbuddy-ai/memory/MEMORY-detail.md`**（要背景时读它）。
-> 本文件只留「照做」，且**刻意不重复 `AGENTS.md` 已有的条目**（那份会单独注入）。按闯祸代价排序。
+> 规则全文 `AGENTS.md` · 改动记录 `docs/changelog.md` · **根因/实例在 `MEMORY-detail.md`**（要背景时读它）。
+> 本文件只留「照做」，**不重复 `AGENTS.md` 已有的条目**（那份单独注入）。按闯祸代价排序。
 
 ## 0. 三条最容易出人命的
 
@@ -16,7 +16,7 @@
 ## 环境（补 `AGENTS.md` 没写的）
 
 - **沙箱在 turn 结束时回收子进程**（`nohup`/`detached`/后台任务都活不过）→ **开工先探端口**，不在就 `.review/spawn-serve.mjs`。**「读不了 / 数据不见了」的第一嫌疑永远是服务没在跑。**
-- `node -e` 写含反引号 / 反斜杠的文本必炸 → 先 `Write` 成文件再读。
+- `node -e` 写含反引号 / `$(…)` / 反斜杠的文本必炸（**bash 先吃掉它们**，`$(…)` 会被当命令替换静默抹掉）→ 先 `Write` 成文件再读。
 - **卡上要说的口径**：改了什么 / 怎么验证 / 验收数字 / 预览地址 `http://127.0.0.1:5199/`（**不出截图**，主人自己会开）。
 
 ## 数据与备份
@@ -48,6 +48,7 @@
 - `database or disk is full` / `ENOSPC` 常是 C 盘满，**伪装成产品回归**。
 - 根因是 kill/rm 顺序（`browser.kill()` 异步 → 紧随的 `rmSync` 撞 Windows 句柄 → EBUSY → 被裸 `catch {}` 吞）→ **「有清理调用」≠「清理成功」**。
 - 修法必须**同步强杀**（清理块多在 `finish = () => {}` / `process.on("exit")` 里，`await` 非法）：`.review/reap-chrome.mjs`（**新脚本一律用它**）、`.review/sweep-profiles.mjs`、`.review/codemod-reap.mjs`。
+- **`reapChromeSync` 返回 true ≠ 目录真没了**（09-22 见过 4 个 profile 在报「已删除」的情况下留在 `.review/profiles/`，未复现根因）→ 新脚本收尾要**自己列一遍 profile 目录**再报数。
 
 ## 时光机（只读穿越；第一期只读）
 
@@ -67,7 +68,7 @@
 - **布局稳定性**：`animation-fill-mode:none` + 正延迟期间按基准样式渲染 → 基准位置本身要在屏幕外（或改负延迟）；`html{scrollbar-gutter:stable}`；CSS `auto` 高度不可插值（`useLayoutEffect` + 直接写 `style.height` + 强制回流）。
 - 天气天空两根轴：`category` 决定**画什么**、`phase` 只决定**色/光**；硬预算由 `verify-weather-art.mjs` 守。
 - **补记条 = 安慰剂**（整条一个点击目标，子控件 `aria-hidden`）；**不出截图**（主人明确要求）。
-- **界面文字一律不可选中**（09-21 定案）：`apps/web/src/styles.css` **顶部一块集中规则** —— `body` + `button` 默认 `user-select:none`；白名单**两条**：① 表单控件（`input/textarea/select/contenteditable`，**必须有**，否则输入框没法全选替换）；② 正文叶子（`.timeline-text` / `.original-block` / `.note-card-excerpt` / `.week-card-text` / `.summary-message` / `.task-summary-copy` / `.server-current-block` / `.settings-ai-preset-id` / `.entity-library-address` / `.person-card-field`）。
+- **界面文字一律不可选中**（09-21 定案）：`apps/web/src/styles.css` **顶部一块集中规则** —— `body` + `button` 默认 `user-select:none`；白名单**两条**：① 表单控件（`input/textarea/select/contenteditable`，**必须有**，否则输入框没法全选替换）；② 正文叶子（**完整清单只看 `styles.css` 顶部那块，共 10 个** —— 本文件不抄，抄了就会漂）。
   - **白名单只能放「承载文字的叶子」，绝不能放容器**（放 `.task-summary` 会连带 `<h2>` 与 `.summary-badge` 一起可选）。
   - 机制是**默认禁 + 白名单放** → 新加的按钮 / 菜单 / 徽标**天生选不中**，不用维护；**别为「某个元素要禁」加单条 `user-select:none`**。
   - **例外**：只读**配置回显值** `.settings-ai-effective-item strong`（当前模型 / 思考 / 推理强度 / 服务地址 / API Key 状态）算内容，**只放值那一层，绝不放容器**。
