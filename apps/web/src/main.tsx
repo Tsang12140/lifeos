@@ -39,6 +39,7 @@ import {
   LockKeyhole,
   LogOut,
   MapPin,
+  Moon,
   MoreHorizontal,
   NotebookPen,
   Plus,
@@ -1982,7 +1983,7 @@ function CalendarDayMarkers({ date, today, module }: { readonly date: string; re
   const intimate = module.events.some((event) => event.date === date && event.kind === "intimacy");
   const fitness = module.events.some((event) => event.date === date && event.kind === "fitness");
   const markers: CalendarMarker[] = [];
-  if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预测经期" : "已记录经期", content: <span className={`calendar-moon ${period.forecast ? "is-forecast" : ""}`} aria-hidden="true" /> });
+  if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预测经期" : "已记录经期", content: <Moon className={`calendar-moon ${period.forecast ? "is-forecast" : ""}`} size={13} strokeWidth={1.9} aria-hidden="true" /> });
   if (intimate) markers.push({ id: `intimacy-${date}`, label: "已记录亲密", content: <Heart className="calendar-heart" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   if (fitness) markers.push({ id: `fitness-${date}`, label: "已记录健身", content: <Dumbbell className="calendar-fitness" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   const visible = markers.length > 4 ? [...markers.slice(0, 3), { id: `more-${date}`, label: `还有 ${markers.length - 3} 个日历事件`, content: <span className="calendar-marker-more" aria-hidden="true">+{markers.length - 3}</span> }] : markers;
@@ -2134,8 +2135,8 @@ function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEv
     void perform(() => onSavePeriodLength(days));
   };
   const options: readonly { kind: CycleIntimacyEventKind; label: string; activeLabel: string; icon: ReactNode }[] = [
-    { kind: "period_start", label: "经期开始", activeLabel: "已记录经期开始", icon: <span className="cycle-option-moon" aria-hidden="true" /> },
-    { kind: "period_end", label: "经期结束", activeLabel: "已记录经期结束", icon: <span className="cycle-option-moon" aria-hidden="true" /> },
+    { kind: "period_start", label: "经期开始", activeLabel: "已记录经期开始", icon: <Moon className="cycle-option-moon" size={17} strokeWidth={1.9} aria-hidden="true" /> },
+    { kind: "period_end", label: "经期结束", activeLabel: "已记录经期结束", icon: <Moon className="cycle-option-moon" size={17} strokeWidth={1.9} aria-hidden="true" /> },
     { kind: "intimacy", label: "亲密", activeLabel: "已记录亲密", icon: <Heart size={17} strokeWidth={1.9} aria-hidden="true" /> },
     { kind: "fitness", label: "健身", activeLabel: "已记录健身", icon: <Dumbbell size={17} strokeWidth={1.9} aria-hidden="true" /> },
   ];

@@ -8641,9 +8641,10 @@ button.relation-chip {
 .calendar-day-marker { display: inline-grid; place-items: center; width: 14px; height: 14px; color: #a45270; }
 /* One moon means one recorded day. The start/end halves are gone because a
    start and an end are now the same mark; only the forecast keeps a second
-   look (pale, dashed) so a calculation never reads as something she entered. */
-.calendar-moon, .cycle-option-moon { display: block; width: 12px; height: 12px; border: 1px solid #b3647e; border-radius: 50%; background: #c66586; }
-.calendar-moon.is-forecast { opacity: 0.34; border-style: dashed; background: #f2c2d0; }
+   look (pale) so a calculation never reads as something she entered. The glyph
+   is lucide's line-art crescent, mirrored left-right so it opens the other way. */
+.calendar-moon, .cycle-option-moon { color: #c66586; transform: scaleX(-1); transform-origin: center; }
+.calendar-moon.is-forecast { opacity: 0.34; }
 .calendar-heart { fill: transparent; }
 .calendar-fitness { color: #557a71; }
 .calendar-marker-more { color: var(--muted); font-size: 0.58rem; font-weight: 760; letter-spacing: -0.04em; }
