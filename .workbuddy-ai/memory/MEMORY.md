@@ -52,7 +52,7 @@
 
 - **`.review/lib/production-guard.mjs` = 生产守卫**：副作用式 import，**必须是第一条 import**。读 `/api/backup/status` 的 `localDirectory`，落在 `data/` 里就 `exit 1`。
   放行 `LIFEOS_ALLOW_PROD_ACCEPTANCE=1`。回归 `node .review/verify-production-guard.mjs`（14 项，夹具在 `.review/guard-fixtures/`）。
-- **跑验收前先看清单 `node .review/audit-toolbox-targets.mjs`**（有未守卫的写入脚本就 exit 1）。豁免要显式写 `@unguarded-on-purpose`（**目前两个**：`retract-record.mjs` 撤回污染记录、`seed-timemachine-demo.mjs` 往 3011 灌时光机样片 —— 都是「职责就是生产」，两个都自带 `--clean` 出口）。
+- **跑验收前先看清单 `node .review/audit-toolbox-targets.mjs`**（有未守卫的写入脚本就 exit 1）。豁免要显式写 `@unguarded-on-purpose`（**目前三个**：`retract-record.mjs` 撤回污染记录、`seed-timemachine-demo.mjs` 往 3011 灌时光机样片、`prune-duplicate-period-ends.mjs` 清同段重复的经期结束日 —— 都是「职责就是生产」；前两个自带 `--clean` 出口，第三个靠 **`--apply` 前 `VACUUM INTO` 一致性快照 + `deleted-events.json` 还原清单**，且**只走 API（GET/DELETE）不直接开库写**，免得和正在跑的 API 抢 WAL）。
 - **守卫铁律：只采信它能验证的东西。** 判定用「**包含**」不用「相等」（`localDirectory` 是 `<数据目录>/backups` 子目录）；报不出目录 → **fail-closed 当生产**；显式目标变量只有**入口脚本源码真的读它**（`argv[1]` 取入口、**剥掉注释再 grep**）才采信。
 - 真污染了生产库：`node .review/retract-record.mjs <id> --apply` → `node .review/purge-trash-junk.mjs --apply`。
 - **崩溃必须变成 FAIL**：脚本抛错时结果文件会留着上次的 `RESULT: PASS` → **看到 PASS 先确认断言条数**。
@@ -100,3 +100,10 @@
 - **日历初始模式是「周」**：刷新后回到周视图 —— 写验收断言时别假设「刷新完还在月视图」（踩过，误报过一条 FAIL）。
 - 右键菜单的「**编辑小结**」= **就地改那一天**（打开编辑模式 + 光标落进右键那天），因此**当月每一天都有字段**，包括完全没有记录的空白天。
 - 四种周期只有一份文案：模块级 `CYCLE_EVENT_KINDS`（周期面板与右键二级菜单共用）；二级菜单同样受「周期模块是否启用」管，没启用就是灰的。
+- **齿轮面板里没有「编辑模式」开关了**（2026-09-21 删；原话「齿轮面板里面的编辑模式删掉」）。编辑模式入口**只有铅笔那一个**，别再加回面板。
+- **右键周期二级菜单每行 = 「方框 + 文字」两个热区**（2026-09-21 定案）：**点方框 = 多选**（切换勾选、**菜单不关**，能连着勾第二件）；**点文字 = 单选**（切换 + **菜单自己关掉**）。判据是 `aria-checked` 与菜单还在不在 —— 这样「自动关菜单」和「同一天连记两件」两个诉求同时成立，不用二选一。
+- **「经期结束」一段经期只允许一个**（2026-09-21 起，堵在**模型层**）：`packages/core` 的 `periodEndSpan(events, date)` 给一个结束日算出它属于哪段经期 `[from, until)`；`apps/api` 的 `addCycleIntimacyEvent` 记 `period_end` 时，**在同一个 `BEGIN IMMEDIATE` 事务里**先把同段其它 `period_end` 删掉再插新的。
+  - 为什么要堵：日历 `periodRuns()` 每段只取区间里**最早**那个结束日，同段更晚的**被静默丢掉**；而周期面板 / 右键菜单读的是**原始行** → 被日历丢掉的那一天**照样显示「已记录」**（蛋妞 2026-09-21 报的 9/25 就是这么来的）。**是两个读取口径分叉，不是显示 bug** —— 在显示层各自补漏会漏掉每一处读事件的地方。
+  - **`assertValidCycleIntimacyModuleData` 故意保持宽松**（不拒绝两条 `period_end`），否则旧备份直接导不进来。不变量只把在**写入口**。
+  - 清历史脏行用 `.review/prune-duplicate-period-ends.mjs`（保留谁 = 每段里**最早**的结束日 = 日历本来就显示的那个，所以清完**画面零变化**）；根因与实例见 `MEMORY-detail.md`。
+

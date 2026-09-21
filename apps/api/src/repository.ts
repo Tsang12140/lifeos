@@ -9,6 +9,7 @@ import {
   assertValidTimelineRecord,
   entitySearchTerms,
   normalizeEntitySearchTerm,
+  periodEndSpan,
   type Asset,
   type AssetKind,
   type CycleIntimacyEvent,
@@ -809,10 +810,31 @@ export class SqliteRecordRepository {
     return this.cycleIntimacyModule();
   }
 
+  /**
+   * Records one marker. 「经期结束」is the exception that needs more than an insert:
+   * a period ends once, so recording an end on another day *moves* it, and whatever
+   * other end sat inside the same period goes away with it in one transaction.
+   * Otherwise a second end just accumulates — the calendar takes the first end after
+   * the start and never draws the other, while the panel and the right-click menu,
+   * which read the rows themselves, keep ticking it on its own day.
+   */
   public addCycleIntimacyEvent(event: CycleIntimacyEvent): CycleIntimacyModuleData {
     const existing = this.cycleIntimacyModule();
-    assertValidCycleIntimacyModuleData({ config: existing.config, events: [...existing.events, event] });
-    this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)").run(event.id, event.date, event.kind);
+    const span = event.kind === "period_end" ? periodEndSpan(existing.events, event.date) : undefined;
+    const superseded = span === undefined ? [] : existing.events.filter((other) => other.kind === "period_end"
+      && (span.from === undefined || other.date >= span.from)
+      && (span.until === undefined || other.date < span.until));
+    assertValidCycleIntimacyModuleData({ config: existing.config, events: [...existing.events.filter((other) => !superseded.includes(other)), event] });
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const remove = this.#db.prepare("DELETE FROM cycle_intimacy_events WHERE id = ?");
+      for (const other of superseded) remove.run(other.id);
+      this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)").run(event.id, event.date, event.kind);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
     return this.cycleIntimacyModule();
   }
 

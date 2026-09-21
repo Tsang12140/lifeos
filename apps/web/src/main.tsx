@@ -2023,7 +2023,7 @@ function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather 
  * the one knob that changes what every cell says, and hiding it behind a rebuild
  * would make tuning it a code change.
  */
-function CalendarSettingsPanel({ status, onStatusChange, editMode, onEditModeChange }: { status: AiStatus | null; onStatusChange: (status: AiStatus) => void; editMode: boolean; onEditModeChange: (value: boolean) => void }) {
+function CalendarSettingsPanel({ status, onStatusChange }: { status: AiStatus | null; onStatusChange: (status: AiStatus) => void }) {
   const [enabled, setEnabled] = useState(status?.enabled ?? true);
   const [baseUrl, setBaseUrl] = useState(status?.baseUrl ?? "https://api.deepseek.com");
   const [model, setModel] = useState(status?.model ?? "deepseek-flash");
@@ -2075,11 +2075,7 @@ function CalendarSettingsPanel({ status, onStatusChange, editMode, onEditModeCha
   const keyConfigured = status?.keyConfigured === true;
   const custom = status?.summaryPromptCustom === true;
   return <section id="calendar-settings-panel" className="calendar-settings-panel" aria-labelledby="calendar-settings-title">
-    <div className="cycle-inline-head"><div><p className="eyebrow">日历设置</p><h3 id="calendar-settings-title">小结与编辑</h3></div>{custom ? <span className="calendar-settings-badge">自定义提示词</span> : null}</div>
-    <div className="calendar-settings-block">
-      <div className="calendar-settings-switch"><span>编辑模式</span><button className={"toggle-button" + (editMode ? " is-on" : "")} type="button" role="switch" aria-checked={editMode} onClick={() => onEditModeChange(!editMode)} aria-label="编辑模式"><span className="toggle-knob" /></button></div>
-      <p className="settings-ai-note">打开后，月历与周历里的小结变成可改的文字；改完点底部的保存才生效。右键某一天，可以重新生成或恢复原样。</p>
-    </div>
+    <div className="cycle-inline-head"><div><p className="eyebrow">日历设置</p><h3 id="calendar-settings-title">小结与提示词</h3></div>{custom ? <span className="calendar-settings-badge">自定义提示词</span> : null}</div>
     <div className="calendar-settings-block">
       <p className="eyebrow">AI 小结</p>
       <div className="calendar-settings-switch"><span>用 AI 生成小结<small>{keyConfigured ? "已配置密钥" : "还没有密钥，暂时用离线规则"}</small></span><button className={"toggle-button" + (enabled ? " is-on" : "")} type="button" role="switch" aria-checked={enabled} onClick={() => setEnabled(!enabled)} aria-label="用 AI 生成小结"><span className="toggle-knob" /></button></div>
@@ -2116,7 +2112,7 @@ const CYCLE_EVENT_KINDS: readonly { kind: CycleIntimacyEventKind; label: string;
  * grid itself. Summaries only exist in the month grid, so the three summary items
  * are month-only; the cycle shortcuts are there in either view.
  */
-function CalendarSummaryMenu({ x, y, monthMode, busy, cycleEnabled, recordedKinds, onEdit, onRegenerate, onRevert, onToggleCycle, onClose }: { x: number; y: number; monthMode: boolean; busy: boolean; cycleEnabled: boolean; recordedKinds: ReadonlySet<CycleIntimacyEventKind>; onEdit: () => void; onRegenerate: () => void; onRevert: () => void; onToggleCycle: (kind: CycleIntimacyEventKind) => void; onClose: () => void }) {
+function CalendarSummaryMenu({ x, y, monthMode, busy, cycleEnabled, recordedKinds, onEdit, onRegenerate, onRevert, onToggleCycle, onPickCycle, onClose }: { x: number; y: number; monthMode: boolean; busy: boolean; cycleEnabled: boolean; recordedKinds: ReadonlySet<CycleIntimacyEventKind>; onEdit: () => void; onRegenerate: () => void; onRevert: () => void; onToggleCycle: (kind: CycleIntimacyEventKind) => void; onPickCycle: (kind: CycleIntimacyEventKind) => void; onClose: () => void }) {
   const [cycleOpen, setCycleOpen] = useState(false);
   /** Near the right edge the submenu would fall off screen, so it opens leftwards. */
   const flip = x > window.innerWidth - 380;
@@ -2143,9 +2139,17 @@ function CalendarSummaryMenu({ x, y, monthMode, busy, cycleEnabled, recordedKind
     <div className="calendar-summary-submenu-host" onMouseEnter={() => setCycleOpen(true)} onMouseLeave={() => setCycleOpen(false)}>
       <button role="menuitem" type="button" aria-haspopup="menu" aria-expanded={cycleOpen} className={cycleOpen ? "is-open" : ""} onClick={() => setCycleOpen(true)}><CalendarDays size={14} strokeWidth={1.9} aria-hidden="true" /><span>周期</span><ChevronRight className="calendar-summary-caret" size={14} strokeWidth={1.9} aria-hidden="true" /></button>
       {cycleOpen ? <div className={`calendar-summary-submenu ${flip ? "is-flipped" : ""}`} role="menu" aria-label="周期">
+        {/* Two click targets per row on purpose. The box is the multi-select half —
+            tick several marks in a row without the menu getting in the way — while
+            the label is the single-select half: pick this one thing and be done, so
+            the menu closes behind it. */}
         {CYCLE_EVENT_KINDS.map((item) => {
           const on = recordedKinds.has(item.kind);
-          return <button className={on ? "is-checked" : ""} role="menuitemcheckbox" type="button" key={item.kind} aria-checked={on} disabled={busy || !cycleEnabled} aria-label={`${on ? "移除" : "记录"}${item.label}`} onClick={() => onToggleCycle(item.kind)}><span className="calendar-summary-check" aria-hidden="true">{on ? <Check size={13} strokeWidth={2.4} /> : null}</span><span>{item.label}</span></button>;
+          const off = busy || !cycleEnabled;
+          return <div className="calendar-summary-cycle-row" role="none" key={item.kind}>
+            <button className={`calendar-summary-checkbox ${on ? "is-checked" : ""}`} type="button" role="menuitemcheckbox" aria-checked={on} disabled={off} aria-label={`多选：${on ? "移除" : "记录"}${item.label}`} onClick={() => onToggleCycle(item.kind)}>{on ? <Check size={11} strokeWidth={2.6} aria-hidden="true" /> : null}</button>
+            <button className="calendar-summary-cycle-label" type="button" role="menuitem" disabled={off} aria-label={`${on ? "移除" : "记录"}${item.label}，并关闭菜单`} onClick={() => onPickCycle(item.kind)}>{item.label}</button>
+          </div>;
         })}
       </div> : null}
     </div>
@@ -2255,7 +2259,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
     </div>
     {mode === "month" ? <div className="calendar-note"><span className="calendar-holiday-legend"><span className="month-day-status is-holiday">休</span><span>法定休息</span><span className="month-day-status is-workday">班</span><span>调休上班</span></span></div> : null}
     {cyclePanelOpen ? <CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} onSavePeriodLength={onSavePeriodLength} /> : null}
-    {settingsOpen ? <CalendarSettingsPanel status={aiStatus} onStatusChange={onAiStatusChange} editMode={editMode} onEditModeChange={onEditModeChange} /> : null}
+    {settingsOpen ? <CalendarSettingsPanel status={aiStatus} onStatusChange={onAiStatusChange} /> : null}
     {editable ? <div className="calendar-edit-bar" role="status">
       <span className="calendar-edit-hint"><Edit3 size={14} strokeWidth={1.9} aria-hidden="true" /><span>{draftCount === 0 ? "点小结就能改；右键某一天还有更多操作" : `${draftCount} 处改动待保存`}</span></span>
       <span className="calendar-edit-actions">
@@ -2315,7 +2319,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
         </CellTag>;
       })}
     </div>) : null}
-    {summaryMenu !== null ? <CalendarSummaryMenu x={summaryMenu.x} y={summaryMenu.y} monthMode={mode === "month"} busy={busyDate === summaryMenu.date || cycleBusyDate === summaryMenu.date} cycleEnabled={cycleModule !== null && cycleModule.config.enabled} recordedKinds={new Set((cycleModule?.events ?? []).filter((event) => event.date === summaryMenu.date).map((event) => event.kind))} onEdit={() => editDaySummary(summaryMenu.date)} onRegenerate={() => { void onRegenerateSummary(summaryMenu.date); }} onRevert={() => { void onRevertSummary(summaryMenu.date); }} onToggleCycle={(kind) => { void toggleCycleOn(summaryMenu.date, kind); }} onClose={closeSummaryMenu} /> : null}
+    {summaryMenu !== null ? <CalendarSummaryMenu x={summaryMenu.x} y={summaryMenu.y} monthMode={mode === "month"} busy={busyDate === summaryMenu.date || cycleBusyDate === summaryMenu.date} cycleEnabled={cycleModule !== null && cycleModule.config.enabled} recordedKinds={new Set((cycleModule?.events ?? []).filter((event) => event.date === summaryMenu.date).map((event) => event.kind))} onEdit={() => editDaySummary(summaryMenu.date)} onRegenerate={() => { void onRegenerateSummary(summaryMenu.date); }} onRevert={() => { void onRevertSummary(summaryMenu.date); }} onToggleCycle={(kind) => { void toggleCycleOn(summaryMenu.date, kind); }} onPickCycle={(kind) => { closeSummaryMenu(); void toggleCycleOn(summaryMenu.date, kind); }} onClose={closeSummaryMenu} /> : null}
   </section>;
 }
 

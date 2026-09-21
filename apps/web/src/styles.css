@@ -11007,8 +11007,14 @@ button.relation-chip {
 .calendar-summary-menu button.is-open { color: var(--ink); background: var(--surface-soft); }
 .calendar-summary-submenu { position: absolute; top: -5px; left: 100%; z-index: 1; display: grid; min-width: 132px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
 .calendar-summary-submenu.is-flipped { left: auto; right: 100%; }
-.calendar-summary-check { display: inline-flex; justify-content: center; width: 13px; color: var(--primary); }
-.calendar-summary-submenu button.is-checked { color: var(--ink); font-weight: 640; }
+/* 一行两个点击目标：勾选框管多选（点了菜单不关，可以连着勾几件），文字管单选
+   （点了就完事、菜单一起收）。基础规则 `.calendar-summary-menu button` 给了
+   34px 高和 10px 内边距，勾选框得用更高特异度把它压回一个小方框。 */
+.calendar-summary-cycle-row { display: flex; align-items: center; }
+.calendar-summary-menu .calendar-summary-checkbox { flex: 0 0 auto; justify-content: center; width: 15px; min-width: 15px; height: 15px; min-height: 15px; margin-left: 10px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px; color: #fff; background: var(--surface); }
+.calendar-summary-menu .calendar-summary-checkbox.is-checked { border-color: var(--primary); background: var(--primary); }
+.calendar-summary-menu .calendar-summary-checkbox:disabled { opacity: 0.5; }
+.calendar-summary-menu .calendar-summary-cycle-label { flex: 1 1 auto; min-height: 34px; padding: 0 10px 0 8px; text-align: left; }
 
 @media (max-width: 760px) {
   .calendar-settings-grid { grid-template-columns: minmax(0, 1fr); }

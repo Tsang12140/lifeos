@@ -892,6 +892,30 @@ export function assertValidCycleIntimacyModuleConfig(value: unknown, name = "cyc
   if (config.anchorStart !== undefined) validateDateOnlyString(stringValue(config.anchorStart, `${name}.anchorStart`), `${name}.anchorStart`);
 }
 
+/**
+ * The period a given end date belongs to: from the recorded start at or before
+ * `date`, to the day before the next start (either side missing when nothing has
+ * been recorded yet — that is the single implicit period).
+ *
+ * A period ends once, so this span is also the answer to "which other ends does
+ * this one replace". It exists because the calendar already read the data this
+ * way — `periodRuns` takes the *first* end after the start — so a second end sat
+ * in the store drawn by nothing while the panel still ticked it on its day.
+ */
+export function periodEndSpan(events: readonly CycleIntimacyEvent[], date: string): { readonly from?: string; readonly until?: string } {
+  let from: string | undefined;
+  let until: string | undefined;
+  for (const event of events) {
+    if (event.kind !== "period_start") continue;
+    if (event.date <= date) {
+      if (from === undefined || event.date > from) from = event.date;
+      continue;
+    }
+    if (until === undefined || event.date < until) until = event.date;
+  }
+  return { ...(from === undefined ? {} : { from }), ...(until === undefined ? {} : { until }) };
+}
+
 export function assertValidCycleIntimacyEvent(value: unknown, name = "cycleIntimacy.event"): asserts value is CycleIntimacyEvent {
   const event = objectValue(value, name);
   nonEmptyStringValue(event.id, `${name}.id`);

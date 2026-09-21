@@ -2038,6 +2038,40 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
   equal((removed.body as { events: unknown[] }).events.length, 3);
 });
 
+test("a period ends once: recording an end on another day moves it instead of stacking a second", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const ends = (body: unknown) => (body as { events: Array<{ date: string; kind: string }> }).events.filter((event) => event.kind === "period_end").map((event) => event.date);
+
+  await request(harness.base, "/api/modules/cycle-intimacy/config", { method: "PUT", ...json({ enabled: true, cycleLength: 28, periodLength: 7 }) });
+  await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-20", kind: "period_start" }) });
+
+  // The owner's own sequence (2026-09-21): confirm the end on 9/25, then correct it
+  // to 9/24. Before this rule the 9/25 row stayed behind — drawn by nothing, because
+  // the calendar takes the first end after the start, but still ticked in the panel.
+  const later = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-25", kind: "period_end" }) });
+  equal(later.response.status, 201);
+  const moved = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-24", kind: "period_end" }) });
+  equal(moved.response.status, 201);
+  deepEqual(ends(moved.body), ["2026-09-24"]);
+
+  // A new period is a new span: moving its end must not reach back into the first.
+  await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-10-18", kind: "period_start" }) });
+  const nextPeriod = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-10-22", kind: "period_end" }) });
+  deepEqual(ends(nextPeriod.body), ["2026-09-24", "2026-10-22"]);
+
+  // Independent habits are never collateral: only ends inside the same span move.
+  await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-21", kind: "fitness" }) });
+  const again = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-23", kind: "period_end" }) });
+  deepEqual(ends(again.body), ["2026-09-23", "2026-10-22"]);
+  deepEqual((again.body as { events: Array<{ date: string; kind: string }> }).events.filter((event) => event.kind === "fitness").map((event) => event.date), ["2026-09-21"]);
+
+  // Same day, same kind is still a plain duplicate — the store cannot grow a second
+  // row keyed to one day, which is the limit this rule deliberately stops at.
+  const sameDay = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-23", kind: "period_end" }) });
+  equal(sameDay.response.status, 409);
+});
+
 test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and upserts refs", async (t) => {
   const harness = await startHarness();
   const restored = await startHarness();

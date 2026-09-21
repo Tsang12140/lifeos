@@ -17,6 +17,7 @@ import {
   clampSummaryText,
   isNoteOnlyDay,
   parseExportJson,
+  periodEndSpan,
   ruleSummaryText,
   serializeExportJson,
   summaryFingerprint,
@@ -36,6 +37,25 @@ test("cycle module accepts the independent fitness habit while preserving period
       { id: "intimacy", date: "2026-09-03", kind: "intimacy" },
     ],
   });
+});
+
+test("a recorded period end replaces only the ends inside its own period", () => {
+  const events = [
+    { id: "s1", date: "2026-09-20", kind: "period_start" as const },
+    { id: "s2", date: "2026-10-18", kind: "period_start" as const },
+    { id: "e1", date: "2026-09-24", kind: "period_end" as const },
+    { id: "e2", date: "2026-09-25", kind: "period_end" as const },
+  ];
+  // The stale pair from 2026-09-21 lives in one and the same span — which is exactly
+  // why recording one of them has to take the other away.
+  deepStrictEqual(periodEndSpan(events, "2026-09-24"), { from: "2026-09-20", until: "2026-10-18" });
+  deepStrictEqual(periodEndSpan(events, "2026-09-25"), { from: "2026-09-20", until: "2026-10-18" });
+  // The next period is its own span: moving an end there must not touch the first.
+  deepStrictEqual(periodEndSpan(events, "2026-10-20"), { from: "2026-10-18" });
+  // Nothing recorded yet is the single implicit period, open on both sides.
+  deepStrictEqual(periodEndSpan([], "2026-09-25"), {});
+  // An end before the first recorded start still belongs to that implicit period.
+  deepStrictEqual(periodEndSpan(events, "2026-09-10"), { until: "2026-09-20" });
 });
 
 const originalText = "今天试记一段原文：\"引号\"、冒号:、井号 #、反斜杠 \\\\，以及\n第二行。";
