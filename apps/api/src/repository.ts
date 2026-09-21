@@ -164,7 +164,7 @@ export interface WeatherObservation {
 export const DEFAULT_CYCLE_INTIMACY_CONFIG: CycleIntimacyModuleConfig = {
   enabled: false,
   cycleLength: 28,
-  periodLength: 5,
+  periodLength: 7,
 };
 
 interface RecordRow {

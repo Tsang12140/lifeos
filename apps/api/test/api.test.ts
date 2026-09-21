@@ -1930,7 +1930,7 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
 
   const defaultModule = await request(harness.base, "/api/modules/cycle-intimacy");
   equal(defaultModule.response.status, 200);
-  deepEqual((defaultModule.body as { config: { enabled: boolean; cycleLength: number; periodLength: number }; events: unknown[] }).config, { enabled: false, cycleLength: 28, periodLength: 5 });
+  deepEqual((defaultModule.body as { config: { enabled: boolean; cycleLength: number; periodLength: number }; events: unknown[] }).config, { enabled: false, cycleLength: 28, periodLength: 7 });
   equal((defaultModule.body as { events: unknown[] }).events.length, 0);
 
   const configured = await request(harness.base, "/api/modules/cycle-intimacy/config", {

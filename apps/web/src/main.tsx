@@ -1903,36 +1903,74 @@ function monthCellPhoto(candidates: readonly { assetId: string; story: number }[
   return bestId;
 }
 
+interface PeriodRun {
+  readonly start: string;
+  readonly end: string;
+}
+
 interface PeriodMoonMarker {
   readonly forecast: boolean;
 }
 
 /**
- * A moon means one thing: this day was recorded as period. Start and end look
- * identical now, and a recorded day never grows neighbours — the owner marks
- * the days she wants marked. Only the forecast run is still computed, and it
- * deliberately skips any cycle whose start day is a recorded day, so a marked
- * start can never spill four unmarked days into the calendar.
+ * One run per recorded start, or a single run from the configured anchor when
+ * nothing has been recorded yet. A recorded end cuts the run short — confirm it
+ * on day five and days six and seven are gone — while the configured duration
+ * closes whatever is left open.
+ */
+function periodRuns(module: CycleIntimacyModuleData | null): readonly PeriodRun[] {
+  if (!module?.config.enabled) return [];
+  const { periodLength, anchorStart } = module.config;
+  const starts = module.events.filter((event) => event.kind === "period_start").map((event) => event.date).sort();
+  const ends = module.events.filter((event) => event.kind === "period_end").map((event) => event.date).sort();
+  const runs: PeriodRun[] = [];
+  for (let index = 0; index < starts.length; index += 1) {
+    const start = starts[index]!;
+    const nextStart = starts[index + 1];
+    const explicitEnd = ends.find((end) => end >= start && (nextStart === undefined || end < nextStart));
+    let end = explicitEnd ?? shiftDate(start, periodLength - 1);
+    if (nextStart !== undefined && end >= nextStart) end = shiftDate(nextStart, -1);
+    runs.push({ start, end });
+  }
+  if (runs.length === 0 && anchorStart !== undefined) runs.push({ start: anchorStart, end: shiftDate(anchorStart, periodLength - 1) });
+  return runs;
+}
+
+/**
+ * A moon stays honest about what it knows. Inside a run, days up to and
+ * including today are solid — the day arrived, so the period did — while the
+ * days still ahead are pale predictions that turn solid by themselves as the
+ * calendar moves forward. One cycle after the last run ended, the same run
+ * comes back as a prediction, so the next start is never a surprise.
  */
 function periodMoonForDate(date: string, today: string, module: CycleIntimacyModuleData | null): PeriodMoonMarker | undefined {
   if (!module?.config.enabled) return undefined;
-  const starts = module.events.filter((event) => event.kind === "period_start").map((event) => event.date).sort();
-  const recorded = new Set([
-    ...starts,
-    ...module.events.filter((event) => event.kind === "period_end").map((event) => event.date),
-  ]);
-  if (recorded.has(date)) return { forecast: false };
-  const baseline = starts[starts.length - 1] ?? module.config.anchorStart;
-  if (baseline === undefined || date < today) return undefined;
-  const difference = Math.floor((new Date(`${date}T12:00:00`).getTime() - new Date(`${baseline}T12:00:00`).getTime()) / 86_400_000);
-  const nearestCycle = Math.max(0, Math.floor(difference / module.config.cycleLength));
-  for (let index = Math.max(0, nearestCycle - 1); index <= nearestCycle + 1; index += 1) {
-    const start = shiftDate(baseline, index * module.config.cycleLength);
-    if (recorded.has(start)) continue;
-    const end = shiftDate(start, module.config.periodLength - 1);
-    if (date >= start && date <= end) return { forecast: true };
+  const { cycleLength, periodLength } = module.config;
+  const runs = periodRuns(module);
+  const last = runs[runs.length - 1];
+  if (last === undefined) return undefined;
+  if (date <= last.end) {
+    const inside = runs.some((run) => date >= run.start && date <= run.end);
+    return inside ? { forecast: date > today } : undefined;
   }
-  return undefined;
+  const predicted = shiftDate(last.end, cycleLength);
+  return date >= predicted && date <= shiftDate(predicted, periodLength - 1)
+    ? { forecast: date > today }
+    : undefined;
+}
+
+/** The next predicted start — one cycle after the last run ended, never in the past. */
+function nextPredictedStart(module: CycleIntimacyModuleData | null, today: string): string | undefined {
+  if (!module?.config.enabled) return undefined;
+  const { cycleLength } = module.config;
+  const runs = periodRuns(module);
+  const last = runs[runs.length - 1];
+  if (last === undefined) return undefined;
+  let start = shiftDate(last.end, cycleLength);
+  // `start === today` is a legitimate answer: the prediction landed exactly on today, and the
+  // panel should say so. Only strictly-past predictions get rolled forward to the next cycle.
+  for (let guard = 0; start < today && guard < 240; guard += 1) start = shiftDate(start, cycleLength);
+  return start;
 }
 
 interface CalendarMarker { readonly id: string; readonly label: string; readonly content: ReactNode; }
@@ -1944,7 +1982,7 @@ function CalendarDayMarkers({ date, today, module }: { readonly date: string; re
   const intimate = module.events.some((event) => event.date === date && event.kind === "intimacy");
   const fitness = module.events.some((event) => event.date === date && event.kind === "fitness");
   const markers: CalendarMarker[] = [];
-  if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预计经期" : "已记录经期", content: <span className={`calendar-moon ${period.forecast ? "is-forecast" : ""}`} aria-hidden="true" /> });
+  if (period !== undefined) markers.push({ id: `period-${date}`, label: period.forecast ? "预测经期" : "已记录经期", content: <span className={`calendar-moon ${period.forecast ? "is-forecast" : ""}`} aria-hidden="true" /> });
   if (intimate) markers.push({ id: `intimacy-${date}`, label: "已记录亲密", content: <Heart className="calendar-heart" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   if (fitness) markers.push({ id: `fitness-${date}`, label: "已记录健身", content: <Dumbbell className="calendar-fitness" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   const visible = markers.length > 4 ? [...markers.slice(0, 3), { id: `more-${date}`, label: `还有 ${markers.length - 3} 个日历事件`, content: <span className="calendar-marker-more" aria-hidden="true">+{markers.length - 3}</span> }] : markers;
@@ -1973,7 +2011,7 @@ function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather 
   return { text: item.textDay, icon: item.iconDay, tempMin: typeof item.tempMin === "string" ? item.tempMin : "—", tempMax: typeof item.tempMax === "string" ? item.tempMax : "—" };
 }
 
-function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void }) {
+function CalendarView({ mode, onModeChange, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSavePeriodLength, onRetry, onOpenDay }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
   const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
   const buckets = useMemo(() => recordsByDate(dates, publicRecords), [dates, publicRecords]);
@@ -2013,7 +2051,7 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
       </div>
     </div>
     {mode === "month" ? <div className="calendar-note"><span className="calendar-holiday-legend"><span className="month-day-status is-holiday">休</span><span>法定休息</span><span className="month-day-status is-workday">班</span><span>调休上班</span></span></div> : null}
-    {cyclePanelOpen ? <CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} /> : null}
+    {cyclePanelOpen ? <CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} onSavePeriodLength={onSavePeriodLength} /> : null}
     {loading ? <LoadingState /> : null}
     {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
     {!loading && !error ? (mode === "week" ? <div className="week-grid">
@@ -2062,11 +2100,13 @@ function CalendarView({ mode, onModeChange, anchor, today, records, assets, summ
   </section>;
 }
 
-function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEvent, onDeleteEvent }: { module: CycleIntimacyModuleData | null; selectedDate: string; today: string; onOpenSettings: () => void; onAddEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteEvent: (id: string) => Promise<void> }) {
+function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEvent, onDeleteEvent, onSavePeriodLength }: { module: CycleIntimacyModuleData | null; selectedDate: string; today: string; onOpenSettings: () => void; onAddEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void> }) {
   const [entryDate, setEntryDate] = useState(selectedDate);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lengthDraft, setLengthDraft] = useState(module?.config.periodLength ?? 7);
   useEffect(() => setEntryDate(selectedDate), [selectedDate]);
+  useEffect(() => { if (module) setLengthDraft(module.config.periodLength); }, [module]);
   if (!module) return <section id="cycle-entry-panel" className="cycle-inline-panel" aria-label="周期记录"><span className="muted">周期模块正在加载…</span></section>;
   const quickDates = [
     { label: "前天", date: shiftDate(today, -2) },
@@ -2085,6 +2125,14 @@ function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEv
     const existing = eventFor(kind);
     void perform(() => existing ? onDeleteEvent(existing.id) : onAddEvent(entryDate, kind));
   };
+  const predicted = nextPredictedStart(module, today);
+  /** How long a run lasts lives here because it is the number she actually tunes. */
+  const commitLength = () => {
+    const days = Math.min(21, Math.max(1, Math.round(Number.isFinite(lengthDraft) ? lengthDraft : 1)));
+    setLengthDraft(days);
+    if (days === module.config.periodLength) return;
+    void perform(() => onSavePeriodLength(days));
+  };
   const options: readonly { kind: CycleIntimacyEventKind; label: string; activeLabel: string; icon: ReactNode }[] = [
     { kind: "period_start", label: "经期开始", activeLabel: "已记录经期开始", icon: <span className="cycle-option-moon" aria-hidden="true" /> },
     { kind: "period_end", label: "经期结束", activeLabel: "已记录经期结束", icon: <span className="cycle-option-moon" aria-hidden="true" /> },
@@ -2099,6 +2147,10 @@ function CycleModulePanel({ module, selectedDate, today, onOpenSettings, onAddEv
       <label className={`cycle-date-picker ${quickDates.some((item) => item.date === entryDate) ? "" : "is-selected"}`}><span>选择日期</span><input type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} aria-label="选择周期记录日期" /></label>
     </div>
     <p className="cycle-entry-target">记录到 <strong>{displayDate(entryDate)}</strong></p>
+    <div className="cycle-forecast-row">
+      <span className="cycle-forecast-next">预测经期开始 <strong>{predicted === undefined ? "还没有依据" : displayDate(predicted)}</strong></span>
+      <label className="cycle-forecast-length"><span>持续</span><input type="number" min="1" max="21" value={lengthDraft} onChange={(event) => setLengthDraft(Number(event.target.value))} onBlur={commitLength} onKeyDown={(event) => { if (event.key === "Enter") commitLength(); }} aria-label="预计经期持续天数" disabled={busy || !module.config.enabled} /><span>天</span></label>
+    </div>
     <div className="cycle-event-row" aria-label={`${entryDate} 的周期事件`}>
       {options.map((option) => { const active = eventFor(option.kind) !== undefined; return <button className={`cycle-event-option ${active ? "is-active" : ""}`} type="button" key={option.kind} onClick={() => toggleEvent(option.kind)} disabled={busy || !module.config.enabled} aria-pressed={active} aria-label={`${active ? option.activeLabel : `记录${option.label}`}，${active ? "再次点击移除" : "点击记录"}`} title={active ? `${option.activeLabel}（再次点击移除）` : `记录${option.label}`}><span className="cycle-event-icon">{option.icon}</span><span>{active ? option.activeLabel : option.label}</span></button>; })}
     </div>
@@ -3960,6 +4012,11 @@ function App() {
     setCycleModule(module);
     showToast(config.enabled ? "周期设置已保存" : "周期已关闭，记录仍被保留");
   };
+  /** How long a run lasts is the one number she tunes from the calendar itself. */
+  const saveCyclePeriodLength = async (periodLength: number) => {
+    if (!cycleModule) return;
+    await saveCycleModuleConfig({ ...cycleModule.config, periodLength });
+  };
   const addCycleModuleEvent = async (date: string, kind: CycleIntimacyEventKind) => {
     const module = await apiRequest<CycleModuleResponse>("/api/modules/cycle-intimacy/events", { method: "POST", body: JSON.stringify({ date, kind }) });
     setCycleModule(module);
@@ -4285,7 +4342,7 @@ function App() {
       : activeView === "notes"
         ? <NotesLibrary records={visibleRecords} loading={recordsLoading} error={recordsError} entities={entities} onRetry={() => setRecordsReload((current) => current + 1)} onCreateEntity={handleCreateEntity} onSave={handleSaveNote} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} />
       : activeView === "calendar"
-         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={() => setCyclePanelOpen((current) => !current)} onOpenCycleSettings={() => openSettingsPage("private/cycle")} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
+         ? <CalendarView mode={calendarMode} onModeChange={setCalendarMode} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={() => setCyclePanelOpen((current) => !current)} onOpenCycleSettings={() => openSettingsPage("private/cycle")} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onSavePeriodLength={saveCyclePeriodLength} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} />
       : activeView === "timemachine"
         ? <TimeMachine />
       : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} onMore={() => setMobileMenuOpen(true)} moreOpen={mobileMenuOpen} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={onNavigate} onOpenSearch={() => setSearchDialogOpen(true)} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><RecordEditorDialog record={editingRecord} saving={editSaving} reloading={editReloading} error={editError} entities={entities} assets={assets} candidates={(recordsForQuery ?? []).filter((candidate) => candidate.id !== editingRecord?.id)} onCreateEntity={handleCreateEntity} onClose={() => { if (!editSaving) setEditingRecord(null); }} onSave={(record, draft) => void handleSaveEdit(record, draft)} onReloadLatest={() => void handleReloadLatest()} /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) setImportFile(null); }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} visible={assistantVisible} onOpenSettings={() => openSettingsPage("integrations/ai")} /></div>;
