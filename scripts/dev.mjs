@@ -17,7 +17,11 @@ if (apiBuild.status !== 0) process.exit(apiBuild.status ?? 1);
 const envFile = resolve(".env");
 
 const children = [
-  spawn(process.execPath, [`--env-file-if-exists=${envFile}`, "apps/api/dist/src/main.js"], { stdio: "inherit", env: process.env }),
+  // --use-env-proxy lets the API honour HTTPS_PROXY from .env. Node only reads the
+  // NODE_USE_ENV_PROXY *variable* during bootstrap, which happens before --env-file
+  // is applied, so putting it in .env does nothing; the CLI flag is the only way in.
+  // Without any proxy variable set the flag is a no-op.
+  spawn(process.execPath, ["--use-env-proxy", `--env-file-if-exists=${envFile}`, "apps/api/dist/src/main.js"], { stdio: "inherit", env: process.env }),
   spawn(process.execPath, [
     resolve("node_modules/vite/bin/vite.js"),
     "--host",
