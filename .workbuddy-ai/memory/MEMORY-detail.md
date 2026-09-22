@@ -778,10 +778,24 @@ Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":337,"threshold"
 2. **`tasklist` 里 `chrome.exe` = 0**，每个采样点都是。
 3. **闸门自己的状态目录**：`%TEMP%\codebuddy-safe-delete-bulk\<sessionHash>\state.json` + 按工具调用 id 命名的 `signal-call_<toolCallId>.json`。本会话那 6 条 signal 的目标正是我以为「已经清掉了」的临时目录：`lifeos-cdp-reap-forensics-cE4WmW-moved`(337)、两个 `lifeos-cdp-task-schedule-*`(1302 / 1307)、`data/derived/snapshots/lifeos-20260918-215809-08a75403.sqlite`(7220)、`.review/mobile-composer-rail-run-9Iwo8Y`(16095)、`.review/movie-module-run`(9150)。
 
-### 仍然未知的一半（**别猜**）
+### 那「未知的一半」已补上（2026-09-22 晚）：**同一条命令被执行了两次**
 
 沙箱被绕过的调用（工具结果里打印 `Sandbox bypassed (escalation-approved)`，环境里**没有** `CODEBUDDY_SAFE_DELETE_SANDBOX`）删除不设闸、直接成功 —— 本会话最后那次 `sweep-profiles --min-age=0` 就是这样清掉 11.9MB 的。
-但**哪一次调用会被批准 / 被绕过是宿主侧的决定**，进程内看不到。状态文件里有 44 条 `approved`、`requests` 计数高到 `27273`，说明「批准」这条路是通的；**具体某一次为什么走通没有证据，因此不写结论。**
+但**哪一次调用会被批准 / 被绕过是宿主侧的决定**，进程内看不到。状态文件里有 44 条 `approved`、`requests` 计数高到 `27273`，说明「批准」这条路是通的。
+
+**答案**：不是「某一次走通、某一次没走通」，而是**同一条命令被跑了两趟** ——
+
+| 趟次 | 沙箱 | `rmSync` | 留下什么 | 它的输出 |
+| --- | --- | --- | --- | --- |
+| 第一趟 | 在沙箱内 | 被闸门拒绝 | **32.5MB 的 profile** | 被丢弃 |
+| 第二趟 | `Sandbox bypassed (escalation-approved)` | 成功 | 无 | 就是我看到的那份 |
+
+**脚印**（全程只发过一条命令）：一次性诊断脚本 `.review/_diag-profile.mjs`（用完已删）的第一行 `before` 里，**已经躺着一个带它专属前缀的 `lifeos-cdp-diag-sheAZp`** ⇒ 在我看到的那次执行之前，同一条命令已经跑过一趟。
+于是「每次收尾都报成功、却每次都留下一个目录」就通了：**一趟必然被拒、一趟必然成功**；脚本的 `profilesAtStart` 是在**第二趟**读的 ⇒ 第一趟的残留被它算成「跑之前就有的」，报告照常写「（无）」。
+
+**脚印对得上**：三次运行 ↔ 三个残留（`W6PMQT` 09:11:35Z / `o8CHup` 09:13:06Z / `r1Fhpc` 09:13:58Z），而脚本每次都报「本次自己的目录已删除」；清掉 4 个共回收 **114.7MB**。
+
+**因此收紧一条纪律**：脚本那句「跑完没留下残留」**只能证明它自己那一趟**。要证明盘上干净，**必须另外列一遍目录**（`node .review/sweep-profiles.mjs --min-age=0`）—— **别拿脚本自己的收尾报告当证据**，它能在盘上躺着 32.5MB 的时候照常打印「（无）」。`.review/verify-movie-toggle-ui.mjs` 已把这句从日志改成**断言**，并把 `profilesAtStart` 挪到 `createProfile` **之前**（反了的话它永远算不出自己的残留）。
 
 ### 项目侧因此怎么改（已落地）
 
@@ -852,28 +866,3 @@ Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":337,"threshold"
 - 要「原生 checkbox + 文字的一整行」就用 `.movie-enabled-toggle` 那套（`display:flex` + `min-height:40px` + 边框，与旁边的输入框同高）。
 - **一个元素上不能同时挂这两套**：它们对 `input` 的处置是相反的（一个藏起来画假药丸、一个要露出来）。
 
-## 「状态不可读 + 旁边有保存按钮」= 一把刀（2026-09-22 实证）
-
-现场：`data/movie-config.json` 的 mtime = **15:03:12**，`enabled` 由 `true` 写成 `false`（168B → 169B），主人 **15:03:38** 来报障。顺序是：
-那行开关因为 CSS 冲突**根本看不见**（checkbox 被压成 1px + `opacity:0`）⇒ 他无法判断当时是开还是关 ⇒ 点「保存配置」⇒ **一个本来是开的模块被真的关掉**，而他以为自己在确认「已开启」。
-
-**可复用的规则**：
-
-- 界面上任何「读不到状态」的地方，**都不能同时提供一个会写盘的按钮** —— 要么把「未知」画出来并禁用写入，要么写入前重新拉一次真值。
-- `fetch(...).catch(() => setState(默认值))` 是**把失败伪装成事实**的典型写法。默认值必须是「未知」，不是「关」。
-- 验收这类控件，判据要包含「**用户能不能读出当前状态**」，而不只是「能不能点得动」。这次就是只测了「点得动」、没测「看得出来」，才让它躺了这么久。
-- 同源的另一半仍在：`apps/web/src/main.tsx:490-491` 状态取回失败会静默把 `movieStatus` 写成全 false（`docs/todo.md` §15，未修）。
-
-## 量尺自己会撒谎：`rect()` 漏字段 / `line-height: normal`（2026-09-22）
-
-- `rect(el)` 只返回了 `x/y/w/h/right/bottom`，而断言里写 `g.labelRect.left >= …` ⇒ `undefined >= 数字` **恒假** ⇒ 「整行没有越出卡片」这条**改前改后都红**，看着像产品问题。**读数里出现 `undefined`/`null`，先怀疑量尺。**
-- `getComputedStyle(el).lineHeight` 在没显式设过行高时是字符串 `"normal"` ⇒ `parseFloat` 得 `NaN` ⇒ `Math.round(h / NaN)` 是 `NaN` ⇒ `JSON.stringify` 把它变成 `null`，于是「文字单行」也跟着假红。**算行数要先给 `NaN` 一个退化值**（`fontSize × 1.2`）。
-
-## `.settings-switch` 的用法边界（2026-09-22）
-
-`.settings-switch` 是**只画药丸**的类：固定 `44×26` 的 inline-flex，靠 `input:checked + span` 换色、`span::after` 画滑块。所以：
-
-- **里面不能塞文字** —— 44px 宽会把字挤成一行一个字符（实测 7 个字 → 8 行、高 96px、上下各溢出 28px）。
-- 要「药丸 + 文字」就照**演示数据卡**的写法：文字放卡片头 `settings-card-copy`，药丸自己一个 `<label className="settings-switch">`。
-- 要「原生 checkbox + 文字的一整行」就用 `.movie-enabled-toggle` 那套（`display:flex` + `min-height:40px` + 边框，与旁边的输入框同高）。
-- **一个元素上不能同时挂这两套**：它们对 `input` 的处置是相反的（一个藏起来画假药丸、一个要露出来）。
