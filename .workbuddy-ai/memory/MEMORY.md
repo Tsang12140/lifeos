@@ -35,6 +35,7 @@
 - **React DOM 嵌套警告**：栈里**不带 props 的裸标签是兄弟节点，不是祖先**；React 按 `parentInfo|childTag|ancestorTag` **去重** ⇒ 条数 = 组合数 × 2；诊断捕获**别设上限**。
 - 瞬态缺陷要在**过程中**高频采样；日期夹具一律动态推导；`verify-settings-ai.mjs` 的 8 项 FAIL 是已知老问题。测试脚手架用异步 `spawn`（`spawnSync` **阻塞父进程事件循环**）。
 - **断言必须自带证据**（把量到的数字写进消息，否则红了等于没测）；**点错元素 CDP 不报错** → 用 `elementFromPoint` 做命中测试。记录正文在 **`body.original`**（`recordText = body.edited ?? body.original`），**没有 `content` 字段**。
+- **判据要挂在机制上，不要挂在机制的副产物上**：量「字段封没封顶」该数 `.date-grid-day[disabled]`（`capped && isFutureDay(date)` 的直接产物）；去读「下个月」箭头的 `disabled` 会**依赖 `monthAnchor`** —— 字段值为空时锚点是空串、箭头反而看起来可用（09-22 实测，对照那条因此假红）。**加断言先问：这条读数还依赖哪些别的状态？**
 
 ## 磁盘：测试失败先 `df -h /c`
 
