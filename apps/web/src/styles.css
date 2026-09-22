@@ -8525,7 +8525,7 @@ button.relation-chip {
   }
 
   .week-grid-prev .week-card {
-    min-height: 148px;
+    min-height: 112px;
     gap: 6px;
     padding: 10px 11px 9px;
     box-shadow: none;

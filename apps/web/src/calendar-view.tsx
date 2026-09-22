@@ -490,7 +490,8 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
         {prevDates.map((date) => {
           const items = buckets.get(date) ?? [];
           const photoIds = dayPhotoIds(items, assets);
-          const highlights = weekCardRecords(items);
+          // 上一周只留两条，整排比本周短一截。
+          const highlights = weekCardRecords(items).slice(0, 2);
           return <CellTag className={`week-card is-prev ${date === today ? "is-today" : ""}`} key={`prev-${date}`} type="button" onClick={() => onOpenDay(date)} aria-label={`上一周 ${displayDate(date)}，${items.length} 条记录`}>
             <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
             <span className="week-card-body">
