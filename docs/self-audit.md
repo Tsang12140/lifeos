@@ -307,3 +307,21 @@ M2 照片只读索引 / Synology Photos；自然语言检索（M3）；语音转
   - **R8d2**：继续拆 weather / ai+movie / modules / entities / assets 路由（照 `routes-backup` 样板）
   - **R10**：`settings-cards.tsx` 再切
 
+### [轮 G · R8d2 路由域拆完] · 2026-09-22
+
+- **AI**：MiMo
+- **触发**：主人「继续」
+- **对应最初问题**：**R8d2**
+- **改了什么**：
+  - 新增 `routes-entities.ts`、`routes-assets.ts`、`routes-weather.ts`、`routes-ai-movie.ts`、`routes-modules.ts`、`http-cookies.ts`；`http-kit.ts` 补 cookie/session 小助手
+  - **`server.ts`：1293 → 约 540 行**（相对最初 2748 约 **−80%**），只留 auth/health、`createApp` 装配、`serveStatic`
+- **怎么验证**：`npm run typecheck` 全绿；`npm test` **95 / 95**
+- **反向用例**：无（纯搬迁）
+- **与最初判断的偏差 / 踩坑（重要）**：
+  1. **`handleRecordsRoutes` 调用链丢了**：后续抽取把 `if (await handleRecordsRoutes…)` 从 `handleApi` 里吃掉，typecheck 仍绿（只是 import 还在），**npm test 立刻 18 红（`404 !== 201`）**。修法是把调用塞回 chain。**教训：每次抽路由后必须 grep `if (await handle\w+Routes` 数一遍，确认每个域 handler 都还在链上——typecheck 不会抓「少了一次调用」。**
+  2. `weatherLocationOverride` 曾被我用错误假想实现覆盖 → 从 `git show HEAD` 抄回原函数。
+  3. `routes-assets` 吸进了实体关系路由（end marker 过宽）；目前一并放在 assets 模块里，能跑，**边界不纯**。
+- **新增剩余债务**：
+  - **R8d3（可选）**：把实体关系从 `routes-assets` 挪回 `routes-entities`；给每个域 handler 加「调用链在场」的冒烟断言
+  - **R10**：`settings-cards.tsx` 再切
+
