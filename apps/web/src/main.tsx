@@ -103,6 +103,7 @@ import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { describeWeatherLocationByName, weatherLocationDisplayName } from "./weather-locations";
 import { ScrollSlotStrip } from "./ScrollSlotStrip";
 import { TaskScheduleField } from "./task-schedule";
+import { DateField, WEEKDAY_LABELS } from "./date-field";
 import {
   combineDateTime,
   DAY_WINDOW,
@@ -1176,257 +1177,6 @@ interface MentionBoxProps {
  * again. Marker characters are stripped from the name: an entity literally
  * named "@老王" would be unmentionable forever.
  */
-const DAY_STEP_LONG_PRESS = 6;
-const DAY_STEP_REPEAT_MS = 90;
-
-/**
- * The day, month and time picker behind every time field in the app.
- *
- * It replaces `input[type=datetime-local]`, and the reasons are all things that
- * input cannot do. Its popup is drawn by Chrome, so it ignores the app's
- * styling entirely and sat a long way from the field it belonged to. Its value
- * is always spelled out with a year, which is noise for a journal that lives in
- * the present. And its focus ring was a bare rectangle inside a 10px-radius
- * capsule, because the global `:focus-visible` rule paints a square 3px collar
- * on whatever element takes focus — the same bug the search bar solved by
- * moving the ring onto the pill's own border. The ring here is the capsule's
- * border, for the same reason.
- *
- * The capsule shows `9月16日 · 06:18` — no year, and no clock icon on the right,
- * since the calendar glyph on the left already says what the control is.
- *
- * The panel is three rows, each answering a question the one above cannot:
- * which day (a three-week strip that steps without a menu), which day exactly
- * (six weeks of the month, reached by opening the month header), and what time.
- * The time row appears only when the field has a time to set — a back-filled
- * date is a day, not an instant, and offering minutes there invites fiction.
- */
-function DateField({ value, onChange, label, showTime = false, capped = false, className = "composer-date-control" }: { readonly value: string; readonly onChange: (value: string) => void; readonly label: string; readonly showTime?: boolean; readonly capped?: boolean; readonly className?: string }) {
-  const [open, setOpen] = useState(false);
-  const [monthAnchor, setMonthAnchor] = useState(value || localDateToday());
-  const [gridOpen, setGridOpen] = useState(false);
-  const [longPressStepping, setLongPressStepping] = useState(false);
-  const [fineMinutes, setFineMinutes] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const pressRef = useRef<{ timer: number; repeat: number } | null>(null);
-
-  // The day the panel works on. Falls back to today for an empty or malformed
-  // value, which is what makes the capsule readable before anything is picked.
-  const day = datePartOf(value) || localDateToday();
-  const time = timePartOf(value);
-  const strip = useMemo(() => dayWindow(day), [day]);
-  const weeks = useMemo(() => monthGridWeeks(monthAnchor), [monthAnchor]);
-  const selectedIndex = strip.indexOf(day);
-  const activeIndex = selectedIndex >= 0 ? selectedIndex : DAY_WINDOW;
-
-  /*
-   * A journal records what already happened, so nothing later than now is a
-   * legal value: not a later hour, not a later minute, not tomorrow. The cap is
-   * derived from the clock rather than stored, so it is re-read every time the
-   * panel opens and a panel left open across midnight (or across the top of the
-   * hour) cannot offer a slot that has since expired.
-   *
-   * `capNow` only applies to "when it happened". A task's due date is the one
-   * field whose whole meaning is in the future, so the caller opts out of the
-   * cap rather than the other way round.
-   */
-  const capNow = capped ? localNowInput() : "";
-  const capHour = capNow === "" ? "" : capNow.slice(11, 13);
-  const minuteStep = fineMinutes ? MINUTE_STEP_FINE : MINUTE_STEP_COARSE;
-  /*
-   * Which minute slot is lit.
-   *
-   * The value can carry a minute the coarse column does not have — the composer
-   * seeds itself with the exact minute, and an old record may have been written
-   * before the grain changed. Snapping the highlight to the nearest slot keeps
-   * the column truthful ("roughly here") without rewriting the stored value on
-   * mere opening; the value only changes when a slot is actually clicked.
-   */
-  const minuteSlot = time === "" ? "" : String(Math.round(Number(time.slice(3, 5)) / minuteStep) * minuteStep % 60).padStart(2, "0");
-  // Only today is bounded by the clock; an earlier day is wholly in the past.
-  const dayBounded = capNow !== "" && day === localDateToday();
-  const hourLocked = (hour: string) => dayBounded && hour > capHour;
-  const minuteLocked = (hour: string, minute: string) => {
-    if (!dayBounded) return false;
-    if (hour < capHour) return false;
-    const cap = minuteCapFor(hour, capNow, minuteStep);
-    return cap !== "" && minute > cap;
-  };
-
-  useEffect(() => {
-    if (open) setMonthAnchor(day);
-  }, [open, day]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const isInside = (target: EventTarget | null) => target instanceof Node && rootRef.current?.contains(target) === true;
-    const handlePointer = (event: PointerEvent) => {
-      if (isInside(event.target)) return;
-      const target = event.target;
-      // The panel is positioned by its own styles and can land outside the
-      // root's box, so a click on it is still a click on this control.
-      if (target instanceof Element && target.closest(".date-panel") !== null) return;
-      setOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
-
-  useEffect(() => () => {
-    if (pressRef.current === null) return;
-    window.clearTimeout(pressRef.current.timer);
-    window.clearInterval(pressRef.current.repeat);
-  }, []);
-
-  const commitDate = (next: string) => {
-    onChange(showTime ? combineDateTime(next, time === "" ? "09:00" : time) : next);
-  };
-  const commitTime = (next: string) => {
-    if (next === "") return;
-    onChange(combineDateTime(day, next));
-  };
-  // Held down, the arrows walk further: a week per beat once the button has
-  // been held past the point where a person would have let go of a click.
-  const startDayStep = (offset: number) => {
-    window.clearTimeout(pressRef.current?.timer);
-    window.clearInterval(pressRef.current?.repeat);
-    pressRef.current = {
-      timer: window.setTimeout(() => {
-        setLongPressStepping(true);
-        pressRef.current = { timer: 0, repeat: window.setInterval(() => commitDate(shiftDate(day, offset * DAY_STEP_LONG_PRESS)), DAY_STEP_REPEAT_MS) };
-      }, 400),
-      repeat: 0,
-    };
-  };
-  const endDayStep = () => {
-    if (pressRef.current === null) return;
-    window.clearTimeout(pressRef.current.timer);
-    window.clearInterval(pressRef.current.repeat);
-    pressRef.current = null;
-    setLongPressStepping(false);
-  };
-  const openPanel = () => {
-    setMonthAnchor(day);
-    setGridOpen(false);
-    /*
-     * An empty time gets the most recent whole hour rather than the exact
-     * minute. It is the value a person actually means: the entry is usually
-     * "this morning", not "07:54". Existing values are never touched — coming
-     * back to a panel you already set must show what you set, not reset it.
-     */
-    if (capped && showTime && time === "") {
-      const seed = lastWholeHour(localNowInput());
-      if (seed !== "") onChange(combineDateTime(day, seed));
-    }
-    setOpen((current) => !current);
-  };
-  // How much room the panel has before its own top edge leaves the screen. It
-  // hangs off the trigger's top, so this is the distance from that edge to the
-  // viewport top — minus the 8px gap it sits above the capsule, and a little
-  // breathing space so it never touches the edge. Measured on open rather than
-  // guessed, because the composer's position depends on how much text is in it.
-  const panelRoom = () => {
-    const box = rootRef.current?.getBoundingClientRect();
-    return box === undefined ? 360 : Math.max(220, Math.min(420, Math.round(box.top - 24)));
-  };
-
-  return <div className={`date-field ${className} ${open ? "is-open" : ""}`} ref={rootRef} data-date-value={value} data-date-time={showTime ? "on" : "off"} data-date-capped={capped ? "on" : "off"}>
-    {/* A button, not a text input. The native field was typed into by accident
-        and cleared by accident with it; a button opens the panel and nothing
-        else, and it is the only thing in here that can take focus. */}
-    <button type="button" className="date-trigger" onClick={openPanel} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}：${displayDate(day)}${showTime && time ? ` ${time}` : ""}`}>
-      <CalendarDays size={15} strokeWidth={1.8} aria-hidden="true" />
-      <span className="date-trigger-value">{dayLabel(day)}</span>
-      {showTime ? <span className="date-trigger-time">{time || "全天"}</span> : null}
-    </button>
-    {open ? <div className="date-panel" role="dialog" aria-label={`${label}选择器`} style={{ "--date-panel-room": `${panelRoom()}px` } as CSSProperties}>
-      <div className="date-panel-head">
-        <button type="button" className={`date-panel-step ${longPressStepping ? "is-fast" : ""}`} onClick={() => commitDate(shiftDate(day, -1))} onPointerDown={() => startDayStep(-1)} onPointerUp={endDayStep} onPointerLeave={endDayStep} aria-label="前一天"><ChevronLeft size={15} aria-hidden="true" /></button>
-        <button type="button" className="date-panel-title" onClick={() => setGridOpen((current) => !current)} aria-expanded={gridOpen} title="选择其他日期"><span>{monthTitle(monthAnchor)}</span><ChevronDown size={14} aria-hidden="true" /></button>
-        <button type="button" className={`date-panel-step ${longPressStepping ? "is-fast" : ""}`} onClick={() => commitDate(shiftDate(day, 1))} onPointerDown={() => startDayStep(1)} onPointerUp={endDayStep} onPointerLeave={endDayStep} aria-label="后一天"><ChevronRight size={15} aria-hidden="true" /></button>
-        <button type="button" className="date-panel-today" onClick={() => commitDate(localDateToday())} disabled={day === localDateToday()}>今天</button>
-      </div>
-        {gridOpen ? <div className="date-panel-grid">
-          <div className="date-grid-head">
-            <button type="button" className="date-panel-step" onClick={() => setMonthAnchor((current) => shiftMonth(current, -1))} aria-label="上个月"><ChevronLeft size={15} aria-hidden="true" /></button>
-            <span className="date-grid-title">{monthTitle(monthAnchor)}</span>
-            <button type="button" className="date-panel-step" onClick={() => setMonthAnchor((current) => shiftMonth(current, 1))} aria-label="下个月" disabled={capped && isFutureMonth(shiftMonth(monthAnchor, 1))}><ChevronRight size={15} aria-hidden="true" /></button>
-          </div>
-          <div className="date-grid-weekdays">{WEEKDAY_LABELS.map((weekday) => <span key={weekday}>{weekday}</span>)}</div>
-          {weeks.map((week) => <div className="date-grid-week" key={week[0]}>
-            {week.map((date) => {
-              // Shown but unclickable, not hidden: a grid that suddenly loses
-              // its bottom rows reads as broken, while a greyed row explains
-              // itself. Same call as the locked hour slots below.
-              const locked = capped && isFutureDay(date);
-              return <button
-                type="button"
-                className={`date-grid-day ${date === day ? "is-selected" : ""} ${date === localDateToday() ? "is-today" : ""} ${date.slice(0, 7) === monthAnchor.slice(0, 7) ? "" : "is-outside"} ${locked ? "is-locked" : ""}`}
-                key={date}
-                disabled={locked}
-                onClick={() => { commitDate(date); setGridOpen(false); }}
-                aria-pressed={date === day}
-                aria-label={displayDate(date)}
-              >{Number(date.slice(8, 10))}</button>;
-            })}
-          </div>)}
-        </div> : <ScrollSlotStrip className="date-day-strip" scrollKey={strip[0] ?? ""} activeIndex={activeIndex}>
-          {strip.map((date) => {
-            const locked = capped && isFutureDay(date);
-            return <button
-              type="button"
-              className={`date-day-slot ${date === day ? "is-selected" : ""} ${date === localDateToday() ? "is-today" : ""} ${isDaySunday(date) ? "is-weekend" : ""} ${locked ? "is-locked" : ""}`}
-              key={date}
-              disabled={locked}
-              onClick={() => commitDate(date)}
-              aria-pressed={date === day}
-            >
-              <span className="date-day-weekday">{weekdayShort(date)}</span>
-              <span className="date-day-number">{Number(date.slice(8, 10))}</span>
-            </button>;
-          })}
-        </ScrollSlotStrip>}
-        {showTime ? <div className="date-panel-time">
-          <ScrollSlotStrip className="date-time-column" scrollKey={day}>
-            {hourOptions().map((hour) => {
-              const locked = hourLocked(hour);
-              // Picking an earlier hour keeps the minute you already chose.
-              // Picking the current hour has to drag the minute back with it,
-              // because that hour's later slots are in the future.
-              const pickedMinute = hour === capHour && dayBounded
-                ? minuteCapFor(hour, capNow, minuteStep)
-                : (time.slice(3, 5) || "00");
-              return <button type="button" className={`date-time-slot ${time.startsWith(`${hour}:`) ? "is-selected" : ""} ${locked ? "is-locked" : ""}`} key={hour} disabled={locked} onClick={() => commitTime(`${hour}:${pickedMinute}`)} aria-pressed={time.startsWith(`${hour}:`)}>{hour}</button>;
-            })}
-          </ScrollSlotStrip>
-          <span className="date-time-sep" aria-hidden="true">:</span>
-          <ScrollSlotStrip className="date-time-column" scrollKey={`${day}-minute`}>
-            {minuteOptions(minuteStep).map((minute) => {
-              const locked = minuteLocked(time.slice(0, 2) || capHour, minute);
-              return <button type="button" className={`date-time-slot ${minute === minuteSlot ? "is-selected" : ""} ${locked ? "is-locked" : ""}`} key={minute} disabled={locked} onClick={() => commitTime(`${time.slice(0, 2) || capHour}:${minute}`)} aria-pressed={minute === minuteSlot}>{minute}</button>;
-            })}
-          </ScrollSlotStrip>
-          <div className="date-panel-time-side">
-            <button type="button" className="text-button" onClick={() => commitTime(localNowInput().slice(11))}>此刻</button>
-            <button type="button" className="text-button" onClick={() => commitDate(localDateToday())}>今天</button>
-          </div>
-        </div> : null}
-        {showTime && capped ? <label className="date-panel-fine">
-          <input type="checkbox" checked={fineMinutes} onChange={(event) => setFineMinutes(event.target.checked)} />
-          <span>精细到分钟</span>
-          <span className="date-panel-fine-note">{capNow === "" ? "" : `不能晚于 ${capNow.slice(11)}`}</span>
-        </label> : null}
-    </div> : null}
-  </div>;
-}
-
 /**
  * One alias field, split on `/`.
  *
@@ -1810,7 +1560,6 @@ function Timeline({ records, assets, entities, loading, refreshing, error, selec
   return <section className="timeline-section" data-view={activeView} aria-labelledby="timeline-title" aria-busy={showUpdating ? "true" : undefined}><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{initialLoading ? <LoadingState /> : null}{showUpdating ? <div className="timeline-refresh-state" role="status"><LoaderCircle className="spin" size={16} aria-hidden="true" /><span>正在读取目标日期…</span></div> : null}{error ? <ErrorState message={error} onRetry={onRetry} /> : null}{showEmpty ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!initialLoading && records && records.length > 0 ? <div className={`timeline-list ${interactionDisabled ? "is-stale" : ""}`}>{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天 · ${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={onPreviewAsset} onOpenEntity={onOpenEntity} interactionDisabled={interactionDisabled} />)}</div>)}</div> : null}</section>;
 }
 
-const WEEKDAY_LABELS: readonly string[] = ["一", "二", "三", "四", "五", "六", "日"];
 
 /**
  * The records that landed on each day of the window the calendar is showing.
@@ -2784,7 +2533,7 @@ function RecordEditorDialog({ record, saving, reloading, error, entities, assets
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (record && !dialog.open) { dialog.showModal(); window.requestAnimationFrame(() => editorTextareaRef.current?.focus()); } if (!record && dialog.open) dialog.close(); }, [record]);
   if (!record) return <dialog ref={dialogRef} className="modal-dialog" />;
   const task = isTaskRecord(record) ? record : undefined;
-  return <dialog ref={dialogRef} className="modal-dialog editor-dialog" aria-labelledby="editor-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">编辑记录</p><h2 id="editor-title">保留原文，更新当前内容</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="dialog-body"><div className="original-block"><div className="original-block-label"><span>原文</span><span>只读保留</span></div><p><RecordText text={record.body.original || "（原文为空）"} entities={mentionVocabulary(record, entities)} /></p></div>{error?.includes("最新版本") ? <div className="server-current-block"><div className="original-block-label"><span>最新服务端内容</span><span>草稿仍在编辑框中</span></div><p><RecordText text={recordText(record)} entities={mentionVocabulary(record, entities)} /></p></div> : null}<label className="dialog-field"><span>当前内容</span><MentionBox textareaRef={editorTextareaRef} autoFocus value={draft.content} onChange={(value) => setDraft((current) => ({ ...current, content: value }))} entities={entities} onCreateEntity={onCreateEntity} rows={5} ariaLabel="当前内容" /></label><div className="dialog-fields-grid"><div className="dialog-field"><span>发生时间</span>{/* 任务的「发生时间」就是它的开始日，必须允许未来 —— 与 composer 的范围选择器同口径。非任务记录仍 capped：日志记的是已经发生的事。 */}<DateField value={draft.occurredAt} onChange={(value) => setDraft((current) => ({ ...current, occurredAt: value, occurredDirty: true }))} label="发生时间" showTime capped={task === undefined} /></div>{task ? <div className="dialog-field"><span>截止时间</span><DateField value={draft.dueAt} onChange={(value) => setDraft((current) => ({ ...current, dueAt: value, dueDirty: true }))} label="截止时间" showTime /></div> : null}</div><div className="dialog-toggle-row"><label className={`backfill-toggle ${draft.isBackfill ? "is-on" : ""}`}><input type="checkbox" checked={draft.isBackfill} onChange={(event) => setDraft((current) => ({ ...current, isBackfill: event.target.checked }))} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label><label className={`privacy-toggle dialog-privacy-toggle ${draft.isPrivate ? "is-on" : ""}`}><input type="checkbox" checked={draft.isPrivate} onChange={(event) => setDraft((current) => ({ ...current, isPrivate: event.target.checked }))} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私模式</span><small>日历隐藏，时间轴点击后显示</small></label></div>{task ? <label className="dialog-field"><span>任务状态</span><select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as TaskStatus }))}><option value="todo">待办</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label> : null}<RelationPanel entities={entities} assets={assets} candidates={candidates} draft={draft} onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))} onCreateEntity={onCreateEntity} />{error ? <div className="dialog-error" role="alert"><CircleHelp size={17} aria-hidden="true" /><span>{error}</span>{error.includes("冲突") || error.includes("409") || error.includes("最新版本") ? <button className="text-button" type="button" onClick={onReloadLatest} disabled={reloading}>{reloading ? "读取中" : error.includes("最新版本") ? "再次读取最新版本" : "读取最新版本，保留草稿"}</button> : null}</div> : null}</div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => onSave(record, draft)} disabled={!draft.content.trim() || saving}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{saving ? "保存中" : "保存修改"}</span></button></div></dialog>;
+  return <dialog ref={dialogRef} className="modal-dialog editor-dialog" aria-labelledby="editor-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">编辑记录</p><h2 id="editor-title">保留原文，更新当前内容</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="dialog-body"><div className="original-block"><div className="original-block-label"><span>原文</span><span>只读保留</span></div><p><RecordText text={record.body.original || "（原文为空）"} entities={mentionVocabulary(record, entities)} /></p></div>{error?.includes("最新版本") ? <div className="server-current-block"><div className="original-block-label"><span>最新服务端内容</span><span>草稿仍在编辑框中</span></div><p><RecordText text={recordText(record)} entities={mentionVocabulary(record, entities)} /></p></div> : null}<label className="dialog-field"><span>当前内容</span><MentionBox textareaRef={editorTextareaRef} autoFocus value={draft.content} onChange={(value) => setDraft((current) => ({ ...current, content: value }))} entities={entities} onCreateEntity={onCreateEntity} rows={5} ariaLabel="当前内容" /></label><div className="dialog-fields-grid">{task ? <div className="dialog-field dialog-field-wide"><span>任务时间</span><TaskScheduleField start={draft.occurredAt} end={draft.dueAt} onStartChange={(value) => setDraft((current) => ({ ...current, occurredAt: value, occurredDirty: true }))} onEndChange={(value) => setDraft((current) => ({ ...current, dueAt: value, dueDirty: true }))} className="composer-date-control" label="任务时间" /></div> : <div className="dialog-field"><span>发生时间</span>{/* 非任务记录仍 capped：日志记的是已经发生的事。 */}<DateField value={draft.occurredAt} onChange={(value) => setDraft((current) => ({ ...current, occurredAt: value, occurredDirty: true }))} label="发生时间" showTime capped /></div>}</div><div className="dialog-toggle-row"><label className={`backfill-toggle ${draft.isBackfill ? "is-on" : ""}`}><input type="checkbox" checked={draft.isBackfill} onChange={(event) => setDraft((current) => ({ ...current, isBackfill: event.target.checked }))} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label><label className={`privacy-toggle dialog-privacy-toggle ${draft.isPrivate ? "is-on" : ""}`}><input type="checkbox" checked={draft.isPrivate} onChange={(event) => setDraft((current) => ({ ...current, isPrivate: event.target.checked }))} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私模式</span><small>日历隐藏，时间轴点击后显示</small></label></div>{task ? <label className="dialog-field"><span>任务状态</span><select value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as TaskStatus }))}><option value="todo">待办</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label> : null}<RelationPanel entities={entities} assets={assets} candidates={candidates} draft={draft} onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))} onCreateEntity={onCreateEntity} />{error ? <div className="dialog-error" role="alert"><CircleHelp size={17} aria-hidden="true" /><span>{error}</span>{error.includes("冲突") || error.includes("409") || error.includes("最新版本") ? <button className="text-button" type="button" onClick={onReloadLatest} disabled={reloading}>{reloading ? "读取中" : error.includes("最新版本") ? "再次读取最新版本" : "读取最新版本，保留草稿"}</button> : null}</div> : null}</div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => onSave(record, draft)} disabled={!draft.content.trim() || saving}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{saving ? "保存中" : "保存修改"}</span></button></div></dialog>;
 }
 
 interface NoteDraft {
@@ -4746,7 +4495,7 @@ function App() {
   };
   const onNavigate = navigate;
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation={activeView !== "calendar"} /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation={activeView !== "calendar"} /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form><button className="icon-button mobile-search-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="搜索记录"><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
        ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />

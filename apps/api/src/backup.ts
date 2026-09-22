@@ -594,12 +594,22 @@ export async function pruneBackups(
 
   await mkdir(trashDirectory, { recursive: true });
   for (const entry of localPlan) {
-    try {
-      const trashPath = join(trashDirectory, entry.location.split(/[\\/]/).pop() ?? `restored-${entry.id}.sqlite`);
-      await rename(entry.location, trashPath);
-      repository.markBackupRunPruned(entry.id, prunedAt, trashPath);
-      result.trashedLocal += 1;
-    } catch { /* already moved or never existed */ }
+    const fileName = entry.location.split(/[\\/]/).pop() ?? `restored-${entry.id}.sqlite`;
+    const trashPath = join(trashDirectory, fileName);
+    // After a data-directory move the run row can still carry the old absolute
+    // path. `rename(oldPath)` then fails, the catch swallows it, and the entry
+    // is never marked pruned — so it sits in the plan as `keep: false` forever
+    // (docs/todo.md §4). Try the remembered path first, then the current
+    // backup directory's copy of the same file name.
+    const candidates = [entry.location, join(directory, fileName)];
+    for (const candidate of candidates) {
+      try {
+        await rename(candidate, trashPath);
+        repository.markBackupRunPruned(entry.id, prunedAt, trashPath);
+        result.trashedLocal += 1;
+        break;
+      } catch { /* try the next candidate */ }
+    }
   }
   if (s3 !== undefined && s3.enabled) {
     for (const entry of remotePlan) {

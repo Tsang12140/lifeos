@@ -4057,6 +4057,15 @@ h2 {
 }
 
 /* 往下开：上方没地方时才走这条。两边都是量出来的（见组件里的 openPanel）。 */
+.task-schedule-panel.is-fixed {
+  z-index: 80;
+  box-shadow: 0 18px 40px rgb(24 36 61 / 0.2);
+}
+
+.dialog-field-wide {
+  grid-column: 1 / -1;
+}
+
 .task-schedule-panel.is-below {
   top: calc(100% + 8px);
   bottom: auto;
@@ -10814,13 +10823,28 @@ button.relation-chip {
   .mobile-nav-item.is-active { color: var(--primary); background: transparent; }
   .mobile-nav-item.is-active::after { width: 18px; height: 2px; margin-top: 1px; border-radius: 999px; content: ""; background: currentColor; }
 
-  .mobile-menu-button,
+  /* Menu is replaced by the bottom nav "more" sheet on the narrowest phones,
+     but search must stay one tap away (todo §10): keep the icon, drop the rest
+     of the topbar actions (the full search form is already display:none). */
+  .mobile-menu-button { display: none !important; }
   .mobile-search-button,
-  .icon-button.mobile-search-button { display: none !important; }
+  .icon-button.mobile-search-button { display: inline-grid !important; }
 
   .topbar { min-height: 0; padding-top: 16px; }
   .topbar-layout { display: block; }
-  .topbar-actions { display: none; }
+  .topbar-actions {
+    display: flex;
+    position: absolute;
+    z-index: 4;
+    top: 17px;
+    right: 10px;
+  }
+  .topbar-actions .search-form { display: none; }
+  .topbar-actions .mobile-search-button {
+    display: inline-grid;
+    width: 40px;
+    height: 40px;
+  }
 
   .weather-header {
     min-height: 116px;

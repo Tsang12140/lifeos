@@ -42,7 +42,7 @@ const DAY_FORMAT = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-export type SnapshotSource = "local" | "remote";
+export type SnapshotSource = "local" | "remote" | "remote-trashed";
 
 export type SnapshotUnavailableReason = "invalid-name" | "missing" | "transport" | "unreadable";
 
@@ -211,26 +211,44 @@ async function materializeSnapshot(config: ApiConfig, fileName: string): Promise
   const cachePath = join(directory, fileName);
   clearSnapshotSidecars(cachePath);
 
-  const localPath = join(backupDirectoryOf(config), fileName);
-  if (existsSync(localPath)) {
-    const sizeBytes = statSync(localPath).size;
+  const backupDir = backupDirectoryOf(config);
+  const localPath = join(backupDir, fileName);
+  // Retention moves pruned copies into `<backupDir>/_trash/` rather than deleting
+  // them (30-day recycle). The time machine must still open those points — the
+  // axis draws them, and "cleaned" is not "gone".
+  const localTrashPath = join(backupDir, "_trash", fileName);
+  for (const [candidate, source] of [
+    [localPath, "local"],
+    [localTrashPath, "local"],
+  ] as const) {
+    if (!existsSync(candidate)) continue;
+    const sizeBytes = statSync(candidate).size;
     assertSnapshotSize(sizeBytes, fileName);
-    copyFileSync(localPath, cachePath);
-    return { path: cachePath, source: "local", sizeBytes };
+    copyFileSync(candidate, cachePath);
+    return { path: cachePath, source, sizeBytes };
   }
 
   let bytes: Buffer | undefined;
+  let remoteSource: "remote" | "remote-trashed" = "remote";
   try {
-    bytes = await downloadSnapshotObject(config, fileName);
+    bytes = await downloadSnapshotObject(config, fileName, "live");
   } catch (error) {
     throw new SnapshotUnavailableError("transport", error instanceof Error ? error.message : String(error));
   }
   if (bytes === undefined) {
-    throw new SnapshotUnavailableError("missing", `找不到快照 ${fileName}：本地备份目录里没有，对象存储也没有可用的副本。`);
+    try {
+      bytes = await downloadSnapshotObject(config, fileName, "trashed");
+      if (bytes !== undefined) remoteSource = "remote-trashed";
+    } catch (error) {
+      throw new SnapshotUnavailableError("transport", error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (bytes === undefined) {
+    throw new SnapshotUnavailableError("missing", `找不到快照 ${fileName}：本地备份目录（含 _trash）里没有，对象存储也没有可用的副本。`);
   }
   assertSnapshotSize(bytes.byteLength, fileName);
   writeFileSync(cachePath, bytes);
-  return { path: cachePath, source: "remote", sizeBytes: bytes.byteLength };
+  return { path: cachePath, source: remoteSource, sizeBytes: bytes.byteLength };
 }
 
 /** Removes the throwaway copy. Reads must not accumulate state. */
