@@ -392,7 +392,11 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
   const summaryValue = (date: string, summary: DaySummary | undefined): string =>
     drafts.get(date) ?? (summary === undefined ? "" : summaryDisplay(summary));
   const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
-  const buckets = useMemo(() => recordsByDate(dates, publicRecords), [dates, publicRecords]);
+  // Include prev-week dates so the quiet row below is not an empty shell.
+  const buckets = useMemo(
+    () => recordsByDate(prevDates.length > 0 ? [...dates, ...prevDates] : dates, publicRecords),
+    [dates, prevDates, publicRecords],
+  );
   const inWindow = [...buckets.values()].reduce((total, items) => total + items.length, 0);
   const rangeStart = dates[0] ?? anchor;
   const rangeEnd = dates[6] ?? anchor;
@@ -485,6 +489,7 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
       {prevDates.length > 0 ? <div className="week-grid week-grid-prev" aria-label="上一周">
         {prevDates.map((date) => {
           const items = buckets.get(date) ?? [];
+          const photoIds = dayPhotoIds(items, assets);
           const highlights = weekCardRecords(items);
           return <CellTag className={`week-card is-prev ${date === today ? "is-today" : ""}`} key={`prev-${date}`} type="button" onClick={() => onOpenDay(date)} aria-label={`上一周 ${displayDate(date)}，${items.length} 条记录`}>
             <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
@@ -492,6 +497,12 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
               {items.length === 0 ? <span className="week-card-empty">没有记录</span> : highlights.map((record) => <span className="week-card-line" key={record.id}><span className="week-card-time">{lifeTimeTime(record.occurredAt ?? record.createdAt)}</span><span className="week-card-text">{recordText(record)}</span></span>)}
             </span>
             <span className="week-card-foot">{items.length === 0 ? "—" : `${items.length} 条`}</span>
+            {photoIds.length > 0 ? <span className={`week-card-art bands-${photoIds.length}`} aria-hidden="true">
+              {photoIds.map((assetId, index) => <span className="week-card-band" key={`prev-${assetId}-${index}`} style={{ "--week-art-index": index, "--week-art-count": photoIds.length, "--week-art-offset": `${(index * 100) / photoIds.length}%`, "--week-art-size": `${100 / photoIds.length}%` } as CSSProperties}>
+                <img src={assetThumbUrl(assetId, 1200)} alt="" loading="lazy" decoding="async" />
+              </span>)}
+              <span className="week-card-veil" />
+            </span> : null}
           </CellTag>;
         })}
       </div> : null}

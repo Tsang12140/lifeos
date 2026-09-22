@@ -8520,7 +8520,8 @@ button.relation-chip {
   .week-grid-prev {
     display: grid;
     margin-top: 14px;
-    opacity: 0.78;
+    /* 更透一点，但正文仍是实色字，不会看不清 */
+    opacity: 0.72;
   }
 
   .week-grid-prev .week-card {
