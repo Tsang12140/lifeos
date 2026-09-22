@@ -144,6 +144,12 @@ import { WeatherArchiveScheduler, WEATHER_ARCHIVE_TIME_ZONE } from "./weather-ar
 import { publicMovieConfig, readRuntimeMovieConfig, saveRuntimeMovieConfig } from "./movie-config.js";
 import { MovieModuleError, resolveMovies, testMovieConfig, type MovieCandidate } from "./movie.js";
 import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, createThumbnailCache, parseThumbnailWidth } from "./derived-thumbs.js";
+import { handleBackupRoutes } from "./routes-backup.js";
+import { handleRecordsRoutes } from "./routes-records.js";
+import { summaryPayload, collectSummarisableRecords } from "./summary-routes.js";
+import { dateForTime, sortTimeline, filterDate, assertTimeZone, filterDateRange, datesBetween } from "./timeline-query.js";
+import type { RouteContext } from "./route-context.js";
+import { readBody, requireJsonContentType, readRawBody } from "./http-body.js";
 
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
@@ -155,60 +161,6 @@ const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
 const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
 const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "fitness", "period_start", "period_end"];
 
-function backupRunDate(run: { readonly startedAt: string }): string {
-  return shanghaiDateKey(new Date(run.startedAt));
-}
-
-function latestDualBackup(runs: readonly BackupRun[]): {
-  readonly batchId: string;
-  readonly status: "success" | "partial" | "local_only" | "failed";
-  readonly local: BackupRun;
-  readonly s3: BackupRun;
-} | null {
-  const local = runs.find((run) => run.batchId !== undefined && run.provider === "local");
-  if (local?.batchId === undefined) return null;
-  const s3 = runs.find((run) => run.batchId === local.batchId && run.provider === "s3");
-  if (s3 === undefined) return null;
-  const status = local.status === "failed"
-    ? "failed"
-    : s3.status === "success"
-      ? "success"
-      : s3.status === "skipped"
-        ? "local_only"
-        : "partial";
-  return { batchId: local.batchId, status, local, s3 };
-}
-
-/**
- * Shapes the retention state for the settings UI: the policy in plain language,
- * one row per backup with its verdict and the reason behind it, and when the
- * cleanup will next run. Cleanup happens after each backup, so "next cleanup" is
- * simply the next scheduled backup.
- */
-function backupRetentionPayload(repository: SqliteRecordRepository, config: ApiConfig, schedule: BackupSchedule) {
-  const policy = repository.getBackupRetention();
-  // The whole history: a truncated list would hide older snapshots from the plan.
-  const runs = repository.listAllBackupRuns();
-  const view = buildBackupRetentionView(runs, policy, new Date());
-  return {
-    policy,
-    limits: BACKUP_RETENTION_LIMITS,
-    defaults: DEFAULT_BACKUP_RETENTION,
-    described: describeBackupRetention(policy),
-    cleanupTrigger: "每次备份完成后自动清理",
-    // Cleaned snapshots are moved into LifeOS's own recycle bin first, because
-    // the bucket has versioning off — a plain S3 DELETE would be permanent.
-    cleanupScope: { local: true, remote: true, recycleBin: { local: true, remote: true } },
-    cleanupScheduled: schedule.enabled,
-    nextCleanupAt: publicNextBackupAt(schedule),
-    localDirectory: config.backupDirectory ?? null,
-    entries: view.entries,
-    summary: view.summary,
-    trashed: view.trashed,
-    connectionTestCount: view.connectionTestCount,
-    connectionTestBytes: view.connectionTestBytes,
-  };
-}
 
 
 
@@ -304,41 +256,8 @@ function decodeStaticPathname(pathname: string): string {
  * streamed size is checked again so a chunked request cannot lie its way past
  * the limit.
  */
-async function readRawBody(req: IncomingMessage, limit: number): Promise<Buffer> {
-  const contentLength = req.headers["content-length"];
-  if (contentLength !== undefined) {
-    const length = Number(contentLength);
-    if (!Number.isSafeInteger(length) || length < 0) throw new HttpError(400, "invalid_content_length", "Invalid Content-Length");
-    if (length > limit) throw new HttpError(413, "body_too_large", "Request body is too large");
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > limit) throw new HttpError(413, "body_too_large", "Request body is too large");
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks);
-}
 
-async function readBody(req: IncomingMessage, limit: number): Promise<unknown> {
-  const raw = await readRawBody(req, limit);
-  if (raw.length === 0) return {};
-  try {
-    return JSON.parse(raw.toString("utf8")) as unknown;
-  } catch {
-    throw new HttpError(400, "invalid_json", "Request body must be valid JSON");
-  }
-}
 
-function requireJsonContentType(req: IncomingMessage, allowEmpty = false): void {
-  const contentType = req.headers["content-type"];
-  if (allowEmpty && contentType === undefined) return;
-  if (contentType === undefined || !/^application\/json(?:\s*;|\s*$)/i.test(contentType)) {
-    throw new HttpError(415, "unsupported_media_type", "Write requests require application/json");
-  }
-}
 
 function parseDateQuery(value: string | null, name: string): string | undefined {
   if (value === null) return undefined;
@@ -349,78 +268,6 @@ function parseDateQuery(value: string | null, name: string): string | undefined 
   }
 }
 
-function dateForTime(time: LifeTime, timeZone: string): string {
-  if (time.kind === "date" || time.kind === "local") return time.value.slice(0, 10);
-  const formatter = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
-  const parts = Object.fromEntries(formatter.formatToParts(new Date(time.value)).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-function timelineDisplayKey(record: RecordView, timeZone: string): string {
-  const time = record.occurredAt ?? record.createdAt;
-  if (time.kind === "date") return `${time.value}T00:00:00`;
-  if (time.kind === "local") return time.value;
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  const parts = Object.fromEntries(formatter.formatToParts(new Date(time.value)).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
-}
-
-function sortTimeline(items: readonly RecordView[], timeZone: string): readonly RecordView[] {
-  return [...items].sort((left, right) => {
-    const leftKey = timelineDisplayKey(left, timeZone);
-    const rightKey = timelineDisplayKey(right, timeZone);
-    if (leftKey < rightKey) return 1;
-    if (leftKey > rightKey) return -1;
-    if (left.createdAt.value < right.createdAt.value) return 1;
-    if (left.createdAt.value > right.createdAt.value) return -1;
-    return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
-  });
-}
-
-function filterDate(items: readonly RecordView[], date: string | undefined, timeZone: string): readonly RecordView[] {
-  assertTimeZone(timeZone);
-  if (date === undefined) return items;
-  return items.filter((item) => dateForTime(item.occurredAt ?? item.createdAt, timeZone) === date);
-}
-
-function assertTimeZone(timeZone: string): void {
-  try {
-    // Constructing the formatter validates IANA names before rows are examined.
-    new Intl.DateTimeFormat("en-CA", { timeZone }).format();
-  } catch {
-    throw new HttpError(400, "invalid_time_zone", "timeZone must be a valid IANA time zone");
-  }
-}
-
-/** Inclusive range over the same local-day key `filterDate` matches on. */
-function filterDateRange(items: readonly RecordView[], from: string | undefined, to: string | undefined, timeZone: string): readonly RecordView[] {
-  if (from === undefined && to === undefined) return items;
-  assertTimeZone(timeZone);
-  return items.filter((item) => {
-    const date = dateForTime(item.occurredAt ?? item.createdAt, timeZone);
-    if (from !== undefined && date < from) return false;
-    return !(to !== undefined && date > to);
-  });
-}
-
-/** Parse note metadata at the HTTP boundary so all clients receive the same
- * 400-shaped error instead of a raw core validation exception. */
-export function datesBetween(from: string, to: string): readonly string[] {
-  const dates: string[] = [];
-  const start = Date.parse(`${from}T00:00:00Z`);
-  const end = Date.parse(`${to}T00:00:00Z`);
-  for (let at = start; at <= end; at += 86_400_000) dates.push(new Date(at).toISOString().slice(0, 10));
-  return dates;
-}
 
 interface LifeosApp {
   readonly repository: SqliteRecordRepository;
@@ -432,34 +279,6 @@ interface LifeosApp {
 }
 
 /** The shape every summaries endpoint answers with: the rows plus whose they are. */
-function summaryPayload(items: readonly DaySummary[], provider: { readonly providerId: string; readonly model?: string; readonly kind: "ai" | "rule" }): Record<string, unknown> {
-  return {
-    items,
-    provider: provider.providerId,
-    ...(provider.model === undefined ? {} : { model: provider.model }),
-    ai: provider.kind === "ai",
-  };
-}
-
-/**
- * Every record a day summary may read, bucketed by the caller's calendar day.
- *
- * Notes are included rather than filtered out, because a day that has nothing
- * else still deserves a cell: the summariser treats them as filler and is told
- * not to describe them as events. Private records stay out either way — a
- * summary is shown on the grid.
- */
-function collectSummarisableRecords(repository: SqliteRecordRepository, timeZone: string): Map<string, RecordView[]> {
-  const byDate = new Map<string, RecordView[]>();
-  for (const record of repository.list({})) {
-    if (record.isPrivate === true) continue;
-    const date = dateForTime(record.occurredAt ?? record.createdAt, timeZone);
-    const bucket = byDate.get(date);
-    if (bucket === undefined) byDate.set(date, [record]);
-    else bucket.push(record);
-  }
-  return byDate;
-}
 
 export const requestLog = (() => {
   const logDir = process.env.LIFEOS_LOG_DIR ?? resolve(process.env.LIFEOS_DATA_DIR ?? process.cwd(), "..", "logs");
@@ -552,6 +371,17 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): Promise<void> {
+    const ctx: RouteContext = {
+      config,
+      repository,
+      backupScheduler,
+      weatherArchiveScheduler,
+      thumbnails,
+      loginFailures,
+      authenticated,
+      requireAuth,
+      checkRequestSecurity,
+    };
     if (pathname === "/api/health" && req.method === "GET") {
       setJson(res, 200, { ok: true });
       return;
@@ -597,182 +427,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     }
 
     requireAuth(req);
-    if (pathname === "/api/backup/status" && req.method === "GET") {
-      const s3 = publicBackupConfig(config);
-      const schedule = backupScheduler.schedule;
-      const runs = repository.listBackupRuns(100);
-      const scheduledRuns = runs.filter((run) => run.kind === "scheduled");
-      const latestScheduled = scheduledRuns[0];
-      setJson(res, 200, {
-        localDirectory: config.backupDirectory ?? null,
-        s3,
-        schedule: {
-          ...schedule,
-          timeZone: BACKUP_TIME_ZONE,
-          nextRunAt: publicNextBackupAt(schedule),
-          ...(latestScheduled?.finishedAt === undefined ? {} : { lastRunAt: latestScheduled.finishedAt }),
-        },
-        lastDualBackup: latestDualBackup(runs),
-        retention: { policy: repository.getBackupRetention(), described: describeBackupRetention(repository.getBackupRetention()) },
-        runs,
-      });
-      return;
-    }
-    if (pathname === "/api/backup/retention" && req.method === "GET") {
-      setJson(res, 200, backupRetentionPayload(repository, config, backupScheduler.schedule));
-      return;
-    }
-    if (pathname === "/api/backup/retention" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["dailyDays", "weeklyWeeks", "monthlyMonths", "trashDays"]);
-      try {
-        const policy: BackupRetention = {
-          dailyDays: boundedIntegerField(input.dailyDays, "dailyDays", BACKUP_RETENTION_LIMITS.dailyDays.min, BACKUP_RETENTION_LIMITS.dailyDays.max),
-          weeklyWeeks: boundedIntegerField(input.weeklyWeeks, "weeklyWeeks", BACKUP_RETENTION_LIMITS.weeklyWeeks.min, BACKUP_RETENTION_LIMITS.weeklyWeeks.max),
-          monthlyMonths: boundedIntegerField(input.monthlyMonths, "monthlyMonths", BACKUP_RETENTION_LIMITS.monthlyMonths.min, BACKUP_RETENTION_LIMITS.monthlyMonths.max),
-          trashDays: boundedIntegerField(input.trashDays, "trashDays", BACKUP_RETENTION_LIMITS.trashDays.min, BACKUP_RETENTION_LIMITS.trashDays.max),
-        };
-        repository.saveBackupRetention(policy);
-        setJson(res, 200, backupRetentionPayload(repository, config, backupScheduler.schedule));
-      } catch (error) {
-        throw new HttpError(400, "invalid_backup_retention", error instanceof Error ? error.message : "保留策略无效");
-      }
-      return;
-    }
-    // The time machine: reads one point in time without altering it. The snapshot
-    // is copied into a scratch directory under the data directory and opened
-    // read-only, so this route can look at the owner's real backup set but has no
-    // way to write to it.
-    if (pathname === "/api/backup/snapshot" && req.method === "GET") {
-      const fileName = (url.searchParams.get("fileName") ?? "").trim();
-      try {
-        setJson(res, 200, await readSnapshot(config, fileName, repository));
-      } catch (error) {
-        if (!(error instanceof SnapshotUnavailableError)) throw error;
-        // The mapping lives here, not in the read layer, because these are HTTP
-        // answers: a point that vanished between listing and clicking is a 404
-        // rather than a 500, and an unreachable object store is a 502 so the view
-        // can blame the copy instead of the request.
-        const mapping = error.reason === "invalid-name"
-          ? { status: 400, code: "invalid_snapshot_name" }
-          : error.reason === "missing"
-            ? { status: 404, code: "snapshot_missing" }
-            : error.reason === "transport"
-              ? { status: 502, code: "snapshot_unavailable" }
-              : { status: 500, code: "snapshot_unreadable" };
-        throw new HttpError(mapping.status, mapping.code, error.message);
-      }
-      return;
-    }
-    if (pathname === "/api/backup/runs" && req.method === "GET") {
-      const from = parseDateQuery(url.searchParams.get("from"), "from");
-      const to = parseDateQuery(url.searchParams.get("to"), "to");
-      if ((from === undefined) !== (to === undefined)) throw new HttpError(400, "invalid_range", "from and to must be provided together");
-      if (from !== undefined && to !== undefined) {
-        if (from > to) throw new HttpError(400, "invalid_range", "from must not be after to");
-        const start = Date.parse(`${from}T00:00:00Z`);
-        const end = Date.parse(`${to}T00:00:00Z`);
-        if (!Number.isFinite(start) || !Number.isFinite(end) || (end - start) / 86_400_000 > 400) {
-          throw new HttpError(400, "invalid_range", "备份日历最多查询 400 天");
-        }
-      }
-      const allRuns = repository.listBackupRuns(1000);
-      const items = from === undefined || to === undefined
-        ? allRuns
-        : allRuns.filter((run) => {
-            const day = backupRunDate(run);
-            return day >= from && day <= to;
-          });
-      setJson(res, 200, { items });
-      return;
-    }
-    if (pathname === "/api/backup/config" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["enabled", "endpoint", "region", "bucket", "prefix", "forcePathStyle", "accessKeyId", "secretAccessKey"]);
-      try {
-        const status = saveRuntimeBackupConfig(config, {
-          enabled: booleanField(input.enabled, "enabled"),
-          endpoint: stringField(input.endpoint, "endpoint", { nonEmpty: true }),
-          region: stringField(input.region, "region", { nonEmpty: true }),
-          bucket: stringField(input.bucket, "bucket", { nonEmpty: true }),
-          prefix: stringField(input.prefix ?? "product-backup/lifeos", "prefix"),
-          forcePathStyle: booleanField(input.forcePathStyle, "forcePathStyle"),
-          ...(input.accessKeyId === undefined ? {} : { accessKeyId: stringField(input.accessKeyId, "accessKeyId") }),
-          ...(input.secretAccessKey === undefined ? {} : { secretAccessKey: stringField(input.secretAccessKey, "secretAccessKey") }),
-        });
-        setJson(res, 200, { ok: true, s3: status });
-      } catch (error) {
-        throw new HttpError(400, "invalid_backup_config", error instanceof Error ? error.message : "对象存储配置无效");
-      }
-      return;
-    }
-    if (pathname === "/api/backup/schedule" && req.method === "GET") {
-      const schedule = backupScheduler.schedule;
-      setJson(res, 200, { ...schedule, timeZone: BACKUP_TIME_ZONE, nextRunAt: publicNextBackupAt(schedule) });
-      return;
-    }
-    if (pathname === "/api/backup/schedule" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["enabled", "hour", "minute"]);
-      const schedule = {
-        enabled: booleanField(input.enabled, "enabled"),
-        hour: boundedIntegerField(input.hour, "hour", 0, 23),
-        minute: boundedIntegerField(input.minute, "minute", 0, 59),
-      } as const;
-      try {
-        repository.saveBackupSchedule(schedule);
-        backupScheduler.update(schedule);
-      } catch (error) {
-        throw new HttpError(400, "invalid_backup_schedule", error instanceof Error ? error.message : "备份排程无效");
-      }
-      setJson(res, 200, { ...schedule, timeZone: BACKUP_TIME_ZONE, nextRunAt: publicNextBackupAt(schedule) });
-      return;
-    }
-    if (pathname === "/api/backup/dual" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      try {
-        const result = await createDualBackup(config, repository, "manual");
-        const status = result.status === "failed" ? 502 : 201;
-        setJson(res, status, { ok: result.status !== "failed", provider: "dual", ...result });
-      } catch (error) {
-        throw backupHttpError(error);
-      }
-      return;
-    }
-    if (pathname === "/api/backup/local" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      try {
-        const artifact = await createLocalBackup(config, repository);
-        const pruned = await pruneBackups(config, repository);
-        setJson(res, 201, { ok: true, provider: "local", fileName: artifact.filename, location: artifact.path, sizeBytes: artifact.sizeBytes, pruned: pruned.trashedLocal + pruned.purgedLocal, prune: pruned });
-      } catch (error) {
-        throw backupHttpError(error);
-      }
-      return;
-    }
-    if (pathname === "/api/backup/s3" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      try {
-        const result = await uploadS3Backup(config, repository);
-        setJson(res, 201, { ok: true, provider: "s3", fileName: result.filename, location: result.location, sizeBytes: result.sizeBytes });
-      } catch (error) {
-        throw backupHttpError(error);
-      }
-      return;
-    }
-    if (pathname === "/api/backup/s3/test" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      try {
-        const result = await testS3Backup(config, repository);
-        setJson(res, 200, { ok: true, location: result.location, transport: result.transport, ...(result.transport === "file" ? { warning: "当前对象存储 Endpoint 是本机目录（file://），连接测试只写入了本机文件，不能证明可以联网上传。" } : {}) });
-      } catch (error) {
-        throw backupHttpError(error);
-      }
-      return;
-    }
+    if (await handleBackupRoutes(ctx, req, res, pathname, url)) return;
     if (pathname === "/api/ai/status" && req.method === "GET") {
       setJson(res, 200, publicAiConfig(config));
       return;
@@ -1121,227 +776,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       setJson(res, 200, repository.cycleIntimacyModule());
       return;
     }
-    if (pathname === "/api/records" && req.method === "GET") {
-      const q = url.searchParams.get("q") ?? undefined;
-      if (q !== undefined && q.length > 2000) throw new HttpError(400, "invalid_query", "q is too long");
-      const kindRaw = url.searchParams.get("kind");
-      const statusRaw = url.searchParams.get("status");
-      const kind = kindRaw === null || kindRaw === "" ? undefined : enumField(kindRaw, RECORD_KINDS, "kind");
-      const status = statusRaw === null || statusRaw === "" ? undefined : enumField(statusRaw, TASK_STATUSES, "status");
-      const date = parseDateQuery(url.searchParams.get("date"), "date");
-      const from = parseDateQuery(url.searchParams.get("from"), "from");
-      const to = parseDateQuery(url.searchParams.get("to"), "to");
-      if (date !== undefined && (from !== undefined || to !== undefined)) {
-        throw new HttpError(400, "invalid_range", "date cannot be combined with from/to");
-      }
-      if (from !== undefined && to !== undefined && from > to) {
-        throw new HttpError(400, "invalid_range", "from must not be after to");
-      }
-      const timeZone = url.searchParams.get("timeZone") || "UTC";
-      // The range is applied in memory, so it is kept to a size a calendar can ask for.
-      if (from !== undefined && to !== undefined && datesBetween(from, to).length > 400) {
-        throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
-      }
-      const entityId = url.searchParams.get("entityId") || undefined;
-      const assetId = url.searchParams.get("assetId") || undefined;
-      const query: { q?: string; kind?: RecordKind; status?: TaskStatus; entityId?: string; assetId?: string } = {};
-      if (q !== undefined) query.q = q;
-      if (kind !== undefined) query.kind = kind;
-      if (status !== undefined) query.status = status;
-      if (entityId !== undefined) query.entityId = entityId;
-      if (assetId !== undefined) query.assetId = assetId;
-      // Date/range reads feed Today and Calendar. Notes are a separate content
-      // library and must not leak into those time-oriented surfaces.
-      const timeScoped = date !== undefined || from !== undefined || to !== undefined;
-      const sourceRecords = repository.list(query).filter((record) => !(timeScoped && record.kind === "note"));
-      const scoped = filterDate(sourceRecords, date, timeZone);
-      const items = sortTimeline(filterDateRange(scoped, from, to, timeZone), timeZone);
-      setJson(res, 200, { items });
-      return;
-    }
-    if (pathname === "/api/summaries" && req.method === "GET") {
-      const from = parseDateQuery(url.searchParams.get("from"), "from");
-      const to = parseDateQuery(url.searchParams.get("to"), "to");
-      if (from === undefined || to === undefined) throw new HttpError(400, "invalid_range", "from and to are required");
-      if (from > to) throw new HttpError(400, "invalid_range", "from must not be after to");
-      const timeZone = url.searchParams.get("timeZone") || "UTC";
-      assertTimeZone(timeZone);
-      const dates = datesBetween(from, to);
-      if (dates.length > 400) throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
-      const byDate = collectSummarisableRecords(repository, timeZone);
-      // Resolved per request, not per process: the AI key lives in the settings
-      // file, so reading it here is what makes "save the key, reopen the calendar"
-      // work without restarting the API.
-      const daySummaryProvider = createDaySummaryProvider(config);
-      const items = await resolveDaySummaries({
-        dates,
-        recordsForDate: (date) => byDate.get(date) ?? [],
-        cache: repository,
-        provider: daySummaryProvider,
-        force: url.searchParams.get("force") === "1",
-      });
-      setJson(res, 200, summaryPayload(items, daySummaryProvider));
-      return;
-    }
-    if (pathname === "/api/summaries/manual" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["entries", "timeZone"]);
-      const entries = Array.isArray(input.entries) ? input.entries : null;
-      if (entries === null) throw new HttpError(400, "invalid_entries", "entries must be an array");
-      if (entries.length > 400) throw new HttpError(400, "invalid_entries", "entries must not exceed 400 items");
-      const timeZone = typeof input.timeZone === "string" ? input.timeZone : "UTC";
-      assertTimeZone(timeZone);
-      const byDate = collectSummarisableRecords(repository, timeZone);
-      const saved: DaySummary[] = [];
-      const cleared: string[] = [];
-      for (const entry of entries) {
-        const item = jsonObject(entry, "entries[]");
-        hasOnlyKeys(item, ["date", "text"]);
-        const date = stringField(item.date, "date", { nonEmpty: true });
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "invalid_date", `entries[].date must be YYYY-MM-DD, received ${date}`);
-        const text = stringField(item.text, "text");
-        // An emptied field is a revert, not a blank summary: the row is dropped so
-        // the next read recomputes it from the records.
-        if (text.trim() === "") {
-          repository.deleteDaySummary(date);
-          cleared.push(date);
-          continue;
-        }
-        const summary = buildManualDaySummary(date, text, byDate.get(date) ?? []);
-        repository.writeDaySummary(summary);
-        saved.push(summary);
-      }
-      setJson(res, 200, { items: saved, cleared });
-      return;
-    }
-    if (pathname === "/api/summaries/regenerate" && req.method === "POST") {
-      requireJsonContentType(req, true);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["date", "from", "to", "timeZone"]);
-      const single = input.date === undefined ? undefined : parseDateQuery(stringField(input.date, "date", { nonEmpty: true }), "date");
-      let from = single;
-      let to = single;
-      if (single === undefined) {
-        if (input.from === undefined || input.to === undefined) throw new HttpError(400, "invalid_range", "date, or both from and to, are required");
-        from = parseDateQuery(stringField(input.from, "from", { nonEmpty: true }), "from");
-        to = parseDateQuery(stringField(input.to, "to", { nonEmpty: true }), "to");
-      }
-      if (from === undefined || to === undefined) throw new HttpError(400, "invalid_range", "date, or both from and to, are required");
-      if (from > to) throw new HttpError(400, "invalid_range", "from must not be after to");
-      const timeZone = typeof input.timeZone === "string" ? input.timeZone : "UTC";
-      assertTimeZone(timeZone);
-      const dates = datesBetween(from, to);
-      if (dates.length > 400) throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
-      const byDate = collectSummarisableRecords(repository, timeZone);
-      const daySummaryProvider = createDaySummaryProvider(config);
-      // Forcing is what makes this a regenerate rather than a read: it steps over
-      // the cached row — including one the owner typed — and writes a fresh one.
-      const items = await resolveDaySummaries({
-        dates,
-        recordsForDate: (date) => byDate.get(date) ?? [],
-        cache: repository,
-        provider: daySummaryProvider,
-        force: true,
-      });
-      setJson(res, 200, summaryPayload(items, daySummaryProvider));
-      return;
-    }
-    if (pathname === "/api/records" && req.method === "POST") {
-      requireJsonContentType(req);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      const record = buildRecord(input, repository);
-      repository.insert(record);
-      const view = repository.findById(record.id);
-      if (view === null) throw new Error("Inserted record could not be read back");
-      setJson(res, 201, view);
-      return;
-    }
-    const recordMatch = /^\/api\/records\/([^/]+)$/.exec(pathname);
-    if (recordMatch !== null && (req.method === "PATCH" || req.method === "DELETE")) {
-      let decodedId: string;
-      try {
-        decodedId = decodeURIComponent(recordMatch[1]!);
-      } catch {
-        throw new HttpError(400, "invalid_id", "Invalid record id");
-      }
-      const id = safeId(decodedId);
-      requireJsonContentType(req);
-      const current = repository.findById(id);
-      if (current === null) throw new HttpError(404, "not_found", "Record not found");
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      if (req.method === "DELETE") {
-        hasOnlyKeys(input, ["revision"]);
-        const revision = revisionField(input.revision);
-        if (!repository.softDelete(id, revision, JSON.stringify(nowInstant()))) {
-          const latest = repository.findById(id);
-          if (latest === null) throw new HttpError(404, "not_found", "Record not found");
-          throw new HttpError(409, "revision_conflict", "Record was changed; reload before deleting");
-        }
-        setEmpty(res, 204);
-        return;
-      }
-      const patched = patchRecord(current, input, repository);
-      if (!repository.update(patched.record, patched.expectedRevision)) {
-        const latest = repository.findById(id);
-        if (latest === null) throw new HttpError(404, "not_found", "Record not found");
-        setJson(res, 409, { error: "revision_conflict", message: "Record was changed; reload before editing", current: latest });
-        return;
-      }
-      const updated = repository.findById(id);
-      if (updated === null) throw new Error("Updated record could not be read back");
-      setJson(res, 200, updated);
-      return;
-    }
-    if (pathname === "/api/export" && req.method === "GET") {
-      const format = url.searchParams.get("format") ?? "json";
-      const data = repository.exportData();
-      const bundle = createExportBundle({ exportedAt: nowInstant(), ...data });
-      if (format === "json") {
-        const payload = serializeExportJson(bundle);
-        res.writeHead(200, {
-          "content-type": "application/json; charset=utf-8",
-          "content-disposition": contentDisposition("lifeos-export.json"),
-          "cache-control": "no-store",
-        });
-        res.end(payload);
-        return;
-      }
-      if (format === "markdown") {
-        const payload = data.records.map((record) => exportRecordMarkdown(record, data)).join("\n\n---\n\n");
-        res.writeHead(200, {
-          "content-type": "text/markdown; charset=utf-8",
-          "content-disposition": contentDisposition("lifeos-export.md"),
-          "cache-control": "no-store",
-        });
-        res.end(payload);
-        return;
-      }
-      throw new HttpError(400, "invalid_format", "format must be json or markdown");
-    }
-    if (pathname === "/api/import" && req.method === "POST") {
-      requireJsonContentType(req);
-      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-      hasOnlyKeys(input, ["bundle"]);
-      if (input.bundle === undefined) throw new HttpError(400, "invalid_bundle", "bundle is required");
-      let bundle;
-      try {
-        bundle = parseExportJson(JSON.stringify(input.bundle));
-      } catch (error) {
-        throw new HttpError(400, "invalid_bundle", error instanceof Error ? error.message : "Invalid export bundle");
-      }
-      // A bundle is the one payload that can carry a reference to nothing; check
-      // the whole graph before it reaches the transaction.
-      assertImportReferences(bundle, repository);
-      try {
-        repository.importData(bundle);
-      } catch (error) {
-        if (error instanceof ConflictError) throw new HttpError(409, "import_conflict", error.message);
-        throw error;
-      }
-      setJson(res, 201, { imported: bundle.records.length, entities: bundle.entities.length, assets: bundle.assets.length });
-      return;
-    }
+    if (await handleRecordsRoutes(ctx, req, res, pathname, url)) return;
     if (pathname === "/api/entities" && req.method === "GET") {
       const typeRaw = url.searchParams.get("type");
       const q = url.searchParams.get("q") ?? undefined;

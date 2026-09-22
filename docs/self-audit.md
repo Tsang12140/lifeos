@@ -289,3 +289,21 @@ M2 照片只读索引 / Synology Photos；自然语言检索（M3）；语音转
   - **R8d**：`createApp` 按 `/api/records|entities|assets|backup|weather|ai|modules` 拆路由
   - **R10**：`settings-cards.tsx` 再切
 
+### [轮 F · R8d 路由域拆分（backup + records）] · 2026-09-22
+
+- **AI**：MiMo
+- **触发**：主人「继续」
+- **对应最初问题**：**R8d**
+- **改了什么**：
+  - 新增 `route-context.ts`（`RouteContext` / `RouteHandler`）、`http-body.ts`（`readBody` / `requireJsonContentType` / `readRawBody`）、`timeline-query.ts`（日期过滤/排序）、`summary-routes.ts`、`routes-backup.ts`、`routes-records.ts`
+  - **`server.ts`：1858 → 1293 行**（相对最初 2748 约 **−53%**）
+  - `handleApi` 里 backup / records+summaries+export-import 变成两行委托
+- **怎么验证**：`npm run typecheck` 全绿；`npm test` **95 / 95**
+- **反向用例**：无（纯搬迁）
+- **与最初判断的偏差**：
+  1. **自动大段 splice 又伤过 server**（`return;` 未转 `return true`、async 被剥、import 切串）→ **`git restore` 后改为「按行号切 + 手写 import 头」**才绿。同一课第三次。
+  2. **weather / ai / movie / modules / entities / assets 路由仍在 `server.ts`**——R8d **未做完**，不是「路由拆完了」。
+- **新增剩余债务**：
+  - **R8d2**：继续拆 weather / ai+movie / modules / entities / assets 路由（照 `routes-backup` 样板）
+  - **R10**：`settings-cards.tsx` 再切
+
