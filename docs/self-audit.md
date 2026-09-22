@@ -272,3 +272,20 @@ M2 照片只读索引 / Synology Photos；自然语言检索（M3）；语音转
   - **R8b**：继续拆 `server.ts`（字段校验 → 电影输入 → `createApp` 按 `/api/*` 路由域）
   - **R9b**（可选）：隔离实例再跑 `verify-calendar-edit-ui` 等重型浏览器套件
 
+### [轮 E · R8b/c 服务器工具层拆完] · 2026-09-22
+
+- **AI**：MiMo
+- **触发**：主人「按你的 推荐」→ 继续 R8b
+- **对应最初问题**：**M1 / R8b**
+- **改了什么**：
+  - 新增 `field-validate.ts`（JSON/字段/周期校验、`parseNoteDetails`）、`record-builders.ts`（`buildRecord` / `patchRecord` / 引用校验 / `withMentionRefs`）、`movie-input.ts`（电影与地点字段、实体合并）
+  - **`server.ts`：2748 → 1858 行**（约 −32%）；工具层合计约 1166 行在外
+- **怎么验证**：`npm run typecheck` 全绿；`npm test` **95 / 95**
+- **反向用例**：无（纯搬迁）
+- **与最初判断的偏差**：
+  1. **`createApp` 路由壳（约 1300 行）本轮未拆**（R8d 保留）——server **没有拆完**，只是工具层出清。
+  2. 抽取过程中多次「import 没写全 / 替换命中调用点」；用落盘脚本 + typecheck 逐条清掉。
+- **新增剩余债务**：
+  - **R8d**：`createApp` 按 `/api/records|entities|assets|backup|weather|ai|modules` 拆路由
+  - **R10**：`settings-cards.tsx` 再切
+
