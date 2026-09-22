@@ -729,3 +729,66 @@ core **28/28**、api **57/57**（新增「a saved key that cannot be decrypted i
 - 四种周期只有一份文案：模块级 `CYCLE_EVENT_KINDS`（周期面板与右键二级菜单共用），同样受「周期模块是否启用」管。**右键周期二级菜单每行 = 「方框 + 文字」两个热区**：**点方框 = 多选**（切换勾选、菜单不关）、**点文字 = 单选**（切换 + 菜单自关）；判据 = `aria-checked` + 菜单还在不在。
 - **「经期结束」一段经期只允许一个**，堵在**模型层**（同一 `BEGIN IMMEDIATE` 事务里先删同段其它 `period_end` 再插）；`assertValidCycleIntimacyModuleData` **故意宽松**（否则旧备份导不进来）—— 不变量只堵**写入口**。清历史脏行：`.review/prune-duplicate-period-ends.mjs`（保留每段**最早**的 = 日历本来就显示的 → 清完画面零变化）。
 
+
+## 沙箱的 `safe-delete` 闸门：为什么 `.review` 里的 profile「删不掉」（2026-09-22 判明）
+
+### 结论先放前面
+
+`docs/todo.md` §12 原本记的是「`reapChromeSync` 报成功，profile 几秒后又**完整长回来**，`chrome.exe` = 0，根因未查清」。
+**这个叙事是错的。删除从来没有发生过。** 真因是沙箱自己的删除闸门在动手之前就把它拒了，而清理代码里的裸 `catch {}` 把拒信整条吞掉 —— 于是「我调过清理」被当成了「已经清干净」。
+
+### 机制
+
+环境变量（进程内实测，过滤 `process.env` 里的 `CODEBUDDY_SAFE_DELETE`）：
+
+```
+CODEBUDDY_SAFE_DELETE_ENABLED=1
+CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=50          # 文件数，按 turn 累计
+CODEBUDDY_SAFE_DELETE_BULK_GUARD=…/safe-delete-bulk-guard.cjs
+CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR=%TEMP%\codebuddy-safe-delete-bulk
+CODEBUDDY_SAFE_DELETE_BIN_DIR=…/safe-bin          # rm / rmdir 这类命令的壳
+CODEBUDDY_SAFE_DELETE_BROKER_DELETE=…/safe-delete-broker-delete.cjs
+CODEBUDDY_SAFE_DELETE_REPORT_PATH=…\codebuddy-safe-delete\report-*.jsonl
+NODE_OPTIONS=--require=…/node-language-shim.cjs   # 进程内的 fs 调用也被接管
+```
+
+判定（`safe-delete-bulk-guard.cjs`）：
+
+```
+deleteCount = countTargets(targets)                       # 递归数文件
+totalCount  = state.requests[requestId].count + deleteCount
+if (state.toolApprovals[toolCallId].approved) { 记账并放行 }
+if (totalCount >= threshold)                  { confirmRequired → 退出码 2 }
+```
+
+`requestId` 是**对话轮次**、`toolCallId` 是**单次工具调用** —— 所以「分块删」绕不过它（累计值照样涨），而「批准」能。
+
+### 现场长什么样（这正是当初被误读成「句柄占用」的原因）
+
+```
+Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":337,"threshold":50,"scope":"turn","targets":["E:\\…\\.review\\profiles\\lifeos-cdp-reap-forensics-cE4WmW"],"targetCount":1}
+       code=undefined errno=undefined syscall=undefined path=undefined
+```
+
+**四个 fs 字段全是 `undefined`。** 旧代码印的是 `"(" + err.code + ")"` → `(undefined)`，于是很自然地转去找句柄。
+
+### 三条硬证据（缺一条就还在猜）
+
+1. **`renameSync(profile, moved)` 成功** —— Windows 上任一句柄占用（含被当作 CWD）都会让改名失败 ⇒ **没有进程攥着它**。
+2. **`tasklist` 里 `chrome.exe` = 0**，每个采样点都是。
+3. **闸门自己的状态目录**：`%TEMP%\codebuddy-safe-delete-bulk\<sessionHash>\state.json` + 按工具调用 id 命名的 `signal-call_<toolCallId>.json`。本会话那 6 条 signal 的目标正是我以为「已经清掉了」的临时目录：`lifeos-cdp-reap-forensics-cE4WmW-moved`(337)、两个 `lifeos-cdp-task-schedule-*`(1302 / 1307)、`data/derived/snapshots/lifeos-20260918-215809-08a75403.sqlite`(7220)、`.review/mobile-composer-rail-run-9Iwo8Y`(16095)、`.review/movie-module-run`(9150)。
+
+### 仍然未知的一半（**别猜**）
+
+沙箱被绕过的调用（工具结果里打印 `Sandbox bypassed (escalation-approved)`，环境里**没有** `CODEBUDDY_SAFE_DELETE_SANDBOX`）删除不设闸、直接成功 —— 本会话最后那次 `sweep-profiles --min-age=0` 就是这样清掉 11.9MB 的。
+但**哪一次调用会被批准 / 被绕过是宿主侧的决定**，进程内看不到。状态文件里有 44 条 `approved`、`requests` 计数高到 `27273`，说明「批准」这条路是通的；**具体某一次为什么走通没有证据，因此不写结论。**
+
+### 项目侧因此怎么改（已落地）
+
+- 判定与措辞统一走 **`.review/lib/delete-guard.mjs`**：`isDeleteGateError` / `deleteGatePayload` / `describeDeleteFailure`（**永不打印 `undefined`**）。
+- `reapChromeSync` / `reapChrome`：撞上闸门**立刻停**（重试无用，答案只会在人批准后变），WARN 点名真因与实测数字。
+- `sweepProfiles` / `sweepStaleProfiles`：返回值带 `blocked[]` 并打印 WARN；**不许再用裸 `catch` 把「闸门拒绝」与「被 Chrome 占用」混成同一件事**。
+- `sweep-profiles.mjs`：闸门拦下的走 `RESULT: BLOCKED`（退出码 1），不再一律说「likely held by a running Chrome」。
+- 回归：`node .review/verify-delete-guard.mjs`（13 项，不需要浏览器与网络）。
+- **不要试图绕过闸门**（分块删 / 直写底层 API 都不行，也不该做）；要么让人批准，要么在一次「Sandbox bypassed」的调用里跑。
+- 这条的另一半教训与 `existsSync` 那条同源：**只对被写出来的那种失败做静默 `catch`**，别的失败必须出声。
