@@ -218,7 +218,13 @@ export function MovieSettingsCard({ status, onChanged }: { readonly status: Movi
   return <div className="settings-card movie-settings-card" data-movie-settings>
     <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选 · TMDb 仅用于识别，豆瓣链接只保存为外部 ID</small></div><span className={`settings-status ${status.enabled && status.connected ? "is-ready" : ""}`}>{stateLabel}</span></div>
     <div className="movie-settings-fields">
-      <label className="settings-switch movie-enabled-toggle"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} aria-label="启用观影模块" /><span aria-hidden="true" /><strong>启用观影模块</strong></label>
+      {/* 这一行**只能**吃 `.movie-enabled-toggle`（原生 checkbox + 文字的一整行）。
+          绝不能同时挂 `.settings-switch` —— 那是另一套设计（44×26 的假药丸，把 `input`
+          绝对定位成 1px + `opacity:0`，靠 `span` 画滑块）。两套一起挂的实测后果：
+          整行被钉成 44×26、假药丸被 `display:none` 干掉、原生 checkbox 被 `opacity:0` 干掉
+          ⇒ 一个可勾的东西都没有；「启用观影模块」七个字挤进 22px 宽、竖着堆成 8 行（高 96px）、
+          上下各溢出 28px。守它的是 `.review/verify-movie-toggle-ui.mjs`。 */}
+      <label className="movie-enabled-toggle"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} aria-label="启用观影模块" /><span aria-hidden="true" /><strong>启用观影模块</strong></label>
       <label><span>TMDb Key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={status.keyConfigured ? "已保存，留空不变" : "填写 TMDb API Key"} autoComplete="new-password" /></label>
     </div>
     <div className="movie-settings-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={busy || testing}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy || testing}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存配置"}</span></button></div>

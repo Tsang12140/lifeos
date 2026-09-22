@@ -9383,7 +9383,11 @@ button.relation-chip {
   min-width: 0;
 }
 
-.movie-settings-fields > label:not(.settings-switch) {
+/* 这一格给「TMDb Key」那类字段标签用，**必须排除开关那一行**（`.movie-enabled-toggle`
+   自己是一整套 flex 行）。原先排除的是 `.settings-switch`，而开关同时挂了两个类 ⇒
+   这条以更高特异性（0,2,1 对 0,1,0）把 `display:grid` 盖在开关头上，与 `movie.tsx`
+   里那处是同源的错（2026-09-22 主人报障，见 `.review/verify-movie-toggle-ui.mjs`）。 */
+.movie-settings-fields > label:not(.movie-enabled-toggle) {
   display: grid;
   align-content: start;
   gap: 5px;

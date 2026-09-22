@@ -825,3 +825,55 @@ Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":337,"threshold"
 - **「测试连接」成功 ≠ 已保存**：`POST /api/movie/config/test` 不写文件（实测 sha256 与 mtime 都不动）。填了新 key 必须再点「保存配置」。
 - **关掉模块不会删数据**：历史胶囊照常渲染（`verify-movie-module.mjs` 专门断言这条）；关掉后 composer 的 `/` 菜单里**不再出现**「电影」。
 - key 只提交到 API 服务端，**不回显、不进 localStorage**；`data/movie-config.json` 存的是 AES-256-GCM 密文，种子 = `LIFEOS_MOVIE_CONFIG_SECRET`（已在 `.env` 钉住，**别删别改**；换了就解不开 → 界面只会显示「未配置」，没有任何报错）。
+
+## 「状态不可读 + 旁边有保存按钮」= 一把刀（2026-09-22 实证）
+
+现场：`data/movie-config.json` 的 mtime = **15:03:12**，`enabled` 由 `true` 写成 `false`（168B → 169B），主人 **15:03:38** 来报障。顺序是：
+那行开关因为 CSS 冲突**根本看不见**（checkbox 被压成 1px + `opacity:0`）⇒ 他无法判断当时是开还是关 ⇒ 点「保存配置」⇒ **一个本来是开的模块被真的关掉**，而他以为自己在确认「已开启」。
+
+**可复用的规则**：
+
+- 界面上任何「读不到状态」的地方，**都不能同时提供一个会写盘的按钮** —— 要么把「未知」画出来并禁用写入，要么写入前重新拉一次真值。
+- `fetch(...).catch(() => setState(默认值))` 是**把失败伪装成事实**的典型写法。默认值必须是「未知」，不是「关」。
+- 验收这类控件，判据要包含「**用户能不能读出当前状态**」，而不只是「能不能点得动」。这次就是只测了「点得动」、没测「看得出来」，才让它躺了这么久。
+- 同源的另一半仍在：`apps/web/src/main.tsx:490-491` 状态取回失败会静默把 `movieStatus` 写成全 false（`docs/todo.md` §15，未修）。
+
+## 量尺自己会撒谎：`rect()` 漏字段 / `line-height: normal`（2026-09-22）
+
+- `rect(el)` 只返回了 `x/y/w/h/right/bottom`，而断言里写 `g.labelRect.left >= …` ⇒ `undefined >= 数字` **恒假** ⇒ 「整行没有越出卡片」这条**改前改后都红**，看着像产品问题。**读数里出现 `undefined`/`null`，先怀疑量尺。**
+- `getComputedStyle(el).lineHeight` 在没显式设过行高时是字符串 `"normal"` ⇒ `parseFloat` 得 `NaN` ⇒ `Math.round(h / NaN)` 是 `NaN` ⇒ `JSON.stringify` 把它变成 `null`，于是「文字单行」也跟着假红。**算行数要先给 `NaN` 一个退化值**（`fontSize × 1.2`）。
+
+## `.settings-switch` 的用法边界（2026-09-22）
+
+`.settings-switch` 是**只画药丸**的类：固定 `44×26` 的 inline-flex，靠 `input:checked + span` 换色、`span::after` 画滑块。所以：
+
+- **里面不能塞文字** —— 44px 宽会把字挤成一行一个字符（实测 7 个字 → 8 行、高 96px、上下各溢出 28px）。
+- 要「药丸 + 文字」就照**演示数据卡**的写法：文字放卡片头 `settings-card-copy`，药丸自己一个 `<label className="settings-switch">`。
+- 要「原生 checkbox + 文字的一整行」就用 `.movie-enabled-toggle` 那套（`display:flex` + `min-height:40px` + 边框，与旁边的输入框同高）。
+- **一个元素上不能同时挂这两套**：它们对 `input` 的处置是相反的（一个藏起来画假药丸、一个要露出来）。
+
+## 「状态不可读 + 旁边有保存按钮」= 一把刀（2026-09-22 实证）
+
+现场：`data/movie-config.json` 的 mtime = **15:03:12**，`enabled` 由 `true` 写成 `false`（168B → 169B），主人 **15:03:38** 来报障。顺序是：
+那行开关因为 CSS 冲突**根本看不见**（checkbox 被压成 1px + `opacity:0`）⇒ 他无法判断当时是开还是关 ⇒ 点「保存配置」⇒ **一个本来是开的模块被真的关掉**，而他以为自己在确认「已开启」。
+
+**可复用的规则**：
+
+- 界面上任何「读不到状态」的地方，**都不能同时提供一个会写盘的按钮** —— 要么把「未知」画出来并禁用写入，要么写入前重新拉一次真值。
+- `fetch(...).catch(() => setState(默认值))` 是**把失败伪装成事实**的典型写法。默认值必须是「未知」，不是「关」。
+- 验收这类控件，判据要包含「**用户能不能读出当前状态**」，而不只是「能不能点得动」。这次就是只测了「点得动」、没测「看得出来」，才让它躺了这么久。
+- 同源的另一半仍在：`apps/web/src/main.tsx:490-491` 状态取回失败会静默把 `movieStatus` 写成全 false（`docs/todo.md` §15，未修）。
+
+## 量尺自己会撒谎：`rect()` 漏字段 / `line-height: normal`（2026-09-22）
+
+- `rect(el)` 只返回了 `x/y/w/h/right/bottom`，而断言里写 `g.labelRect.left >= …` ⇒ `undefined >= 数字` **恒假** ⇒ 「整行没有越出卡片」这条**改前改后都红**，看着像产品问题。**读数里出现 `undefined`/`null`，先怀疑量尺。**
+- `getComputedStyle(el).lineHeight` 在没显式设过行高时是字符串 `"normal"` ⇒ `parseFloat` 得 `NaN` ⇒ `Math.round(h / NaN)` 是 `NaN` ⇒ `JSON.stringify` 把它变成 `null`，于是「文字单行」也跟着假红。**算行数要先给 `NaN` 一个退化值**（`fontSize × 1.2`）。
+
+## `.settings-switch` 的用法边界（2026-09-22）
+
+`.settings-switch` 是**只画药丸**的类：固定 `44×26` 的 inline-flex，靠 `input:checked + span` 换色、`span::after` 画滑块。所以：
+
+- **里面不能塞文字** —— 44px 宽会把字挤成一行一个字符（实测 7 个字 → 8 行、高 96px、上下各溢出 28px）。
+- 要「药丸 + 文字」就照**演示数据卡**的写法：文字放卡片头 `settings-card-copy`，药丸自己一个 `<label className="settings-switch">`。
+- 要「原生 checkbox + 文字的一整行」就用 `.movie-enabled-toggle` 那套（`display:flex` + `min-height:40px` + 边框，与旁边的输入框同高）。
+- **一个元素上不能同时挂这两套**：它们对 `input` 的处置是相反的（一个藏起来画假药丸、一个要露出来）。
