@@ -171,6 +171,7 @@ export interface TrashedBackupEntry {
    */
   readonly id?: number;
   readonly fileName: string;
+  readonly startedAt: string;
   readonly prunedAt: string;
   readonly provider: string;
   readonly trashLocation?: string;

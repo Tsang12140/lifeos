@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Cloud, HardDrive, History, RotateCcw } from "lucide-react";
-import { apiRequest } from "./api";
+import { apiRequest, type TrashedBackupEntry } from "./api";
 
 const TIME_ZONE = "Asia/Shanghai";
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
@@ -31,6 +31,22 @@ interface RetentionEntry {
   readonly reason: string;
   readonly local: boolean;
   readonly remote: boolean;
+  /** Cleaned into the recycle bin; still readable until the bin ages out. */
+  readonly trashed?: boolean;
+}
+
+function axisEntryFromTrash(item: TrashedBackupEntry): RetentionEntry {
+  return {
+    fileName: item.fileName,
+    startedAt: item.startedAt,
+    ...(item.sizeBytes === undefined ? {} : { sizeBytes: item.sizeBytes }),
+    keep: false,
+    tier: "none",
+    reason: "已被保留策略清理（回收站）",
+    local: item.provider === "local",
+    remote: item.provider !== "local",
+    trashed: true,
+  };
 }
 
 interface SnapshotCounts {
@@ -70,7 +86,7 @@ function photoThumbUrl(assetId: string): string {
 
 interface SnapshotReading {
   readonly fileName: string;
-  readonly source: "local" | "remote";
+  readonly source: "local" | "remote" | "remote-trashed";
   readonly sizeBytes: number;
   readonly counts: SnapshotCounts;
   readonly diff: {
@@ -95,7 +111,7 @@ const TIER_LABELS: Record<RetentionEntry["tier"], string> = {
   weekly: "周备份",
   monthly: "月备份",
   newest: "最新",
-  none: "待清理",
+  none: "已清理",
 };
 
 function dayKeyOf(iso: string): string {
@@ -150,12 +166,27 @@ export function TimeMachine() {
 
   useEffect(() => {
     const controller = new AbortController();
-    apiRequest<{ readonly entries: readonly RetentionEntry[]; readonly trashed?: readonly unknown[] }>("/api/backup/retention", { signal: controller.signal })
+    apiRequest<{
+      readonly entries: readonly RetentionEntry[];
+      readonly trashed?: readonly TrashedBackupEntry[];
+    }>("/api/backup/retention", { signal: controller.signal })
       .then((payload) => {
         if (controller.signal.aborted) return;
-        setEntries(payload.entries);
+        // Live points first; cleaned ones stay on the axis so history does not
+        // silently vanish when retention tidies the folder. Dedupe by fileName
+        // because a dual backup writes local + s3 rows for one file.
+        const byFile = new Map<string, RetentionEntry>();
+        for (const entry of payload.entries) byFile.set(entry.fileName, entry);
+        for (const item of payload.trashed ?? []) {
+          if (byFile.has(item.fileName)) continue;
+          byFile.set(item.fileName, axisEntryFromTrash(item));
+        }
+        const merged = [...byFile.values()].sort(
+          (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
+        );
+        setEntries(merged);
         setRecycled(payload.trashed?.length ?? 0);
-        setSelected(payload.entries[0]?.fileName ?? null);
+        setSelected(merged[0]?.fileName ?? null);
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) setAxisError(error instanceof Error ? error.message : "备份列表读取失败");
@@ -226,11 +257,10 @@ export function TimeMachine() {
     <section className="time-machine">
       <nav className="tm-axis" aria-label="备份时间轴">
         <p className="tm-axis-caption">
-          共 {entries.length} 个快照
-          {/* Retention keeps roughly one snapshot a day and moves the rest to the
-              recycle bin. Saying so out loud matters here: an axis that silently
-              dropped them would look like history that never happened. */}
-          {recycled > 0 ? `；另有 ${recycled} 个更早的已被保留策略清理，还在回收站里（30 天内可恢复）` : ""}
+          共 {entries.filter((entry) => entry.trashed !== true).length} 个在库快照
+          {/* Retention moves extras to the recycle bin. Those cleaned points stay
+              on the axis (dimmed) so the gaps are honest, and remain readable. */}
+          {recycled > 0 ? `；另有 ${recycled} 条清理记录在回收站（轴上灰点，30 天内仍可回看）` : ""}
         </p>
         <ol className="tm-days">
           {days.map((day) => {
@@ -246,7 +276,7 @@ export function TimeMachine() {
                 </div>
                 <ul className="tm-points">
                   {visible.map((entry) => (
-                    <li className="tm-point" key={entry.fileName}>
+                    <li className={`tm-point ${entry.trashed === true ? "is-trashed" : ""}`} key={entry.fileName}>
                       <button
                         className={`tm-point-button ${entry.fileName === selected ? "is-selected" : ""}`}
                         type="button"

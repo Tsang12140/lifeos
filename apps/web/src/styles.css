@@ -10169,6 +10169,16 @@ button.relation-chip {
   position: relative;
 }
 
+/* Cleaned into the recycle bin: still a real point on the axis, just quieter.
+   Hiding it would rewrite history into a denser ruler than the backups ever had. */
+.tm-point.is-trashed .tm-point-button {
+  opacity: 0.55;
+}
+
+.tm-point.is-trashed .tm-point-dot {
+  background: var(--muted);
+}
+
 /* Three columns, and the dot is a plain grid item in the middle one.
    It used to be `position: absolute; left: var(--tm-gutter)` inside this button —
    which landed it 64px to the right of the spine, because an absolutely

@@ -240,6 +240,8 @@ export interface TrashedBackupEntry {
    */
   readonly id: number;
   readonly fileName: string;
+  /** When the snapshot was taken — the axis groups by this, not by prune day. */
+  readonly startedAt: string;
   readonly prunedAt: string;
   readonly provider: string;
   readonly trashLocation?: string;
@@ -286,6 +288,7 @@ export function buildBackupRetentionView(runs: readonly RetentionRunInput[], pol
     .map((run) => ({
       id: run.id,
       fileName: run.fileName as string,
+      startedAt: run.startedAt,
       prunedAt: run.prunedAt as string,
       provider: run.provider,
       ...(run.trashLocation === undefined ? {} : { trashLocation: run.trashLocation }),
