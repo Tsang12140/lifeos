@@ -792,3 +792,36 @@ Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":337,"threshold"
 - 回归：`node .review/verify-delete-guard.mjs`（13 项，不需要浏览器与网络）。
 - **不要试图绕过闸门**（分块删 / 直写底层 API 都不行，也不该做）；要么让人批准，要么在一次「Sandbox bypassed」的调用里跑。
 - 这条的另一半教训与 `existsSync` 那条同源：**只对被写出来的那种失败做静默 `catch`**，别的失败必须出声。
+
+## 观影模块：怎么用、怎么验、怎么算「生效了」（2026-09-22 实测）
+
+### 用起来（四步，全在界面里）
+
+1. **设置 → 服务集成 → 观影**（`#settings/integrations/movie`）：开关「启用观影模块」；TMDb Key 填过一次后 placeholder 变「已保存，留空不变」（**留空保存 = 不动旧 key**）；点「测试连接」看到「TMDb API 连接成功」；**新 key 要生效必须点「保存配置」**（测试不落盘）。
+2. **首页 composer 打 `/`** → 菜单里出现「电影」（别名 `/观`）→ 回车或点选 → 「添加电影」面板 → 输入**片名 / 豆瓣链接 / IMDb tt / TMDb ID** → 「识别」→ **候选必须手点**（不会默认选第一个）→ 「添加到记录」。
+3. **或者**：写一条正文含「电影」的日记 → 那条记录上出现「电影」按钮 → 「添加影片」走同一条流程；不想要就点「不再提示」（只写浏览器 localStorage，键 `lifeos.moviePromptHidden`）。
+4. **记录卡片上的电影胶囊** → 点开电影卡片 → 填「我的评分」（0–10、**0.5 步长**，不合规会被拒）与「短评」→ 保存（走 `POST /api/movie/upsert`）。
+
+**没有独立的观影列表页** —— 全仓搜 `观影` 只有设置页那一处。影片是挂在记录上的实体，入口就上面那三个（composer 已选列表 / 记录里的胶囊 / 提示按钮）。
+
+### 三层验收（越往下越重、证据越强）
+
+| 层 | 命令 | 项数 | 碰不碰主人的库 |
+| --- | --- | --- | --- |
+| 只读连通性 | `node .review/probe-movie-live.mjs` | 12 | 只读；**自证** config 字节与条数没变 |
+| UI 契约（隔离） | `node .review/verify-movie-module.mjs` | 21 | 自己的实例（API 3071 / Vite 5392），TMDb 页面内 mock，跑完自清 |
+| 真界面端到端 | `LIFEOS_ALLOW_PROD_ACCEPTANCE=1 node .review/verify-movie-e2e.mjs` | 34 | 贴 3011/5199，只读；**要放行**（守卫 fail-closed 是对的） |
+
+### 「生效了」的三个可见判据（缺一不算）
+
+1. 设置页观影卡片状态标签 = **「已连接」**且带 `is-ready`。四个状态出自 `movie.tsx:217`：`!enabled → 已关闭` / `connected → 已连接` / `keyConfigured → 待测试` / 否则 `未配置`。
+2. 首页 composer 打 `/`，菜单里**有**「电影」—— `enabledModuleCommands(movieEnabled)` 只在 `enabled` 时返回它，**菜单里没有 = 模块没开**（比看设置页更直接）。
+3. 真识别一次：「盗梦空间」→ 出 3 个候选、海报域名 `image.tmdb.org`。
+
+硬证据（不依赖界面）：`GET /api/movie/status` → `{"enabled":true,"configured":true,"hasKey":true,"source":"file"}`。
+
+### 三个容易误判的点
+
+- **「测试连接」成功 ≠ 已保存**：`POST /api/movie/config/test` 不写文件（实测 sha256 与 mtime 都不动）。填了新 key 必须再点「保存配置」。
+- **关掉模块不会删数据**：历史胶囊照常渲染（`verify-movie-module.mjs` 专门断言这条）；关掉后 composer 的 `/` 菜单里**不再出现**「电影」。
+- key 只提交到 API 服务端，**不回显、不进 localStorage**；`data/movie-config.json` 存的是 AES-256-GCM 密文，种子 = `LIFEOS_MOVIE_CONFIG_SECRET`（已在 `.env` 钉住，**别删别改**；换了就解不开 → 界面只会显示「未配置」，没有任何报错）。
