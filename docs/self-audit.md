@@ -250,3 +250,25 @@ M2 照片只读索引 / Synology Photos；自然语言检索（M3）；语音转
   - **R9**：拆分后跑一轮浏览器验收（`verify-selectability` / `verify-calendar-edit-ui` 等）证明 UI 行为未漂
   - **R10**：`settings-cards.tsx` 仍 769 行，可再按 AI/备份/天气/照片拆
 
+### [轮 D · R9 UI 验收 + R8 起步] · 2026-09-22
+
+- **AI**：MiMo
+- **触发**：主人「听你的 继续」→ 按建议先 R9 再 R8
+- **对应最初问题**：**M1** 收尾证据（R9）；**R8** `server.ts`
+- **改了什么**：
+  - **R9（验证，非改产品）**：拆分后 UI 全绿
+  - **R8 起步**：新增 `apps/api/src/http-kit.ts`（HttpError / setJson / setEmpty / backupHttpError）与 `apps/api/src/asset-static.ts`（扩展名、媒体类型、上传、本地原件解析）；`server.ts` 2748 → 约 2560 行。**`createApp` 路由壳未拆**。
+- **怎么验证**：
+  - `verify-selectability.mjs` → **PASS (59 checks)**（含「浏览器控制台没有报错」）
+  - `verify-weekclamp.mjs` → **PASS**
+  - `verify-search-ui.mjs` → **PASS**（zero console errors）
+  - `verify-composer-date.mjs` → **114/114**
+  - `npm run typecheck` 全绿；`npm test` → **95 / 95**
+- **反向用例**：无
+- **与最初判断的偏差**：
+  1. **R8 第一次抽取又切串**（http-kit 吸进 buildRecord、movie 吸进 place 字段）→ **`git restore --source=HEAD -- apps/api/src/server.ts` 后改为一次一块**。与轮 C 同一课，这次恢复更快。
+  2. **R8 只完成约 8% 体量**（两块纯工具层）；**不是「server 已拆完」**。电影字段 / 字段校验 / `createApp` 路由仍挤在 `server.ts`。
+- **新增剩余债务**：
+  - **R8b**：继续拆 `server.ts`（字段校验 → 电影输入 → `createApp` 按 `/api/*` 路由域）
+  - **R9b**（可选）：隔离实例再跑 `verify-calendar-edit-ui` 等重型浏览器套件
+
