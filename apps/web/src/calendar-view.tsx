@@ -275,6 +275,11 @@ export function CalendarSummaryMenu({ x, y, monthMode, busy, cycleEnabled, recor
 
 export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSavePeriodLength, onRetry, onOpenDay, settingsOpen, onToggleSettings, aiStatus, onAiStatusChange, editMode, onEditModeChange, drafts, onDraftChange, summarySaving, onSaveDrafts, onDiscardDrafts, onRegenerateSummary, onRevertSummary, busyDate }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; onStep: (direction: number) => void; onOpenBackfill: () => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void; settingsOpen: boolean; onToggleSettings: () => void; aiStatus: AiStatus | null; onAiStatusChange: (status: AiStatus) => void; editMode: boolean; onEditModeChange: (value: boolean) => void; drafts: ReadonlyMap<string, string>; onDraftChange: (date: string, text: string) => void; summarySaving: boolean; onSaveDrafts: () => void; onDiscardDrafts: () => void; onRegenerateSummary: (date: string) => Promise<void>; onRevertSummary: (date: string) => Promise<void>; busyDate: string | null }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
+  /** PC 周历下方的「上一周」预览（弱化可读；手机不显示）。 */
+  const prevDates = useMemo(
+    () => (mode === "week" ? datesOfWeek(shiftDate(anchor, -7)) : []),
+    [mode, anchor],
+  );
   // A week card has no summary line at all, so edit mode only means something in
   // the month grid. Deriving it once keeps every cell honest even if the two ever
   // disagree for a frame.
@@ -452,7 +457,8 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
     </div> : null}
     {loading ? <LoadingState /> : null}
     {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
-    {!loading && !error ? (mode === "week" ? <div className="week-grid">
+    {!loading && !error ? (mode === "week" ? <>
+      <div className="week-grid">
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];
         const photoIds = dayPhotoIds(items, assets);
@@ -475,7 +481,21 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
           </span> : null}
         </CellTag>;
       })}
-    </div> : <div className="month-grid">
+      </div>
+      {prevDates.length > 0 ? <div className="week-grid week-grid-prev" aria-label="上一周">
+        {prevDates.map((date) => {
+          const items = buckets.get(date) ?? [];
+          const highlights = weekCardRecords(items);
+          return <CellTag className={`week-card is-prev ${date === today ? "is-today" : ""}`} key={`prev-${date}`} type="button" onClick={() => onOpenDay(date)} aria-label={`上一周 ${displayDate(date)}，${items.length} 条记录`}>
+            <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
+            <span className="week-card-body">
+              {items.length === 0 ? <span className="week-card-empty">没有记录</span> : highlights.map((record) => <span className="week-card-line" key={record.id}><span className="week-card-time">{lifeTimeTime(record.occurredAt ?? record.createdAt)}</span><span className="week-card-text">{recordText(record)}</span></span>)}
+            </span>
+            <span className="week-card-foot">{items.length === 0 ? "—" : `${items.length} 条`}</span>
+          </CellTag>;
+        })}
+      </div> : null}
+    </> : <div className="month-grid">
       {WEEKDAY_LABELS.map((label) => <span className="month-weekday" key={label}>{label}</span>)}
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];

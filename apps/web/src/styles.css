@@ -8511,6 +8511,47 @@ button.relation-chip {
   gap: 10px;
 }
 
+/* 上一周预览（PC 周历下方）：弱化但看得清——整体略淡、字号小半档，不用浅灰字。 */
+.week-grid-prev {
+  display: none;
+}
+
+@media (min-width: 901px) {
+  .week-grid-prev {
+    display: grid;
+    margin-top: 14px;
+    opacity: 0.78;
+  }
+
+  .week-grid-prev .week-card {
+    min-height: 148px;
+    gap: 6px;
+    padding: 10px 11px 9px;
+    box-shadow: none;
+  }
+
+  .week-grid-prev .week-card-day {
+    font-size: 1.05rem;
+  }
+
+  .week-grid-prev .week-card-text {
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .week-grid-prev .week-card-time,
+  .week-grid-prev .week-card-foot,
+  .week-grid-prev .week-card-weekday {
+    font-size: 0.68rem;
+  }
+
+  .week-grid-prev .week-card:hover {
+    opacity: 1;
+    box-shadow: var(--shadow-soft);
+    transform: translateY(-1px);
+  }
+}
+
 .week-card {
   position: relative;
   display: flex;
