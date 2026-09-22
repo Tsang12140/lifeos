@@ -9523,6 +9523,70 @@ button.relation-chip {
   white-space: nowrap;
 }
 
+/* 选中文字后的右键菜单。定位口径跟 `.calendar-summary-menu` 完全一致（`fixed` +
+   鼠标坐标），两处菜单才不会一个跟着滚动跑、一个钉在原地。`max-width` 是必须的：
+   `left/top` 直接吃鼠标坐标，贴着窗口右缘右键时菜单会整个跑到屏幕外。 */
+.mention-context-menu {
+  position: fixed;
+  z-index: 62;
+  display: grid;
+  gap: 2px;
+  min-width: 172px;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.mention-context-menu button {
+  display: grid;
+  gap: 1px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.mention-context-menu button:hover,
+.mention-context-menu button:focus-visible {
+  outline: none;
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+/* 灰掉的那条不拦点击 —— 点了就把菜单收掉。用 `aria-disabled` 而不是 `disabled`：
+   原生 `disabled` 的按钮不派发 click，菜单会赖在屏幕上不走。 */
+.mention-context-menu button.is-disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.mention-context-menu button.is-disabled:hover {
+  color: var(--muted);
+  background: transparent;
+}
+
+.mention-context-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.mention-context-menu small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .movie-add-panel {
   display: grid;
   gap: 11px;
@@ -9632,6 +9696,28 @@ button.relation-chip {
   min-width: 0;
 }
 
+/* 片名与类型徽标同占一行。徽标是这次 `/search/multi` 换端点之后才有的：候选里
+   可能同时躺着 1936 年的老片和 2010 年的剧集，光看片名分不出来。 */
+.movie-candidate-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.movie-candidate-kind {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid #d8c6a8;
+  border-radius: 5px;
+  color: #7a5a2e;
+  background: #faf3e7;
+  font-size: 0.6rem;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .movie-candidate strong,
 .movie-candidate small,
 .movie-candidate em {
@@ -9641,6 +9727,7 @@ button.relation-chip {
 }
 
 .movie-candidate strong {
+  min-width: 0;
   color: var(--ink);
   font-size: 0.78rem;
 }

@@ -106,11 +106,15 @@ export function normalizeMovie(value: unknown): MovieEntity | null {
   const overview = stringValue(nested.overview) ?? stringValue(nested.description);
   const personalReview = typeof nested.personalReview === "string" ? nested.personalReview : typeof nested.review === "string" ? nested.review : undefined;
   const watchedAt = stringValue(nested.watchedAt);
+  // Only the two values TMDb actually emits are accepted; anything else is
+  // dropped rather than guessed at, so a malformed payload cannot relabel a film.
+  const mediaType = nested.mediaType === "tv" ? "tv" : nested.mediaType === "movie" ? "movie" : undefined;
   return {
     id,
     type: "movie",
     name,
     ...(aliases === undefined || aliases.length === 0 ? {} : { aliases }),
+    ...(mediaType === undefined ? {} : { mediaType }),
     ...(stringValue(nested.originalTitle) === undefined ? {} : { originalTitle: stringValue(nested.originalTitle) }),
     ...(releaseYear === undefined ? {} : { releaseYear }),
     ...(posterUrl === undefined ? {} : { posterUrl }),
@@ -185,6 +189,16 @@ function movieMeta(movie: Pick<MovieEntity, "originalTitle" | "releaseYear">): s
   return [movie.originalTitle, movie.releaseYear === undefined ? undefined : String(movie.releaseYear)].filter(Boolean).join(" · ");
 }
 
+/**
+ * What kind of thing this is, in the owner's words. Search now runs through
+ * TMDb's `/search/multi`, so a candidate list can hold films and series side by
+ * side — and a series is exactly what a bare film search used to hide.
+ * Undefined means "film": every entity saved before `mediaType` existed.
+ */
+function mediaTypeLabel(mediaType: MovieEntity["mediaType"]): string | undefined {
+  return mediaType === "tv" ? "剧集" : mediaType === "movie" ? "电影" : undefined;
+}
+
 function moviePoster(movie: Pick<MovieEntity, "posterUrl">): string | undefined {
   const value = movie.posterUrl?.trim();
   return value ? value : undefined;
@@ -238,26 +252,51 @@ interface MovieAddPanelProps {
   readonly onAttach: (movie: MovieEntity) => void;
   readonly onClose?: () => void;
   readonly compact?: boolean;
+  /**
+   * A title handed in from outside — the right-click 「识别为影片」 action passes
+   * the cleaned selection here. It is searched on arrival: the owner has already
+   * pointed at the text he means, so asking him to press 识别 as well would be
+   * asking the same question twice.
+   */
+  readonly initialQuery?: string;
 }
 
-export function MovieAddPanel({ enabled, onAttach, onClose, compact = false }: MovieAddPanelProps) {
-  const [query, setQuery] = useState("");
+export function MovieAddPanel({ enabled, onAttach, onClose, compact = false, initialQuery }: MovieAddPanelProps) {
+  const [query, setQuery] = useState(initialQuery?.trim() ?? "");
   const [candidates, setCandidates] = useState<readonly MovieResolveCandidate[]>([]);
   const [selected, setSelected] = useState<MovieResolveCandidate | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const resolve = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!enabled || busy || !query.trim()) return;
+  // `runResolve` takes its term as an argument so the same path serves both the
+  // form and the auto-search below — one code path, so a bug cannot live in only
+  // one of the two ways into the panel.
+  const runResolve = async (raw: string) => {
+    const term = raw.trim();
+    if (!enabled || busy || !term) return;
     setBusy(true); setError(null); setMessage(null); setSelected(null);
     try {
-      const next = await resolveMovie(query);
+      const next = await resolveMovie(term);
       setCandidates(next);
       if (next.length === 0) setMessage("没有找到匹配影片，请换一个片名或链接");
     } catch (cause) { setCandidates([]); setError(cause instanceof Error ? cause.message : "识别失败，请检查观影模块配置"); }
     finally { setBusy(false); }
   };
+  const resolve = async (event: FormEvent) => {
+    event.preventDefault();
+    await runResolve(query);
+  };
+  const incomingQuery = initialQuery?.trim() ?? "";
+  const autoSearched = useRef<string | null>(null);
+  useEffect(() => {
+    // Guarded by the last term searched, not by a mount flag: the panel stays
+    // mounted while it is open, and a second right-click with different text
+    // must search again rather than silently keep the first result set.
+    if (incomingQuery === "" || !enabled || autoSearched.current === incomingQuery) return;
+    autoSearched.current = incomingQuery;
+    setQuery(incomingQuery);
+    void runResolve(incomingQuery);
+  }, [incomingQuery, enabled]);
   const attach = async () => {
     if (!selected || busy) return;
     setBusy(true); setError(null); setMessage(null);
@@ -269,7 +308,7 @@ export function MovieAddPanel({ enabled, onAttach, onClose, compact = false }: M
     <div className="movie-add-heading"><div><strong>添加电影</strong><small>豆瓣链接、IMDb tt、TMDb ID 或片名</small></div>{onClose ? <button type="button" className="icon-button compact-icon-button" onClick={onClose} aria-label="关闭添加电影"><X size={15} aria-hidden="true" /></button> : null}</div>
     {!enabled ? <p className="movie-panel-muted">请先在设置中启用观影模块。</p> : <>
       <form className="movie-resolve-form" onSubmit={resolve}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入电影名 / 链接 / ID" aria-label="电影识别内容" autoFocus={!compact} /><button className="secondary-button" type="submit" disabled={!query.trim() || busy}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Search size={15} aria-hidden="true" />}<span>{busy ? "识别中…" : "识别"}</span></button></form>
-      {candidates.length > 0 ? <div className="movie-candidates" role="listbox" aria-label="电影候选"><p className="movie-candidates-hint">找到 {candidates.length} 个候选，请点选后添加</p>{candidates.map((candidate) => { const meta = movieMeta(candidate); return <button className={`movie-candidate ${selected?.id === candidate.id ? "is-selected" : ""}`} data-movie-candidate={candidate.id} type="button" role="option" aria-selected={selected?.id === candidate.id} key={candidate.id} onClick={() => setSelected(candidate)}>{moviePoster(candidate) ? <img src={moviePoster(candidate)} alt="" loading="lazy" /> : <span className="movie-candidate-fallback" aria-hidden="true"><Film size={16} /></span>}<span><strong>{candidate.name}</strong>{meta ? <small>{meta}</small> : null}{candidate.overview ? <em>{candidate.overview}</em> : null}</span></button>; })}</div> : null}
+      {candidates.length > 0 ? <div className="movie-candidates" role="listbox" aria-label="电影候选"><p className="movie-candidates-hint">找到 {candidates.length} 个候选，请点选后添加</p>{candidates.map((candidate) => { const meta = movieMeta(candidate); const kind = mediaTypeLabel(candidate.mediaType); return <button className={`movie-candidate ${selected?.id === candidate.id ? "is-selected" : ""}`} data-movie-candidate={candidate.id} type="button" role="option" aria-selected={selected?.id === candidate.id} key={candidate.id} onClick={() => setSelected(candidate)}>{moviePoster(candidate) ? <img src={moviePoster(candidate)} alt="" loading="lazy" /> : <span className="movie-candidate-fallback" aria-hidden="true"><Film size={16} /></span>}<span><span className="movie-candidate-title"><strong>{candidate.name}</strong>{kind ? <i className="movie-candidate-kind" data-movie-kind={candidate.mediaType}>{kind}</i> : null}</span>{meta ? <small>{meta}</small> : null}{candidate.overview ? <em>{candidate.overview}</em> : null}</span></button>; })}</div> : null}
       {selected ? <div className="movie-add-selected"><span>已选择：{selected.name}</span><button className="primary-button" type="button" onClick={() => void attach()} disabled={busy}>{busy ? "保存中…" : "添加到记录"}</button></div> : null}
       {message ? <p className="movie-panel-message" role="status">{message}</p> : null}{error ? <p className="movie-panel-error" role="alert">{error}</p> : null}
     </>}
@@ -300,7 +339,7 @@ export function MovieCardDialog({ entity, onClose, onSaved }: { readonly entity:
     finally { setBusy(false); }
   };
   return <dialog ref={dialogRef} className="modal-dialog movie-card-dialog" data-movie-card={entity.id} aria-labelledby="movie-card-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
-    <div className="movie-card-hero">{poster ? <img className="movie-card-poster" src={poster} alt={`${entity.name} 海报`} onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <div className="movie-card-poster movie-card-poster-fallback" aria-hidden="true"><Film size={29} /></div>}<div className="movie-card-heading"><p className="eyebrow">电影卡片</p><h2 id="movie-card-title">《{entity.name}》</h2>{movieMeta(entity) ? <p>{movieMeta(entity)}</p> : null}{entity.watchedAt ? <small>观看于 {entity.watchedAt.slice(0, 10)}</small> : null}</div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭电影卡片"><X size={17} aria-hidden="true" /></button></div>
+    <div className="movie-card-hero">{poster ? <img className="movie-card-poster" src={poster} alt={`${entity.name} 海报`} onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <div className="movie-card-poster movie-card-poster-fallback" aria-hidden="true"><Film size={29} /></div>}<div className="movie-card-heading"><p className="eyebrow">{entity.mediaType === "tv" ? "剧集卡片" : "电影卡片"}</p><h2 id="movie-card-title">《{entity.name}》</h2>{movieMeta(entity) ? <p>{movieMeta(entity)}</p> : null}{entity.watchedAt ? <small>观看于 {entity.watchedAt.slice(0, 10)}</small> : null}</div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭电影卡片"><X size={17} aria-hidden="true" /></button></div>
     <div className="movie-card-body">{entity.overview ? <div className="movie-card-field"><small>简介</small><p>{entity.overview}</p></div> : null}<div className="movie-card-ratings">{entity.doubanRating === undefined ? null : <span><Star size={14} aria-hidden="true" />豆瓣 {entity.doubanRating}</span>}<label><span>我的评分</span><input type="number" min="0" max="10" step="0.5" value={rating} onChange={(event) => setRating(event.target.value)} aria-label="我的评分" placeholder="— / 10" /></label></div><label className="movie-card-field"><span>短评</span><textarea rows={3} value={review} onChange={(event) => setReview(event.target.value)} placeholder="写一句看完后的感受" aria-label="电影短评" /></label>{entity.externalIds ? <div className="movie-card-external"><small>外部 ID</small><span>{entity.externalIds.tmdb ? `TMDb ${entity.externalIds.tmdb}` : null}{entity.externalIds.imdb ? `IMDb ${entity.externalIds.imdb}` : null}{entity.externalIds.douban ? `豆瓣 ${entity.externalIds.douban}` : null}</span></div> : null}{error ? <p className="movie-panel-error" role="alert">{error}</p> : null}</div>
     <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>关闭</button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存评分与短评"}</span></button></div>
   </dialog>;

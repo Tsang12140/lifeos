@@ -5,6 +5,7 @@ import {
   assertValidCycleIntimacyModuleData,
   assertValidTimelineRecord,
   canonicalPersonName,
+  cleanMovieQuery,
   createDateOnly,
   createExportBundle,
   createInstant,
@@ -642,4 +643,27 @@ test("movie entities validate, round-trip through export, and never become menti
   equal(findEntityMentions("看了霸王别姬", [movie]).length, 0);
   throws(() => assertValidEntity({ ...movie, personalRating: 9.25 }), /0\.5 increments/);
   throws(() => assertValidEntity({ type: "person", id: "p", name: "人", originalTitle: "误用" }), /only allowed on a movie/);
+});
+
+test("cleanMovieQuery 洗掉动作词、书名号与季标记，但不动片名本身", () => {
+  // 主人实际写的那条日记 —— 这一条是这次改动的起因。
+  equal(cleanMovieQuery("重看《行尸走肉》第一季"), "行尸走肉");
+  equal(cleanMovieQuery("《盗梦空间》"), "盗梦空间");
+  equal(cleanMovieQuery("看了「看不见的客人」"), "看不见的客人");
+  equal(cleanMovieQuery("二刷《星际穿越》"), "星际穿越");
+  equal(cleanMovieQuery("  行尸走肉 第二季  "), "行尸走肉");
+  equal(cleanMovieQuery("行尸走肉 S01"), "行尸走肉");
+  equal(cleanMovieQuery("行尸走肉 Season 1"), "行尸走肉");
+  // 间隔号是片名的一部分，只有首尾标点才去。
+  equal(cleanMovieQuery("《哈利·波特与魔法石》"), "哈利·波特与魔法石");
+  // 反例一：季标记只在结尾、且必须整段匹配 ——「第一滴血」的「第一」动不得。
+  equal(cleanMovieQuery("第一滴血"), "第一滴血");
+  // 反例二：动作词只在开头 ——「看不见的客人」里的「看」不在开头。
+  equal(cleanMovieQuery("看不见的客人"), "看不见的客人");
+  // 链接与 IMDb ID 原样返回，后端自己会抠出 douban / imdb 标识。
+  equal(cleanMovieQuery("https://movie.douban.com/subject/1295644/"), "https://movie.douban.com/subject/1295644/");
+  equal(cleanMovieQuery("tt1375666"), "tt1375666");
+  // 洗不出东西就给空串，让调用方把菜单项变灰 —— 而不是送半个片名去搜。
+  equal(cleanMovieQuery("   "), "");
+  equal(cleanMovieQuery("《》"), "");
 });

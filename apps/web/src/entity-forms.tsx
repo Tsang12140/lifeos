@@ -23,6 +23,21 @@ import {
 } from "./mention";
 import { slashSuggestions as slashSuggestionsFn } from "./mention";
 
+/**
+ * One entry in the right-click menu. The menu is generic on purpose: the box
+ * knows how to read a selection and draw a list, and the caller knows what the
+ * text means. `hint` is the second line — while the action is usable it says
+ * what will actually be searched for, and when it is not, it says why. That
+ * line is the whole reason the cleaning step is visible instead of silent.
+ */
+export interface ContextAction {
+  readonly id: string;
+  readonly label: string;
+  readonly hint?: string;
+  readonly disabled?: boolean;
+  readonly onSelect: (text: string) => void;
+}
+
 export interface MentionBoxProps {
   readonly value: string;
   readonly onChange: (value: string) => void;
@@ -39,6 +54,13 @@ export interface MentionBoxProps {
   readonly autoGrowRows?: number;
   readonly moduleCommands?: readonly ModuleCommand[];
   readonly onSlashCommand?: (command: ModuleCommand) => void;
+  /**
+   * Builds the right-click menu for a selection. Omitted means "no menu" and the
+   * browser's own one is left alone, which is what every other box wants. It is
+   * a function rather than a list because the caller needs the selected text to
+   * decide what the entries say.
+   */
+  readonly contextActions?: (text: string) => readonly ContextAction[];
 }
 
 /**
@@ -225,13 +247,19 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
  * Unknown names are never rewritten, which is what keeps e-mail addresses,
  * passwords, and hex colours safe.
  */
-export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand }: MentionBoxProps) {
+export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand, contextActions }: MentionBoxProps) {
   const localRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? localRef;
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [createFormOpen, setCreateFormOpen] = useState(false);
   const [slash, setSlash] = useState<SlashQuery | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string; actions: readonly ContextAction[] } | null>(null);
+  // A right-click outside the selection collapses it before `contextmenu`
+  // arrives, so the range is copied on the way down as well. Inside the
+  // selection the live range still wins, which keeps a stale copy from ever
+  // acting on text the owner has since moved away from.
+  const pressedRange = useRef<{ start: number; end: number } | null>(null);
   const slashOptions = useMemo(() => slash === null ? [] : slashSuggestions(moduleCommands, slash.query), [moduleCommands, slash]);
   const suggestions = useMemo(() => (mention === null || createFormOpen ? [] : mentionSuggestions(entities, mention.marker, mention.query, recentPlaceIds)), [entities, mention, createFormOpen, recentPlaceIds]);
   const trimmedQuery = mention?.query.trim() ?? "";
@@ -268,6 +296,38 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     document.addEventListener("pointerdown", handleOutsidePointer);
     return () => document.removeEventListener("pointerdown", handleOutsidePointer);
   }, [slash]);
+
+  // Same dismissal contract as the calendar's summary menu: a pointer down
+  // outside, Escape, or a scroll takes it away. Picking an entry closes it too,
+  // and that has to happen in the entry's own click — a press inside the panel
+  // stops its `pointerdown` from ever reaching this window listener.
+  useEffect(() => {
+    if (contextMenu === null) return undefined;
+    const close = () => setContextMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu]);
+
+  const openContextMenu = (element: HTMLTextAreaElement, clientX: number, clientY: number): boolean => {
+    if (contextActions === undefined) return false;
+    const start = element.selectionStart ?? 0;
+    const end = element.selectionEnd ?? 0;
+    const range = end > start ? { start, end } : pressedRange.current;
+    if (range === null) return false;
+    const text = element.value.slice(range.start, range.end);
+    if (text.trim().length === 0) return false;
+    const actions = contextActions(text);
+    if (actions.length === 0) return false;
+    setContextMenu({ x: clientX, y: clientY, text, actions });
+    return true;
+  };
 
   const insert = (name: string, markerOverride?: string) => {
     if (mention === null) return;
@@ -391,7 +451,8 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
   }, [autoGrow, value, ref]);
 
   return <div className="mention-box">
-    <textarea ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onChange={(event) => { onChange(event.target.value); syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
+    <textarea ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onChange={(event) => { onChange(event.target.value); syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
+    {contextMenu !== null ? <div className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text; setContextMenu(null); if (action.disabled !== true) action.onSelect(text); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")} · ` : ""}{command.description}</small></button>)}</div> : null}
     {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={`创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">

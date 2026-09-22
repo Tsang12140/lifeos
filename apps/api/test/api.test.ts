@@ -2143,9 +2143,15 @@ test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and 
     if (url.includes("/find/")) {
       return new Response(JSON.stringify({ movie_results: [{ id: 111, title: "霸王别姬", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: "/poster.jpg", overview: "一段故事" }] }), { status: 200 });
     }
+    // Search goes through `/search/multi`, so the fixture has to be that shape:
+    // every entry carries `media_type`, and a series uses `name` + `first_air_date`.
+    equal(url.includes("/search/multi"), true);
     return new Response(JSON.stringify({ results: [
-      { id: 111, title: "霸王别姬", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: "/poster.jpg", overview: "一段故事" },
-      { id: 222, title: "霸王别姬（修复版）", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: null, overview: "另一个候选" },
+      { id: 111, media_type: "movie", title: "霸王别姬", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: "/poster.jpg", overview: "一段故事" },
+      { id: 222, media_type: "movie", title: "霸王别姬（修复版）", original_title: "Farewell My Concubine", release_date: "1993-01-01", poster_path: null, overview: "另一个候选" },
+      { id: 333, media_type: "tv", name: "霸王别姬 剧集版", original_name: "Farewell My Concubine", first_air_date: "2020-04-01", poster_path: "/tv.jpg", overview: "一部剧集" },
+      // `/search/multi` also returns people; they must never become candidates.
+      { id: 444, media_type: "person", name: "张国荣", known_for_department: "Acting" },
     ] }), { status: 200 });
   };
   try {
@@ -2168,21 +2174,29 @@ test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and 
 
     const resolved = await request(harness.base, "/api/movie/resolve", { method: "POST", ...json({ title: "霸王别姬" }) });
     equal(resolved.response.status, 200);
-    const candidates = (resolved.body as { candidates: Array<{ tmdbId: number; name: string; posterUrl?: string }> }).candidates;
-    equal(candidates.length, 2);
-    equal(candidates[0]?.tmdbId, 111);
+    const candidates = (resolved.body as { candidates: Array<{ tmdbId: number; name: string; posterUrl?: string; mediaType?: string; releaseYear?: number }> }).candidates;
+    // The person (444) is filtered out; the series (333) stays and carries its type.
+    deepEqual(candidates.map((candidate) => candidate.tmdbId), [111, 222, 333]);
     equal(candidates[0]?.posterUrl, "https://image.tmdb.org/t/p/w500/poster.jpg");
+    equal(candidates[1]?.posterUrl, undefined);
+    equal(candidates[0]?.mediaType, "movie");
+    equal(candidates[2]?.mediaType, "tv");
+    equal(candidates[2]?.releaseYear, 2020);
+    equal(candidates[2]?.name, "霸王别姬 剧集版");
 
     const imported = await request(harness.base, "/api/movie/import", {
       method: "POST",
       ...json({ movie: { ...candidates[0], personalRating: 9.5, personalReview: "值得重看", watchedAt: "2026-09-15" } }),
     });
     equal(imported.response.status, 201);
-    const importedEntity = (imported.body as { created: boolean; entity: { id: string; type: string; externalIds: { tmdb: string }; personalRating: number } }).entity;
+    const importedEntity = (imported.body as { created: boolean; entity: { id: string; type: string; externalIds: { tmdb: string }; personalRating: number; mediaType?: string } }).entity;
     equal((imported.body as { created: boolean }).created, true);
     equal(importedEntity.type, "movie");
     equal(importedEntity.externalIds.tmdb, "111");
     equal(importedEntity.personalRating, 9.5);
+    // The candidate's type has to survive the import, otherwise a series becomes
+    // indistinguishable from a film the moment it lands in the library.
+    equal(importedEntity.mediaType, "movie");
 
     const duplicate = await request(harness.base, "/api/movie/upsert", {
       method: "POST",
@@ -2208,6 +2222,9 @@ test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and 
 
     const invalidRating = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "movie", name: "坏评分", personalRating: 8.25 }) });
     equal(invalidRating.response.status, 400);
+    const invalidMediaType = await request(harness.base, "/api/movie/import", { method: "POST", ...json({ movie: { name: "坏类型", mediaType: "anime" } }) });
+    equal(invalidMediaType.response.status, 400);
+    equal((invalidMediaType.body as { error: string }).error, "invalid_field");
     const exported = await request(harness.base, "/api/export");
     equal(exported.response.status, 200);
     const bundle = exported.body as { entities: Array<{ type: string }>; records: unknown[] };

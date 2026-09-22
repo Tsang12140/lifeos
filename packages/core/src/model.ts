@@ -129,6 +129,13 @@ export interface MovieExternalIds {
 /** A movie is an ordinary entity so timeline records can reference it. */
 export interface Movie extends EntityBase {
   readonly type: "movie";
+  /**
+   * TMDb `/search/multi` returns films and series in one list, so the kind has
+   * to travel with the entity — otherwise a series found by title would be
+   * indistinguishable from a film the moment it is attached to a record.
+   * Absent means "film": that is what every pre-existing entity is.
+   */
+  readonly mediaType?: "movie" | "tv";
   /** Optional original-language title; `name` remains the display title. */
   readonly originalTitle?: string;
   readonly releaseYear?: number;
@@ -739,6 +746,7 @@ function validateMovieExternalIds(value: unknown, name: string): void {
 }
 
 function validateMovieFields(entity: UnknownRecord): void {
+  if (entity.mediaType !== undefined) enumValue(entity.mediaType, ["movie", "tv"], "entity.mediaType");
   optionalStringValue(entity.originalTitle, "entity.originalTitle");
   if (entity.releaseYear !== undefined && (!Number.isSafeInteger(entity.releaseYear) || (entity.releaseYear as number) < 1 || (entity.releaseYear as number) > 9999)) {
     throw new Error("entity.releaseYear must be an integer between 1 and 9999");
@@ -810,7 +818,7 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
     }
     optionalStringValue(entity.address, "entity.address");
   }
-  const movieFieldNames = ["originalTitle", "releaseYear", "posterUrl", "overview", "externalIds", "doubanRating", "personalRating", "personalReview", "watchedAt"];
+  const movieFieldNames = ["mediaType", "originalTitle", "releaseYear", "posterUrl", "overview", "externalIds", "doubanRating", "personalRating", "personalReview", "watchedAt"];
   const carriesMovieFields = movieFieldNames.some((field) => entity[field] !== undefined);
   if (entity.type !== "movie" && carriesMovieFields) {
     throw new Error("movie fields are only allowed on a movie");

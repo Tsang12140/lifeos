@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   CalendarDays,
   Check,
@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import type { AssetLink, Entity, EntityRef, PlacePeriod, PlaceRole, WeatherAttachment } from "@lifeos/core";
-import { PLACE_MARKER, entitySearchTerms, normalizeEntitySearchTerm } from "@lifeos/core";
+import { PLACE_MARKER, cleanMovieQuery, entitySearchTerms, normalizeEntitySearchTerm } from "@lifeos/core";
 import type { MovieEntity, RecordView } from "./api";
 import type { ComposerKind, CreateEntity, EntityCreateRequest } from "./app-types";
 import type { ModuleCommand } from "./movie";
@@ -36,7 +36,7 @@ import {
 import { entityHint, mentionQueryAt, mentionSuggestions, slashQueryAt, slashSuggestions, type MentionQuery } from "./mention";
 import { localDateToday } from "./time";
 import { enabledModuleCommands, movieRef, MovieAddPanel } from "./movie";
-import { EntityCreateForm, MentionBox } from "./entity-forms";
+import { EntityCreateForm, MentionBox, type ContextAction } from "./entity-forms";
 import { ShotDropZone, type ShotUpload } from "./shot-drop-zone";
 
 export interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
@@ -53,6 +53,7 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
   const [smartMentionPrompt, setSmartMentionPrompt] = useState<SmartMentionPrompt | null>(null);
   const [smartHintVisible, setSmartHintVisible] = useState(false);
   const [moviePanelOpen, setMoviePanelOpen] = useState(false);
+  const [movieQuery, setMovieQuery] = useState<string | undefined>(undefined);
   const composerRef = useRef<HTMLElement>(null);
   const smartHintTimerRef = useRef<number | null>(null);
   const selectionRef = useRef<ComposerSelection | null>(null);
@@ -226,6 +227,29 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
           ? `「${smartSelectionText}」匹配到多个关联对象`
           : `把「${smartSelectionText}」存成？`;
   const moduleCommands = useMemo(() => enabledModuleCommands(movieEnabled), [movieEnabled]);
+  /**
+   * The composer's right-click menu. Selecting text and right-clicking is the one
+   * gesture that needs no explaining, so the cleaning step rides along with it:
+   * the selection goes through `cleanMovieQuery` and the hint spells out the term
+   * that will actually be searched for, so nothing is cleaned behind the owner's
+   * back. The text in the box is never rewritten — his prose is his, and a menu
+   * entry that silently edited it would be the worst kind of surprise.
+   */
+  const movieContextActions = useCallback((text: string): readonly ContextAction[] => {
+    if (!movieEnabled) return [];
+    const keyword = cleanMovieQuery(text);
+    // A one-character "title" is not a title; searching it returns noise and
+    // would read as the feature being broken. Say why instead of greying out.
+    const usable = Array.from(keyword).length >= 2;
+    const shown = Array.from(keyword).length > 16 ? `${Array.from(keyword).slice(0, 16).join("")}…` : keyword;
+    return [{
+      id: "movie-identify",
+      label: "识别为影片",
+      hint: usable ? `用「${shown}」搜索` : "先选中一段片名",
+      disabled: !usable,
+      onSelect: (selected) => { setMovieQuery(cleanMovieQuery(selected)); setMoviePanelOpen(true); },
+    }];
+  }, [movieEnabled]);
   const attachMovie = (movie: MovieEntity) => {
     const ref = movieRef(movie) as unknown as EntityRef;
     onMovieRefsChange([...movieRefs.filter((item) => !isMovieRef(item)), ref]);
@@ -251,7 +275,7 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
         as well as width. The strip below is a flat 44px row and needs none of
         that, so the field goes back to two rows (about 81px) and the band adds
         its own height underneath. */}
-    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => setMoviePanelOpen(true)} />
+    <MentionBox className="composer-input" value={content} onChange={onContentChange} entities={entities} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => { setMovieQuery(undefined); setMoviePanelOpen(true); }} contextActions={movieContextActions} />
       {/* The photos sit flush under the text block, not under the room. The
           textarea is inset from the room's top by its own padding, so a floor on
           the room leaves that same inset stranded below the text instead — the
@@ -262,7 +286,7 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
         <button className="primary-button composer-inline-save" type="button" disabled={!content.trim() || saving} onClick={onSubmit} aria-label={saving ? "正在保存" : "保存"} title={saving ? "正在保存" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className="visually-hidden">{saving ? "保存中" : "保存"}</span></button>
       </div>
     </div>
-    {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => setMoviePanelOpen(false)} /> : null}
+    {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => { setMoviePanelOpen(false); setMovieQuery(undefined); }} initialQuery={movieQuery} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
     <div className="composer-footer">
       <div className="composer-fields">

@@ -12,6 +12,8 @@ export interface MovieCandidate {
   readonly aliases?: readonly string[];
   readonly originalTitle?: string;
   readonly releaseYear?: number;
+  /** `/search/multi` 会把电影与剧集一起返回；候选上标明类型，界面才能显示「剧集」。 */
+  readonly mediaType?: "movie" | "tv";
   readonly posterUrl?: string;
   readonly overview?: string;
   readonly externalIds: MovieExternalIds;
@@ -132,7 +134,10 @@ function candidateFromTmdb(raw: unknown, imdbId?: string, doubanId?: string): Mo
   if (!Number.isSafeInteger(id) || id <= 0 || name === undefined) return null;
   const originalTitle = text(value.original_title);
   const aliases = originalTitle !== undefined && originalTitle !== name ? [originalTitle] : undefined;
-  const year = releaseYear(value.release_date);
+  // `/search/multi` 的每条结果自带 `media_type`（人物已在 resolveMovies 里滤掉）。
+  const mediaType = value.media_type === "tv" ? "tv" : "movie";
+  // 剧集没有 `release_date`，得看 `first_air_date`。
+  const year = releaseYear(value.release_date ?? value.first_air_date);
   const poster = posterUrl(value.poster_path);
   const overview = text(value.overview);
   const externalIds: MovieExternalIds = {
@@ -145,6 +150,7 @@ function candidateFromTmdb(raw: unknown, imdbId?: string, doubanId?: string): Mo
     id: String(id),
     tmdbId: id,
     name,
+    mediaType,
     ...(aliases === undefined ? {} : { aliases }),
     ...(originalTitle === undefined ? {} : { originalTitle }),
     ...(year === undefined ? {} : { releaseYear: year }),
@@ -213,10 +219,19 @@ export async function resolveMovies(config: ApiConfig, input: MovieLookupRequest
     return { candidates: candidate === null ? [] : [candidate] };
   }
   const title = requireSearchTitle(request);
-  const body = await tmdbJson(config, "/search/movie", { query: title, include_adult: "false", page: "1" });
+  // 用 `/search/multi` 而不是 `/search/movie`：一次同时返回电影与剧集。
+  // `/search/movie` 只搜电影，剧集永远搜不到 —— 实测搜「行尸走肉」只会得到
+  // 9 部 1936 / 1973 年的同名老片，2010 那部剧集根本不在候选里。
+  const body = await tmdbJson(config, "/search/multi", { query: title, include_adult: "false", page: "1" });
   const results = Array.isArray(body.results) ? body.results : [];
   const doubanId = request.doubanId === undefined ? undefined : String(request.doubanId);
-  return { candidates: results.map((item) => candidateFromTmdb(item, undefined, doubanId)).filter((item): item is MovieCandidate => item !== null) };
+  return {
+    // multi 会把人物一起返回，这里只收电影与剧集。
+    candidates: results
+      .filter((item) => { const kind = objectValue(item).media_type; return kind === "movie" || kind === "tv"; })
+      .map((item) => candidateFromTmdb(item, undefined, doubanId))
+      .filter((item): item is MovieCandidate => item !== null),
+  };
 }
 
 /** Test the configured TMDb key without creating or changing any movie. */

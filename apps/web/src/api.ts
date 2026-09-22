@@ -238,6 +238,8 @@ export interface MovieEntity {
   readonly type: "movie";
   readonly name: string;
   readonly aliases?: readonly string[];
+  /** TMDb 的 `/search/multi` 同时返回电影与剧集；缺省按电影看。 */
+  readonly mediaType?: "movie" | "tv";
   readonly originalTitle?: string;
   readonly releaseYear?: number;
   readonly posterUrl?: string;

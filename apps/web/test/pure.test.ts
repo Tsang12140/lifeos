@@ -12,6 +12,7 @@ import {
   dayWindow,
   isFutureDay,
   isFutureMonth,
+  localDateToday,
   minuteCapFor,
   monthGridDates,
   shiftDate,
@@ -70,7 +71,10 @@ test("dateKeyForRecord prefers occurredAt over createdAt", () => {
 });
 
 test("isFutureDay / isFutureMonth only move forward", () => {
-  const today = new Date().toISOString().slice(0, 10);
+  // Derive "today" from the same local-calendar helper the product uses. Using
+  // `new Date().toISOString()` here made this test red every day between 00:00
+  // and 08:00 Asia/Shanghai: UTC is still on yesterday while local is not.
+  const today = localDateToday();
   assert.equal(isFutureDay(today), false);
   assert.equal(isFutureDay(shiftDate(today, 1)), true);
   assert.equal(isFutureDay(shiftDate(today, -1)), false);

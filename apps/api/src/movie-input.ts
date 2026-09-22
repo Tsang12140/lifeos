@@ -34,6 +34,7 @@ import { aliasesField, sizeBytesField } from "./record-builders.js";
 const ASSET_KINDS: readonly string[] = ["photo", "audio", "file"];
 
 export const MOVIE_FIELD_NAMES = [
+  "mediaType",
   "originalTitle",
   "releaseYear",
   "posterUrl",
@@ -77,6 +78,11 @@ export function movieReleaseYearField(value: unknown): number {
   return boundedIntegerField(value, "releaseYear", 1, 9999);
 }
 
+export function movieMediaTypeField(value: unknown): "movie" | "tv" {
+  if (value !== "movie" && value !== "tv") throw new HttpError(400, "invalid_field", "mediaType must be one of: movie, tv");
+  return value;
+}
+
 export function movieWatchedAtField(value: unknown): string {
   const parsed = parseDateQuery(stringField(value, "watchedAt"), "watchedAt");
   if (parsed === undefined) throw new HttpError(400, "invalid_date", "watchedAt must use YYYY-MM-DD");
@@ -98,6 +104,8 @@ export function movieFieldsField(input: JsonObject, allowNull: boolean): JsonObj
       output[field] = stringField(value, field);
     } else if (field === "releaseYear") {
       output[field] = movieReleaseYearField(value);
+    } else if (field === "mediaType") {
+      output[field] = movieMediaTypeField(value);
     } else if (field === "externalIds") {
       output[field] = movieExternalIdsField(value);
     } else if (field === "doubanRating") {
@@ -246,6 +254,7 @@ export const MOVIE_INPUT_KEYS = [
   "query",
   "aliases",
   "description",
+  "mediaType",
   "originalTitle",
   "releaseYear",
   "posterUrl",
