@@ -49,13 +49,14 @@ import {
   type BackupStatus,
   type MovieModuleStatus,
   type WeatherProfilesResponse,
+  type WeatherProfilesState,
   type WeatherStatus,
 } from "./api";
 import { BackupCalendar } from "./BackupCalendar";
 import { TimeMachine } from "./TimeMachine";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { WeatherSky } from "./WeatherBackground";
-import { getWeatherEmoji, type WeatherCategory, type WeatherPhase, type WeatherProfile } from "./weather";
+import { getWeatherEmoji, type WeatherCategory, type WeatherPhase } from "./weather";
 import { describeWeatherLocationByName, weatherLocationDisplayName } from "./weather-locations";
 import { MovieSettingsCard } from "./movie";
 import type { MovieModuleStatusState } from "./movie";
@@ -385,7 +386,12 @@ function WeatherScenePreviewDialog({ open, onClose }: { readonly open: boolean; 
   </dialog>;
 }
 
-export function WeatherSettingsCard({ status, profiles, activeProfileId, onChanged, onProfilesChanged }: { readonly status: WeatherStatus | null; readonly profiles: readonly WeatherProfile[]; readonly activeProfileId: string | null; readonly onChanged: (status: WeatherStatus) => void; readonly onProfilesChanged: (payload: WeatherProfilesResponse) => void }) {
+export function WeatherSettingsCard({ profilesState, onChanged, onProfilesChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly onChanged: (status: WeatherStatus) => void; readonly onProfilesChanged: (payload: WeatherProfilesResponse) => void; readonly onRetry: () => void }) {
+  const profilesPayload = profilesState.status;
+  const status = profilesPayload?.status ?? null;
+  const profiles = profilesPayload?.items ?? [];
+  const activeProfileId = profilesPayload?.activeProfileId ?? null;
+  const statusReady = profilesState.phase === "ready" && profilesPayload !== null;
   const [enabled, setEnabled] = useState(status?.enabled ?? true);
   const [apiKey, setApiKey] = useState("");
   const [locationId, setLocationId] = useState(status?.locationId ?? "");
@@ -428,7 +434,7 @@ export function WeatherSettingsCard({ status, profiles, activeProfileId, onChang
   }, [activeProfileId, profiles]);
 
   const save = async () => {
-    if (busy || (!locationId.trim() && !city.trim())) return;
+    if (!statusReady || busy || (!locationId.trim() && !city.trim())) return;
     setBusy(true);
     setMessage(null);
     setError(null);
@@ -445,7 +451,7 @@ export function WeatherSettingsCard({ status, profiles, activeProfileId, onChang
   };
 
   const test = async () => {
-    if (testing || !locationId.trim()) return;
+    if (!statusReady || testing || !locationId.trim()) return;
     setTesting(true);
     setMessage(null);
     setError(null);
@@ -460,7 +466,7 @@ export function WeatherSettingsCard({ status, profiles, activeProfileId, onChang
   };
 
   const activateProfile = async (id: string) => {
-    if (!id || busy || testing) return;
+    if (!statusReady || !id || busy || testing) return;
     setBusy(true);
     setMessage(null);
     setError(null);
@@ -479,7 +485,7 @@ export function WeatherSettingsCard({ status, profiles, activeProfileId, onChang
   };
 
   const saveProfile = async () => {
-    if (busy || testing || (!locationId.trim() && !city.trim())) return;
+    if (!statusReady || busy || testing || (!locationId.trim() && !city.trim())) return;
     setBusy(true);
     setMessage(null);
     setError(null);
@@ -497,22 +503,25 @@ export function WeatherSettingsCard({ status, profiles, activeProfileId, onChang
     }
   };
 
+  const stateLabel = profilesState.phase === "ready" ? status?.configured ? "已连接" : "未配置" : profilesState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-weather-card">
-    <div className="settings-weather-overview"><div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>天气动画与预报</strong><small className="settings-weather-scope">{status?.locationScope === "device" ? "本设备独立城市" : "沿用服务端默认城市"}</small></div><span className={`settings-status ${status?.configured ? "is-ready" : ""}`}>{status?.configured ? "已连接" : "未配置"}</span><button className="secondary-button settings-action" type="button" onClick={() => setPreviewOpen(true)}>预览天气效果</button></div>
+    <div className="settings-weather-overview"><div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>天气动画与预报</strong><small className="settings-weather-scope">{status?.locationScope === "device" ? "本设备独立城市" : "沿用服务端默认城市"}</small></div><span className={`settings-status ${profilesState.phase === "ready" && status?.configured ? "is-ready" : ""}`} data-weather-status-phase={profilesState.phase}>{stateLabel}</span><button className="secondary-button settings-action" type="button" onClick={() => setPreviewOpen(true)}>预览天气效果</button></div>
+    {profilesState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{profilesState.error}</span>{status === null ? null : <small>上次确认：{status.configured ? "已连接" : "未配置"}</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
+    {status === null ? <p className="settings-config-unavailable">状态确认后，才能调整天气、方案或提交测试。</p> : null}
     <div className="settings-weather-form">
       <div className="settings-subsection-heading"><strong>当前方案</strong><small>切换已保存方案会立即应用；新方案请先填写位置。</small></div>
-      <div className="settings-weather-profile-row"><label><span>已保存的天气方案</span><select value={selectedProfileId ?? ""} onChange={(event) => { const id = event.target.value; setSelectedProfileId(id || null); if (id) void activateProfile(id); }} disabled={busy || testing}><option value="">当前手动配置 / 服务端默认</option>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.label} · {profile.city || profile.locationId}{profile.hasKey ? "" : " · 缺少 Key"}</option>)}</select></label><label><span>方案名称</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="例如：佛山南海区" /></label></div>
+      <div className="settings-weather-profile-row"><label><span>已保存的天气方案</span><select value={selectedProfileId ?? ""} onChange={(event) => { const id = event.target.value; setSelectedProfileId(id || null); if (id) void activateProfile(id); }} disabled={!statusReady || busy || testing}><option value="">当前手动配置 / 服务端默认</option>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.label} · {profile.city || profile.locationId}{profile.hasKey ? "" : " · 缺少 Key"}</option>)}</select></label><label><span>方案名称</span><input value={profileName} disabled={!statusReady} onChange={(event) => setProfileName(event.target.value)} placeholder="例如：佛山南海区" /></label></div>
       <div className="settings-subsection-heading"><strong>位置</strong><small>天气预报和表头动画都使用这里的位置。</small></div>
-      <WeatherLocationPicker locationId={locationId} city={city} disabled={busy || testing} onChange={(option) => { setLocationId(option.locationId); setCity(option.city); }} />
+      <WeatherLocationPicker locationId={locationId} city={city} disabled={!statusReady || busy || testing} onChange={(option) => { setLocationId(option.locationId); setCity(option.city); }} />
       <details className="settings-weather-manual" open={manualLocationId} onToggle={(event) => setManualLocationId(event.currentTarget.open)}>
         <summary><span>手动输入位置 ID（境外位置 / 旧配置迁移）</span></summary>
-        <div className="settings-weather-form-row"><label><span>位置 ID</span><input value={locationId} onChange={(event) => setLocationId(event.target.value)} placeholder="例如 101280601" /></label><label><span>城市名（备用）</span><input value={city} onChange={(event) => setCity(event.target.value)} placeholder="例如 佛山南海区" /></label></div>
+        <div className="settings-weather-form-row"><label><span>位置 ID</span><input value={locationId} disabled={!statusReady} onChange={(event) => setLocationId(event.target.value)} placeholder="例如 101280601" /></label><label><span>城市名（备用）</span><input value={city} disabled={!statusReady} onChange={(event) => setCity(event.target.value)} placeholder="例如 佛山南海区" /></label></div>
       </details>
       <details className="settings-weather-advanced">
         <summary><SlidersHorizontal size={15} aria-hidden="true" /><span>高级：连接与密钥</span><ChevronDown size={15} aria-hidden="true" /></summary>
-        <div className="settings-weather-advanced-body"><label><span>API Key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" placeholder={status?.hasKey ? "已保存，留空不变" : "填写和风天气 Key"} /></label><label><span>API Host</span><input value={apiHost} onChange={(event) => setApiHost(event.target.value)} placeholder="devapi.qweather.com" /></label><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用天气模块与表头动画</span></label></div>
+        <div className="settings-weather-advanced-body"><label><span>API Key</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" placeholder={status?.hasKey ? "已保存，留空不变" : "填写和风天气 Key"} /></label><label><span>API Host</span><input value={apiHost} disabled={!statusReady} onChange={(event) => setApiHost(event.target.value)} placeholder="devapi.qweather.com" /></label><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} /><span>启用天气模块与表头动画</span></label></div>
       </details>
-      <div className="settings-weather-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={testing || busy || !locationId.trim()}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="secondary-button" type="button" onClick={() => void saveProfile()} disabled={busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存并应用方案"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "仅保存默认配置"}</span></button></div>
+      <div className="settings-weather-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={!statusReady || testing || busy || !locationId.trim()}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="secondary-button" type="button" onClick={() => void saveProfile()} disabled={!statusReady || busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存并应用方案"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "仅保存默认配置"}</span></button></div>
       {message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
       <p className="settings-weather-note">测试成功后可保存为方案；方案会加密保存 API Host、API Key 和位置 ID，之后直接切换即可。未配置 Key 时，表头不会伪造天气数据。</p>
     </div>
@@ -739,7 +748,7 @@ export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: C
   </div>;
 }
 
-export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onWeatherProfilesChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
   useEffect(() => { window.requestAnimationFrame(() => pageHeadingRef.current?.focus()); }, [page]);
@@ -762,7 +771,7 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <FontSettingsCard value={uiFont} onChange={onUiFontChange} />
-    : page === "integrations/weather" ? <WeatherSettingsCard status={weatherStatus} profiles={weatherProfiles} activeProfileId={weatherActiveProfileId} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} />
+    : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} onRetry={onRetryWeatherProfiles} />
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />

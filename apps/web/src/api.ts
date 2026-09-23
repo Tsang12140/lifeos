@@ -234,6 +234,9 @@ export interface WeatherProfilesResponse {
   readonly status: WeatherStatus;
 }
 
+/** Weather status and profile selection are one writable configuration unit. */
+export type WeatherProfilesState = ConfigReadState<WeatherProfilesResponse>;
+
 /**
  * Movie is an optional module, so its shape lives at the web/API boundary
  * until the core model grows the corresponding EntityKind.  Keeping the

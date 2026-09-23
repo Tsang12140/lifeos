@@ -90,6 +90,7 @@ import {
   type WeatherCurrentResponse,
   type WeatherArchiveResponse,
   type WeatherProfilesResponse,
+  type WeatherProfilesState,
   type WeatherStatus,
 } from "./api";
 import { AIAssistant } from "./AIAssistant";
@@ -99,7 +100,7 @@ import { WeatherHeader } from "./WeatherHeader";
 import { WeatherSky } from "./WeatherBackground";
 import { BackupCalendar } from "./BackupCalendar";
 import { TimeMachine } from "./TimeMachine";
-import { getWeatherEmoji, type WeatherCategory, type WeatherDay, type WeatherPhase, type WeatherProfile } from "./weather";
+import { getWeatherEmoji, type WeatherCategory, type WeatherDay, type WeatherPhase } from "./weather";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { describeWeatherLocationByName, weatherLocationDisplayName } from "./weather-locations";
 import { ScrollSlotStrip } from "./ScrollSlotStrip";
@@ -313,9 +314,11 @@ function App() {
   // mistake it for a confirmed server configuration.
   const aiStatus = aiStatusState.status ?? { preset: "quick", enabled: true, configured: false, keyConfigured: false, keyUnreadable: false, provider: "deepseek", model: "deepseek-flash", baseUrl: AI_DEFAULT_BASE_URL, thinking: false, reasoningEffort: null, keySource: "none", summaryPrompt: SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: false } as const;
   const [assistantVisible, setAssistantVisible] = useState(readAssistantVisibility);
-  const [weatherStatus, setWeatherStatus] = useState<WeatherStatus | null>(null);
-  const [weatherProfiles, setWeatherProfiles] = useState<readonly WeatherProfile[]>([]);
-  const [weatherActiveProfileId, setWeatherActiveProfileId] = useState<string | null>(null);
+  const [weatherProfilesState, setWeatherProfilesState] = useState<WeatherProfilesState>({ phase: "loading", status: null });
+  const [weatherProfilesRetry, setWeatherProfilesRetry] = useState(0);
+  const weatherStatus = weatherProfilesState.status?.status ?? null;
+  const weatherProfiles = weatherProfilesState.status?.items ?? [];
+  const weatherActiveProfileId = weatherProfilesState.status?.activeProfileId ?? null;
   const [movieStatusState, setMovieStatusState] = useState<MovieModuleStatusState>({ phase: "loading", status: null });
   const [movieStatusRetry, setMovieStatusRetry] = useState(0);
   // Other parts of the app can hide optional movie affordances until the first
@@ -405,6 +408,7 @@ function App() {
       setMovieStatusRetry((current) => current + 1);
     }
     if (settingsPage === "integrations/ai" && previousPage !== settingsPage) setAiStatusRetry((current) => current + 1);
+    if (settingsPage === "integrations/weather" && previousPage !== settingsPage) setWeatherProfilesRetry((current) => current + 1);
   }, [settingsPage]);
 
   const setAssistantVisibility = useCallback((visible: boolean) => {
@@ -432,6 +436,24 @@ function App() {
   const retryAiStatus = useCallback(() => {
     setAiStatusState((current) => ({ phase: "loading", status: current.status }));
     setAiStatusRetry((current) => current + 1);
+  }, []);
+
+  const onWeatherProfilesChange = useCallback((payload: WeatherProfilesResponse) => {
+    setWeatherProfilesState({ phase: "ready", status: payload });
+  }, []);
+
+  const onWeatherStatusChange = useCallback((status: WeatherStatus) => {
+    // The default-config route returns only status. It can advance a confirmed
+    // profile baseline, but it must not manufacture a writable profile list
+    // after a read failure.
+    setWeatherProfilesState((current) => current.status === null
+      ? current
+      : { phase: "ready", status: { ...current.status, status } });
+  }, []);
+
+  const retryWeatherProfiles = useCallback(() => {
+    setWeatherProfilesState((current) => ({ phase: "loading", status: current.status }));
+    setWeatherProfilesRetry((current) => current + 1);
   }, []);
 
   useEffect(() => {
@@ -567,32 +589,26 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     if (authState.required && !authState.authenticated) {
-      setWeatherProfiles([]);
-      setWeatherActiveProfileId(null);
+      setWeatherProfilesState({ phase: "failed", status: null, error: "登录后才能读取天气配置" });
       return () => controller.abort();
     }
+    setWeatherProfilesState((current) => ({ phase: "loading", status: current.status }));
     apiRequest<WeatherProfilesResponse>("/api/weather/profiles", { signal: controller.signal }).then((payload) => {
       if (controller.signal.aborted) return;
-      setWeatherProfiles(payload.items);
-      setWeatherActiveProfileId(payload.activeProfileId);
-      setWeatherStatus(payload.status);
-    }).catch(() => {
+      setWeatherProfilesState({ phase: "ready", status: payload });
+    }).catch((error) => {
       if (controller.signal.aborted) return;
-      setWeatherProfiles([]);
-      setWeatherActiveProfileId(null);
+      if (errorStatus(error) === 401) {
+        const nextAuth = { required: true, authenticated: false } as const;
+        authRef.current = nextAuth;
+        setAuthState(nextAuth);
+        setWeatherProfilesState({ phase: "failed", status: null, error: "需要重新登录后才能读取天气配置" });
+        return;
+      }
+      setWeatherProfilesState((current) => ({ phase: "failed", status: current.status, error: errorMessage(error, "天气配置暂时无法读取，请重试") }));
     });
     return () => controller.abort();
-  }, [authState.authenticated, authState.required]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    if (authState.required && !authState.authenticated) {
-      setWeatherStatus(null);
-      return () => controller.abort();
-    }
-    apiRequest<WeatherStatus>("/api/weather/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setWeatherStatus(status); }).catch(() => { if (!controller.signal.aborted) setWeatherStatus(null); });
-    return () => controller.abort();
-  }, [authState.authenticated, authState.required]);
+  }, [authState.authenticated, authState.required, weatherProfilesRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1348,7 +1364,7 @@ function App() {
   const onNavigate = navigate;
 
   return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form><button className="icon-button mobile-search-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="搜索记录"><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
-       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
+       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherProfilesState={weatherProfilesState} onWeatherStatusChange={onWeatherStatusChange} onWeatherProfilesChange={onWeatherProfilesChange} onRetryWeatherProfiles={retryWeatherProfiles} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "notes"
