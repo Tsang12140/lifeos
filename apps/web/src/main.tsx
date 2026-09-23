@@ -141,7 +141,7 @@ import {
   weekdayShort,
 } from "./time";
 import { registerWebMcp } from "./webmcp";
-import { enabledModuleCommands, fetchMovieModuleStatus, movieRef, MovieAddPanel, MovieCardDialog, MoviePrompt, MovieSettingsCard, type ModuleCommand } from "./movie";
+import { enabledModuleCommands, fetchMovieModuleStatus, movieRef, MovieAddPanel, MovieCardDialog, MoviePrompt, MovieSettingsCard, type ModuleCommand, type MovieModuleStatusState } from "./movie";
 import "./styles.css";
 import { AI_DEFAULT_BASE_URL } from "./settings-cards";
 import { type CalendarWeather } from "./timeline";
@@ -234,6 +234,7 @@ function noteUpdatedAt(record: RecordView): string {
 }
 
 const RECORDS_CACHE_LIMIT = 24;
+const DEFAULT_MOVIE_MODULE_STATUS: MovieModuleStatus = { enabled: false, configured: false, keyConfigured: false, connected: false };
 
 function cacheRecords(
   cache: Map<string, { readonly items: readonly RecordView[]; readonly selectedDate: string }>,
@@ -309,7 +310,12 @@ function App() {
   const [weatherStatus, setWeatherStatus] = useState<WeatherStatus | null>(null);
   const [weatherProfiles, setWeatherProfiles] = useState<readonly WeatherProfile[]>([]);
   const [weatherActiveProfileId, setWeatherActiveProfileId] = useState<string | null>(null);
-  const [movieStatus, setMovieStatus] = useState<MovieModuleStatus>({ enabled: false, configured: false, keyConfigured: false, connected: false });
+  const [movieStatusState, setMovieStatusState] = useState<MovieModuleStatusState>({ phase: "loading", status: null });
+  const [movieStatusRetry, setMovieStatusRetry] = useState(0);
+  // Other parts of the app can hide optional movie affordances until the first
+  // successful read. The settings card receives the source state separately
+  // and never treats this display fallback as a persisted configuration.
+  const movieStatus = movieStatusState.status ?? DEFAULT_MOVIE_MODULE_STATUS;
   const [backupStatus, setBackupStatus] = useState<BackupStatus>({ localDirectory: null, s3: { configured: false, enabled: false, endpoint: "", region: "", bucket: "", prefix: "backups/db", forcePathStyle: true }, schedule: { enabled: false, hour: 2, minute: 0, timeZone: "Asia/Shanghai", nextRunAt: null }, lastDualBackup: null, runs: [] });
   const [backupBusy, setBackupBusy] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -352,6 +358,7 @@ function App() {
   const recordsPrefetchRef = useRef(new Map<string, AbortController>());
   const recordsCacheGenerationRef = useRef(0);
   const tasksRequestRef = useRef(0);
+  const previousSettingsPageRef = useRef(settingsPage);
 
   const openSettingsPage = useCallback((page: SettingsPageId) => {
     const nextHash = settingsHash(page);
@@ -382,9 +389,31 @@ function App() {
     return () => { window.removeEventListener("hashchange", syncSettingsHash); window.removeEventListener("popstate", syncSettingsHash); };
   }, []);
 
+  useEffect(() => {
+    const previousPage = previousSettingsPageRef.current;
+    previousSettingsPageRef.current = settingsPage;
+    if (settingsPage === "integrations/movie" && previousPage !== settingsPage) {
+      // Revalidate the module status when returning to its settings page. This
+      // gives the last confirmed value a real refresh-failure path to fall back
+      // to, while leaving the manual retry button available for failures.
+      setMovieStatusRetry((current) => current + 1);
+    }
+  }, [settingsPage]);
+
   const setAssistantVisibility = useCallback((visible: boolean) => {
     setAssistantVisible(visible);
     try { window.localStorage.setItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY, visible ? "1" : "0"); } catch { /* local persistence is optional */ }
+  }, []);
+
+  const onMovieStatusChange = useCallback((status: MovieModuleStatus) => {
+    // Only a successful config save reaches this callback; its response is the
+    // new server-confirmed baseline for the toggle.
+    setMovieStatusState({ phase: "ready", status });
+  }, []);
+
+  const retryMovieStatus = useCallback(() => {
+    setMovieStatusState((current) => ({ phase: "loading", status: current.status }));
+    setMovieStatusRetry((current) => current + 1);
   }, []);
 
   useEffect(() => {
@@ -484,14 +513,25 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     if (authState.required && !authState.authenticated) {
-      setMovieStatus({ enabled: false, configured: false, keyConfigured: false, connected: false });
+      setMovieStatusState({ phase: "failed", status: null, error: "登录后才能读取观影状态" });
       return () => controller.abort();
     }
-    fetchMovieModuleStatus().then((status) => { if (!controller.signal.aborted) setMovieStatus(status); }).catch(() => {
-      if (!controller.signal.aborted) setMovieStatus({ enabled: false, configured: false, keyConfigured: false, connected: false });
+    setMovieStatusState((current) => ({ phase: "loading", status: current.status }));
+    fetchMovieModuleStatus(controller.signal).then((status) => {
+      if (!controller.signal.aborted) setMovieStatusState({ phase: "ready", status });
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      if (errorStatus(error) === 401) {
+        const nextAuth = { required: true, authenticated: false } as const;
+        authRef.current = nextAuth;
+        setAuthState(nextAuth);
+        setMovieStatusState({ phase: "failed", status: null, error: "需要重新登录后才能读取观影状态" });
+        return;
+      }
+      setMovieStatusState((current) => ({ phase: "failed", status: current.status, error: errorMessage(error, "观影状态暂时无法读取，请重试") }));
     });
     return () => controller.abort();
-  }, [authState.authenticated, authState.required]);
+  }, [authState.authenticated, authState.required, movieStatusRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1277,7 +1317,7 @@ function App() {
   const onNavigate = navigate;
 
   return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form><button className="icon-button mobile-search-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="搜索记录"><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
-       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatus={movieStatus} onMovieStatusChange={setMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
+       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatus={aiStatus} onAiStatusChange={setAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherStatus={weatherStatus} weatherProfiles={weatherProfiles} weatherActiveProfileId={weatherActiveProfileId} onWeatherStatusChange={setWeatherStatus} onWeatherProfilesChange={(payload) => { setWeatherProfiles(payload.items); setWeatherActiveProfileId(payload.activeProfileId); }} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "notes"

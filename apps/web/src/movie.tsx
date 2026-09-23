@@ -19,6 +19,14 @@ export interface ModuleCommand {
   readonly description: string;
 }
 
+/** The value shown by MovieSettingsCard is only writable when status came
+ * from a successful server read. Keep the last confirmed status across an
+ * ordinary read failure so the card can explain what was last known. */
+export type MovieModuleStatusState =
+  | { readonly phase: "loading"; readonly status: MovieModuleStatus | null }
+  | { readonly phase: "ready"; readonly status: MovieModuleStatus }
+  | { readonly phase: "failed"; readonly status: MovieModuleStatus | null; readonly error: string };
+
 export const MOVIE_COMMAND: ModuleCommand = {
   id: "movie",
   label: "电影",
@@ -153,8 +161,8 @@ function normalizeStatus(payload: unknown): MovieModuleStatus {
   return { enabled, configured, keyConfigured, connected, ...(provider === undefined ? {} : { provider }), ...(message === undefined ? {} : { message }) };
 }
 
-export async function fetchMovieModuleStatus(): Promise<MovieModuleStatus> {
-  return normalizeStatus(await requestMovie<MovieModulePayload>(MOVIE_ENDPOINTS.status));
+export async function fetchMovieModuleStatus(signal?: AbortSignal): Promise<MovieModuleStatus> {
+  return normalizeStatus(await requestMovie<MovieModulePayload>(MOVIE_ENDPOINTS.status, { signal }));
 }
 
 export async function saveMovieModuleConfig(enabled: boolean, apiKey: string): Promise<MovieModuleStatus> {
@@ -204,16 +212,20 @@ function moviePoster(movie: Pick<MovieEntity, "posterUrl">): string | undefined 
   return value ? value : undefined;
 }
 
-export function MovieSettingsCard({ status, onChanged }: { readonly status: MovieModuleStatus; readonly onChanged: (status: MovieModuleStatus) => void }) {
-  const [enabled, setEnabled] = useState(status.enabled);
+export function MovieSettingsCard({ statusState, onChanged, onRetry }: { readonly statusState: MovieModuleStatusState; readonly onChanged: (status: MovieModuleStatus) => void; readonly onRetry: () => void }) {
+  const status = statusState.status;
+  const statusReady = statusState.phase === "ready" && status !== null;
+  const [enabled, setEnabled] = useState(status?.enabled ?? false);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testPassed, setTestPassed] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => setEnabled(status.enabled), [status.enabled]);
+  useEffect(() => { if (status !== null) setEnabled(status.enabled); }, [statusState.phase, status?.enabled]);
+  useEffect(() => { if (statusState.phase !== "ready") setTestPassed(false); }, [statusState.phase]);
   const save = async () => {
-    if (busy || testing) return;
+    if (!statusReady || status === null || busy || testing) return;
     setBusy(true); setMessage(null); setError(null);
     try {
       const next = await saveMovieModuleConfig(enabled, apiKey);
@@ -222,15 +234,17 @@ export function MovieSettingsCard({ status, onChanged }: { readonly status: Movi
     finally { setBusy(false); }
   };
   const test = async () => {
-    if (busy || testing) return;
-    setTesting(true); setMessage(null); setError(null);
-    try { const result = await testMovieModule(apiKey); onChanged({ ...status, enabled, connected: true, configured: status.configured || Boolean(apiKey.trim()), keyConfigured: status.keyConfigured || Boolean(apiKey.trim()) }); setMessage(result); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "TMDb 连接失败，请检查 Key"); }
+    if (!statusReady || status === null || busy || testing) return;
+    setTesting(true); setTestPassed(false); setMessage(null); setError(null);
+    try { const result = await testMovieModule(apiKey); setTestPassed(true); setMessage(result); }
+    catch (cause) { setTestPassed(false); setError(cause instanceof Error ? cause.message : "TMDb 连接失败，请检查 Key"); }
     finally { setTesting(false); }
   };
-  const stateLabel = !status.enabled ? "已关闭" : status.connected ? "已连接" : status.keyConfigured ? "待测试" : "未配置";
+  const confirmedLabel = status === null ? null : !status.enabled ? "已关闭" : status.connected ? "已连接" : status.keyConfigured ? "待测试" : "未配置";
+  const stateLabel = statusState.phase === "ready" ? testPassed ? "测试通过" : confirmedLabel : statusState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-card movie-settings-card" data-movie-settings>
-    <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选 · TMDb 仅用于识别，豆瓣链接只保存为外部 ID</small></div><span className={`settings-status ${status.enabled && status.connected ? "is-ready" : ""}`}>{stateLabel}</span></div>
+    <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选 · TMDb 仅用于识别，豆瓣链接只保存为外部 ID</small></div><span className={`settings-status ${statusState.phase === "ready" && (testPassed || (status?.enabled && status.connected)) ? "is-ready" : ""}`} data-movie-status-phase={statusState.phase} data-movie-test-result={testPassed ? "passed" : undefined}>{stateLabel}</span></div>
+    {statusState.phase === "failed" ? <div className="movie-settings-read-error" role="alert"><span>{statusState.error}</span>{status === null ? null : <small>上次确认：{confirmedLabel}（模块{status.enabled ? "已启用" : "已关闭"}）</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
     <div className="movie-settings-fields">
       {/* 这一行**只能**吃 `.movie-enabled-toggle`（原生 checkbox + 文字的一整行）。
           绝不能同时挂 `.settings-switch` —— 那是另一套设计（44×26 的假药丸，把 `input`
@@ -238,10 +252,10 @@ export function MovieSettingsCard({ status, onChanged }: { readonly status: Movi
           整行被钉成 44×26、假药丸被 `display:none` 干掉、原生 checkbox 被 `opacity:0` 干掉
           ⇒ 一个可勾的东西都没有；「启用观影模块」七个字挤进 22px 宽、竖着堆成 8 行（高 96px）、
           上下各溢出 28px。守它的是 `.review/verify-movie-toggle-ui.mjs`。 */}
-      <label className="movie-enabled-toggle"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} aria-label="启用观影模块" /><span aria-hidden="true" /><strong>启用观影模块</strong></label>
-      <label><span>TMDb Key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={status.keyConfigured ? "已保存，留空不变" : "填写 TMDb API Key"} autoComplete="new-password" /></label>
+      {status === null ? <p className="movie-settings-unavailable">状态确认后，才能调整观影模块或提交配置。</p> : <label className="movie-enabled-toggle"><input type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} aria-label="启用观影模块" /><span aria-hidden="true" /><strong>启用观影模块</strong></label>}
+      <label><span>TMDb Key</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => { setApiKey(event.target.value); setTestPassed(false); }} placeholder={status?.keyConfigured ? "已保存，留空不变" : "填写 TMDb API Key"} autoComplete="new-password" /></label>
     </div>
-    <div className="movie-settings-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={busy || testing}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy || testing}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存配置"}</span></button></div>
+    <div className="movie-settings-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={!statusReady || busy || testing}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || testing}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存配置"}</span></button></div>
     {message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
     <p className="movie-settings-note">Key 只提交到 API 服务端，不进入 localStorage，也不会回显。</p>
   </div>;

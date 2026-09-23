@@ -9383,6 +9383,31 @@ button.relation-chip {
   min-width: 0;
 }
 
+.movie-settings-read-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid rgb(180 76 86 / 22%);
+  border-radius: 9px;
+  color: #a8434e;
+  background: rgb(180 76 86 / 6%);
+  font-size: 0.72rem;
+}
+
+.movie-settings-read-error small {
+  color: var(--muted);
+}
+
+.movie-settings-unavailable {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
 /* 这一格给「TMDb Key」那类字段标签用，**必须排除开关那一行**（`.movie-enabled-toggle`
    自己是一整套 flex 行）。原先排除的是 `.settings-switch`，而开关同时挂了两个类 ⇒
    这条以更高特异性（0,2,1 对 0,1,0）把 `display:grid` 盖在开关头上，与 `movie.tsx`
