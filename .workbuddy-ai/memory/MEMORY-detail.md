@@ -898,3 +898,54 @@ Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":337,"threshold"
 - 要「原生 checkbox + 文字的一整行」就用 `.movie-enabled-toggle` 那套（`display:flex` + `min-height:40px` + 边框，与旁边的输入框同高）。
 - **一个元素上不能同时挂这两套**：它们对 `input` 的处置是相反的（一个藏起来画假药丸、一个要露出来）。
 
+## 右键「识别为影片」：为什么清洗、为什么换 `/search/multi`、为什么类型要落盘（2026-09-23 落地）
+
+主人 2026-09-22 提的做法：正文里写完「重看《行尸走肉》第一季」→ 选中 → 右键 → 点「识别为影片」→ 清洗 → 自动搜 → 展开候选 → 他挑是哪一部。次日落地，commit `90aa206`。
+
+**为什么要有「清洗」这一步，而不是把选区直接丢给搜索**
+
+- 他写的是**散文**，不是检索词：书名号、《》、动作词（重看/二刷/补完）、季标记（第一季 / S01）对 TMDb 全是噪声，带上就会搜不到或搜歪。
+- 规则是 **「宁可少清，不要多清」**，每条边界都写进 `packages/core/src/movie-query.ts` 的头注释：只剥**一个**前置动作词、只剥**一个**尾部季标记，且**剥完必须还剩东西**（送个空串出去比搜不准更糟）。反例钉在单测里：「第一滴血」「看不见的客人」必须**原样**通过 —— 前者带「第一」、后者带「看不见」，都是会被贪心规则吃掉的形状。
+- **清洗不改主人的正文。** 菜单只拿选中的文字去搜，那段字一个字符都不动 —— 一个悄悄改他散文的菜单项是最坏的意外。清洗结果**写在菜单副标题里给他看**（「用「行尸走肉」搜索」），所以这一步是可见的、不是背后的魔法。
+- 识别码原样透传：`douban.com/subject/1295644`、`tt1375666` 不做任何清洗（`IDENTIFIER_LIKE` 直接短路返回）。
+
+**为什么搜索端点必须换（这才是「电视剧找不到」的真正原因）**
+
+`movie.ts` 原来用 `/search/movie` —— **只搜电影**。实测搜「行尸走肉」返回 **9 条 1936 / 1973 年的同名老片**，2010 那部剧集**根本不在候选里**。所以「怎么没有电视剧」不是界面缺一个模块，而是**搜索源本身就看不到剧集**。换成 `/search/multi` 之后同一句话返回 **15 个候选**，首个就是 2010 那部。
+
+两个必须记住的副作用：
+
+- **`/search/multi` 会把人物一起返回**（`media_type: "person"`）。不过滤的话候选里会冒出一个演员，**而且他还能被「导入」成一部电影**。`resolveMovies` 里 `.filter(kind === "movie" || "tv")` 守这一条，API 测试里放了一条假数据。
+- **剧集没有 `release_date`**，年份要看 `first_air_date`；剧集的名字在 `name` 而不是 `title`（`candidateFromTmdb` 两个都读）。
+
+**为什么把 `mediaType` 落到实体上**
+
+不落的话，剧集一进库就和电影分不出来了 —— 而主人的原始诉求恰恰是「电影 / 电视剧」要能分。所以 `Movie` 加了 `mediaType?: "movie" | "tv"`：**旧数据没有这个字段 = 电影**（`mediaTypeLabel()` 返回 `undefined` 时按电影显示），**不需要迁移**。
+
+代价是**加一个实体字段要同时放行三处**，漏任何一处都是 400，而且报错信息只说「不允许的字段」：
+
+1. `packages/core/src/model.ts` 的 `movieFieldNames`（否则 core 校验直接拒）+ `validateMovieFields` 里的枚举校验；
+2. `apps/api/src/movie-input.ts` 的 `MOVIE_FIELD_NAMES`（PATCH 走 `movieFieldsField` 循环它）；
+3. 同文件的 `MOVIE_INPUT_KEYS`（`movieInputEntity` 的 `hasOnlyKeys` 白名单）。
+
+`mergeMovie` 是 `{...existing, ...incoming}`，incoming 不带这个键时**不会**把它抹掉，所以 upsert 不会丢类型。
+
+**右键菜单的机制与边界**
+
+- 形状照抄**已验证**的 `.calendar-summary-menu`（`position: fixed` + 鼠标坐标 + `role="menu"` + 面板 `onPointerDown` stopPropagation）。**别自己发明第二套** —— 那套已经在 textarea 上用过（`month-day-summary-field`）。
+- `MentionBox` 的接口是 `contextActions?: (text) => ContextAction[]`，**是函数不是数组**：条目文案依赖选中的文字（hint 要写清洗后的词、选太短要灰掉并说原因），数组形式算不出来。
+- **不传 `contextActions` 就完全不碰浏览器原生右键菜单** —— 这是默认值，其他所有输入框保持原样。
+- 灰条目用 **`aria-disabled` 而不是原生 `disabled`**：原生 `disabled` 的按钮不派发 `click`，菜单会赖在屏幕上不走。灰条目点了要**把菜单收掉**。
+- 选区取的是**右键那一刻**的实时 `selectionStart/End`；另有一份「按下右键时」的快照兜底。**取点要贴着选区第一个字符**（`paddingLeft + 4`），不能取行中间 —— 只选中一个字时行中间已经在选区外，右键会先把光标挪过去、选区当场塌掉，菜单不弹，负例会因为「点错地方」而**假绿**。
+- 判据必须是**双向**的：没选中 → 不弹；选中一个字 → 弹但灰掉且点了不开面板；选中整句 → 弹、hint 是洗过的词、点了才开面板并自动搜。只测正例测不出「抢掉了浏览器右键菜单」这类坏。
+
+**这条链的三层证据（都在 `.review/`，被 gitignore）**
+
+- `verify-movie-context-menu.mjs` → **PASS (34)**：整条界面链（贴 5199、只读、走生产守卫）。末段自证没写库：记录/实体/电影实体 **151 / 50 / 0 → 不变**。
+- `verify-movie-e2e.mjs` → **PASS (34)**：斜杠那条老路没被碰坏。
+- `verify-movie-toggle-ui.mjs` → **PASS (17)**：设置开关。
+- `npm test` **96 / 96**（core 29 + api 57 + web 10）；`typecheck` 三段全绿。
+
+**顺手修的一条无关 bug**：`apps/web/test/pure.test.ts` 的 `isFutureDay` 用 `new Date().toISOString()`（UTC）取「今天」，而判据是本地时区 ⇒ **本地 0–8 点必红**（本地 07:38 时 UTC 还是前一天，「明天」算成了「今天」）。改用产品自己的 `localDateToday()`。
+
+

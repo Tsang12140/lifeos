@@ -33,6 +33,9 @@
 - **图片「加载成功」≠「画出来有东西」**：判据 = **画布采样**（`.review/probe-photo-content.mjs`），三条缺一不可：请求成功 + 滚动后仍成功 + 采样后有内容。
 - 瞬态缺陷**过程中**高频采样；日期夹具动态推导；脚手架用异步 `spawn`。
 - **贴 3011 的验收需 `LIFEOS_ALLOW_PROD_ACCEPTANCE=1`**，否则被生产守卫拒、看着像脚本坏了。
+- **偶发的网络类 FAIL 先重跑一次再怀疑产品**：观影「测试连接」打 TMDb `/configuration`，本机代理抖一下就报「TMDb 暂时无法连接」，而同一刻 `resolve` 是通的（实测 4 连 4 成功）。
+- **给实体加字段要同时放行三处**，漏一处「导入」就静默 400：core 的 `movieFieldNames` 校验 + API 的 `MOVIE_FIELD_NAMES`（PATCH 走它）+ `MOVIE_INPUT_KEYS`（`hasOnlyKeys` 白名单）。
+- `docs/changelog.md` **被 gitignore、从未提交** —— 照常写，但它不进 commit。
 
 ## 磁盘：测试失败先 `df -h /c`
 
