@@ -49,7 +49,7 @@ import {
   type PlaceRole,
   type WeatherAttachment,
 } from "@lifeos/core";
-import { apiRequest, type AiStatus, type MovieEntity, type RecordView } from "./api";
+import { apiRequest, type AiStatus, type AiStatusState, type MovieEntity, type RecordView } from "./api";
 import type { AppView, CalendarMode, ComposerKind, CreateEntity, SettingsPageId } from "./app-types";
 import { calendarDayInfo } from "./calendarData";
 import { peekScore, scorePhoto, storyWeight } from "./photoScore";
@@ -139,7 +139,9 @@ function weatherFromArchiveValue(value: unknown, date: string): CalendarWeather 
  * the one knob that changes what every cell says, and hiding it behind a rebuild
  * would make tuning it a code change.
  */
-export function CalendarSettingsPanel({ status, onStatusChange }: { status: AiStatus | null; onStatusChange: (status: AiStatus) => void }) {
+export function CalendarSettingsPanel({ statusState, onStatusChange, onRetry }: { statusState: AiStatusState; onStatusChange: (status: AiStatus) => void; onRetry: () => void }) {
+  const status = statusState.status;
+  const statusReady = statusState.phase === "ready" && status !== null;
   const [enabled, setEnabled] = useState(status?.enabled ?? true);
   const [baseUrl, setBaseUrl] = useState(status?.baseUrl ?? "https://api.deepseek.com");
   const [model, setModel] = useState(status?.model ?? "deepseek-flash");
@@ -159,7 +161,7 @@ export function CalendarSettingsPanel({ status, onStatusChange }: { status: AiSt
   /** The key is write-only: it is sent only when a new one has been typed. */
   const body = () => JSON.stringify({ enabled, baseUrl, model, ...(apiKey.trim() === "" ? {} : { apiKey: apiKey.trim() }) });
   const run = async (kind: "save" | "test", request: () => Promise<AiStatus | { ok?: boolean; message?: string }>, done: (next: AiStatus | { ok?: boolean; message?: string }) => void, failure: string) => {
-    if (busy !== null) return;
+    if (!statusReady || busy !== null) return;
     setBusy(kind);
     setMessage(null);
     try {
@@ -194,17 +196,19 @@ export function CalendarSettingsPanel({ status, onStatusChange }: { status: AiSt
     <div className="cycle-inline-head"><div><p className="eyebrow">日历设置</p><h3 id="calendar-settings-title">小结与提示词</h3></div>{custom ? <span className="calendar-settings-badge">自定义提示词</span> : null}</div>
     <div className="calendar-settings-block">
       <p className="eyebrow">AI 小结</p>
-      <div className="calendar-settings-switch"><span>用 AI 生成小结<small>{keyConfigured ? "已配置密钥" : "还没有密钥，暂时用离线规则"}</small></span><button className={"toggle-button" + (enabled ? " is-on" : "")} type="button" role="switch" aria-checked={enabled} onClick={() => setEnabled(!enabled)} aria-label="用 AI 生成小结"><span className="toggle-knob" /></button></div>
+      <div className="calendar-settings-switch"><span>用 AI 生成小结<small>{statusReady ? keyConfigured ? "已配置密钥" : "还没有密钥，暂时用离线规则" : "状态确认后才能修改"}</small></span><button className={"toggle-button" + (enabled ? " is-on" : "")} type="button" role="switch" aria-checked={enabled} disabled={!statusReady} onClick={() => setEnabled(!enabled)} aria-label="用 AI 生成小结"><span className="toggle-knob" /></button></div>
+      {statusState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{statusState.error}</span><button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
+      {status === null ? <p className="settings-config-unavailable">状态暂时不可读取；保存、测试和提示词调整已锁定。</p> : null}
       <div className="calendar-settings-grid">
-        <label><span>服务地址</span><input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com" aria-label="AI 服务地址" /></label>
-        <label><span>模型</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-flash" aria-label="AI 模型" /></label>
-        <label className="calendar-settings-wide"><span>API Key{keyConfigured ? "（留空则沿用已存的）" : ""}</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={keyConfigured ? "已保存，留空不修改" : "填入密钥"} aria-label="AI API Key" autoComplete="off" /></label>
+        <label><span>服务地址</span><input value={baseUrl} disabled={!statusReady} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.deepseek.com" aria-label="AI 服务地址" /></label>
+        <label><span>模型</span><input value={model} disabled={!statusReady} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-flash" aria-label="AI 模型" /></label>
+        <label className="calendar-settings-wide"><span>API Key{keyConfigured ? "（留空则沿用已存的）" : ""}</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => setApiKey(event.target.value)} placeholder={keyConfigured ? "已保存，留空不修改" : "填入密钥"} aria-label="AI API Key" autoComplete="off" /></label>
       </div>
-      <label className="calendar-settings-prompt"><span>给 AI 的提示词</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={9} spellCheck={false} aria-label="给 AI 的提示词" /></label>
+      <label className="calendar-settings-prompt"><span>给 AI 的提示词</span><textarea value={prompt} disabled={!statusReady} onChange={(event) => setPrompt(event.target.value)} rows={9} spellCheck={false} aria-label="给 AI 的提示词" /></label>
       <div className="calendar-settings-actions">
-        <button className="primary-button" type="button" onClick={() => void save()} disabled={busy !== null}>{busy === "save" ? "保存中…" : "保存"}</button>
-        <button className="secondary-button" type="button" onClick={() => void test()} disabled={busy !== null}>{busy === "test" ? "测试中…" : "测试连接"}</button>
-        <button className="secondary-button" type="button" onClick={() => void resetPrompt()} disabled={busy !== null || !custom}>换回内置提示词</button>
+        <button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy !== null}>{busy === "save" ? "保存中…" : "保存"}</button>
+        <button className="secondary-button" type="button" onClick={() => void test()} disabled={!statusReady || busy !== null}>{busy === "test" ? "测试中…" : "测试连接"}</button>
+        <button className="secondary-button" type="button" onClick={() => void resetPrompt()} disabled={!statusReady || busy !== null || !custom}>换回内置提示词</button>
       </div>
       {message !== null ? <p className={"settings-ai-note " + (message.tone === "bad" ? "settings-inline-error" : "settings-inline-success")} role="status">{message.text}</p> : null}
       <p className="settings-ai-note">密钥保存在这台机器的数据目录里（加密存放），不会随日历一起显示。</p>
@@ -273,7 +277,7 @@ export function CalendarSummaryMenu({ x, y, monthMode, busy, cycleEnabled, recor
   </div>;
 }
 
-export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSavePeriodLength, onRetry, onOpenDay, settingsOpen, onToggleSettings, aiStatus, onAiStatusChange, editMode, onEditModeChange, drafts, onDraftChange, summarySaving, onSaveDrafts, onDiscardDrafts, onRegenerateSummary, onRevertSummary, busyDate }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; onStep: (direction: number) => void; onOpenBackfill: () => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void; settingsOpen: boolean; onToggleSettings: () => void; aiStatus: AiStatus | null; onAiStatusChange: (status: AiStatus) => void; editMode: boolean; onEditModeChange: (value: boolean) => void; drafts: ReadonlyMap<string, string>; onDraftChange: (date: string, text: string) => void; summarySaving: boolean; onSaveDrafts: () => void; onDiscardDrafts: () => void; onRegenerateSummary: (date: string) => Promise<void>; onRevertSummary: (date: string) => Promise<void>; busyDate: string | null }) {
+export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onOpenCycleSettings, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSavePeriodLength, onRetry, onOpenDay, settingsOpen, onToggleSettings, aiStatusState, onAiStatusChange, onRetryAiStatus, editMode, onEditModeChange, drafts, onDraftChange, summarySaving, onSaveDrafts, onDiscardDrafts, onRegenerateSummary, onRevertSummary, busyDate }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; onStep: (direction: number) => void; onOpenBackfill: () => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleIntimacyModuleData | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void; onOpenCycleSettings: () => void; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSavePeriodLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void; settingsOpen: boolean; onToggleSettings: () => void; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; editMode: boolean; onEditModeChange: (value: boolean) => void; drafts: ReadonlyMap<string, string>; onDraftChange: (date: string, text: string) => void; summarySaving: boolean; onSaveDrafts: () => void; onDiscardDrafts: () => void; onRegenerateSummary: (date: string) => Promise<void>; onRevertSummary: (date: string) => Promise<void>; busyDate: string | null }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
   /** PC 周历下方的「上一周」预览（弱化可读；手机不显示）。 */
   const prevDates = useMemo(
@@ -451,7 +455,7 @@ export function CalendarView({ mode, onModeChange, onStep, onOpenBackfill, ancho
     </div>
     {mode === "month" ? <div className="calendar-note"><span className="calendar-holiday-legend"><span className="month-day-status is-holiday">休</span><span>法定休息</span><span className="month-day-status is-workday">班</span><span>调休上班</span></span></div> : null}
     {cyclePanelOpen ? <CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} onSavePeriodLength={onSavePeriodLength} /> : null}
-    {settingsOpen ? <CalendarSettingsPanel status={aiStatus} onStatusChange={onAiStatusChange} /> : null}
+    {settingsOpen ? <CalendarSettingsPanel statusState={aiStatusState} onStatusChange={onAiStatusChange} onRetry={onRetryAiStatus} /> : null}
     {editable ? <div className="calendar-edit-bar" role="status">
       <span className="calendar-edit-hint"><Edit3 size={14} strokeWidth={1.9} aria-hidden="true" /><span>{draftCount === 0 ? "点小结就能改；右键某一天还有更多操作" : `${draftCount} 处改动待保存`}</span></span>
       <span className="calendar-edit-actions">

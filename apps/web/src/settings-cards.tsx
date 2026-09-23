@@ -43,6 +43,7 @@ import {
 import {
   apiRequest,
   type AiStatus,
+  type AiStatusState,
   type BackupRetentionPolicy,
   type BackupRetentionView,
   type BackupStatus,
@@ -97,25 +98,30 @@ function aiPresetLabel(id: AiPresetId): string {
   return id === "quick" ? "日常问答" : id === "reflect" ? "深度复盘" : id === "review" ? "重要复盘" : "自定义";
 }
 
-export function AiSettingsCard({ status, open = false, assistantVisible, onAssistantVisibleChange, onChanged }: { readonly status: AiStatus; readonly open?: boolean; readonly assistantVisible: boolean; readonly onAssistantVisibleChange: (visible: boolean) => void; readonly onChanged: (status: AiStatus) => void }) {
+export function AiSettingsCard({ statusState, open = false, assistantVisible, onAssistantVisibleChange, onChanged, onRetry }: { readonly statusState: AiStatusState; readonly open?: boolean; readonly assistantVisible: boolean; readonly onAssistantVisibleChange: (visible: boolean) => void; readonly onChanged: (status: AiStatus) => void; readonly onRetry: () => void }) {
+  const status = statusState.status;
+  const statusReady = statusState.phase === "ready" && status !== null;
   const [expanded, setExpanded] = useState(open);
-  const [enabled, setEnabled] = useState(status.enabled);
-  const [baseUrl, setBaseUrl] = useState(status.baseUrl || AI_DEFAULT_BASE_URL);
-  const [model, setModel] = useState(status.model || "deepseek-flash");
-  const [thinking, setThinking] = useState(status.thinking);
-  const [reasoningEffort, setReasoningEffort] = useState<AiStatus["reasoningEffort"]>(status.reasoningEffort);
+  const [enabled, setEnabled] = useState(status?.enabled ?? true);
+  const [baseUrl, setBaseUrl] = useState(status?.baseUrl || AI_DEFAULT_BASE_URL);
+  const [model, setModel] = useState(status?.model || "deepseek-flash");
+  const [thinking, setThinking] = useState(status?.thinking ?? false);
+  const [reasoningEffort, setReasoningEffort] = useState<AiStatus["reasoningEffort"]>(status?.reasoningEffort ?? null);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { if (open) setExpanded(true); }, [open]);
   useEffect(() => { if (open) window.dispatchEvent(new Event("lifeos:close-ai")); }, [open]);
-  useEffect(() => { setEnabled(status.enabled); setBaseUrl(status.baseUrl || AI_DEFAULT_BASE_URL); setModel(status.model || "deepseek-flash"); setThinking(status.thinking); setReasoningEffort(status.reasoningEffort); }, [status.enabled, status.baseUrl, status.model, status.thinking, status.reasoningEffort]);
+  useEffect(() => {
+    if (status === null) return;
+    setEnabled(status.enabled); setBaseUrl(status.baseUrl || AI_DEFAULT_BASE_URL); setModel(status.model || "deepseek-flash"); setThinking(status.thinking); setReasoningEffort(status.reasoningEffort);
+  }, [status?.enabled, status?.baseUrl, status?.model, status?.thinking, status?.reasoningEffort]);
   const currentPreset = aiPresetFor(model, thinking, reasoningEffort, baseUrl);
   const call = async (path: string, body: Record<string, unknown>) => apiRequest<AiStatus & { readonly ok?: boolean; readonly message?: string }>(path, { method: "POST", body: JSON.stringify(body) });
-  const applyPreset = (preset: (typeof AI_PRESETS)[number]) => { setModel(preset.model); setThinking(preset.thinking); setReasoningEffort(preset.reasoningEffort); setMessage(null); setError(null); };
+  const applyPreset = (preset: (typeof AI_PRESETS)[number]) => { if (!statusReady) return; setModel(preset.model); setThinking(preset.thinking); setReasoningEffort(preset.reasoningEffort); setMessage(null); setError(null); };
   const save = async () => {
-    if (busy) return;
+    if (!statusReady || busy) return;
     setBusy(true); setMessage(null); setError(null);
     try {
       const next = await call("/api/ai/config", { enabled, baseUrl, model, thinking, reasoningEffort: thinking ? reasoningEffort ?? "high" : null, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
@@ -125,45 +131,48 @@ export function AiSettingsCard({ status, open = false, assistantVisible, onAssis
     finally { setBusy(false); }
   };
   const test = async () => {
-    if (busy) return;
+    if (!statusReady || busy) return;
     setBusy(true); setMessage(null); setError(null);
     try { const result = await call("/api/ai/config/test", { baseUrl, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) }); setMessage(result.message ?? "AI 服务连接成功"); }
     catch (cause) { setError(errorMessage(cause, "AI 服务连接失败，请检查地址和 API Key")); }
     finally { setBusy(false); }
   };
-  const keyConfigured = status.keyConfigured;
-  const stateLabel = !status.enabled ? "已关闭" : keyConfigured ? "已启用" : status.keyUnreadable ? "密钥读不出来" : "规则回退";
+  const keyConfigured = status?.keyConfigured === true;
+  const confirmedLabel = status === null ? null : !status.enabled ? "已关闭" : keyConfigured ? "已启用" : status.keyUnreadable ? "密钥读不出来" : "规则回退";
+  const stateLabel = statusState.phase === "ready" ? confirmedLabel : statusState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-card settings-ai-card">
     <div className="settings-ai-head">
       <div className="settings-card-icon"><Bot size={18} aria-hidden="true" /></div>
-      <div className="settings-card-copy"><strong>DeepSeek AI</strong><small>API Key：{keyConfigured ? "已配置" : "未配置"}{status.keyUnreadable ? "（文件里那把现在读不出来，重新填一次即可覆盖）" : ""} · provider：DeepSeek</small></div>
-      <span className={`settings-status ${status.enabled && keyConfigured ? "is-ready" : ""}`}>{stateLabel}</span>
+      <div className="settings-card-copy"><strong>DeepSeek AI</strong><small>API Key：{keyConfigured ? "已配置" : "未配置"}{status?.keyUnreadable ? "（文件里那把现在读不出来，重新填一次即可覆盖）" : ""} · provider：DeepSeek</small></div>
+      <span className={`settings-status ${statusState.phase === "ready" && status?.enabled && keyConfigured ? "is-ready" : ""}`} data-ai-status-phase={statusState.phase}>{stateLabel}</span>
       <button className="secondary-button settings-action" type="button" onClick={() => setExpanded((current) => !current)}>{expanded ? "收起配置" : "配置 AI"}</button>
     </div>
     <div className="settings-ai-effective" aria-label="当前生效的 AI 配置">
-      <div className="settings-ai-effective-item" data-ai-effective="model"><span>当前模型</span><strong>{status.model || "—"}</strong></div>
-      <div className="settings-ai-effective-item" data-ai-effective="thinking"><span>思考</span><strong>{status.thinking ? "开启" : "关闭"}</strong></div>
-      <div className="settings-ai-effective-item" data-ai-effective="reasoning"><span>推理强度</span><strong>{status.thinking && status.reasoningEffort !== null ? status.reasoningEffort : "— / 不启用"}</strong></div>
-      <div className="settings-ai-effective-item is-wide" data-ai-effective="base-url"><span>服务地址</span><strong title={status.baseUrl}>{status.baseUrl || "—"}</strong></div>
+      <div className="settings-ai-effective-item" data-ai-effective="model"><span>当前模型</span><strong>{status?.model || "—"}</strong></div>
+      <div className="settings-ai-effective-item" data-ai-effective="thinking"><span>思考</span><strong>{status?.thinking ? "开启" : "关闭"}</strong></div>
+      <div className="settings-ai-effective-item" data-ai-effective="reasoning"><span>推理强度</span><strong>{status?.thinking && status.reasoningEffort !== null ? status.reasoningEffort : "— / 不启用"}</strong></div>
+      <div className="settings-ai-effective-item is-wide" data-ai-effective="base-url"><span>服务地址</span><strong title={status?.baseUrl}>{status?.baseUrl || "—"}</strong></div>
       <div className="settings-ai-effective-item" data-ai-effective="key"><span>API Key</span><strong>{keyConfigured ? "已配置" : "未配置"}</strong></div>
     </div>
+    {statusState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{statusState.error}</span>{status === null ? null : <small>上次确认：{confirmedLabel}</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
+    {status === null ? <p className="settings-config-unavailable">状态确认后，才能调整 AI 服务配置或提交测试。</p> : null}
     <label className="settings-ai-visibility"><input type="checkbox" checked={assistantVisible} onChange={(event) => onAssistantVisibleChange(event.target.checked)} /><span><strong>显示 AI 助手</strong><small>只控制悬浮 AI 界面；不影响服务启用、API Key 或已保存对话。</small></span></label>
     <div className="settings-ai-presets" aria-label="AI 快捷档位">
       <div className="settings-ai-form-heading"><span>快捷档位</span><strong data-ai-current-preset={`preset-${currentPreset}`}>{aiPresetLabel(currentPreset)}</strong></div>
-      <div className="settings-ai-preset-grid">{AI_PRESETS.map((preset) => <button className={`settings-ai-preset ${currentPreset === preset.id ? "is-selected" : ""}`} data-ai-preset={preset.id} aria-pressed={currentPreset === preset.id} type="button" key={preset.id} onClick={() => applyPreset(preset)}><strong>{preset.label}<em className="settings-ai-preset-id">{preset.id}</em></strong><small>{preset.detail}</small><em>{preset.model}</em></button>)}</div>
+      <div className="settings-ai-preset-grid">{AI_PRESETS.map((preset) => <button className={`settings-ai-preset ${currentPreset === preset.id ? "is-selected" : ""}`} data-ai-preset={preset.id} aria-pressed={currentPreset === preset.id} type="button" key={preset.id} onClick={() => applyPreset(preset)} disabled={!statusReady}><strong>{preset.label}<em className="settings-ai-preset-id">{preset.id}</em></strong><small>{preset.detail}</small><em>{preset.model}</em></button>)}</div>
     </div>
     <details className="settings-ai-advanced" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary><SlidersHorizontal size={15} aria-hidden="true" /><span>高级配置：模型、服务地址、推理与密钥</span><ChevronDown size={15} aria-hidden="true" /></summary>
       <div className="settings-ai-form">
       <div className="settings-ai-fields">
-        <label><span>模型</span><input data-ai-field="model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-flash" /></label>
-        <label><span>思考开关</span><span className="settings-ai-toggle"><input data-ai-field="thinking" type="checkbox" checked={thinking} onChange={(event) => { const next = event.target.checked; setThinking(next); setReasoningEffort(next ? reasoningEffort ?? "high" : null); }} /><span>{thinking ? "开启" : "关闭"}</span></span></label>
-        <label><span>推理强度</span><select data-ai-field="reasoning-effort" value={thinking ? reasoningEffort ?? "high" : ""} disabled={!thinking} onChange={(event) => setReasoningEffort(event.target.value === "low" || event.target.value === "high" || event.target.value === "max" ? event.target.value : null)}><option value="">— / 不启用</option><option value="low">low</option><option value="high">high</option><option value="max">max</option></select></label>
-        <label><span>API Key</span><input data-ai-field="api-key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={keyConfigured ? "已保存，留空表示继续使用" : "填写 DeepSeek API Key"} autoComplete="new-password" /></label>
-        <label className="is-wide"><span>服务地址</span><input data-ai-field="base-url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={AI_DEFAULT_BASE_URL} /></label>
-        <label className="settings-ai-enabled is-wide"><input data-ai-field="enabled" type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用真实 AI；关闭后仍保留本地规则模式</span></label>
+        <label><span>模型</span><input data-ai-field="model" value={model} disabled={!statusReady} onChange={(event) => setModel(event.target.value)} placeholder="deepseek-flash" /></label>
+        <label><span>思考开关</span><span className="settings-ai-toggle"><input data-ai-field="thinking" type="checkbox" checked={thinking} disabled={!statusReady} onChange={(event) => { const next = event.target.checked; setThinking(next); setReasoningEffort(next ? reasoningEffort ?? "high" : null); }} /><span>{thinking ? "开启" : "关闭"}</span></span></label>
+        <label><span>推理强度</span><select data-ai-field="reasoning-effort" value={thinking ? reasoningEffort ?? "high" : ""} disabled={!statusReady || !thinking} onChange={(event) => setReasoningEffort(event.target.value === "low" || event.target.value === "high" || event.target.value === "max" ? event.target.value : null)}><option value="">— / 不启用</option><option value="low">low</option><option value="high">high</option><option value="max">max</option></select></label>
+        <label><span>API Key</span><input data-ai-field="api-key" type="password" value={apiKey} disabled={!statusReady} onChange={(event) => setApiKey(event.target.value)} placeholder={keyConfigured ? "已保存，留空表示继续使用" : "填写 DeepSeek API Key"} autoComplete="new-password" /></label>
+        <label className="is-wide"><span>服务地址</span><input data-ai-field="base-url" value={baseUrl} disabled={!statusReady} onChange={(event) => setBaseUrl(event.target.value)} placeholder={AI_DEFAULT_BASE_URL} /></label>
+        <label className="settings-ai-enabled is-wide"><input data-ai-field="enabled" type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} /><span>启用真实 AI；关闭后仍保留本地规则模式</span></label>
       </div>
-      <div className="settings-ai-actions"><button className="secondary-button" type="button" onClick={() => void test()} disabled={busy}>{busy ? "处理中…" : "测试连接"}</button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy || !baseUrl.trim() || !model.trim()}>{busy ? "保存中…" : "保存配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}<small className="settings-ai-note">API Key 只写入 API 服务端的加密配置文件，不进入浏览器本地存储或 SQLite 备份。</small>
+      <div className="settings-ai-actions"><button className="secondary-button" type="button" onClick={() => void test()} disabled={!statusReady || busy}>{busy ? "处理中…" : "测试连接"}</button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || !baseUrl.trim() || !model.trim()}>{busy ? "保存中…" : "保存配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}<small className="settings-ai-note">API Key 只写入 API 服务端的加密配置文件，不进入浏览器本地存储或 SQLite 备份。</small>
       </div>
     </details>
   </div>;
@@ -730,7 +739,7 @@ export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: C
   </div>;
 }
 
-export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, aiStatus, onAiStatusChange, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatus: AiStatus; onAiStatusChange: (status: AiStatus) => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherStatus, weatherProfiles, weatherActiveProfileId, onWeatherStatusChange, onWeatherProfilesChange, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherStatus: WeatherStatus | null; weatherProfiles: readonly WeatherProfile[]; weatherActiveProfileId: string | null; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
   useEffect(() => { window.requestAnimationFrame(() => pageHeadingRef.current?.focus()); }, [page]);
@@ -754,7 +763,7 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <FontSettingsCard value={uiFont} onChange={onUiFontChange} />
     : page === "integrations/weather" ? <WeatherSettingsCard status={weatherStatus} profiles={weatherProfiles} activeProfileId={weatherActiveProfileId} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} />
-    : page === "integrations/ai" ? <AiSettingsCard status={aiStatus} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} />
+    : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />
     : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS · 本机优先</strong><small>记录、设置和已保存的服务配置由当前 LifeOS 实例管理。天气、AI 和观影服务只有在你主动启用并配置后才会连接外部服务。</small></div></div>;

@@ -82,6 +82,18 @@ export interface AiStatus {
   readonly summaryPromptCustom: boolean;
 }
 
+/**
+ * A settings card may display its last confirmed value while a refresh is in
+ * flight or has failed, but it must never mistake that display value for a
+ * fresh server read that can safely drive a persistence action.
+ */
+export type ConfigReadState<T> =
+  | { readonly phase: "loading"; readonly status: T | null }
+  | { readonly phase: "ready"; readonly status: T }
+  | { readonly phase: "failed"; readonly status: T | null; readonly error: string };
+
+export type AiStatusState = ConfigReadState<AiStatus>;
+
 /** What the calendar's edit mode writes: new owner text, plus the days it cleared. */
 export interface SummaryManualResponse {
   readonly items: readonly DaySummary[];
