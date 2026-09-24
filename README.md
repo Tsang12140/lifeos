@@ -19,6 +19,7 @@ LifeOS 是一个以时间轴为核心的自托管个人生活记录工具。它�
 - 可选天气：接入和风天气（QWeather）后显示表头动画、地点、温度和日期天气，可按设备保存位置方案，也可以把当天或实时天气钉在记录上。没有 Key 时不会伪造天气。
 - 可选 AI 助手：支持配置 DeepSeek 的服务地址、模型、思考开关和推理强度；未配置或请求失败时使用本地规则回答。真实 AI 只读取非隐私记录。
 - 备份与迁移：SQLite 本地备份、按 `Asia/Shanghai` 的每日定时备份、可选 S3-compatible 对象存储、JSON/Markdown 导出和 `lifeos.export` v1 JSON 导入。
+- 可选账户模式：owner 手动创建/停用独立账号；每个账号拥有独立 SQLite、配置密钥、资产与备份目录。默认不开启，旧单用户模式保持原样。
 - 可选的“伴侣周期与亲密”日历模块：记录经期边界和亲密标记并显示非医疗周期估算；模块数据独立保存，关闭模块不会删除已有标记。
 
 ## 技术结构
@@ -98,19 +99,22 @@ npm run build
 
 | 变量 | 默认值/说明 |
 | --- | --- |
-| `LIFEOS_HOST` / `LIFEOS_PORT` | `127.0.0.1:3001`；对外监听时必须同时设置密码 |
+| `LIFEOS_HOST` / `LIFEOS_PORT` | `127.0.0.1:3001`；legacy 非回环单用户模式需密码，账户模式需 Secure Cookie 与 HTTPS Origin 白名单 |
 | `LIFEOS_DATA_DIR` | `./data`；SQLite、加密配置和本地备份的默认目录 |
-| `LIFEOS_DB_PATH` | 覆盖 SQLite 文件路径；优先于 `LIFEOS_DATA_DIR` |
-| `LIFEOS_PASSWORD` | 单用户密码；非回环绑定必填，建议使用随机长密码 |
+| `LIFEOS_DB_PATH` | 覆盖 owner/legacy SQLite 文件路径；成员空间始终强制使用各自目录下的 `lifeos.sqlite` |
+| `LIFEOS_ACCOUNT_MODE` | 默认关闭；明确设为 `1` 后启用账号登录和物理隔离租户 |
+| `LIFEOS_OWNER_USERNAME` | 账户模式首次启动时的 owner 用户名；owner 创建后与引导密码一并移除 |
+| `LIFEOS_PASSWORD` | legacy 单用户密码；账户模式只用于首次 owner 引导（至少 10 字符），owner 建立后移除用户名与密码两个引导值 |
 | `LIFEOS_ALLOWED_ORIGINS` | 逗号分隔的 Web Origin 白名单；不要用任意来源替代明确白名单 |
-| `LIFEOS_COOKIE_SECURE` | HTTPS 反向代理后设为 `true` |
+| `LIFEOS_COOKIE_SECURE` | 账户模式必须为 `true`；HTTPS 反向代理后也应设为 `true` |
 | `LIFEOS_BODY_LIMIT_BYTES` | JSON 请求体上限，默认 1 MiB；导入较大 bundle 时按需调高 |
 | `LIFEOS_ASSET_ROOT` | 可选的本地原件根目录；只读预览会拒绝越界路径 |
 | `LIFEOS_BACKUP_DIR` / `BACKUP_DIR` | 覆盖本地备份目录，默认是数据目录下的 `backups/` |
 | `LIFEOS_DEEPSEEK_API_KEY` / `LIFEOS_DEEPSEEK_MODEL` / `LIFEOS_DEEPSEEK_BASE_URL` | 启动时配置可选 DeepSeek；也可在设置页配置 |
-| `LIFEOS_AI_CONFIG_SECRET` | 设置页保存 AI Key 时使用的加密口令；不设置则依次使用 `LIFEOS_PASSWORD` 或本地目录派生值 |
+| `LIFEOS_AI_CONFIG_SECRET` | 设置页保存 AI Key 时使用的加密口令；生产部署请固定强随机值，避免移除首次引导密码后 owner 密钥无法解密 |
 | `QWEATHER_KEY` / `QWEATHER_LOCATION` / `QWEATHER_CITY` / `QWEATHER_HOST` | 启动时配置可选和风天气；也可在设置页配置 |
-| `LIFEOS_WEATHER_CONFIG_SECRET` | 设置页保存天气 Key 时使用的加密口令 |
+| `LIFEOS_WEATHER_CONFIG_SECRET` | 设置页保存天气 Key 时使用的加密口令；应固定并持久保存 |
+| `LIFEOS_MOVIE_CONFIG_SECRET` | 设置页保存观影服务 Key 时使用的加密口令；应固定并持久保存 |
 | `BACKUP_S3_*` | 可选 S3-compatible 备份的 Endpoint、Region、Bucket、Prefix、Path-style 和密钥 |
 | `LIFEOS_BACKUP_CONFIG_SECRET` | 设置页保存对象存储密钥时使用的加密口令 |
 
@@ -122,7 +126,8 @@ API 默认前缀为 `/api`，所有写请求使用 JSON。密码模式下，除�
 
 | 路径组 | 用途 |
 | --- | --- |
-| `/api/health`、`/api/auth/*` | 健康检查、登录、会话状态和退出 |
+| `/api/health`、`/api/auth/*` | 健康检查、登录、会话状态和退出；账户模式使用账号 + 密码，旧共享密码入口不可绕过 |
+| `/api/admin/accounts` | 账户模式下仅 owner 可列出、创建、停用账号及重置密码；不开放公开注册 |
 | `/api/records`、`/api/summaries` | 记录 CRUD、日期/关键词筛选、任务状态和日摘要 |
 | `/api/entities`、`/api/assets` | 人物/地点/项目/主题与外部资产引用 CRUD |
 | `/api/export`、`/api/import` | JSON/Markdown 导出与 `lifeos.export` v1 导入 |
@@ -135,23 +140,39 @@ API 默认前缀为 `/api`，所有写请求使用 JSON。密码模式下，除�
 
 ## 部署与安全
 
-LifeOS 面向单用户自托管。部署到局域网、公网或容器时请把以下事项当作必需配置：
+LifeOS 默认保持旧的单用户本机模式；账户模式是显式开启的可选部署方式，一个账号对应一个私有空间，不支持公开注册或共享空间。停用账号会立即撤销已有会话。部署到公网或容器时请把以下事项当作必需配置：
 
-1. 非回环监听（例如 Docker Compose 的 `0.0.0.0`）必须设置 `LIFEOS_PASSWORD`。密码模式使用 HttpOnly、SameSite=Lax 会话 cookie，并对登录失败做简单限流。
-2. 公网部署应放在 HTTPS 反向代理之后，并设置 `LIFEOS_COOKIE_SECURE=true`；`LIFEOS_ALLOWED_ORIGINS` 只填写实际 Web Origin。
-3. 使用专用的数据目录和备份目录，不要把整个 NAS、照片根目录或宿主机根目录挂载给 LifeOS。SQLite 数据目录不要放在 SMB/NFS 网络共享上。
-4. 不要把 `.env`、SQLite 文件、备份、运行日志、`LIFEOS_ASSET_ROOT` 下的原件或任何真实导出文件加入 Git。公开仓库的 `.gitignore` 已排除这些常见本地数据范围，但提交前仍应运行 `git status --ignored` 检查。
-5. 启用 AI、天气或对象存储前，先确认第三方服务的数据保留、区域、费用和访问策略。AI 助手只组装非隐私记录，但启用真实服务仍意味着这些记录会发往所配置的 AI 服务。
-6. 对象存储配置页的 Access Key、Secret Key、AI Key 和天气 Key 只在 API 服务端使用，并以 AES-256-GCM 加密写入数据目录；请限制数据目录权限并使用独立的最小权限凭据。
+1. 公网账户模式必须置于 HTTPS 反向代理后，并设置 `LIFEOS_ACCOUNT_MODE=1`、`LIFEOS_COOKIE_SECURE=true` 和精确的 `LIFEOS_ALLOWED_ORIGINS`（例如 `https://lifeos.dnbox.cn`）。反向代理需保留原始 `Host` 与 `Origin`；API 会拒绝不在白名单内的来源。
+2. Compose 只把容器端口绑定到宿主机 `127.0.0.1:3001`。宝塔反向代理上游应为 `http://127.0.0.1:3001`，不要再配置公网直连端口；同时启用 HTTPS 证书并让代理向上游传递 `$host` 和 `$http_origin`。
+3. 首次 owner 引导需同时设置 `LIFEOS_OWNER_USERNAME` 与至少 10 字符的 `LIFEOS_PASSWORD`。确认 owner 能登录后，移除这两个引导值并重启；账号、会话和租户身份保存在持久卷的 `/data/identity.sqlite`。所有配置与随机租户目录也必须随 `/data` 一起持久化。
+4. 移除引导密码前，应先为 `LIFEOS_AI_CONFIG_SECRET`、`LIFEOS_WEATHER_CONFIG_SECRET`、`LIFEOS_MOVIE_CONFIG_SECRET` 与 `LIFEOS_BACKUP_CONFIG_SECRET` 设置并固定强随机值，再保存对应的集成密钥；不要轮换这些值，否则旧密文将无法解密。新租户使用独立派生种子，不继承 owner 的绝对 DB、资产或备份路径。
+5. 给 Compose 配置持久化的空 `/data` 卷，并显式设 owner 资产目录 `LIFEOS_ASSET_ROOT=/data/assets`。新租户资产与本地备份由服务端放入独立子目录。启用旧实例账户模式前，先在数据库和资产副本上演练备份、回退和解密；本项目的首次部署示例以空库为目标，不会自动迁移已有单用户数据。
+6. 不要把 `.env`、SQLite 文件、备份、运行日志、资产原件或真实导出文件加入 Git；SQLite 数据目录不要放在 SMB/NFS 网络共享上。
+7. 启用 AI、天气或对象存储前，先确认第三方服务的数据保留、区域、费用和访问策略。AI 助手只组装非隐私记录，但启用真实服务仍意味着这些记录会发往所配置的 AI 服务。
 
-Docker Compose 示例：
+在服务器 `.env`（不要提交 Git）中配置并在首次成功创建 owner 后删除两项引导值：
 
-```powershell
-$env:LIFEOS_PASSWORD = "replace-with-a-long-random-password"
+```dotenv
+LIFEOS_ACCOUNT_MODE=1
+LIFEOS_OWNER_USERNAME=owner
+LIFEOS_PASSWORD=<至少 10 字符的强随机引导密码>
+LIFEOS_COOKIE_SECURE=true
+LIFEOS_ALLOWED_ORIGINS=https://lifeos.dnbox.cn
+LIFEOS_ASSET_ROOT=/data/assets
+# 四个 *_CONFIG_SECRET 使用各自不同的强随机值，并长期固定
+LIFEOS_AI_CONFIG_SECRET=<随机密钥>
+LIFEOS_WEATHER_CONFIG_SECRET=<随机密钥>
+LIFEOS_MOVIE_CONFIG_SECRET=<随机密钥>
+LIFEOS_BACKUP_CONFIG_SECRET=<随机密钥>
+```
+
+启动命令：
+
+```bash
 docker compose up -d --build
 ```
 
-Compose 使用命名卷保存 `/data`。首次上线前请自行验证反向代理、卷权限、备份恢复和日志轮转；仓库提供配置和脚本，不替代目标环境的运维演练。
+确认 owner 登录成功后，从服务器 `.env` 删除 `LIFEOS_OWNER_USERNAME` 与 `LIFEOS_PASSWORD` 并重启容器；不要删除身份库或 `/data` 卷。Compose 使用命名卷保存 `/data`，且端口只暴露在宿主机回环。首次上线前仍须在目标环境确认 DNS、证书、反向代理原始 Host/Origin、卷权限、备份恢复和日志轮转；本仓库不连接或操作用户服务器。
 
 ## 隐私、数据和备份
 
@@ -172,7 +193,7 @@ npm run backup -- data/lifeos.sqlite backup/lifeos.sqlite
 
 ## 当前边界
 
-- 当前是单用户 Web 应用，不提供多租户、角色权限或团队协作模型。
+- 可选账户模式已由本地隔离 API/CDP 验收覆盖；生产空库部署仍需由部署者验证 DNS、HTTPS 反代、持久卷与恢复流程。首版仅 owner 管理独立账号，不提供公开注册、共享空间或团队协作模型。
 - 外部资产目前是引用/只读预览链路，不是照片库同步或通用上传服务；Synology Photos、NAS 专用 API、离线同步、原生 App、语音转写和外部日历同步仍属于后续适配方向。
 - AI 和天气是可选集成，网络、供应商可用性、Key 权限和费用由部署者负责；无 Key 时核心记录功能仍可用。
 - 周/月摘要在没有 AI Key 时使用本地规则生成。周期模块的预测仅为非医疗的日历估算，不应作为诊断、避孕或治疗依据。

@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 const HASH_BYTES = 64;
+const MAX_MEMBER_ACCOUNTS = 64;
 const SCRYPT_OPTIONS = { N: 16_384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
 
 export type AccountRole = "owner" | "member";
@@ -130,6 +131,7 @@ export class IdentityStore {
 
   public ensureOwner(usernameValue: string, password: string): AccountIdentity {
     const username = assertAccountUsername(usernameValue);
+    if (password.length < 10 || password.length > 1024) throw new Error("密码长度需为 10–1024 个字符");
     const existing = this.#db.prepare("SELECT a.id, a.username, a.display_name, t.space_name, a.tenant_id, a.role, a.disabled_at FROM accounts a JOIN tenants t ON t.id = a.tenant_id WHERE a.role = 'owner' LIMIT 1").get() as Record<string, unknown> | undefined;
     if (existing !== undefined) return accountRow(existing);
     const count = this.#db.prepare("SELECT COUNT(*) AS count FROM accounts").get() as { count: number };
@@ -166,7 +168,8 @@ export class IdentityStore {
   public createSession(accountId: string, tokenHash: string, expiresAt: number): void {
     const now = Date.now();
     this.#db.prepare("DELETE FROM identity_sessions WHERE expires_at <= ?").run(now);
-    this.#db.prepare("INSERT INTO identity_sessions (token_hash, account_id, expires_at, created_at) SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND disabled_at IS NULL").run(tokenHash, expiresAt, now, accountId);
+    const result = this.#db.prepare("INSERT INTO identity_sessions (token_hash, account_id, expires_at, created_at) SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND disabled_at IS NULL").run(tokenHash, expiresAt, now, accountId);
+    if (result.changes !== 1) throw new Error("账号已停用");
   }
 
   public session(tokenHash: string, now = Date.now()): IdentitySession | null {
@@ -210,6 +213,8 @@ export class IdentityStore {
     const passwordHash = await hashAccountPassword(input.password);
     this.#db.exec("BEGIN IMMEDIATE");
     try {
+      const count = this.#db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE role = 'member'").get() as { count: number };
+      if (count.count >= MAX_MEMBER_ACCOUNTS) throw new Error(`最多可创建 ${MAX_MEMBER_ACCOUNTS} 个独立账号`);
       this.#db.prepare("INSERT INTO tenants (id, space_name, role, created_at) VALUES (?, ?, 'member', ?)").run(tenantId, spaceName, createdAt);
       this.#db.prepare("INSERT INTO accounts (id, username, display_name, password_hash, tenant_id, role, created_at) VALUES (?, ?, ?, ?, ?, 'member', ?)").run(id, username, displayName, passwordHash, tenantId, createdAt);
       this.#db.exec("COMMIT");
@@ -228,6 +233,23 @@ export class IdentityStore {
     this.#db.exec("BEGIN IMMEDIATE");
     try {
       this.#db.prepare("UPDATE accounts SET disabled_at = ? WHERE id = ?").run(Date.now(), accountId);
+      this.#db.prepare("DELETE FROM identity_sessions WHERE account_id = ?").run(accountId);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  public async resetAccountPassword(accountId: string, password: string): Promise<void> {
+    if (password.length < 10 || password.length > 1024) throw new Error("密码长度需为 10–1024 个字符");
+    const account = this.#db.prepare("SELECT role FROM accounts WHERE id = ?").get(accountId) as { role?: unknown } | undefined;
+    if (account === undefined) throw new Error("账号不存在");
+    if (account.role === "owner") throw new Error("不能从此处重置 owner 密码");
+    const passwordHash = await hashAccountPassword(password);
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#db.prepare("UPDATE accounts SET password_hash = ? WHERE id = ? AND role <> 'owner'").run(passwordHash, accountId);
       this.#db.prepare("DELETE FROM identity_sessions WHERE account_id = ?").run(accountId);
       this.#db.exec("COMMIT");
     } catch (error) {

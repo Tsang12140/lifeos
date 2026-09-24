@@ -238,6 +238,16 @@ function noteUpdatedAt(record: RecordView): string {
 const RECORDS_CACHE_LIMIT = 24;
 const DEFAULT_MOVIE_MODULE_STATUS: MovieModuleStatus = { enabled: false, configured: false, keyConfigured: false, connected: false };
 
+function clearTenantSensitiveBrowserStorage(): void {
+  try {
+    for (const key of ["lifeos.ai.chat", "lifeos.composerShots", "lifeos.hideDemo", "lifeos.moviePromptHidden"]) window.localStorage.removeItem(key);
+  } catch { /* Browser storage is optional; in-memory state is discarded on reload. */ }
+}
+
+function loggedOutAuth(previous: AuthState): AuthState {
+  return { required: true, authenticated: false, ...(previous.accountMode === true ? { accountMode: true } : {}) };
+}
+
 function cacheRecords(
   cache: Map<string, { readonly items: readonly RecordView[]; readonly selectedDate: string }>,
   queryPath: string,
@@ -303,7 +313,8 @@ function App() {
   /** Held outside React state so clearing a toast can cancel its own timer. A
    *  toast that outlives its welcome leaves a dead "撤销" on screen. */
   const toastTimer = useRef<number | null>(null);
-  const [authState, setAuthState] = useState<AuthState>({ required: false, authenticated: true });
+  const [authState, setAuthState] = useState<AuthState>({ required: true, authenticated: false });
+  const [authResolved, setAuthResolved] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
@@ -361,7 +372,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recordsRef = useRef<readonly RecordView[]>([]);
   const recordsLoadedRef = useRef(false);
-  const authRef = useRef<AuthState>({ required: false, authenticated: true });
+  const authRef = useRef<AuthState>({ required: true, authenticated: false });
   const recordsRequestRef = useRef(0);
   const recordsCacheRef = useRef(new Map<string, { readonly items: readonly RecordView[]; readonly selectedDate: string }>());
   const recordsPrefetchRef = useRef(new Map<string, AbortController>());
@@ -521,7 +532,7 @@ function App() {
   const handleRequestError = useCallback((error: unknown, fallback: string): string => {
     if (errorStatus(error) === 401) {
       invalidateRecordsCache();
-      const nextAuth = { required: true, authenticated: false } as const;
+      const nextAuth = loggedOutAuth(authRef.current);
       authRef.current = nextAuth;
       setRecords(null);
       setRecordsQueryPath(null);
@@ -536,7 +547,7 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    apiRequest<AuthState>("/api/auth", { signal: controller.signal }).then((state) => { authRef.current = state; setAuthState(state); }).catch((error) => { if (!controller.signal.aborted && errorStatus(error) === 401) { const nextAuth = { required: true, authenticated: false } as const; authRef.current = nextAuth; setAuthState(nextAuth); } });
+    apiRequest<AuthState>("/api/auth", { signal: controller.signal }).then((state) => { authRef.current = state; setAuthState(state); setAuthResolved(true); }).catch((error) => { if (!controller.signal.aborted) { if (errorStatus(error) === 401) { const nextAuth = loggedOutAuth(authRef.current); authRef.current = nextAuth; setAuthState(nextAuth); } else setAuthError(errorMessage(error, "无法连接 LifeOS API")); setAuthResolved(true); } });
     return () => controller.abort();
   }, []);
 
@@ -552,7 +563,7 @@ function App() {
     }).catch((error) => {
       if (controller.signal.aborted) return;
       if (errorStatus(error) === 401) {
-        const nextAuth = { required: true, authenticated: false } as const;
+        const nextAuth = loggedOutAuth(authRef.current);
         authRef.current = nextAuth;
         setAuthState(nextAuth);
         setAiStatusState({ phase: "failed", status: null, error: "需要重新登录后才能读取 AI 状态" });
@@ -575,7 +586,7 @@ function App() {
     }).catch((error) => {
       if (controller.signal.aborted) return;
       if (errorStatus(error) === 401) {
-        const nextAuth = { required: true, authenticated: false } as const;
+        const nextAuth = loggedOutAuth(authRef.current);
         authRef.current = nextAuth;
         setAuthState(nextAuth);
         setMovieStatusState({ phase: "failed", status: null, error: "需要重新登录后才能读取观影状态" });
@@ -599,7 +610,7 @@ function App() {
     }).catch((error) => {
       if (controller.signal.aborted) return;
       if (errorStatus(error) === 401) {
-        const nextAuth = { required: true, authenticated: false } as const;
+        const nextAuth = loggedOutAuth(authRef.current);
         authRef.current = nextAuth;
         setAuthState(nextAuth);
         setWeatherProfilesState({ phase: "failed", status: null, error: "需要重新登录后才能读取天气配置" });
@@ -1276,19 +1287,39 @@ function App() {
     if (!importFile || importBusy) return;
     setImportBusy(true);
     setImportError(null);
-    try { const bundle = JSON.parse(await importFile.text()) as unknown; await apiRequest<unknown>("/api/import", { method: "POST", body: JSON.stringify({ bundle }) }); setImportFile(null); showToast("备份已导入"); refresh(); } catch (error) { setImportError(errorMessage(error, "导入失败，请检查 JSON 文件")); if (errorStatus(error) === 401) { invalidateRecordsCache(); const nextAuth = { required: true, authenticated: false } as const; authRef.current = nextAuth; setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); } } finally { setImportBusy(false); }
+    try { const bundle = JSON.parse(await importFile.text()) as unknown; await apiRequest<unknown>("/api/import", { method: "POST", body: JSON.stringify({ bundle }) }); setImportFile(null); showToast("备份已导入"); refresh(); } catch (error) { setImportError(errorMessage(error, "导入失败，请检查 JSON 文件")); if (errorStatus(error) === 401) { invalidateRecordsCache(); const nextAuth = loggedOutAuth(authRef.current); authRef.current = nextAuth; setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); } } finally { setImportBusy(false); }
   };
 
   const handleLogout = async () => {
     if (logoutBusy) return;
     setLogoutBusy(true);
-    try { await apiRequest<unknown>("/api/auth/logout", { method: "POST" }); invalidateRecordsCache(); const nextAuth: AuthState = { required: true, authenticated: false }; authRef.current = nextAuth; setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); setMobileMenuOpen(false); } catch (error) { showToast(handleRequestError(error, "退出失败，请重试")); } finally { setLogoutBusy(false); }
+    try {
+      await apiRequest<unknown>("/api/auth/logout", { method: "POST" });
+      invalidateRecordsCache();
+      if (authState.accountMode) {
+        clearTenantSensitiveBrowserStorage();
+        window.location.reload();
+        return;
+      }
+      const nextAuth: AuthState = { required: true, authenticated: false };
+      authRef.current = nextAuth;
+      setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); setTasks(null); recordsRef.current = []; setAuthState(nextAuth); setMobileMenuOpen(false);
+    } catch (error) { showToast(handleRequestError(error, "退出失败，请重试")); }
+    finally { setLogoutBusy(false); }
   };
 
-  const handleLogin = async (password: string) => {
+  const handleLogin = async (username: string, password: string) => {
     setLoginLoading(true);
     setAuthError(null);
-    try { const state = await apiRequest<AuthState>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) }); invalidateRecordsCache(); setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); authRef.current = state; setAuthState(state); } catch (error) { setAuthError(errorMessage(error, "密码不正确")); } finally { setLoginLoading(false); }
+    try {
+      if (authState.accountMode) clearTenantSensitiveBrowserStorage();
+      const body = authState.accountMode ? { username, password } : { password };
+      const state = await apiRequest<AuthState>("/api/auth/login", { method: "POST", body: JSON.stringify(body) });
+      invalidateRecordsCache();
+      if (authState.accountMode) { window.location.reload(); return; }
+      setRecords(null); setRecordsQueryPath(null); setRecordsDisplayedDate(null); setRecordsErrorQueryPath(null); authRef.current = state; setAuthState(state);
+    } catch (error) { setAuthError(errorMessage(error, "账号或密码不正确")); }
+    finally { setLoginLoading(false); }
   };
 
   const isToday = activeView === "today";
@@ -1353,7 +1384,8 @@ function App() {
     onClose: () => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); },
   };
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
-  if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
+  if (!authResolved) return <main className="auth-screen"><div className="auth-panel surface" role="status"><LoaderCircle className="spin" size={22} aria-hidden="true" /><p className="auth-description">正在检查账号会话…</p></div></main>;
+  if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} accountMode={authState.accountMode === true} />;
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
   const openCalendarBackfill = () => {
@@ -1364,7 +1396,7 @@ function App() {
   const onNavigate = navigate;
 
   return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form><button className="icon-button mobile-search-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="搜索记录"><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
-       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherProfilesState={weatherProfilesState} onWeatherStatusChange={onWeatherStatusChange} onWeatherProfilesChange={onWeatherProfilesChange} onRetryWeatherProfiles={retryWeatherProfiles} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
+       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} accountMode={authState.accountMode === true} account={authState.account} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherProfilesState={weatherProfilesState} onWeatherStatusChange={onWeatherStatusChange} onWeatherProfilesChange={onWeatherProfilesChange} onRetryWeatherProfiles={retryWeatherProfiles} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "notes"

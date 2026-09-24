@@ -43,6 +43,10 @@ function deriveConfigSecret(masterSecret: string, tenantId: string, module: stri
 export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, masterSecret: string): ApiConfig {
   const dataDirectory = ensureTenantDirectory(root, account.tenantId);
   const {
+    password: _rootPassword,
+    ownerUsername: _ownerUsername,
+    accountMode: _accountMode,
+    gatewayAuthenticated: _gatewayAuthenticated,
     deepseekApiKey: _deepseekApiKey,
     qweatherApiKey: _qweatherApiKey,
     qweatherLocation: _qweatherLocation,
@@ -53,6 +57,8 @@ export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, maste
   } = root;
   return {
     ...safeRoot,
+    accountMode: false,
+    gatewayAuthenticated: true,
     dataDirectory,
     databasePath: join(dataDirectory, "lifeos.sqlite"),
     assetRoot: join(dataDirectory, "assets"),

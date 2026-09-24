@@ -54,6 +54,8 @@ import {
 } from "@lifeos/core";
 import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
+import { IdentityStore, type AccountIdentity, type PublicAccount } from "./identity-store.js";
+import { tenantConfigFor } from "./tenant-config.js";
 import { HttpError, backupHttpError, setJson, setEmpty } from "./http-kit.js";
 import {
   type JsonObject,
@@ -159,6 +161,24 @@ import { readBody, requireJsonContentType, readRawBody } from "./http-body.js";
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const LOGIN_FAILURE_TTL_MS = 15 * 60 * 1000;
+const MAX_LOGIN_FAILURE_BUCKETS = 4096;
+interface LoginFailureBucket { readonly failures: number; readonly blockedUntil: number; readonly lastFailureAt: number; }
+
+function pruneLoginFailures(failures: Map<string, LoginFailureBucket>, now: number): void {
+  for (const [key, bucket] of failures) if (now - bucket.lastFailureAt > LOGIN_FAILURE_TTL_MS) failures.delete(key);
+}
+
+function recordLoginFailure(failures: Map<string, LoginFailureBucket>, key: string, previous: LoginFailureBucket | undefined, now: number): void {
+  failures.delete(key);
+  if (failures.size >= MAX_LOGIN_FAILURE_BUCKETS) {
+    const oldest = failures.keys().next().value as string | undefined;
+    if (oldest !== undefined) failures.delete(oldest);
+  }
+  const count = (previous?.failures ?? 0) + 1;
+  failures.set(key, { failures: count, blockedUntil: count >= 5 ? now + 60_000 : 0, lastFailureAt: now });
+}
+
 const RECORD_KINDS: readonly RecordKind[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
 const ENTITY_KINDS: readonly EntityKind[] = ["person", "project", "place", "topic", "movie"];
@@ -305,7 +325,8 @@ export const requestLog = (() => {
 
 
 function createApp(config: ApiConfig, repository = new SqliteRecordRepository(config.databasePath)): LifeosApp {
-  const loginFailures = new Map<string, { failures: number; blockedUntil: number }>();
+  const loginFailures = new Map<string, LoginFailureBucket>();
+  let lastLoginFailureSweepAt = 0;
   const backupScheduler = new BackupScheduler({
     repository,
     config,
@@ -360,7 +381,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   function checkRequestSecurity(req: IncomingMessage): void {
     // Passwordless mode is intentionally safe only on the loopback interface and
     // rejects a hostile Host header to prevent DNS-rebinding reads/writes.
-    if (config.password === undefined && !localHostAllowed(req)) {
+    if (config.password === undefined && config.gatewayAuthenticated !== true && !localHostAllowed(req)) {
       throw new HttpError(421, "invalid_host", "Passwordless mode accepts loopback Host headers only");
     }
     if (!originAllowed(req, config)) throw new HttpError(403, "origin_not_allowed", "Origin is not allowed");
@@ -396,16 +417,17 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
         return;
       }
       const loginKey = req.socket.remoteAddress ?? "unknown";
+      const now = Date.now();
+      if (now - lastLoginFailureSweepAt >= 60_000) { pruneLoginFailures(loginFailures, now); lastLoginFailureSweepAt = now; }
       const attempt = loginFailures.get(loginKey);
-      if (attempt !== undefined && attempt.blockedUntil > Date.now()) {
-        res.setHeader("retry-after", String(Math.ceil((attempt.blockedUntil - Date.now()) / 1000)));
+      if (attempt !== undefined && attempt.blockedUntil > now) {
+        res.setHeader("retry-after", String(Math.ceil((attempt.blockedUntil - now) / 1000)));
         throw new HttpError(429, "login_rate_limited", "登录尝试过多，请稍后再试");
       }
       const expected = Buffer.from(config.password);
       const actual = Buffer.from(password);
       if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-        const failures = (attempt?.failures ?? 0) + 1;
-        loginFailures.set(loginKey, { failures, blockedUntil: failures >= 5 ? Date.now() + 60_000 : 0 });
+        recordLoginFailure(loginFailures, loginKey, attempt, Date.now());
         throw new HttpError(401, "invalid_credentials", "Invalid credentials");
       }
       loginFailures.delete(loginKey);
@@ -524,8 +546,258 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   return app;
 }
 
+function accountOwnerConfig(config: ApiConfig): ApiConfig {
+  const { password: _bootstrapPassword, ownerUsername: _ownerUsername, ...withoutBootstrap } = config;
+  return { ...withoutBootstrap, accountMode: false, gatewayAuthenticated: true };
+}
+
+function accountHostAllowed(req: IncomingMessage, config: ApiConfig): boolean {
+  const host = req.headers.host?.trim().toLowerCase();
+  const name = hostName(host);
+  if (name === undefined) return false;
+  if (isLoopbackHost(name)) return true;
+  const allowedHosts = new Set(config.allowedOrigins.flatMap((origin) => {
+    try { return [new URL(origin).host.toLowerCase()]; } catch { return []; }
+  }));
+  return host !== undefined && allowedHosts.has(host);
+}
+
+function accountOriginAllowed(req: IncomingMessage, config: ApiConfig): boolean {
+  const origin = requestOrigin(req);
+  if (origin !== undefined && !config.allowedOrigins.includes(origin)) return false;
+  return accountHostAllowed(req, config);
+}
+
+function accountPublicView(account: AccountIdentity | PublicAccount) {
+  return {
+    id: account.id,
+    username: account.username,
+    displayName: account.displayName,
+    spaceName: account.spaceName,
+    tenantId: account.tenantId,
+    role: account.role,
+  };
+}
+
+function accountAdminError(error: unknown): HttpError {
+  const message = error instanceof Error ? error.message : "账号操作失败";
+  if (message === "账号不存在") return new HttpError(404, "account_not_found", message);
+  if (message === "账号已存在" || message.startsWith("最多可创建 ")) return new HttpError(409, "account_conflict", message);
+  if (/^(账号需为|密码长度|显示名称|空间名称|不能停用|不能从此处重置)/.test(message)) return new HttpError(400, "invalid_account_operation", message);
+  return new HttpError(500, "account_operation_failed", "账号操作失败");
+}
+
+function createAccountModeApp(config: ApiConfig): LifeosApp {
+  if (!config.cookieSecure) throw new Error("账户模式必须启用 LIFEOS_COOKIE_SECURE=true");
+  if (!config.allowedOrigins.some((origin) => {
+    try { return new URL(origin).protocol === "https:"; } catch { return false; }
+  })) throw new Error("账户模式必须在 LIFEOS_ALLOWED_ORIGINS 配置至少一个 HTTPS Origin");
+
+  const identity = new IdentityStore(resolve(config.dataDirectory, "identity.sqlite"));
+  const currentAccounts = identity.listAccounts();
+  const existingOwner = currentAccounts.find((account) => account.role === "owner");
+  let owner: AccountIdentity | PublicAccount;
+  if (existingOwner !== undefined) {
+    owner = existingOwner;
+  } else {
+    if (!config.ownerUsername || !config.password) {
+      identity.close();
+      throw new Error("首次启用账户模式需设置 LIFEOS_OWNER_USERNAME 与 LIFEOS_PASSWORD；owner 建立后可移除这两个引导值");
+    }
+    try { owner = identity.ensureOwner(config.ownerUsername, config.password); }
+    catch (error) { identity.close(); throw error; }
+  }
+
+  const ownerConfig = accountOwnerConfig(config);
+  const apps = new Map<string, { readonly app: LifeosApp; lastUsedAt: number }>();
+  const appFor = (account: AccountIdentity | PublicAccount): LifeosApp => {
+    const key = account.tenantId;
+    const existing = apps.get(key);
+    if (existing !== undefined) {
+      existing.lastUsedAt = Date.now();
+      return existing.app;
+    }
+    const tenantConfig = account.role === "owner" ? ownerConfig : tenantConfigFor(config, account, identity.configMasterSecret);
+    const app = createApp(tenantConfig);
+    apps.set(key, { app, lastUsedAt: Date.now() });
+    return app;
+  };
+
+  try {
+    // Start each enabled tenant's schedulers at boot, rather than waiting for its
+    // first interactive request. A newly created account is also started below.
+    for (const account of identity.listAccounts()) if (!account.disabled) appFor(account);
+    const ownerApp = appFor(owner);
+    const loginFailures = new Map<string, LoginFailureBucket>();
+    let lastLoginFailureSweepAt = 0;
+    const ttlMs = SESSION_TTL_MS;
+    let closed = false;
+
+    const sessionFor = (req: IncomingMessage) => {
+      const token = cookieValue(req, SESSION_COOKIE);
+      return token === undefined ? null : identity.session(identity.tokenHash(token));
+    };
+
+    const handleAccountRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      const startedAt = Date.now();
+      let path = "/";
+      try {
+        path = rawPathname(req);
+        const isApi = path === "/api" || path.startsWith("/api/");
+        if (!accountOriginAllowed(req, config)) throw new HttpError(403, "origin_not_allowed", "Origin or Host is not allowed");
+        if (isApi) {
+          const url = new URL(req.url ?? "/", "http://lifeos.invalid");
+          if (path === "/api/auth" && req.method === "GET") {
+            const session = sessionFor(req);
+            setJson(res, 200, {
+              required: true,
+              authenticated: session !== null,
+              accountMode: true,
+              ...(session === null ? {} : { account: accountPublicView(session.account) }),
+            });
+            return;
+          }
+          if (path === "/api/auth/login" && req.method === "POST") {
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+            hasOnlyKeys(input, ["username", "password"]);
+            const username = stringField(input.username, "username", { nonEmpty: true });
+            const password = stringField(input.password, "password", { nonEmpty: true });
+            const remote = req.socket.remoteAddress ?? "unknown";
+            const loginKey = `${remote}:${createHash("sha256").update(username.toLowerCase(), "utf8").digest("hex")}`;
+            const now = Date.now();
+            if (now - lastLoginFailureSweepAt >= 60_000) { pruneLoginFailures(loginFailures, now); lastLoginFailureSweepAt = now; }
+            const attempt = loginFailures.get(loginKey);
+            if (attempt !== undefined && attempt.blockedUntil > now) {
+              res.setHeader("retry-after", String(Math.ceil((attempt.blockedUntil - now) / 1000)));
+              throw new HttpError(429, "login_rate_limited", "登录尝试过多，请稍后再试");
+            }
+            const account = await identity.authenticate(username, password);
+            if (account === null) {
+              recordLoginFailure(loginFailures, loginKey, attempt, Date.now());
+              throw new HttpError(401, "invalid_credentials", "账号或密码不正确");
+            }
+            loginFailures.delete(loginKey);
+            const token = randomBytes(32).toString("base64url");
+            const tokenHash = identity.tokenHash(token);
+            identity.createSession(account.id, tokenHash, Date.now() + ttlMs);
+            const session = identity.session(tokenHash);
+            if (session === null) throw new HttpError(401, "account_disabled", "账号已停用");
+            appFor(session.account);
+            setJson(res, 200, {
+              required: true,
+              authenticated: true,
+              accountMode: true,
+              account: accountPublicView(session.account),
+            }, { "set-cookie": cookieHeader(token, config, ttlMs / 1000) });
+            return;
+          }
+          if (path === "/api/auth/logout" && req.method === "POST") {
+            requireJsonContentType(req, true);
+            const token = cookieValue(req, SESSION_COOKIE);
+            if (token !== undefined) identity.deleteSession(identity.tokenHash(token));
+            setEmpty(res, 204, { "set-cookie": cookieHeader("", config, 0) });
+            return;
+          }
+
+          const session = sessionFor(req);
+          if (session === null) throw new HttpError(401, "authentication_required", "Authentication required");
+          if (path === "/api/admin/accounts") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理账号");
+            if (req.method === "GET") {
+              setJson(res, 200, { accounts: identity.listAccounts().map((account) => ({
+                ...accountPublicView(account), disabled: account.disabled, createdAt: account.createdAt,
+              })) });
+              return;
+            }
+            if (req.method === "POST") {
+              requireJsonContentType(req);
+              const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+              hasOnlyKeys(input, ["username", "password", "displayName", "spaceName"]);
+              let account: PublicAccount;
+              try {
+                account = await identity.createAccount({
+                  username: stringField(input.username, "username", { nonEmpty: true }),
+                  password: stringField(input.password, "password", { nonEmpty: true }),
+                  displayName: stringField(input.displayName, "displayName", { nonEmpty: true }),
+                  spaceName: stringField(input.spaceName, "spaceName", { nonEmpty: true }),
+                });
+              } catch (error) { throw accountAdminError(error); }
+              try { appFor(account); }
+              catch (error) { identity.disableAccount(account.id); throw error; }
+              setJson(res, 201, { account: { ...accountPublicView(account), disabled: false, createdAt: account.createdAt } });
+              return;
+            }
+            throw new HttpError(405, "method_not_allowed", "Method not allowed");
+          }
+          const disableMatch = path.match(/^\/api\/admin\/accounts\/([0-9a-f-]{36})\/disable$/i);
+          if (disableMatch !== null && req.method === "POST") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理账号");
+            requireJsonContentType(req, true);
+            const target = identity.listAccounts().find((account) => account.id === disableMatch[1]);
+            try { identity.disableAccount(disableMatch[1]!); }
+            catch (error) { throw accountAdminError(error); }
+            if (target !== undefined) {
+              const entry = apps.get(target.tenantId);
+              if (entry !== undefined) { entry.app.close(); apps.delete(target.tenantId); }
+            }
+            setJson(res, 200, { ok: true });
+            return;
+          }
+          const resetMatch = path.match(/^\/api\/admin\/accounts\/([0-9a-f-]{36})\/password$/i);
+          if (resetMatch !== null && req.method === "PATCH") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理账号");
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+            hasOnlyKeys(input, ["password"]);
+            try { await identity.resetAccountPassword(resetMatch[1]!, stringField(input.password, "password", { nonEmpty: true })); }
+            catch (error) { throw accountAdminError(error); }
+            setJson(res, 200, { ok: true, sessionsRevoked: true });
+            return;
+          }
+          await appFor(session.account).handler(req, res);
+          return;
+        }
+        // Static frontend files are public; every API path is handled above.
+        await ownerApp.handler(req, res);
+      } catch (error) {
+        if (res.headersSent) { res.destroy(); return; }
+        const httpError = error instanceof HttpError
+          ? error
+          : error instanceof SyntaxError
+            ? new HttpError(400, "invalid_json", "Invalid request")
+            : new HttpError(500, "internal_error", "Internal server error");
+        setJson(res, httpError.status, { error: httpError.code, message: httpError.message });
+        requestLog(httpError.status, req.method ?? "?", path, startedAt, `${httpError.code}: ${httpError.message}`);
+        return;
+      }
+      requestLog(res.statusCode, req.method ?? "?", path, startedAt);
+    };
+
+    const app: LifeosApp = {
+      repository: ownerApp.repository,
+      backupScheduler: ownerApp.backupScheduler,
+      weatherArchiveScheduler: ownerApp.weatherArchiveScheduler,
+      assetGcScheduler: ownerApp.assetGcScheduler,
+      handler: handleAccountRequest,
+      close: () => {
+        if (closed) return;
+        closed = true;
+        for (const entry of apps.values()) entry.app.close();
+        apps.clear();
+        identity.close();
+      },
+    };
+    return app;
+  } catch (error) {
+    for (const entry of apps.values()) entry.app.close();
+    identity.close();
+    throw error;
+  }
+}
+
 export function createHttpServer(config: ApiConfig): { server: Server; app: LifeosApp } {
-  const app = createApp(config);
+  const app = config.accountMode === true ? createAccountModeApp(config) : createApp(config);
   const server = createServer((req, res) => {
     void app.handler(req, res);
   });

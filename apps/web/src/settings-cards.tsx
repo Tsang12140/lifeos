@@ -29,6 +29,7 @@ import {
   Trash2,
   Type,
   Upload,
+  UsersRound,
   X,
 } from "lucide-react";
 import {
@@ -44,6 +45,7 @@ import {
   apiRequest,
   type AiStatus,
   type AiStatusState,
+  type AccountSummary,
   type BackupRetentionPolicy,
   type BackupRetentionView,
   type BackupStatus,
@@ -748,7 +750,60 @@ export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: C
   </div>;
 }
 
-export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onWeatherProfilesChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+function AccountManagementCard() {
+  const [accounts, setAccounts] = useState<readonly (AccountSummary & { disabled: boolean })[]>([]);
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [spaceName, setSpaceName] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const reload = async () => {
+    const result = await apiRequest<{ accounts: readonly (AccountSummary & { disabled: boolean })[] }>("/api/admin/accounts");
+    setAccounts(result.accounts);
+  };
+  useEffect(() => { void reload().catch((caught) => setError(errorMessage(caught, "账号列表读取失败"))); }, []);
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await apiRequest("/api/admin/accounts", { method: "POST", body: JSON.stringify({ username, displayName, spaceName, password }) });
+      setUsername(""); setDisplayName(""); setSpaceName(""); setPassword("");
+      setNotice("独立空间已创建，账号可立即登录。");
+      await reload();
+    } catch (caught) { setError(errorMessage(caught, "账号创建失败")); }
+    finally { setBusy(false); }
+  };
+  const disable = async (account: AccountSummary) => {
+    if (!window.confirm(`停用「${account.displayName}」并让其所有会话立即失效？空间数据会保留。`)) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await apiRequest(`/api/admin/accounts/${encodeURIComponent(account.id)}/disable`, { method: "POST" });
+      setNotice(`${account.username} 已停用，空间数据仍保留。`);
+      await reload();
+    } catch (caught) { setError(errorMessage(caught, "账号停用失败")); }
+    finally { setBusy(false); }
+  };
+  const resetPassword = async (account: AccountSummary) => {
+    const nextPassword = window.prompt(`为 ${account.username} 设置新密码（至少 10 个字符）。该账号现有会话会全部退出。`);
+    if (nextPassword === null) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await apiRequest(`/api/admin/accounts/${encodeURIComponent(account.id)}/password`, { method: "PATCH", body: JSON.stringify({ password: nextPassword }) });
+      setNotice(`${account.username} 的密码已重置，旧会话已失效。`);
+    } catch (caught) { setError(errorMessage(caught, "密码重置失败")); }
+    finally { setBusy(false); }
+  };
+  return <section className="settings-card settings-account-management" aria-labelledby="account-management-title"><div className="settings-card-icon"><UsersRound size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong id="account-management-title">独立空间账号</strong><small>每个账号使用独立数据库、照片目录和配置。停用会立即撤销其所有登录会话，空间数据不会删除。</small></div>
+    <form className="account-create-form" onSubmit={(event) => void create(event)} aria-label="创建独立空间账号"><label className="dialog-field"><span>登录账号</span><input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} aria-label="新账号用户名" /></label><label className="dialog-field"><span>显示名称</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} aria-label="新账号显示名称" /></label><label className="dialog-field"><span>空间名称</span><input value={spaceName} onChange={(event) => setSpaceName(event.target.value)} aria-label="新空间名称" /></label><label className="dialog-field"><span>初始密码（至少 10 位）</span><input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-label="新账号初始密码" /></label><button className="primary-button" type="submit" disabled={busy || !username || !displayName || !spaceName || password.length < 10}>{busy ? "处理中…" : "创建账号与空间"}</button></form>
+    <div className="settings-account-list" aria-label="现有账号">{accounts.map((account) => <div className="settings-account-row" key={account.id}><div className="settings-card-copy"><strong>{account.spaceName}</strong><small>{account.displayName} · {account.username} · {account.role === "owner" ? "所有者" : account.disabled ? "已停用" : "可登录"}</small></div>{account.role === "member" ? <div className="settings-card-actions"><button className="secondary-button" type="button" onClick={() => void resetPassword(account)} disabled={busy}>重置密码</button>{!account.disabled ? <button className="danger-button" type="button" onClick={() => void disable(account)} disabled={busy}>停用</button> : null}</div> : null}</div>)}</div>
+    {error ? <p className="settings-inline-error" role="alert">{error}</p> : null}{notice ? <p className="settings-inline-notice" role="status">{notice}</p> : null}
+  </section>;
+}
+
+export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onWeatherProfilesChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
   useEffect(() => { window.requestAnimationFrame(() => pageHeadingRef.current?.focus()); }, [page]);
@@ -765,7 +820,8 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     "private/cycle": "周期与亲密模块的私密设置。",
     about: "了解本机优先的数据边界。",
   };
-  const pageContent = page === "account/session" ? <div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{authRequired ? "已登录" : "本机访问"}</strong><small>{authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : "退出登录"}</span></button> : null}</div>
+  const accountContent = <><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{accountMode ? account?.spaceName ?? "已登录空间" : authRequired ? "已登录" : "本机访问"}</strong><small>{accountMode ? `${account?.displayName ?? ""} · ${account?.username ?? ""} · ${account?.role === "owner" ? "空间所有者" : "独立账号"}` : authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : accountMode ? "退出并切换账号" : "退出登录"}</span></button> : null}</div>{accountMode && account?.role === "owner" ? <AccountManagementCard /> : null}</>;
+  const pageContent = page === "account/session" ? accountContent
     : page === "data/import-export" ? <div className="settings-card settings-data-grid"><div className="settings-card-icon"><FileJson size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>备份与导出</strong><small>导入前请确认 JSON 来自可信的 LifeOS 实例；导出文件包含你的记录内容。</small></div><div className="settings-card-actions"><button className="secondary-button" type="button" onClick={onImport}><Upload size={15} aria-hidden="true" /><span>导入 JSON</span></button><a className="secondary-button" href="/api/export?format=json" download><FileJson size={15} aria-hidden="true" /><span>导出 JSON</span></a><a className="secondary-button" href="/api/export?format=markdown" download><FileText size={15} aria-hidden="true" /><span>导出 Markdown</span></a></div></div>
     : page === "data/backup" ? <BackupSettingsCard backupStatus={backupStatus} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} />
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>

@@ -17,6 +17,12 @@ export interface ApiConfig {
   readonly port: number;
   readonly databasePath: string;
   readonly password?: string;
+  /** Account mode is deliberately opt-in and defaults off for legacy installs. */
+  readonly accountMode?: boolean;
+  /** Required only to bootstrap the first account-mode owner. */
+  readonly ownerUsername?: string;
+  /** Set only by the trusted in-process account gateway, never from request data. */
+  readonly gatewayAuthenticated?: boolean;
   readonly dataDirectory: string;
   readonly webDirectory: string;
   /**
@@ -107,20 +113,45 @@ function splitOrigins(raw: string | undefined, host: string): string[] {
 }
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
-  if (env.LIFEOS_ACCOUNT_MODE === "1") {
-    throw new Error("LIFEOS_ACCOUNT_MODE is not available yet; the account identity foundation is not connected to HTTP routes");
+  const accountModeValue = env.LIFEOS_ACCOUNT_MODE?.trim().toLowerCase();
+  if (accountModeValue !== undefined && accountModeValue !== "" && !["0", "false", "1", "true"].includes(accountModeValue)) {
+    throw new Error("LIFEOS_ACCOUNT_MODE must be 1/true or 0/false");
   }
+  const accountMode = accountModeValue === "1" || accountModeValue === "true";
   const host = env.LIFEOS_HOST?.trim() || DEFAULT_HOST;
   const port = parsePort(env.LIFEOS_PORT);
   const dataDirectory = resolve(env.LIFEOS_DATA_DIR?.trim() || "data");
   const databasePath = resolve(env.LIFEOS_DB_PATH?.trim() || `${dataDirectory}/lifeos.sqlite`);
   const password = env.LIFEOS_PASSWORD?.length ? env.LIFEOS_PASSWORD : undefined;
-  if (!isLoopbackHost(host) && password === undefined) {
+  if (!isLoopbackHost(host) && password === undefined && !accountMode) {
     throw new Error("LIFEOS_PASSWORD is required when LIFEOS_HOST is not loopback");
   }
   const webDirectory = resolve(env.LIFEOS_WEB_DIR?.trim() || "apps/web/dist");
   const assetRoot = env.LIFEOS_ASSET_ROOT?.trim();
-  const cookieSecure = env.LIFEOS_COOKIE_SECURE === "1" || env.LIFEOS_COOKIE_SECURE?.toLowerCase() === "true";
+  const cookieSecureValue = env.LIFEOS_COOKIE_SECURE?.trim().toLowerCase();
+  const cookieSecure = cookieSecureValue === "1" || cookieSecureValue === "true";
+  const ownerUsername = env.LIFEOS_OWNER_USERNAME?.trim();
+  const allowedOrigins = splitOrigins(env.LIFEOS_ALLOWED_ORIGINS, host);
+  if (accountMode) {
+    if (!cookieSecure) throw new Error("LIFEOS_ACCOUNT_MODE requires LIFEOS_COOKIE_SECURE=true");
+    if ((ownerUsername === undefined || ownerUsername === "") !== (password === undefined)) {
+      throw new Error("Set both LIFEOS_OWNER_USERNAME and LIFEOS_PASSWORD for first-owner bootstrap, or remove both after bootstrap");
+    }
+    if (password !== undefined && (password.length < 10 || password.length > 1024)) {
+      throw new Error("Account-mode LIFEOS_PASSWORD must be 10–1024 characters");
+    }
+    if (allowedOrigins.length === 0) throw new Error("LIFEOS_ACCOUNT_MODE requires explicit HTTPS LIFEOS_ALLOWED_ORIGINS");
+    const normalizedOrigins = allowedOrigins.map((origin) => {
+      let parsed: URL;
+      try { parsed = new URL(origin); }
+      catch { throw new Error("LIFEOS_ACCOUNT_MODE contains an invalid LIFEOS_ALLOWED_ORIGINS entry"); }
+      if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+        throw new Error("LIFEOS_ACCOUNT_MODE allows HTTPS origins only; configure origin values without paths");
+      }
+      return parsed.origin;
+    });
+    allowedOrigins.splice(0, allowedOrigins.length, ...new Set(normalizedOrigins));
+  }
   const deepseekApiKey = env.LIFEOS_DEEPSEEK_API_KEY?.trim();
   const qweatherApiKey = env.QWEATHER_KEY?.trim();
   const tmdbApiKey = (env.LIFEOS_TMDB_API_KEY?.trim() || env.TMDB_API_KEY?.trim()) || undefined;
@@ -145,10 +176,12 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     port,
     databasePath,
     ...(password === undefined ? {} : { password }),
+    ...(accountMode ? { accountMode: true } : {}),
+    ...(ownerUsername === undefined || ownerUsername === "" ? {} : { ownerUsername }),
     dataDirectory,
     webDirectory,
     ...(assetRoot === undefined || assetRoot === "" ? {} : { assetRoot: resolve(assetRoot) }),
-    allowedOrigins: splitOrigins(env.LIFEOS_ALLOWED_ORIGINS, host),
+    allowedOrigins,
     cookieSecure,
     bodyLimitBytes: parsePositiveInt(env.LIFEOS_BODY_LIMIT_BYTES, DEFAULT_BODY_LIMIT, "LIFEOS_BODY_LIMIT_BYTES"),
     assetUploadLimitBytes: parsePositiveInt(env.LIFEOS_ASSET_UPLOAD_LIMIT_BYTES, DEFAULT_ASSET_UPLOAD_LIMIT, "LIFEOS_ASSET_UPLOAD_LIMIT_BYTES"),

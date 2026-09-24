@@ -111,6 +111,39 @@ async function startHarness(password?: string, bodyLimitBytes = 1024 * 1024, exi
   };
 }
 
+async function startAccountHarness(): Promise<Harness> {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-account-mode-"));
+  const config = readConfig({
+    LIFEOS_HOST: "127.0.0.1",
+    LIFEOS_PORT: "3001",
+    LIFEOS_DB_PATH: join(root, "lifeos.sqlite"),
+    LIFEOS_PASSWORD: "isolated-owner-bootstrap-password",
+    LIFEOS_OWNER_USERNAME: "owner",
+    LIFEOS_ACCOUNT_MODE: "1",
+    LIFEOS_DATA_DIR: root,
+    LIFEOS_WEB_DIR: join(root, "web"),
+    LIFEOS_ASSET_ROOT: join(root, "owner-assets"),
+    LIFEOS_BACKUP_DIR: join(root, "owner-backups"),
+    LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn",
+    LIFEOS_COOKIE_SECURE: "true",
+  });
+  const { server, app } = createHttpServer(config);
+  const port = await listenOnFetchablePort(server, config.host);
+  const base = `http://${config.host}:${port}`;
+  return {
+    root,
+    base,
+    app,
+    stop: async (remove = true) => {
+      if (server.listening) {
+        server.close();
+        await once(server, "close");
+      }
+      if (remove) rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
 async function request(base: string, path: string, init: RequestInit = {}): Promise<{ response: Response; body: unknown }> {
   const response = await fetch(`${base}${path}`, init);
   const text = await response.text();
@@ -118,6 +151,12 @@ async function request(base: string, path: string, init: RequestInit = {}): Prom
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("json")) return { response, body: JSON.parse(text) as unknown };
   return { response, body: text };
+}
+
+function withCookie(init: RequestInit, cookie: string): RequestInit {
+  const headers = new Headers(init.headers);
+  headers.set("cookie", cookie);
+  return { ...init, headers };
 }
 
 function json(value: unknown): RequestInit {
@@ -370,6 +409,24 @@ test("passwordless mode rejects non-loopback Host and config requires password f
   t.after(async () => harness.stop());
   equal(await statusWithHost(harness.base, "lifeos.example"), 421);
   throws(() => readConfig({ LIFEOS_HOST: "0.0.0.0" }), /LIFEOS_PASSWORD is required/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "0.0.0.0", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn" }), /COOKIE_SECURE=true/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "http://lifeos.dnbox.cn" }), /HTTPS origins only/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn/path" }), /HTTPS origins only/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn", LIFEOS_OWNER_USERNAME: "owner" }), /Set both/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "maybe" }), /must be 1\/true or 0\/false/);
+  const bootstrap = readConfig({
+    LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "0.0.0.0", LIFEOS_COOKIE_SECURE: "true",
+    LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_PASSWORD: "owner-bootstrap-password",
+  });
+  equal(bootstrap.accountMode, true);
+  equal(bootstrap.ownerUsername, "owner");
+  equal(bootstrap.allowedOrigins[0], "https://lifeos.dnbox.cn");
+  const afterBootstrap = readConfig({
+    LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "0.0.0.0", LIFEOS_COOKIE_SECURE: "true",
+    LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn",
+  });
+  equal(afterBootstrap.accountMode, true);
+  equal(afterBootstrap.password, undefined);
 });
 
 test("login sessions persist in SQLite and AI assistant falls back without a key", async (t) => {
@@ -486,7 +543,173 @@ test("tenant identity foundation isolates paths, keys, sessions, and remote back
   store = new IdentityStore(identityPath);
   equal((await store.authenticate("bob", "isolated-member-password"))?.tenantId, second.tenantId);
   equal(tenantConfigFor(ownerConfig, second, store.configMasterSecret).tenantConfigSecrets?.ai, bobConfig.tenantConfigSecrets?.ai);
-  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "127.0.0.1" }), /not available yet/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "127.0.0.1" }), /COOKIE_SECURE=true/);
+});
+
+test("account gateway binds all APIs to isolated tenants and revokes disabled/reset sessions", async (t) => {
+  const harness = await startAccountHarness();
+  t.after(async () => harness.stop());
+  const login = async (username: string, password: string) => {
+    const result = await request(harness.base, "/api/auth/login", { method: "POST", ...json({ username, password }) });
+    const setCookie = result.response.headers.get("set-cookie") ?? "";
+    const token = setCookie.match(/lifeos_session=([^;]+)/)?.[1];
+    return { ...result, cookie: token ? `lifeos_session=${token}` : "", setCookie };
+  };
+  const as = (cookie: string, path: string, init: RequestInit = {}) => request(harness.base, path, withCookie(init, cookie));
+
+  const unauthRecords = await request(harness.base, "/api/records", { headers: { "x-lifeos-tenant-id": "forged-tenant" } });
+  equal(unauthRecords.response.status, 401);
+  equal((await request(harness.base, "/api/health")).response.status, 401);
+  equal((await request(harness.base, "/api/not-a-route")).response.status, 401);
+  equal((await request(harness.base, "/api/assets/not-owned/content")).response.status, 401);
+  equal(await statusWithHost(harness.base, "evil.example"), 403);
+  equal((await request(harness.base, "/api/auth", { headers: { origin: "https://evil.example" } })).response.status, 403);
+  const oldPasswordLogin = await request(harness.base, "/api/auth/login", { method: "POST", ...json({ password: "isolated-owner-bootstrap-password" }) });
+  equal(oldPasswordLogin.response.status, 400);
+  equal(oldPasswordLogin.response.headers.get("set-cookie"), null);
+  for (let attempt = 0; attempt < 5; attempt += 1) equal((await request(harness.base, "/api/auth/login", { method: "POST", ...json({ username: "rateprobe", password: "wrong-account-password" }) })).response.status, 401);
+  const throttledLogin = await request(harness.base, "/api/auth/login", { method: "POST", ...json({ username: "rateprobe", password: "wrong-account-password" }) });
+  equal(throttledLogin.response.status, 429);
+  ok(Number(throttledLogin.response.headers.get("retry-after")) > 0);
+
+  const ownerLogin = await login("owner", "isolated-owner-bootstrap-password");
+  equal(ownerLogin.response.status, 200);
+  match(ownerLogin.setCookie, /HttpOnly/);
+  match(ownerLogin.setCookie, /SameSite=Lax/);
+  match(ownerLogin.setCookie, /Secure/);
+  const ownerState = ownerLogin.body as { accountMode: boolean; account: { role: string; spaceName: string } };
+  equal(ownerState.accountMode, true);
+  equal(ownerState.account.role, "owner");
+  const ownerCookie = ownerLogin.cookie;
+  ok(ownerCookie.length > 20);
+
+  const ownerRecord = await as(ownerCookie, "/api/records", { method: "POST", ...json({ kind: "journal", content: "OWNER_ROOT_RECORD" }) });
+  equal(ownerRecord.response.status, 201);
+  const createdAlice = await as(ownerCookie, "/api/admin/accounts", { method: "POST", ...json({ username: "alice", password: "alice-password-long", displayName: "Alice", spaceName: "Alice space" }) });
+  equal(createdAlice.response.status, 201);
+  const alice = (createdAlice.body as { account: { id: string; tenantId: string; spaceName: string } }).account;
+  const createdBob = await as(ownerCookie, "/api/admin/accounts", { method: "POST", ...json({ username: "bob", password: "bob-password-long", displayName: "Bob", spaceName: "Bob space" }) });
+  equal(createdBob.response.status, 201);
+  const bob = (createdBob.body as { account: { id: string; tenantId: string } }).account;
+  ok(alice.tenantId !== bob.tenantId);
+  equal((await as(ownerCookie, "/api/admin/accounts")).response.status, 200);
+  const duplicate = await as(ownerCookie, "/api/admin/accounts", { method: "POST", ...json({ username: "alice", password: "alice-password-long", displayName: "Alice", spaceName: "Duplicate" }) });
+  equal(duplicate.response.status, 409);
+  const weakPassword = await as(ownerCookie, "/api/admin/accounts", { method: "POST", ...json({ username: "carol", password: "weak", displayName: "Carol", spaceName: "Carol space" }) });
+  equal(weakPassword.response.status, 400);
+
+  const aliceLogin = await login("alice", "alice-password-long");
+  const bobLogin = await login("bob", "bob-password-long");
+  equal(aliceLogin.response.status, 200);
+  equal(bobLogin.response.status, 200);
+  const aliceCookie = aliceLogin.cookie;
+  const bobCookie = bobLogin.cookie;
+  ok(aliceCookie.length > 20 && bobCookie.length > 20);
+  const bobAdmin = await as(bobCookie, "/api/admin/accounts");
+  equal(bobAdmin.response.status, 403);
+
+  const aliceRecordResult = await as(aliceCookie, "/api/records", { method: "POST", ...json({ kind: "journal", content: "ALICE_ONLY_RECORD" }) });
+  equal(aliceRecordResult.response.status, 201);
+  const aliceRecord = aliceRecordResult.body as { id: string; revision: number };
+  const bobRecordResult = await as(bobCookie, "/api/records", { method: "POST", ...json({ kind: "journal", content: "BOB_ONLY_RECORD" }) });
+  equal(bobRecordResult.response.status, 201);
+  const bobRecord = bobRecordResult.body as { id: string; revision: number };
+  const bobList = await as(bobCookie, "/api/records", { headers: { "x-lifeos-tenant-id": alice.tenantId } });
+  const bobListText = JSON.stringify(bobList.body);
+  ok(bobListText.includes("BOB_ONLY_RECORD"));
+  equal(bobListText.includes("ALICE_ONLY_RECORD"), false);
+  const forgedTenant = await as(aliceCookie, "/api/records", { headers: { "x-lifeos-tenant-id": bob.tenantId }, method: "GET" });
+  ok(JSON.stringify(forgedTenant.body).includes("ALICE_ONLY_RECORD"));
+  equal(JSON.stringify(forgedTenant.body).includes("BOB_ONLY_RECORD"), false);
+  const directRecordMutation = await as(bobCookie, `/api/records/${encodeURIComponent(aliceRecord.id)}`, { method: "PATCH", ...json({ revision: aliceRecord.revision, content: "steal" }) });
+  equal(directRecordMutation.response.status, 404);
+
+  const aliceEntity = await as(aliceCookie, "/api/entities", { method: "POST", ...json({ id: "alice-private-entity", type: "person", name: "Alice private entity" }) });
+  equal(aliceEntity.response.status, 201);
+  const bobEntityDelete = await as(bobCookie, "/api/entities/alice-private-entity", { method: "DELETE", ...json({}) });
+  equal(bobEntityDelete.response.status, 404);
+  const bobEntityList = await as(bobCookie, "/api/entities");
+  equal(JSON.stringify(bobEntityList.body).includes("alice-private-entity"), false);
+
+  const aliceUpload = await as(aliceCookie, "/api/assets/uploads?name=alice.png", { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(TINY_PNG) });
+  equal(aliceUpload.response.status, 201);
+  const aliceAsset = aliceUpload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  const aliceAssetPath = join(harness.root, "tenants", alice.tenantId, "assets", ...(aliceAsset.storageRefs[0]?.sourceRef ?? "").split("/"));
+  ok(existsSync(aliceAssetPath));
+  const aliceContent = await fetch(`${harness.base}/api/assets/${encodeURIComponent(aliceAsset.id)}/content`, { headers: { cookie: aliceCookie } });
+  equal(aliceContent.status, 200);
+  equal(Buffer.from(await aliceContent.arrayBuffer()).equals(TINY_PNG), true);
+  const bobCrossAsset = await as(bobCookie, `/api/assets/${encodeURIComponent(aliceAsset.id)}/content`);
+  equal(bobCrossAsset.response.status, 404);
+  const bobUpload = await as(bobCookie, "/api/assets/uploads?name=bob.png", { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(TINY_PNG) });
+  equal(bobUpload.response.status, 201);
+  const bobAsset = bobUpload.body as { id: string; storageRefs: Array<{ sourceRef: string }> };
+  ok(bobAsset.id !== aliceAsset.id);
+  ok(existsSync(join(harness.root, "tenants", bob.tenantId, "assets", ...(bobAsset.storageRefs[0]?.sourceRef ?? "").split("/"))));
+
+  const aliceExport = await as(aliceCookie, "/api/export?format=json");
+  const bobExport = await as(bobCookie, "/api/export?format=json");
+  const aliceBundleText = JSON.stringify(aliceExport.body);
+  const bobBundleText = JSON.stringify(bobExport.body);
+  ok(aliceBundleText.includes("ALICE_ONLY_RECORD"));
+  equal(aliceBundleText.includes("BOB_ONLY_RECORD"), false);
+  ok(bobBundleText.includes("BOB_ONLY_RECORD"));
+  equal(bobBundleText.includes("ALICE_ONLY_RECORD"), false);
+  // Importing a bundle targets the authenticated tenant's database only. Alice
+  // deliberately submits her export to Bob's import endpoint; this is an
+  // explicit user-supplied transfer, not a cross-tenant read or implicit merge.
+  const bobImport = await as(bobCookie, "/api/import", { method: "POST", ...json({ bundle: aliceExport.body }) });
+  equal(bobImport.response.status, 201);
+  ok(JSON.stringify((await as(bobCookie, "/api/records")).body).includes("ALICE_ONLY_RECORD"));
+  ok(JSON.stringify((await as(aliceCookie, "/api/records")).body).includes("ALICE_ONLY_RECORD"));
+
+  const aliceAiConfig = await as(aliceCookie, "/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: "https://api.deepseek.com", model: "deepseek-flash", apiKey: "sk-alice-isolated-test" }) });
+  equal(aliceAiConfig.response.status, 200);
+  equal(((await as(aliceCookie, "/api/ai/status")).body as { keyConfigured: boolean }).keyConfigured, true);
+  equal(((await as(bobCookie, "/api/ai/status")).body as { keyConfigured: boolean }).keyConfigured, false);
+  const aliceWeatherConfig = await as(aliceCookie, "/api/weather/config", { method: "POST", ...json({ enabled: true, locationId: "101280601", city: "Alice city", apiKey: "fake-weather-key" }) });
+  equal(aliceWeatherConfig.response.status, 200);
+  equal(((await as(aliceCookie, "/api/weather/status")).body as { hasKey: boolean }).hasKey, true);
+  equal(((await as(bobCookie, "/api/weather/status")).body as { hasKey: boolean }).hasKey, false);
+  const aliceWeatherProfile = await as(aliceCookie, "/api/weather/profiles", { method: "POST", ...json({ label: "Alice profile", locationId: "101280601", city: "Alice city", apiKey: "fake-profile-key" }) });
+  equal(aliceWeatherProfile.response.status, 200);
+  equal(((await as(bobCookie, "/api/weather/profiles")).body as { items: unknown[] }).items.length, 0);
+  const aliceMovieConfig = await as(aliceCookie, "/api/movie/config", { method: "POST", ...json({ enabled: true, apiKey: "fake-movie-key" }) });
+  equal(aliceMovieConfig.response.status, 200);
+  equal(((await as(aliceCookie, "/api/movie/status")).body as { hasKey: boolean }).hasKey, true);
+  equal(((await as(bobCookie, "/api/movie/status")).body as { hasKey: boolean }).hasKey, false);
+  const aliceBackupConfig = await as(aliceCookie, "/api/backup/config", { method: "POST", ...json({ enabled: true, endpoint: "https://s3.example", region: "test", bucket: "tenant-bucket", prefix: "tenant-copy", forcePathStyle: true, accessKeyId: "fake-ak", secretAccessKey: "fake-sk" }) });
+  equal(aliceBackupConfig.response.status, 200);
+  const aliceBackupStatus = (await as(aliceCookie, "/api/backup/status")).body as { localDirectory: string; s3: { configured: boolean; prefix: string } };
+  const bobBackupStatus = (await as(bobCookie, "/api/backup/status")).body as { localDirectory: string; s3: { configured: boolean } };
+  equal(aliceBackupStatus.localDirectory, join(harness.root, "tenants", alice.tenantId, "backups"));
+  equal(bobBackupStatus.localDirectory, join(harness.root, "tenants", bob.tenantId, "backups"));
+  equal(aliceBackupStatus.s3.configured, true);
+  equal(aliceBackupStatus.s3.prefix, "tenant-copy");
+  equal(bobBackupStatus.s3.configured, false);
+  const aliceBackup = await as(aliceCookie, "/api/backup/local", { method: "POST", ...json({}) });
+  equal(aliceBackup.response.status, 201);
+  const aliceFileName = (aliceBackup.body as { fileName: string }).fileName;
+  const bobSnapshotRead = await as(bobCookie, `/api/backup/snapshot?fileName=${encodeURIComponent(aliceFileName)}`);
+  equal(bobSnapshotRead.response.status, 404);
+  const bobBackupRuns = await as(bobCookie, "/api/backup/runs");
+  equal(((bobBackupRuns.body as { items: unknown[] }).items).length, 0);
+
+  const reset = await as(ownerCookie, `/api/admin/accounts/${encodeURIComponent(bob.id)}/password`, { method: "PATCH", ...json({ password: "bob-reset-password" }) });
+  equal(reset.response.status, 200);
+  equal((await as(bobCookie, "/api/records")).response.status, 401);
+  equal((await login("bob", "bob-password-long")).response.status, 401);
+  const bobResetLogin = await login("bob", "bob-reset-password");
+  equal(bobResetLogin.response.status, 200);
+  const disableBob = await as(ownerCookie, `/api/admin/accounts/${encodeURIComponent(bob.id)}/disable`, { method: "POST", ...json({}) });
+  equal(disableBob.response.status, 200);
+  equal((await as(bobResetLogin.cookie, "/api/records")).response.status, 401);
+  equal((await login("bob", "bob-reset-password")).response.status, 401);
+  equal((await as(aliceCookie, "/api/records")).response.status, 200);
+  const ownerStillOnOriginalRoot = (await as(ownerCookie, "/api/backup/status")).body as { localDirectory: string };
+  equal(ownerStillOnOriginalRoot.localDirectory, join(harness.root, "owner-backups"));
+  equal(existsSync(join(harness.root, "lifeos.sqlite")), true);
+  equal((await as(ownerCookie, "/api/records")).response.status, 200);
 });
 
 test("AI config exposes effective presets, validates reasoning, and never returns the key", async (t) => {

@@ -13,7 +13,7 @@ export interface RouteContext {
   readonly backupScheduler: BackupScheduler;
   readonly weatherArchiveScheduler: WeatherArchiveScheduler;
   readonly thumbnails: ThumbnailCache;
-  readonly loginFailures: Map<string, { failures: number; blockedUntil: number }>;
+  readonly loginFailures: Map<string, { failures: number; blockedUntil: number; lastFailureAt: number }>;
   readonly authenticated: (req: IncomingMessage) => boolean;
   readonly requireAuth: (req: IncomingMessage) => void;
   readonly checkRequestSecurity: (req: IncomingMessage) => void;

@@ -2,15 +2,21 @@ services:
   lifeos:
     build: .
     ports:
-      - "3001:3001"
+      # Baota/Nginx on this host should proxy to 127.0.0.1:3001; do not expose the API directly.
+      - "127.0.0.1:3001:3001"
     environment:
       LIFEOS_HOST: 0.0.0.0
       LIFEOS_PORT: 3001
       LIFEOS_DATA_DIR: /data
-      LIFEOS_PASSWORD: ${LIFEOS_PASSWORD:?Set LIFEOS_PASSWORD before starting LifeOS}
-      # The default HTTP mapping is usable on a trusted local network. Set true behind HTTPS.
+      LIFEOS_ACCOUNT_MODE: ${LIFEOS_ACCOUNT_MODE:-0}
+      LIFEOS_OWNER_USERNAME: ${LIFEOS_OWNER_USERNAME:-}
+      # In account mode this pair is only required for first-owner bootstrap; remove both afterward.
+      LIFEOS_PASSWORD: ${LIFEOS_PASSWORD:-}
       LIFEOS_COOKIE_SECURE: ${LIFEOS_COOKIE_SECURE:-false}
       LIFEOS_ALLOWED_ORIGINS: ${LIFEOS_ALLOWED_ORIGINS:-}
+      # Keep owner-uploaded local originals inside the persistent volume.
+      LIFEOS_ASSET_ROOT: ${LIFEOS_ASSET_ROOT:-/data/assets}
+      LIFEOS_BACKUP_DIR: ${LIFEOS_BACKUP_DIR:-/data/backups}
     volumes:
       - lifeos_data:/data
     restart: unless-stopped

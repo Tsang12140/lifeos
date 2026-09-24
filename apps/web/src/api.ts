@@ -52,6 +52,19 @@ export interface SummariesResponse {
 export interface AuthState {
   readonly required: boolean;
   readonly authenticated: boolean;
+  readonly accountMode?: boolean;
+  readonly account?: AccountSummary;
+}
+
+export interface AccountSummary {
+  readonly id: string;
+  readonly username: string;
+  readonly displayName: string;
+  readonly spaceName: string;
+  readonly tenantId: string;
+  readonly role: "owner" | "member";
+  readonly disabled?: boolean;
+  readonly createdAt?: string;
 }
 
 export interface AiStatus {

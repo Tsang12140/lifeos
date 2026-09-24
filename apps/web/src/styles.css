@@ -11758,3 +11758,37 @@ button.relation-chip {
   .calendar-heading-tools { gap: 6px; }
   .calendar-heading-tools .record-count { display: none; }
 }
+
+.settings-account-management {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+}
+.settings-account-management > .settings-card-icon { grid-column: 1; grid-row: 1; }
+.settings-account-management > .settings-card-copy { grid-column: 2; grid-row: 1; }
+.account-create-form,
+.settings-account-list,
+.settings-account-management > .settings-inline-error,
+.settings-account-management > .settings-inline-notice { grid-column: 1 / -1; min-width: 0; }
+.account-create-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+  width: 100%;
+  padding-top: 8px;
+}
+.account-create-form .dialog-field { display: grid; gap: 5px; margin: 0; }
+.account-create-form .dialog-field > span { color: var(--muted); font-size: 0.72rem; }
+.account-create-form input { min-width: 0; width: 100%; }
+.account-create-form > button { min-height: 38px; }
+.settings-account-list { display: grid; gap: 0; width: 100%; }
+.settings-account-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 0; border-top: 1px solid var(--line); }
+.settings-account-row .settings-card-actions { margin-left: auto; }
+.settings-inline-notice { color: #39856b; font-size: 0.7rem; line-height: 1.5; }
+
+@media (max-width: 560px) {
+  .account-create-form { grid-template-columns: minmax(0, 1fr); }
+  .settings-account-row { align-items: flex-start; flex-direction: column; }
+  .settings-account-row .settings-card-actions { width: 100%; margin-left: 0; }
+}
