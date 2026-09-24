@@ -64,6 +64,15 @@ export interface ApiConfig {
   readonly qweatherLocation?: string;
   readonly qweatherCity?: string;
   readonly qweatherHost: string;
+  /**
+   * Credentials an account-mode member may borrow from the owner. Providers
+   * are intentionally lazy so a key rotation takes effect without restarting
+   * the member app, and borrowed credentials never enter tenant config files.
+   */
+  readonly sharedIntegrations?: {
+    readonly ai?: () => { readonly apiKey: string; readonly baseUrl: string; readonly model: string } | undefined;
+    readonly weather?: () => { readonly apiKey: string; readonly host: string } | undefined;
+  };
   /** Optional TMDb key used only by the opt-in movie module. */
   readonly tmdbApiKey?: string;
   /** Per-tenant key material derived from the identity database's stable master secret. */

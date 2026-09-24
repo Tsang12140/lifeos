@@ -107,7 +107,7 @@ export const handleWeatherRoutes: RouteHandler = async (
         enabled: input.enabled === undefined ? true : booleanField(input.enabled, "enabled"),
         locationId,
         city,
-        apiHost: stringField(input.apiHost ?? "devapi.qweather.com", "apiHost", { nonEmpty: true }),
+        apiHost: stringField(input.apiHost ?? readRuntimeWeatherConfig(config).apiHost, "apiHost", { nonEmpty: true }),
         ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
         ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
       });
@@ -218,7 +218,7 @@ export const handleWeatherRoutes: RouteHandler = async (
       setJson(res, 200, { ...publicWeatherConfig(config, weatherLocationOverride(config, current)), locationScope: "device", throttled: true });
       return true;
     }
-    const location = await lookupWeatherLocationByCoordinates(runtime, longitude, latitude);
+    const location = await lookupWeatherLocationByCoordinates(config, runtime, longitude, latitude);
     if (location === null) throw new HttpError(502, "weather_location_failed", "暂时无法根据当前位置确定城市，请手动选择");
     const deviceLocation = repository.saveWeatherDeviceLocation(deviceId, location.id, location.name, JSON.stringify(nowInstant()));
     clearWeatherCache();
@@ -228,4 +228,3 @@ export const handleWeatherRoutes: RouteHandler = async (
 
   return false;
 };
-

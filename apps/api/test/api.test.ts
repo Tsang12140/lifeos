@@ -175,6 +175,54 @@ async function statusWithHost(base: string, host: string): Promise<number> {
   });
 }
 
+interface CredentialProbeServer {
+  readonly base: string;
+  readonly requests: { readonly path: string; readonly authorization: string | null; readonly body: string }[];
+  setRedirect(target?: string): void;
+  stop(): Promise<void>;
+}
+
+async function startCredentialProbeServer(): Promise<CredentialProbeServer> {
+  const requests: { path: string; authorization: string | null; body: string }[] = [];
+  let redirectTarget: string | undefined;
+  const server = createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => { body += chunk; });
+    req.on("end", () => {
+      requests.push({ path: req.url ?? "/", authorization: req.headers.authorization ?? null, body });
+      if (redirectTarget !== undefined) {
+        res.writeHead(302, { location: redirectTarget });
+        res.end();
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      if (req.url?.endsWith("/models")) {
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      let date = "2026-09-24";
+      try {
+        const payload = JSON.parse(body) as { messages?: readonly { role?: string; content?: string }[] };
+        const prompt = payload.messages?.find((message) => message.role === "user")?.content ?? "";
+        date = prompt.match(/\\d{4}-\\d{2}-\\d{2}/)?.[0] ?? date;
+      } catch { /* A malformed request still gets a deterministic fake reply. */ }
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ [date]: "fake summary" }) } }] }));
+    });
+  });
+  const port = await listenOnFetchablePort(server, "127.0.0.1");
+  return {
+    base: "http://127.0.0.1:" + port,
+    requests,
+    setRedirect: (target) => { redirectTarget = target; },
+    stop: async () => {
+      if (!server.listening) return;
+      server.close();
+      await once(server, "close");
+    },
+  };
+}
+
 test("Compose forwards documented optional runtime integration settings", () => {
   const compose = readFileSync(new URL("../../../../compose.yaml", import.meta.url), "utf8");
   const environmentSection = compose.match(/^    environment:\r?\n((?:      .*(?:\r?\n|$))*)/m)?.[1] ?? "";
@@ -591,14 +639,16 @@ test("tenant identity foundation isolates paths, keys, sessions, and remote back
   // owner's standing integrations — and nothing location-shaped, because a
   // member in another city must not be shown the owner's forecast.
   const shared = tenantConfigFor(ownerConfig, second, store.configMasterSecret, {
-    ai: { apiKey: "owner-ai-secret", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" },
-    weather: { apiKey: "owner-weather-secret", host: "devapi.qweather.com" },
+    ai: () => ({ apiKey: "owner-ai-secret", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" }),
+    weather: () => ({ apiKey: "owner-weather-secret", host: "devapi.qweather.com" }),
   });
-  equal(shared.deepseekApiKey, "owner-ai-secret");
-  equal(shared.deepseekBaseUrl, "https://api.deepseek.com");
-  equal(shared.deepseekModel, "deepseek-flash");
-  equal(shared.qweatherApiKey, "owner-weather-secret");
+  equal(shared.deepseekApiKey, undefined);
+  equal(shared.deepseekBaseUrl, ownerConfig.deepseekBaseUrl);
+  equal(shared.deepseekModel, ownerConfig.deepseekModel);
+  equal(shared.sharedIntegrations?.ai?.()?.apiKey, "owner-ai-secret");
+  equal(shared.qweatherApiKey, undefined);
   equal(shared.qweatherHost, "devapi.qweather.com");
+  equal(shared.sharedIntegrations?.weather?.()?.apiKey, "owner-weather-secret");
   equal(shared.qweatherLocation, undefined);
   equal(shared.qweatherCity, undefined);
   equal(shared.tmdbApiKey, undefined);
@@ -871,6 +921,144 @@ test("account gateway binds all APIs to isolated tenants and revokes disabled/re
   equal(ownerStillOnOriginalRoot.localDirectory, join(harness.root, "owner-backups"));
   equal(existsSync(join(harness.root, "lifeos.sqlite")), true);
   equal((await as(ownerCookie, "/api/records")).response.status, 200);
+});
+
+test("shared integration keys stay on owner-approved endpoints, rotate live, and block redirects", async (t) => {
+  const harness = await startAccountHarness();
+  const approvedAiV1 = await startCredentialProbeServer();
+  const approvedAiV2 = await startCredentialProbeServer();
+  const maliciousAi = await startCredentialProbeServer();
+  const memberOwnAi = await startCredentialProbeServer();
+  t.after(async () => {
+    globalThis.fetch = originalFetch;
+    await harness.stop();
+    await Promise.all([approvedAiV1.stop(), approvedAiV2.stop(), maliciousAi.stop(), memberOwnAi.stop()]);
+  });
+  const originalFetch = globalThis.fetch;
+  const weatherCalls: { readonly host: string; readonly key: string | null; readonly redirect: "error" | "follow" | "manual" | undefined }[] = [];
+  let redirectWeather = false;
+  globalThis.fetch = async (input, init) => {
+    const url = input instanceof Request ? new URL(input.url) : new URL(input instanceof URL ? input.href : input);
+    if (url.protocol !== "https:") return originalFetch(input, init);
+    weatherCalls.push({ host: url.hostname, key: url.searchParams.get("key"), redirect: init?.redirect });
+    if (redirectWeather && url.hostname !== "geoapi.qweather.com") {
+      if (init?.redirect === "error") throw new TypeError("redirect rejected by fetch policy");
+      weatherCalls.push({ host: "evil.example", key: url.searchParams.get("key"), redirect: init?.redirect });
+      return Response.json({ code: "200", now: { text: "晴", icon: "100", temp: "22" } });
+    }
+    if (url.hostname === "evil.example") return Response.json({ code: "200" });
+    if (url.hostname === "geoapi.qweather.com") return Response.json({ code: "200", location: [{ id: "101280601", name: "南海区", adm2: "佛山市", adm1: "广东省" }] });
+    if (url.pathname.endsWith("/weather/now")) return Response.json({ code: "200", now: { text: "晴", icon: "100", temp: "22" } });
+    if (url.pathname.endsWith("/weather/3d")) return Response.json({ code: "200" });
+    return Response.json({ code: "200", daily: [{ fxDate: "2026-09-24", textDay: "晴", tempMax: "28", tempMin: "20", iconDay: "100" }, { fxDate: "2026-09-25", textDay: "晴", tempMax: "28", tempMin: "20", iconDay: "100" }] });
+  };
+
+  const login = async (username: string, password: string) => {
+    const result = await request(harness.base, "/api/auth/login", { method: "POST", ...json({ username, password }) });
+    const token = (result.response.headers.get("set-cookie") ?? "").match(/lifeos_session=([^;]+)/)?.[1];
+    return { ...result, cookie: token ? `lifeos_session=${token}` : "" };
+  };
+  const owner = await login("owner", "isolated-owner-bootstrap-password");
+  equal(owner.response.status, 200);
+  const asOwner = (path: string, init: RequestInit = {}) => request(harness.base, path, withCookie(init, owner.cookie));
+  const asMember = (cookie: string, path: string, init: RequestInit = {}) => request(harness.base, path, withCookie(init, cookie));
+
+  equal((await asOwner("/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: approvedAiV1.base, model: "deepseek-flash", apiKey: "owner-ai-v1" }) })).response.status, 200);
+  equal((await asOwner("/api/weather/config", { method: "POST", ...json({ enabled: true, locationId: "101280601", city: "佛山南海", apiHost: "devapi.qweather.com", apiKey: "owner-weather-v1" }) })).response.status, 200);
+  const created = await asOwner("/api/admin/accounts", { method: "POST", ...json({ username: "shared-member", password: "shared-member-password", displayName: "Shared", spaceName: "Shared space" }) });
+  equal(created.response.status, 201);
+  const memberLogin = await login("shared-member", "shared-member-password");
+  equal(memberLogin.response.status, 200);
+  const memberCookie = memberLogin.cookie;
+
+  const aiStatus = (await asMember(memberCookie, "/api/ai/status")).body as { keyConfigured: boolean; keySource: string; baseUrl: string };
+  equal(aiStatus.keyConfigured, true);
+  equal(aiStatus.keySource, "shared");
+  equal(aiStatus.baseUrl, approvedAiV1.base);
+  const weatherStatus = (await asMember(memberCookie, "/api/weather/status")).body as { hasKey: boolean; source: string; apiHost: string };
+  equal(weatherStatus.hasKey, true);
+  equal(weatherStatus.source, "shared");
+  equal(weatherStatus.apiHost, "devapi.qweather.com");
+
+  equal((await asMember(memberCookie, "/api/ai/config/test", { method: "POST", ...json({ baseUrl: maliciousAi.base }) })).response.status, 502);
+  equal(maliciousAi.requests.length, 0);
+  equal((await asMember(memberCookie, "/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: maliciousAi.base, model: "deepseek-flash" }) })).response.status, 400);
+  equal((await asMember(memberCookie, "/api/weather/config/test", { method: "POST", ...json({ locationId: "101280601", apiHost: "evil.example" }) })).response.status, 502);
+  equal(weatherCalls.some((call) => call.host === "evil.example"), false);
+  equal((await asMember(memberCookie, "/api/weather/config", { method: "POST", ...json({ enabled: true, locationId: "101280601", city: "佛山南海", apiHost: "evil.example" }) })).response.status, 400);
+  equal((await asMember(memberCookie, "/api/weather/profiles", { method: "POST", ...json({ label: "blocked", locationId: "101280601", city: "佛山南海", apiHost: "evil.example" }) })).response.status, 400);
+
+  equal((await asMember(memberCookie, "/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: approvedAiV1.base, model: "deepseek-flash" }) })).response.status, 200);
+  equal((await asMember(memberCookie, "/api/ai/config/test", { method: "POST", ...json({ baseUrl: approvedAiV1.base }) })).response.status, 200);
+  equal(approvedAiV1.requests.at(-1)?.authorization, "Bearer owner-ai-v1");
+  equal((await asMember(memberCookie, "/api/weather/config", { method: "POST", ...json({ enabled: true, locationId: "101280601", city: "佛山南海", apiHost: "devapi.qweather.com" }) })).response.status, 200);
+  equal((await asMember(memberCookie, "/api/weather/profiles", { method: "POST", ...json({ label: "家", locationId: "101280601", city: "佛山南海", apiHost: "devapi.qweather.com", activate: true }) })).response.status, 200);
+
+  const tenantDirectory = join(harness.root, "tenants", (created.body as { account: { tenantId: string } }).account.tenantId);
+  const storedAi = JSON.parse(readFileSync(join(tenantDirectory, "ai-config.json"), "utf8")) as Record<string, unknown>;
+  const storedWeather = JSON.parse(readFileSync(join(tenantDirectory, "weather-config.json"), "utf8")) as { encryptedApiKey?: string; ownApiKey?: boolean; profiles?: readonly Record<string, unknown>[] };
+  equal("encryptedApiKey" in storedAi, false);
+  equal("ownApiKey" in storedAi, false);
+  equal(storedWeather.encryptedApiKey, undefined);
+  equal(storedWeather.ownApiKey, undefined);
+  equal("encryptedApiKey" in (storedWeather.profiles?.[0] ?? {}), false);
+  const forgedLegacyProfileId = "legacy-custom-host";
+  const weatherConfigPath = join(tenantDirectory, "weather-config.json");
+  writeFileSync(weatherConfigPath, JSON.stringify({
+    ...storedWeather,
+    profiles: [...(storedWeather.profiles ?? []), { id: forgedLegacyProfileId, label: "legacy", locationId: "101280601", city: "佛山南海", apiHost: "evil.example" }],
+  }));
+  equal((await asMember(memberCookie, "/api/weather/profiles/activate", { method: "POST", ...json({ id: forgedLegacyProfileId }) })).response.status, 200);
+  equal((await asMember(memberCookie, "/api/weather/current", { method: "POST", ...json({}) })).response.status, 200);
+  equal(weatherCalls.filter((call) => call.host === "devapi.qweather.com").at(-1)?.key, "owner-weather-v1");
+  equal(weatherCalls.some((call) => call.host === "evil.example"), false);
+  const record = await asMember(memberCookie, "/api/records", { method: "POST", ...json({ kind: "journal", content: "shared summary probe" }) });
+  equal(record.response.status, 201);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+  equal((await asMember(memberCookie, `/api/summaries?from=${today}&to=${today}&timeZone=Asia%2FShanghai&force=1`)).response.status, 200);
+  ok(approvedAiV1.requests.some((entry) => entry.path.endsWith("/chat/completions") && entry.authorization === "Bearer owner-ai-v1"));
+
+  equal((await asOwner("/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: approvedAiV2.base, model: "deepseek-flash", apiKey: "owner-ai-v2" }) })).response.status, 200);
+  equal((await asOwner("/api/weather/config", { method: "POST", ...json({ enabled: true, locationId: "101280601", city: "佛山南海", apiHost: "new-owner-weather.example", apiKey: "owner-weather-v2" }) })).response.status, 200);
+  const rotatedAi = (await asMember(memberCookie, "/api/ai/status")).body as { baseUrl: string; keySource: string };
+  equal(rotatedAi.baseUrl, approvedAiV2.base);
+  equal(rotatedAi.keySource, "shared");
+  const rotatedWeather = (await asMember(memberCookie, "/api/weather/profiles")).body as { status: { apiHost: string; source: string } };
+  equal(rotatedWeather.status.apiHost, "new-owner-weather.example");
+  equal(rotatedWeather.status.source, "shared");
+  equal((await asMember(memberCookie, "/api/ai/assistant", { method: "POST", ...json({ message: "最近记录是什么？" }) })).response.status, 200);
+  equal(approvedAiV2.requests.at(-1)?.authorization, "Bearer owner-ai-v2");
+  equal((await asMember(memberCookie, "/api/weather/current", { method: "POST", ...json({}) })).response.status, 200);
+  equal(weatherCalls.filter((call) => call.host === "new-owner-weather.example").at(-1)?.key, "owner-weather-v2");
+
+  approvedAiV2.setRedirect(maliciousAi.base + "/models");
+  equal((await asMember(memberCookie, "/api/ai/config/test", { method: "POST", ...json({ baseUrl: approvedAiV2.base }) })).response.status, 502);
+  const maliciousWeatherCount = weatherCalls.filter((call) => call.host === "evil.example").length;
+  redirectWeather = true;
+  equal((await asMember(memberCookie, "/api/weather/current", { method: "POST", ...json({}) })).response.status, 502);
+  equal(weatherCalls.filter((call) => call.host === "evil.example").length, maliciousWeatherCount);
+  equal(weatherCalls.filter((call) => call.host === "new-owner-weather.example").at(-1)?.redirect, "error");
+  equal(maliciousAi.requests.length, 0);
+
+  redirectWeather = false;
+  equal((await asMember(memberCookie, "/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: memberOwnAi.base, model: "deepseek-flash", apiKey: "member-ai-own" }) })).response.status, 200);
+  const ownAiStatus = (await asMember(memberCookie, "/api/ai/status")).body as { keySource: string; baseUrl: string };
+  equal(ownAiStatus.keySource, "file");
+  equal(ownAiStatus.baseUrl, memberOwnAi.base);
+  equal((await asMember(memberCookie, "/api/ai/assistant", { method: "POST", ...json({ message: "最近记录是什么？" }) })).response.status, 200);
+  equal(memberOwnAi.requests.at(-1)?.authorization, "Bearer member-ai-own");
+
+  equal((await asMember(memberCookie, "/api/weather/config", { method: "POST", ...json({ enabled: true, locationId: "101280601", city: "佛山南海", apiHost: "member-weather.example", apiKey: "member-weather-own" }) })).response.status, 200);
+  equal((await asMember(memberCookie, "/api/weather/config/test", { method: "POST", ...json({ locationId: "101280601", apiHost: "member-weather.example", apiKey: "member-weather-own" }) })).response.status, 200);
+  equal((await asMember(memberCookie, "/api/weather/device/location", { method: "POST", ...json({ locationId: "101280601", city: "佛山南海" }) })).response.status, 200);
+  equal((await asMember(memberCookie, "/api/weather/current", { method: "POST", ...json({}) })).response.status, 200);
+  equal(weatherCalls.filter((call) => call.host === "member-weather.example").at(-1)?.key, "member-weather-own");
+  const ownWeatherStatus = (await asMember(memberCookie, "/api/weather/status")).body as { source: string; apiHost: string };
+  equal(ownWeatherStatus.source, "file");
+  equal(ownWeatherStatus.apiHost, "member-weather.example");
+  const ownWeatherStored = JSON.parse(readFileSync(join(tenantDirectory, "weather-config.json"), "utf8")) as { encryptedApiKey?: string; ownApiKey?: boolean };
+  ok(typeof ownWeatherStored.encryptedApiKey === "string");
+  equal(ownWeatherStored.ownApiKey, true);
 });
 
 test("account login limits rotating unknown usernames on one TCP peer", async (t) => {

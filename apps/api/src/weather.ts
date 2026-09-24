@@ -1,6 +1,6 @@
 import { createInstant, type WeatherAttachment } from "@lifeos/core";
 import type { ApiConfig } from "./config.js";
-import { readRuntimeWeatherConfig, runtimeWeatherConfigForLocation, type RuntimeWeatherConfig, type WeatherLocationOverride } from "./weather-config.js";
+import { assertWeatherCredentialTarget, readRuntimeWeatherConfig, runtimeWeatherConfigForLocation, type RuntimeWeatherConfig, type WeatherLocationOverride } from "./weather-config.js";
 import type { WeatherDayCache, WeatherObservation } from "./repository.js";
 
 export interface WeatherDay {
@@ -215,9 +215,10 @@ function archivedPayload(value: unknown): { readonly snapshot: WeatherSnapshot; 
   return { snapshot, location };
 }
 
-async function fetchDailyWeather(locationId: string, runtime: RuntimeWeatherConfig): Promise<WeatherDay[] | null> {
+async function fetchDailyWeather(config: ApiConfig, locationId: string, runtime: RuntimeWeatherConfig): Promise<WeatherDay[] | null> {
   try {
-    const response = await fetch(`https://${cleanHost(runtime.apiHost)}/v7/weather/7d?location=${encodeURIComponent(locationId)}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    assertWeatherCredentialTarget(config, runtime, runtime.apiHost);
+    const response = await fetch(`https://${cleanHost(runtime.apiHost)}/v7/weather/7d?location=${encodeURIComponent(locationId)}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
     const data = await response.json() as QWeatherDailyResponse;
     if (data.code !== "200" || !Array.isArray(data.daily)) return null;
     return data.daily.map(weatherDayFromDaily).filter((day): day is WeatherDay => day !== null);
@@ -226,12 +227,13 @@ async function fetchDailyWeather(locationId: string, runtime: RuntimeWeatherConf
   }
 }
 
-async function fetchHistoricalWeather(date: string, locationId: string, runtime: RuntimeWeatherConfig): Promise<WeatherDay | null> {
+async function fetchHistoricalWeather(config: ApiConfig, date: string, locationId: string, runtime: RuntimeWeatherConfig): Promise<WeatherDay | null> {
   const cacheKey = `${locationId}:${date}`;
   const cached = historyCache.get(cacheKey);
   if (cached) return cached;
   try {
-    const response = await fetch(`https://${cleanHost(runtime.apiHost)}/v7/historical/weather?location=${encodeURIComponent(locationId)}&date=${date.replaceAll("-", "")}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    assertWeatherCredentialTarget(config, runtime, runtime.apiHost);
+    const response = await fetch(`https://${cleanHost(runtime.apiHost)}/v7/historical/weather?location=${encodeURIComponent(locationId)}&date=${date.replaceAll("-", "")}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
     const data = await response.json() as QWeatherHistoricalResponse;
     if (data.code !== "200" || !data.weatherDaily?.date || !data.weatherHourly?.length) return null;
     const representative = data.weatherHourly.find((item) => item.time?.endsWith("12:00")) ?? data.weatherHourly.find((item) => item.time?.endsWith("15:00")) ?? data.weatherHourly[Math.floor(data.weatherHourly.length / 2)];
@@ -244,7 +246,7 @@ async function fetchHistoricalWeather(date: string, locationId: string, runtime:
   }
 }
 
-async function resolveLocation(runtime: RuntimeWeatherConfig): Promise<WeatherLocation | null> {
+async function resolveLocation(config: ApiConfig, runtime: RuntimeWeatherConfig): Promise<WeatherLocation | null> {
   const signature = `${runtime.locationId}|${runtime.city}|${runtime.apiHost}`;
   if (locationCache?.signature === signature) return locationCache.location;
   if (runtime.locationId) {
@@ -256,7 +258,8 @@ async function resolveLocation(runtime: RuntimeWeatherConfig): Promise<WeatherLo
       adm1: known?.adm1 || "",
     };
     try {
-      const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(runtime.locationId)}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+      assertWeatherCredentialTarget(config, runtime, GEO_HOST);
+      const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(runtime.locationId)}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
       const data = await response.json() as QWeatherLocationResponse;
       const match = data.code === "200" ? data.location?.find((item) => item.id === runtime.locationId) ?? data.location?.[0] : undefined;
       if (match?.id) {
@@ -272,7 +275,8 @@ async function resolveLocation(runtime: RuntimeWeatherConfig): Promise<WeatherLo
   }
   if (!runtime.city) return null;
   try {
-    const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(runtime.city)}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    assertWeatherCredentialTarget(config, runtime, GEO_HOST);
+    const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(runtime.city)}&key=${encodeURIComponent(runtime.apiKey ?? "")}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
     const data = await response.json() as QWeatherLocationResponse;
     const match = data.code === "200" ? data.location?.[0] : undefined;
     if (!match?.id) return null;
@@ -294,12 +298,13 @@ async function resolveLocation(runtime: RuntimeWeatherConfig): Promise<WeatherLo
  * string is one less precise trace handed to a third party. Only the resolved
  * city id and name are ever stored.
  */
-export async function lookupWeatherLocationByCoordinates(runtime: RuntimeWeatherConfig, longitude: number, latitude: number): Promise<WeatherLocation | null> {
+export async function lookupWeatherLocationByCoordinates(config: ApiConfig, runtime: RuntimeWeatherConfig, longitude: number, latitude: number): Promise<WeatherLocation | null> {
   const apiKey = runtime.apiKey;
   if (!apiKey) return null;
   const location = `${longitude.toFixed(2)},${latitude.toFixed(2)}`;
   try {
-    const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(location)}&key=${encodeURIComponent(apiKey)}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    assertWeatherCredentialTarget(config, runtime, GEO_HOST);
+    const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(location)}&key=${encodeURIComponent(apiKey)}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
     const data = await response.json() as QWeatherLocationResponse;
     const match = data.code === "200" ? data.location?.[0] : undefined;
     if (!match?.id) return null;
@@ -359,7 +364,7 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
     // malformed local payload into an external request while viewing history.
     return { snapshot: null, location: null };
   }
-  const location = await resolveLocation(runtime);
+  const location = await resolveLocation(config, runtime);
   if (!location) return { snapshot: null, location: null };
   const locationKey = location.id || location.name;
   const archived = archiveStore?.getWeatherDayCache(targetDate, locationKey);
@@ -384,7 +389,7 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
   // the entry so the next ordinary read sees the newer snapshot.
   let snapshot = options.force === true ? undefined : cached && cached.expiresAt > Date.now() ? cached.snapshot : undefined;
   if (snapshot === undefined) {
-    const daily = await fetchDailyWeather(location.id, runtime);
+    const daily = await fetchDailyWeather(config, location.id, runtime);
     if (daily === null || daily.length < 2) return { snapshot: null, location };
     snapshot = { today: daily[0]!, tomorrow: daily[1]!, days: daily };
     snapshotCache.set(`${location.id}:${runtime.apiHost}`, { snapshot, location, expiresAt: Date.now() + CACHE_MS });
@@ -396,7 +401,7 @@ export async function fetchWeatherSnapshot(config: ApiConfig, requestedDate?: st
     }
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(targetDate) && findWeatherDay(snapshot, targetDate) === null && targetDate < currentDateShanghai()) {
-    const historical = await fetchHistoricalWeather(targetDate, location.id, runtime);
+    const historical = await fetchHistoricalWeather(config, targetDate, location.id, runtime);
     if (historical) {
       snapshot = { ...snapshot, days: [...snapshot.days.filter((day) => day.fxDate !== historical.fxDate), historical].sort((left, right) => left.fxDate.localeCompare(right.fxDate)) };
       archiveStore?.saveWeatherDayCache(historical.fxDate, locationKey, location.id, location.name, weatherArchiveValue(oneDaySnapshot(historical), location), new Date().toISOString(), true);
@@ -441,10 +446,11 @@ export async function archiveWeatherDay(
 export async function fetchRealtimeWeather(config: ApiConfig, locationOverride?: WeatherLocationOverride): Promise<RealtimeWeatherResult | null> {
   const runtime = runtimeWeatherConfigForLocation(config, locationOverride);
   if (!runtime.enabled || !runtime.apiKey) return null;
-  const location = await resolveLocation(runtime);
+  const location = await resolveLocation(config, runtime);
   if (!location) return null;
   try {
-    const response = await fetch(`https://${cleanHost(runtime.apiHost)}/v7/weather/now?location=${encodeURIComponent(location.id)}&key=${encodeURIComponent(runtime.apiKey)}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    assertWeatherCredentialTarget(config, runtime, runtime.apiHost);
+    const response = await fetch(`https://${cleanHost(runtime.apiHost)}/v7/weather/now?location=${encodeURIComponent(location.id)}&key=${encodeURIComponent(runtime.apiKey)}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
     const data = await response.json() as QWeatherNowResponse;
     const now = data.code === "200" ? data.now : undefined;
     if (!now?.text || !now.icon) return null;
@@ -506,13 +512,16 @@ export function recordWeatherObservation(
   return true;
 }
 
-export async function verifyWeatherLocation(config: ApiConfig, input: { readonly apiKey?: string; readonly locationId: string; readonly apiHost?: string }): Promise<{ readonly location: WeatherLocation }> {  const runtime = readRuntimeWeatherConfig(config);
-  const apiKey = input.apiKey?.trim() || runtime.apiKey;
+export async function verifyWeatherLocation(config: ApiConfig, input: { readonly apiKey?: string; readonly locationId: string; readonly apiHost?: string }): Promise<{ readonly location: WeatherLocation }> {
+  const runtime = readRuntimeWeatherConfig(config);
+  const suppliedKey = input.apiKey?.trim();
+  const apiKey = suppliedKey || runtime.apiKey;
   const locationId = input.locationId.trim();
   const apiHost = cleanHost(input.apiHost?.trim() || runtime.apiHost);
   if (!apiKey) throw new Error("请先填写和风天气 API Key");
   if (!locationId) throw new Error("位置 ID 不能为空");
-  const response = await fetch(`https://${apiHost}/v7/weather/3d?location=${encodeURIComponent(locationId)}&key=${encodeURIComponent(apiKey)}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+  if (!suppliedKey || suppliedKey === runtime.apiKey) assertWeatherCredentialTarget(config, { ...runtime, apiKey, apiHost }, apiHost);
+  const response = await fetch(`https://${apiHost}/v7/weather/3d?location=${encodeURIComponent(locationId)}&key=${encodeURIComponent(apiKey)}`, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000) });
   const data = await response.json() as { readonly code?: string };
   if (data.code !== "200") {
     const hint = data.code === "401" ? "（Key 无效）" : data.code === "402" ? "（超出调用限额）" : data.code === "404" ? "（位置 ID 不存在）" : "";

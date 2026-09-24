@@ -101,7 +101,7 @@ export interface AiStatus {
   readonly baseUrl: string;
   readonly thinking: boolean;
   readonly reasoningEffort: "low" | "high" | "max" | null;
-  readonly keySource?: "env" | "file" | "none";
+  readonly keySource?: "env" | "file" | "shared" | "none";
   /** The wording the calendar sends the model, already resolved to a default if unset. */
   readonly summaryPrompt: string;
   /**
@@ -179,7 +179,7 @@ export interface BackupStatus {
     readonly bucket: string;
     readonly prefix: string;
     readonly forcePathStyle: boolean;
-    readonly keySource?: "env" | "file" | "none";
+    readonly keySource?: "env" | "file" | "shared" | "none";
     /**
      * "file" means the endpoint is a local directory, so nothing is uploaded
      * over the network. The settings UI must never present that as cloud backup.

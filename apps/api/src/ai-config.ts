@@ -17,7 +17,7 @@ export interface RuntimeAiConfig {
   readonly reasoningEffort?: AiReasoningEffort;
   readonly preset: AiPresetId;
   readonly apiKey?: string;
-  readonly source: "env" | "file" | "none";
+  readonly source: "env" | "file" | "shared" | "none";
   /**
    * The instruction the calendar sends when summarising days. Absent means the
    * built-in default is in force. It is part of the AI settings rather than a
@@ -41,6 +41,8 @@ interface StoredAiConfig {
   readonly thinking?: boolean;
   readonly reasoningEffort?: AiReasoningEffort;
   readonly encryptedApiKey?: string;
+  /** Explicitly entered in this tenant after shared-key support was added. */
+  readonly ownApiKey?: boolean;
   readonly apiKeyIv?: string;
   readonly apiKeyTag?: string;
   readonly summaryPrompt?: string;
@@ -128,16 +130,34 @@ function normalizeBaseUrl(value: string): string {
 export function readRuntimeAiConfig(config: ApiConfig): RuntimeAiConfig {
   const stored = readStored(config);
   if (stored !== undefined) {
-    const decryptedKey = decryptApiKey(config, stored);
-    const apiKey = decryptedKey ?? (stored.encryptedApiKey === undefined ? config.deepseekApiKey : undefined);
-    const source = decryptedKey !== undefined ? "file" : apiKey === undefined ? "none" : "env";
-    const baseUrl = normalizeBaseUrl(stored.baseUrl);
+    const hasStoredKeyMaterial = stored.encryptedApiKey !== undefined || stored.apiKeyIv !== undefined || stored.apiKeyTag !== undefined;
+    // Older account-mode builds could persist an inherited key without source
+    // metadata. Treat those ciphertexts as untrusted until a member re-enters
+    // their own key; never send an unknown legacy value to a custom endpoint.
+    const trustedStoredKey = config.sharedIntegrations === undefined || stored.ownApiKey === true;
+    const decryptedKey = trustedStoredKey ? decryptApiKey(config, stored) : undefined;
+    const hasTrustedStoredKeyMaterial = trustedStoredKey && hasStoredKeyMaterial;
+    const shared = decryptedKey === undefined && !hasTrustedStoredKeyMaterial && config.deepseekApiKey === undefined ? config.sharedIntegrations?.ai?.() : undefined;
+    const apiKey = decryptedKey ?? (hasTrustedStoredKeyMaterial ? undefined : config.deepseekApiKey ?? shared?.apiKey);
+    const source = decryptedKey !== undefined ? "file" : config.deepseekApiKey !== undefined && !hasTrustedStoredKeyMaterial ? "env" : shared !== undefined && apiKey !== undefined ? "shared" : "none";
+    const baseUrl = normalizeBaseUrl(source === "shared" && shared !== undefined ? shared.baseUrl : stored.baseUrl);
     const thinking = stored.thinking ?? false;
     const reasoningEffort = thinking ? stored.reasoningEffort ?? "high" : undefined;
     return runtimeConfig({ enabled: stored.enabled, baseUrl, model: stored.model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(apiKey === undefined ? {} : { apiKey }), ...(stored.summaryPrompt === undefined ? {} : { summaryPrompt: stored.summaryPrompt }), source });
   }
   const thinking = false;
-  return runtimeConfig({ enabled: true, baseUrl: config.deepseekBaseUrl, model: config.deepseekModel, thinking, ...(config.deepseekApiKey ? { apiKey: config.deepseekApiKey } : {}), source: config.deepseekApiKey === undefined ? "none" : "env" });
+  const shared = config.deepseekApiKey === undefined ? config.sharedIntegrations?.ai?.() : undefined;
+  const apiKey = config.deepseekApiKey ?? shared?.apiKey;
+  return runtimeConfig({ enabled: true, baseUrl: shared?.baseUrl ?? config.deepseekBaseUrl, model: shared?.model ?? config.deepseekModel, thinking, ...(apiKey === undefined ? {} : { apiKey }), source: config.deepseekApiKey !== undefined ? "env" : shared?.apiKey === undefined ? "none" : "shared" });
+}
+
+/** Refuse to send an inherited owner key anywhere except its current approved endpoint. */
+export function assertAiCredentialTarget(config: ApiConfig, runtime: Pick<RuntimeAiConfig, "source" | "apiKey" | "baseUrl">): void {
+  if (runtime.source !== "shared") return;
+  const shared = config.sharedIntegrations?.ai?.();
+  if (shared === undefined || runtime.apiKey !== shared.apiKey || normalizeBaseUrl(runtime.baseUrl) !== normalizeBaseUrl(shared.baseUrl)) {
+    throw new Error("共享 AI Key 仅能用于管理员批准的服务地址");
+  }
 }
 
 /**
@@ -170,7 +190,7 @@ export function publicAiConfig(config: ApiConfig): { readonly enabled: boolean; 
   /** 密文还在、却解不开（换过加密种子 / 文件被手改坏）。
    *  这时只报 `keyConfigured:false` 会让界面显示「未配置」——主人既不知道自己
    *  的钥匙其实还躺在文件里，也想不到「重新填一次」就能救。所以要单独说出来。 */
-  const keyUnreadable = existing !== undefined && existing.encryptedApiKey !== undefined && decryptApiKey(config, existing) === undefined;
+  const keyUnreadable = existing !== undefined && existing.encryptedApiKey !== undefined && (config.sharedIntegrations === undefined || existing.ownApiKey === true) && decryptApiKey(config, existing) === undefined;
   return { enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, keyUnreadable, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source, summaryPrompt: runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: runtime.summaryPrompt !== undefined };
 }
 
@@ -178,6 +198,15 @@ export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled
   const current = readRuntimeAiConfig(config);
   const existing = readStored(config);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
+  const typedApiKey = input.apiKey?.trim();
+  const hasExistingKeyMaterial = existing !== undefined && (existing.encryptedApiKey !== undefined || existing.apiKeyIv !== undefined || existing.apiKeyTag !== undefined);
+  const trustedExistingKey = existing !== undefined && (config.sharedIntegrations === undefined || existing.ownApiKey === true);
+  const hasTrustedExistingKeyMaterial = trustedExistingKey && hasExistingKeyMaterial;
+  const sharedNow = config.sharedIntegrations?.ai?.();
+  if (typedApiKey && typedApiKey === sharedNow?.apiKey) throw new Error("管理员共享 AI Key 不能保存到个人配置");
+  const hasUsableOwnKey = !input.clearApiKey && (Boolean(typedApiKey) || (hasTrustedExistingKeyMaterial && decryptApiKey(config, existing!) !== undefined));
+  const inherited = !hasUsableOwnKey && (!hasTrustedExistingKeyMaterial || input.clearApiKey === true) ? sharedNow : undefined;
+  if (inherited !== undefined) assertAiCredentialTarget(config, { source: "shared", apiKey: inherited.apiKey, baseUrl });
   const model = input.model.trim();
   if (!model) throw new Error("AI 模型不能为空");
   if (input.thinking !== undefined && typeof input.thinking !== "boolean") throw new Error("AI 思考开关必须是布尔值");
@@ -192,7 +221,7 @@ export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled
   // than storing the default text — a later change to the constant then flows
   // through. An omitted field leaves the current wording untouched.
   const requestedPrompt = input.summaryPrompt === undefined ? current.summaryPrompt : input.summaryPrompt?.trim() || undefined;
-  const stored: StoredAiConfig = { enabled: input.enabled, provider: "deepseek", baseUrl, model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...nextKeyFields(config, input, existing), ...(requestedPrompt === undefined ? {} : { summaryPrompt: requestedPrompt }) };
+  const stored: StoredAiConfig = { enabled: input.enabled, provider: "deepseek", baseUrl, model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...nextKeyFields(config, input, existing), ...(!input.clearApiKey && (Boolean(typedApiKey) || existing?.ownApiKey === true) ? { ownApiKey: true } : {}), ...(requestedPrompt === undefined ? {} : { summaryPrompt: requestedPrompt }) };
   mkdirSync(config.dataDirectory, { recursive: true });
   writeFileSync(configPath(config), `${JSON.stringify(stored, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return publicAiConfig(config);
@@ -201,11 +230,13 @@ export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled
 export async function testRuntimeAiConfig(config: ApiConfig, input: { readonly baseUrl: string; readonly apiKey?: string }): Promise<string> {
   const current = readRuntimeAiConfig(config);
   const baseUrl = normalizeBaseUrl(input.baseUrl);
-  const apiKey = input.apiKey?.trim() || current.apiKey;
+  const suppliedKey = input.apiKey?.trim();
+  const apiKey = suppliedKey || current.apiKey;
   if (!apiKey) throw new Error("请先填写 AI API Key");
+  if (!suppliedKey || suppliedKey === current.apiKey) assertAiCredentialTarget(config, { source: current.source, apiKey, baseUrl });
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}/models`, { headers: { accept: "application/json", authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(20_000) });
+    response = await fetch(`${baseUrl}/models`, { headers: { accept: "application/json", authorization: `Bearer ${apiKey}` }, redirect: "error", signal: AbortSignal.timeout(20_000) });
   } catch (error) {
     throw new Error(`AI 服务连接失败：${error instanceof Error && error.name === "TimeoutError" ? "请求超时（20 秒）" : "网络连接失败"}`);
   }

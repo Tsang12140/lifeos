@@ -26,6 +26,8 @@ import {
 import {
   listWeatherProfiles,
   publicWeatherConfig,
+  assertWeatherCredentialTarget,
+  readRuntimeWeatherConfig,
   readWeatherProfile,
   saveWeatherProfile,
 } from "./weather-config.js";
@@ -222,7 +224,7 @@ export const handleAiMovieRoutes: RouteHandler = async (
         label: stringField(input.label, "label", { nonEmpty: true }),
         locationId: stringField(input.locationId ?? "", "locationId"),
         city: stringField(input.city ?? "", "city"),
-        apiHost: stringField(input.apiHost ?? "devapi.qweather.com", "apiHost", { nonEmpty: true }),
+        apiHost: stringField(input.apiHost ?? readRuntimeWeatherConfig(config).apiHost, "apiHost", { nonEmpty: true }),
         ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
         ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
       });
@@ -243,6 +245,11 @@ export const handleAiMovieRoutes: RouteHandler = async (
     const profileId = stringField(input.id, "id", { nonEmpty: true });
     const profile = readWeatherProfile(config, profileId);
     if (profile === null) throw new HttpError(404, "weather_profile_not_found", "天气方案不存在");
+    try {
+      assertWeatherCredentialTarget(config, profile, profile.apiHost);
+    } catch (error) {
+      throw new HttpError(400, "invalid_weather_profile", error instanceof Error ? error.message : "天气方案无效");
+    }
     const deviceId = weatherDeviceId(req, res, config);
     repository.saveWeatherDeviceLocation(deviceId, profile.locationId, profile.city, JSON.stringify(nowInstant()), profileId);
     clearWeatherCache();
@@ -253,4 +260,3 @@ export const handleAiMovieRoutes: RouteHandler = async (
 
   return false;
 };
-

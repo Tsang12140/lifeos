@@ -72,7 +72,7 @@ export function weatherLocationOverride(config: ApiConfig, deviceLocation: Retur
   if (deviceLocation === null) return undefined;
   if (deviceLocation.profileId !== undefined) {
     const profile = readWeatherProfile(config, deviceLocation.profileId);
-    if (profile !== null) return { profileId: deviceLocation.profileId, locationId: profile.locationId, city: profile.city, apiHost: profile.apiHost, apiKey: profile.apiKey ?? null };
+    if (profile !== null) return { profileId: deviceLocation.profileId, locationId: profile.locationId, city: profile.city, apiHost: profile.apiHost, apiKey: profile.apiKey ?? null, apiKeySource: profile.source };
   }
   return { locationId: deviceLocation.locationId, city: deviceLocation.city };
 }

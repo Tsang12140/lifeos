@@ -9,7 +9,7 @@ export interface RuntimeWeatherConfig {
   readonly locationId: string;
   readonly city: string;
   readonly apiHost: string;
-  readonly source: "env" | "file" | "none";
+  readonly source: "env" | "file" | "shared" | "none";
 }
 
 export interface WeatherConfigStatus {
@@ -28,6 +28,7 @@ export interface WeatherLocationOverride {
   readonly city: string;
   readonly apiHost?: string;
   readonly apiKey?: string | null;
+  readonly apiKeySource?: RuntimeWeatherConfig["source"];
   readonly profileId?: string;
 }
 
@@ -52,6 +53,7 @@ interface StoredWeatherProfile {
   readonly city: string;
   readonly apiHost: string;
   readonly encryptedApiKey?: string;
+  readonly ownApiKey?: boolean;
   readonly apiKeyIv?: string;
   readonly apiKeyTag?: string;
 }
@@ -62,6 +64,7 @@ interface StoredWeatherConfig {
   readonly city: string;
   readonly apiHost: string;
   readonly encryptedApiKey?: string;
+  readonly ownApiKey?: boolean;
   readonly apiKeyIv?: string;
   readonly apiKeyTag?: string;
   readonly profiles?: readonly StoredWeatherProfile[];
@@ -127,17 +130,37 @@ function fromEnv(config: ApiConfig): RuntimeWeatherConfig {
 export function readRuntimeWeatherConfig(config: ApiConfig): RuntimeWeatherConfig {
   const stored = readStored(config);
   if (stored !== undefined) {
-    const apiKey = decrypt(config, stored.encryptedApiKey, stored.apiKeyIv, stored.apiKeyTag);
+    const hasStoredKeyMaterial = stored.encryptedApiKey !== undefined || stored.apiKeyIv !== undefined || stored.apiKeyTag !== undefined;
+    const trustedStoredKey = config.sharedIntegrations === undefined || stored.ownApiKey === true;
+    const apiKey = trustedStoredKey ? decrypt(config, stored.encryptedApiKey, stored.apiKeyIv, stored.apiKeyTag) : undefined;
+    const hasTrustedStoredKeyMaterial = trustedStoredKey && hasStoredKeyMaterial;
+    const shared = apiKey === undefined && !hasTrustedStoredKeyMaterial && config.qweatherApiKey === undefined ? config.sharedIntegrations?.weather?.() : undefined;
+    const effectiveKey = apiKey ?? (hasTrustedStoredKeyMaterial ? undefined : config.qweatherApiKey ?? shared?.apiKey);
     return {
       enabled: stored.enabled,
-      ...(apiKey ? { apiKey } : {}),
+      ...(effectiveKey ? { apiKey: effectiveKey } : {}),
       locationId: stored.locationId.trim(),
       city: stored.city.trim(),
-      apiHost: normalizeHost(stored.apiHost),
-      source: apiKey ? "file" : "none",
+      apiHost: normalizeHost(shared !== undefined && effectiveKey !== undefined ? shared.host : stored.apiHost),
+      source: apiKey ? "file" : config.qweatherApiKey !== undefined && !hasTrustedStoredKeyMaterial ? "env" : shared !== undefined && effectiveKey !== undefined ? "shared" : "none",
     };
   }
-  return fromEnv(config);
+  const env = fromEnv(config);
+  if (config.qweatherApiKey !== undefined) return env;
+  const shared = config.sharedIntegrations?.weather?.();
+  return shared === undefined ? env : { ...env, apiKey: shared.apiKey, apiHost: normalizeHost(shared.host), source: "shared" };
+}
+
+/** Refuse to send an inherited owner key anywhere except its current approved host. */
+export function assertWeatherCredentialTarget(config: ApiConfig, runtime: RuntimeWeatherConfig, targetHost = runtime.apiHost): void {
+  if (runtime.source !== "shared") return;
+  const shared = config.sharedIntegrations?.weather?.();
+  const normalizedTarget = normalizeHost(targetHost);
+  // GeoAPI is a fixed first-party endpoint used only for city lookup. Member
+  // input cannot select it; redirects from it are rejected at fetch time.
+  if (shared === undefined || runtime.apiKey !== shared.apiKey || (normalizedTarget !== normalizeHost(shared.host) && normalizedTarget !== "geoapi.qweather.com")) {
+    throw new Error("共享天气 Key 仅能用于管理员批准的服务地址");
+  }
 }
 
 export function runtimeWeatherConfigForLocation(config: ApiConfig, override?: WeatherLocationOverride): RuntimeWeatherConfig {
@@ -147,7 +170,10 @@ export function runtimeWeatherConfigForLocation(config: ApiConfig, override?: We
     ? runtime
     : (() => {
       const { apiKey: _globalApiKey, ...withoutGlobalKey } = runtime;
-      return { ...withoutGlobalKey, ...(override.apiKey === null || override.apiKey.length === 0 ? {} : { apiKey: override.apiKey }) };
+      return {
+        ...withoutGlobalKey,
+        ...(override.apiKey === null || override.apiKey.length === 0 ? { source: "none" as const } : { apiKey: override.apiKey, source: override.apiKeySource ?? "file" }),
+      };
     })();
   return { ...base, locationId: override.locationId.trim(), city: override.city.trim(), ...(override.apiHost ? { apiHost: normalizeHost(override.apiHost) } : {}) };
 }
@@ -175,15 +201,31 @@ export function saveRuntimeWeatherConfig(
   const city = input.city.trim();
   if (!locationId && !city) throw new Error("位置 ID 和城市名至少填写一个");
   const apiHost = normalizeHost(input.apiHost);
-  const apiKey = input.clearApiKey ? undefined : input.apiKey?.trim() || current.apiKey;
-  const encrypted = apiKey ? encrypt(config, apiKey) : undefined;
   const previous = readStored(config);
+  const typedApiKey = input.apiKey?.trim();
+  const hasPreviousKeyMaterial = previous !== undefined && (previous.encryptedApiKey !== undefined || previous.apiKeyIv !== undefined || previous.apiKeyTag !== undefined);
+  const trustedPreviousKey = previous !== undefined && (config.sharedIntegrations === undefined || previous.ownApiKey === true);
+  const hasTrustedPreviousKeyMaterial = trustedPreviousKey && hasPreviousKeyMaterial;
+  const previousKey = hasTrustedPreviousKeyMaterial ? decrypt(config, previous?.encryptedApiKey, previous?.apiKeyIv, previous?.apiKeyTag) : undefined;
+  const sharedNow = config.sharedIntegrations?.weather?.();
+  if (typedApiKey && typedApiKey === sharedNow?.apiKey) throw new Error("管理员共享天气 Key 不能保存到个人配置");
+  const ownKey = !input.clearApiKey && (Boolean(typedApiKey) || previousKey !== undefined);
+  const sharedAfterSave = !ownKey ? sharedNow : undefined;
+  if (sharedAfterSave !== undefined) {
+    assertWeatherCredentialTarget(config, { ...current, apiKey: sharedAfterSave.apiKey, source: "shared", apiHost }, apiHost);
+  }
+  const encrypted = typedApiKey ? encrypt(config, typedApiKey) : undefined;
   const stored: StoredWeatherConfig = {
     enabled: input.enabled,
     locationId,
     city,
     apiHost,
-    ...(encrypted ? { encryptedApiKey: encrypted.encrypted, apiKeyIv: encrypted.iv, apiKeyTag: encrypted.tag } : {}),
+    ...(!input.clearApiKey && !typedApiKey && hasPreviousKeyMaterial ? {
+      encryptedApiKey: previous!.encryptedApiKey,
+      apiKeyIv: previous!.apiKeyIv,
+      apiKeyTag: previous!.apiKeyTag,
+    } : encrypted ? { encryptedApiKey: encrypted.encrypted, apiKeyIv: encrypted.iv, apiKeyTag: encrypted.tag } : {}),
+    ...(!input.clearApiKey && (Boolean(typedApiKey) || previous?.ownApiKey === true) ? { ownApiKey: true } : {}),
     ...(previous?.profiles === undefined ? {} : { profiles: previous.profiles }),
   };
   mkdirSync(config.dataDirectory, { recursive: true });
@@ -192,14 +234,18 @@ export function saveRuntimeWeatherConfig(
 }
 
 function profileRuntime(config: ApiConfig, profile: StoredWeatherProfile): RuntimeWeatherConfig {
-  const apiKey = decrypt(config, profile.encryptedApiKey, profile.apiKeyIv, profile.apiKeyTag);
+  const hasStoredKeyMaterial = profile.encryptedApiKey !== undefined || profile.apiKeyIv !== undefined || profile.apiKeyTag !== undefined;
+  const trustedStoredKey = config.sharedIntegrations === undefined || profile.ownApiKey === true;
+  const apiKey = trustedStoredKey ? decrypt(config, profile.encryptedApiKey, profile.apiKeyIv, profile.apiKeyTag) : undefined;
+  const hasTrustedStoredKeyMaterial = trustedStoredKey && hasStoredKeyMaterial;
+  const fallback = apiKey === undefined && !hasTrustedStoredKeyMaterial ? readRuntimeWeatherConfig(config) : undefined;
   return {
     enabled: true,
-    ...(apiKey ? { apiKey } : {}),
+    ...(apiKey ? { apiKey } : fallback?.apiKey === undefined ? {} : { apiKey: fallback.apiKey }),
     locationId: profile.locationId,
     city: profile.city,
-    apiHost: normalizeHost(profile.apiHost),
-    source: apiKey ? "file" : "none",
+    apiHost: normalizeHost(fallback?.source === "shared" ? fallback.apiHost : profile.apiHost),
+    source: apiKey ? "file" : fallback?.source ?? "none",
   };
 }
 
@@ -209,8 +255,8 @@ function profileStatus(config: ApiConfig, profile: StoredWeatherProfile): Weathe
     label: profile.label,
     locationId: profile.locationId,
     city: profile.city,
-    apiHost: normalizeHost(profile.apiHost),
-    hasKey: Boolean(decrypt(config, profile.encryptedApiKey, profile.apiKeyIv, profile.apiKeyTag)),
+    apiHost: profileRuntime(config, profile).apiHost,
+    hasKey: Boolean(profileRuntime(config, profile).apiKey),
   };
 }
 
@@ -236,30 +282,35 @@ export function saveWeatherProfile(
   const apiHost = normalizeHost(input.apiHost);
   const previous = readStored(config);
   const existing = input.id === undefined ? undefined : previous?.profiles?.find((profile) => profile.id === input.id);
-  const currentKey = existing === undefined ? readRuntimeWeatherConfig(config).apiKey : decrypt(config, existing.encryptedApiKey, existing.apiKeyIv, existing.apiKeyTag);
-  const apiKey = input.clearApiKey ? undefined : input.apiKey?.trim() || currentKey;
-  if (!apiKey) throw new Error("方案需要 API Key");
-  const encrypted = encrypt(config, apiKey);
+  const typedApiKey = input.apiKey?.trim();
+  const profileKeyMaterial = existing !== undefined && (existing.encryptedApiKey !== undefined || existing.apiKeyIv !== undefined || existing.apiKeyTag !== undefined);
+  const trustedExisting = existing !== undefined && (config.sharedIntegrations === undefined || existing.ownApiKey === true);
+  const trustedProfileKeyMaterial = trustedExisting && profileKeyMaterial;
+  const existingKey = !input.clearApiKey && trustedProfileKeyMaterial ? decrypt(config, existing?.encryptedApiKey, existing?.apiKeyIv, existing?.apiKeyTag) : undefined;
+  const inherited = !typedApiKey && existingKey === undefined && (!trustedProfileKeyMaterial || input.clearApiKey === true) ? readRuntimeWeatherConfig(config) : undefined;
+  const sharedNow = config.sharedIntegrations?.weather?.();
+  if (typedApiKey && typedApiKey === sharedNow?.apiKey) throw new Error("管理员共享天气 Key 不能保存到个人方案");
+  if (!typedApiKey && existingKey === undefined && inherited?.apiKey === undefined) throw new Error("方案需要可用的天气 API Key");
+  if (!typedApiKey && existingKey === undefined && inherited?.source === "shared") assertWeatherCredentialTarget(config, { ...inherited, apiHost }, apiHost);
+  const encrypted = typedApiKey ? encrypt(config, typedApiKey) : undefined;
   const profile: StoredWeatherProfile = {
     id: existing?.id ?? input.id ?? randomUUID(),
     label,
     locationId,
     city,
     apiHost,
-    encryptedApiKey: encrypted.encrypted,
-    apiKeyIv: encrypted.iv,
-    apiKeyTag: encrypted.tag,
+    ...(!input.clearApiKey && !typedApiKey && profileKeyMaterial ? {
+      encryptedApiKey: existing!.encryptedApiKey,
+      apiKeyIv: existing!.apiKeyIv,
+      apiKeyTag: existing!.apiKeyTag,
+    } : encrypted ? { encryptedApiKey: encrypted.encrypted, apiKeyIv: encrypted.iv, apiKeyTag: encrypted.tag } : {}),
+    ...(!input.clearApiKey && (Boolean(typedApiKey) || existing?.ownApiKey === true) ? { ownApiKey: true } : {}),
   };
   const profiles = [...(previous?.profiles ?? []).filter((candidate) => candidate.id !== profile.id), profile];
   const current = readRuntimeWeatherConfig(config);
   const globalEncrypted = previous?.encryptedApiKey !== undefined && previous.apiKeyIv !== undefined && previous.apiKeyTag !== undefined
     ? { encryptedApiKey: previous.encryptedApiKey, apiKeyIv: previous.apiKeyIv, apiKeyTag: previous.apiKeyTag }
-    : current.apiKey === undefined
-      ? {}
-      : (() => {
-        const encryptedGlobal = encrypt(config, current.apiKey!);
-        return { encryptedApiKey: encryptedGlobal.encrypted, apiKeyIv: encryptedGlobal.iv, apiKeyTag: encryptedGlobal.tag };
-      })();
+    : {};
   const stored: StoredWeatherConfig = {
     enabled: previous?.enabled ?? current.enabled,
     locationId: previous?.locationId ?? current.locationId,

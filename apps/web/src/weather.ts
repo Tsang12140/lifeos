@@ -29,7 +29,7 @@ export interface WeatherConfigStatus {
   readonly enabled: boolean;
   readonly configured: boolean;
   readonly hasKey: boolean;
-  readonly source: "env" | "file" | "none";
+  readonly source: "env" | "file" | "shared" | "none";
   readonly locationId: string;
   readonly city: string;
   readonly apiHost: string;

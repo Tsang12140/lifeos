@@ -628,14 +628,16 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
    * the owner's *effective* config so a key typed into the settings page counts
    * exactly like one put in the environment.
    */
-  const sharedIntegrationsForMembers = (): SharedIntegrations => {
-    const ai = readRuntimeAiConfig(ownerConfig);
-    const weather = readRuntimeWeatherConfig(ownerConfig);
-    return {
-      ...(ai.apiKey === undefined ? {} : { ai: { apiKey: ai.apiKey, baseUrl: ai.baseUrl, model: ai.model } }),
-      ...(weather.apiKey === undefined ? {} : { weather: { apiKey: weather.apiKey, host: weather.apiHost } }),
-    };
-  };
+  const sharedIntegrationsForMembers = (): SharedIntegrations => ({
+    ai: () => {
+      const ai = readRuntimeAiConfig(ownerConfig);
+      return ai.apiKey === undefined ? undefined : { apiKey: ai.apiKey, baseUrl: ai.baseUrl, model: ai.model };
+    },
+    weather: () => {
+      const weather = readRuntimeWeatherConfig(ownerConfig);
+      return weather.apiKey === undefined ? undefined : { apiKey: weather.apiKey, host: weather.apiHost };
+    },
+  });
   const apps = new Map<string, { readonly app: LifeosApp; lastUsedAt: number }>();
   const appFor = (account: AccountIdentity | PublicAccount): LifeosApp => {
     const key = account.tenantId;

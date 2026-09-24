@@ -1,5 +1,5 @@
 import type { ApiConfig } from "./config.js";
-import { readRuntimeAiConfig, type RuntimeAiConfig } from "./ai-config.js";
+import { assertAiCredentialTarget, readRuntimeAiConfig, type RuntimeAiConfig } from "./ai-config.js";
 import { type RecordView, SqliteRecordRepository } from "./repository.js";
 
 export interface AssistantHistoryItem {
@@ -68,8 +68,9 @@ function rulesReply(message: string, context: ReturnType<typeof contextFor>): st
   return "我可以帮你查看记录和任务。要启用更完整的自然语言分析，请到设置里的 AI 助手填写服务地址、模型和 API Key；没有配置时，LifeOS 仍可使用本地规则回答。";
 }
 
-async function askDeepSeek(runtime: RuntimeAiConfig, system: string, history: readonly AssistantHistoryItem[], message: string): Promise<string | null> {
+async function askDeepSeek(config: ApiConfig, runtime: RuntimeAiConfig, system: string, history: readonly AssistantHistoryItem[], message: string): Promise<string | null> {
   if (!runtime.enabled || runtime.apiKey === undefined) return null;
+  assertAiCredentialTarget(config, runtime);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
@@ -87,6 +88,7 @@ async function askDeepSeek(runtime: RuntimeAiConfig, system: string, history: re
         ],
       }),
       signal: controller.signal,
+      redirect: "error",
     });
     if (!response.ok) return null;
     const payload = await response.json() as { choices?: readonly { message?: { content?: unknown } }[] };
@@ -112,7 +114,7 @@ export async function answerLifeosAssistant(config: ApiConfig, repository: Sqlit
     "LifeOS 数据上下文：",
     context.text,
   ].join("\n");
-  const answer = await askDeepSeek(runtime, system, history, request.message);
+  const answer = await askDeepSeek(config, runtime, system, history, request.message);
   if (answer !== null) return { reply: answer, mode: "ai", provider: "deepseek", model: runtime.model };
   return { reply: rulesReply(request.message, context), mode: "rules", provider: "local" };
 }

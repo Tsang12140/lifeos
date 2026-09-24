@@ -50,8 +50,8 @@ function deriveConfigSecret(masterSecret: string, tenantId: string, module: stri
  * choice lives in their own database.
  */
 export interface SharedIntegrations {
-  readonly ai?: { readonly apiKey: string; readonly baseUrl: string; readonly model: string };
-  readonly weather?: { readonly apiKey: string; readonly host: string };
+  readonly ai?: () => { readonly apiKey: string; readonly baseUrl: string; readonly model: string } | undefined;
+  readonly weather?: () => { readonly apiKey: string; readonly host: string } | undefined;
 }
 
 /** Build an isolated runtime config. Client input never participates in any path. */
@@ -62,6 +62,7 @@ export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, maste
     ownerUsername: _ownerUsername,
     accountMode: _accountMode,
     gatewayAuthenticated: _gatewayAuthenticated,
+    sharedIntegrations: _sharedIntegrations,
     deepseekApiKey: _deepseekApiKey,
     qweatherApiKey: _qweatherApiKey,
     qweatherLocation: _qweatherLocation,
@@ -74,10 +75,10 @@ export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, maste
     ...safeRoot,
     accountMode: false,
     gatewayAuthenticated: true,
-    // Handed down as the env-level fallback, so a member's own saved settings
-    // still win and a key they never typed still works.
-    ...(shared?.ai === undefined ? {} : { deepseekApiKey: shared.ai.apiKey, deepseekBaseUrl: shared.ai.baseUrl, deepseekModel: shared.ai.model }),
-    ...(shared?.weather === undefined ? {} : { qweatherApiKey: shared.weather.apiKey, qweatherHost: shared.weather.host }),
+    // Borrowed credentials are resolved lazily at use time. Never copy them
+    // into the tenant config: weather settings persist fallback keys, and an
+    // owner rotation must not leave the old secret behind in a member file.
+    ...(shared === undefined ? {} : { sharedIntegrations: shared }),
     dataDirectory,
     databasePath: join(dataDirectory, "lifeos.sqlite"),
     assetRoot: join(dataDirectory, "assets"),

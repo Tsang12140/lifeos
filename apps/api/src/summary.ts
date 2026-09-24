@@ -15,7 +15,7 @@ import {
   type DaySummaryProvider,
   type SummarySourceRecord,
 } from "@lifeos/core";
-import { readRuntimeAiConfig } from "./ai-config.js";
+import { assertAiCredentialTarget, readRuntimeAiConfig } from "./ai-config.js";
 import type { ApiConfig } from "./config.js";
 import type { RecordView } from "./repository.js";
 
@@ -102,17 +102,22 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
   readonly #baseUrl: string;
   /** Overridable so the prompt can be edited from settings instead of only in code. */
   readonly #systemPrompt: string;
+  readonly #config: ApiConfig;
+  readonly #source: ReturnType<typeof readRuntimeAiConfig>["source"];
 
-  public constructor(apiKey: string, baseUrl: string, model: string, systemPrompt: string = SUMMARY_SYSTEM_PROMPT) {
+  public constructor(config: ApiConfig, apiKey: string, baseUrl: string, model: string, source: ReturnType<typeof readRuntimeAiConfig>["source"], systemPrompt: string = SUMMARY_SYSTEM_PROMPT) {
+    this.#config = config;
     this.#apiKey = apiKey;
     this.#baseUrl = baseUrl;
     this.model = model;
+    this.#source = source;
     this.#systemPrompt = systemPrompt;
     this.contextKey = summaryContextKey(baseUrl, model, systemPrompt);
   }
 
   public async summarizeDays(days: readonly DaySummaryInput[]): Promise<readonly DaySummaryDraft[]> {
     if (days.length === 0) return [];
+    assertAiCredentialTarget(this.#config, { source: this.#source, apiKey: this.#apiKey, baseUrl: this.#baseUrl });
     const response = await fetch(`${this.#baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.#apiKey}` },
@@ -126,6 +131,7 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
         ],
       }),
       signal: AbortSignal.timeout(30_000),
+      redirect: "error",
     });
     if (!response.ok) throw new Error(`DeepSeek responded ${response.status}`);
     const payload = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
@@ -150,7 +156,7 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
 export function createDaySummaryProvider(config: ApiConfig): DaySummaryProvider {
   const runtime = readRuntimeAiConfig(config);
   if (!runtime.enabled || runtime.apiKey === undefined) return new RuleDaySummaryProvider();
-  return new DeepSeekDaySummaryProvider(runtime.apiKey, runtime.baseUrl, runtime.model, runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT);
+  return new DeepSeekDaySummaryProvider(config, runtime.apiKey, runtime.baseUrl, runtime.model, runtime.source, runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT);
 }
 
 /**
