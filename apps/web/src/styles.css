@@ -1,43 +1,3 @@
-@font-face {
-  font-family: "Maple Mono Normal CN";
-  src: url("/fonts/MapleMonoNormal-CN-Regular.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Maple Mono Normal CN";
-  src: url("/fonts/MapleMonoNormal-CN-Medium.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Maple Mono Normal CN";
-  src: url("/fonts/MapleMonoNormal-CN-SemiBold.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Maple Mono Normal CN";
-  src: url("/fonts/MapleMonoNormal-CN-Bold.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Maple Mono Normal CN";
-  src: url("/fonts/MapleMonoNormal-CN-ExtraBold.ttf") format("truetype");
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-}
-
 /* MiSans 的内部字重刻度是非标准的：Regular=330 / Medium=380 / Semibold=520 / Bold=630 / Heavy=700。
    直接用裸家族名 "MiSans" 时，CSS 里最普通的 font-weight:700 会精确命中 Heavy（最粗那张），
    全站 670–850 的请求也全部塌缩到 Heavy —— 表现为界面「莫名滥用高字重」。
@@ -597,7 +557,7 @@ textarea:focus-visible {
   color: #1d2736;
   background: rgb(255 255 255 / 0.76);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.96), 0 2px 5px rgb(35 51 78 / 0.06);
-  font-family: "Maple Mono Normal CN", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--lifeos-ui-font);
   font-size: 2.12rem;
   font-variant-numeric: tabular-nums;
   font-weight: 760;
@@ -10253,7 +10213,7 @@ button.relation-chip {
 }
 
 [data-thumb-cache] code {
-  font-family: "Maple Mono Normal CN", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 0.68rem;
   word-break: break-all;
 }

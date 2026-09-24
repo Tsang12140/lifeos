@@ -724,7 +724,7 @@ export function ThumbnailCacheSettingsCard() {
 
 export function FontSettingsCard({ value, onChange }: { readonly value: UiFontId; readonly onChange: (value: UiFontId) => void }) {
   const selected = UI_FONT_OPTIONS.find((option) => option.id === value) ?? UI_FONT_OPTIONS[0];
-  return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong><small>仅影响本浏览器的 LifeOS 界面；Maple Mono 继续用于日期和数字等宽信息。</small></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
+  return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong><small>目前使用 MiSans；选择框保留供以后增加字体。访问设备未安装 MiSans 时会使用系统字体。</small></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
 }
 
 export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: CycleIntimacyModuleData | null; readonly onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {

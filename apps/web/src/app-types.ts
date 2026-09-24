@@ -4,7 +4,7 @@ export type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "e
 export type SettingsPageId = "account/session" | "data/import-export" | "data/backup" | "data/demo" | "data/photos" | "appearance/interface" | "integrations/weather" | "integrations/ai" | "integrations/movie" | "private/cycle" | "about";
 export type CalendarMode = "week" | "month";
 export type ComposerKind = Extract<RecordKind, "journal" | "task" | "event" | "note">;
-export type UiFontId = "misans" | "source-han-sans" | "harmonyos-sans";
+export type UiFontId = "misans";
 
 /** Everything the create form can collect in one shot. */
 export interface EntityCreateRequest {

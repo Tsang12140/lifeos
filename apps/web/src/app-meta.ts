@@ -123,8 +123,6 @@ export function writeComposerShotsDraft(shots: readonly AssetLink[]): void {
 
 export const UI_FONT_OPTIONS: readonly { id: UiFontId; label: string; stack: string }[] = [
   { id: "misans", label: "MiSans", stack: '"LifeOS MiSans", "MiSans", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
-  { id: "source-han-sans", label: "思源黑体 / Source Han Sans", stack: '"Source Han Sans SC", "Source Han Sans SC VF", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
-  { id: "harmonyos-sans", label: "HarmonyOS Sans", stack: '"HarmonyOS Sans SC", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
 ];
 
 export function isUiFontId(value: string | null): value is UiFontId {
