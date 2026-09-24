@@ -55,7 +55,7 @@ import {
 import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
 import { IdentityStore, type AccountIdentity, type PublicAccount } from "./identity-store.js";
-import { tenantConfigFor } from "./tenant-config.js";
+import { tenantConfigFor, type SharedIntegrations } from "./tenant-config.js";
 import { HttpError, backupHttpError, setJson, setEmpty } from "./http-kit.js";
 import {
   type JsonObject,
@@ -138,7 +138,7 @@ import { BackupScheduler, BACKUP_TIME_ZONE, publicNextBackupAt, shanghaiDateKey 
 import { publicBackupConfig, saveRuntimeBackupConfig } from "./backup-config.js";
 import { BACKUP_RETENTION_LIMITS, buildBackupRetentionView, DEFAULT_BACKUP_RETENTION, describeBackupRetention, type BackupRetention } from "./backup-retention.js";
 import { readSnapshot, SnapshotUnavailableError } from "./backup-timeline.js";
-import { AI_REASONING_EFFORTS, publicAiConfig, saveRuntimeAiConfig, testRuntimeAiConfig } from "./ai-config.js";
+import { AI_REASONING_EFFORTS, publicAiConfig, readRuntimeAiConfig, saveRuntimeAiConfig, testRuntimeAiConfig } from "./ai-config.js";
 import { clearWeatherCache, decideForcedRefresh, fetchRealtimeWeather, fetchWeatherSnapshot, recordWeatherObservation, verifyWeatherLocation, WEATHER_OBSERVATION_TIME_ZONE } from "./weather.js";
 import { selectDayObservations } from "./weather-selection.js";
 import { listWeatherProfiles, publicWeatherConfig, readRuntimeWeatherConfig, readWeatherProfile, saveRuntimeWeatherConfig, saveWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
@@ -589,17 +589,22 @@ function accountPublicView(account: AccountIdentity | PublicAccount) {
 
 function accountAdminError(error: unknown): HttpError {
   const message = error instanceof Error ? error.message : "账号操作失败";
-  if (message === "账号不存在") return new HttpError(404, "account_not_found", message);
-  if (message === "账号已存在" || message.startsWith("最多可创建 ")) return new HttpError(409, "account_conflict", message);
-  if (/^(账号需为|密码长度|显示名称|空间名称|不能停用|不能从此处重置)/.test(message)) return new HttpError(400, "invalid_account_operation", message);
+  if (message === "账号不存在" || message === "邀请码不存在") return new HttpError(404, "account_not_found", message);
+  if (message === "账号已存在" || message.startsWith("最多可创建 ") || message === "邀请码已使用、已撤销或过期") return new HttpError(409, "account_conflict", message);
+  if (message === "仅空间所有者可创建邀请码" || message === "仅空间所有者可撤销邀请码") return new HttpError(403, "owner_required", message);
+  if (/^(账号需为|密码长度|显示名称|空间名称|邀请码有效期|不能停用|不能从此处重置)/.test(message)) return new HttpError(400, "invalid_account_operation", message);
   return new HttpError(500, "account_operation_failed", "账号操作失败");
 }
 
 function createAccountModeApp(config: ApiConfig): LifeosApp {
-  if (!config.cookieSecure) throw new Error("账户模式必须启用 LIFEOS_COOKIE_SECURE=true");
-  if (!config.allowedOrigins.some((origin) => {
+  const publicOrigins = config.allowedOrigins.filter((origin) => {
     try { return new URL(origin).protocol === "https:"; } catch { return false; }
-  })) throw new Error("账户模式必须在 LIFEOS_ALLOWED_ORIGINS 配置至少一个 HTTPS Origin");
+  });
+  // A plaintext cookie on a public origin is what this refuses. A loopback
+  // origin is reachable only from this machine, so it stays available as the
+  // local preview of the account-mode front end.
+  if (!config.cookieSecure && publicOrigins.length > 0) throw new Error("账户模式对外发布必须启用 LIFEOS_COOKIE_SECURE=true");
+  if (config.allowedOrigins.length === 0) throw new Error("账户模式必须配置 LIFEOS_ALLOWED_ORIGINS");
 
   const identity = new IdentityStore(resolve(config.dataDirectory, "identity.sqlite"));
   const currentAccounts = identity.listAccounts();
@@ -617,6 +622,20 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
   }
 
   const ownerConfig = accountOwnerConfig(config);
+  /**
+   * What a member space is allowed to borrow. Read at the moment the space is
+   * created so a key the owner saved in settings is picked up, and read from
+   * the owner's *effective* config so a key typed into the settings page counts
+   * exactly like one put in the environment.
+   */
+  const sharedIntegrationsForMembers = (): SharedIntegrations => {
+    const ai = readRuntimeAiConfig(ownerConfig);
+    const weather = readRuntimeWeatherConfig(ownerConfig);
+    return {
+      ...(ai.apiKey === undefined ? {} : { ai: { apiKey: ai.apiKey, baseUrl: ai.baseUrl, model: ai.model } }),
+      ...(weather.apiKey === undefined ? {} : { weather: { apiKey: weather.apiKey, host: weather.apiHost } }),
+    };
+  };
   const apps = new Map<string, { readonly app: LifeosApp; lastUsedAt: number }>();
   const appFor = (account: AccountIdentity | PublicAccount): LifeosApp => {
     const key = account.tenantId;
@@ -625,7 +644,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       existing.lastUsedAt = Date.now();
       return existing.app;
     }
-    const tenantConfig = account.role === "owner" ? ownerConfig : tenantConfigFor(config, account, identity.configMasterSecret);
+    const tenantConfig = account.role === "owner" ? ownerConfig : tenantConfigFor(config, account, identity.configMasterSecret, sharedIntegrationsForMembers());
     const app = createApp(tenantConfig);
     apps.set(key, { app, lastUsedAt: Date.now() });
     return app;
@@ -649,6 +668,22 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       return token === undefined ? null : identity.session(identity.tokenHash(token));
     };
 
+    // Signing in and redeeming an invite both run scrypt, so they share one
+    // bounded budget: a burst of redemptions cannot starve sign-ins, and one
+    // peer cannot hold every slot.
+    const reservePasswordWork = (remote: string): boolean => {
+      if (inFlightLogins >= ACCOUNT_LOGIN_MAX_GLOBAL_IN_FLIGHT || (inFlightByPeer.get(remote) ?? 0) >= ACCOUNT_LOGIN_MAX_PEER_IN_FLIGHT) return false;
+      inFlightLogins += 1;
+      inFlightByPeer.set(remote, (inFlightByPeer.get(remote) ?? 0) + 1);
+      return true;
+    };
+    const releasePasswordWork = (remote: string): void => {
+      inFlightLogins -= 1;
+      const remaining = (inFlightByPeer.get(remote) ?? 1) - 1;
+      if (remaining <= 0) inFlightByPeer.delete(remote);
+      else inFlightByPeer.set(remote, remaining);
+    };
+
     const handleAccountRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
       const startedAt = Date.now();
       let path = "/";
@@ -666,6 +701,97 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
               accountMode: true,
               ...(session === null ? {} : { account: accountPublicView(session.account) }),
             });
+            return;
+          }
+          if (path === "/api/auth/invite/check" && req.method === "POST") {
+            // Only says whether a code is still redeemable. It is answered
+            // before the session gate because the person holding an invite has
+            // no account yet — that is the whole point of an invite.
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+            hasOnlyKeys(input, ["code"]);
+            const code = stringField(input.code, "code", { nonEmpty: true });
+            const remote = req.socket.remoteAddress ?? "unknown";
+            const now = Date.now();
+            if (now - lastLoginFailureSweepAt >= 60_000) {
+              pruneLoginFailures(loginFailures, now);
+              pruneLoginFailures(peerLoginFailures, now, ACCOUNT_PEER_WINDOW_MS);
+              lastLoginFailureSweepAt = now;
+            }
+            const peerAttempt = peerLoginFailures.get(remote);
+            if (peerAttempt !== undefined && peerAttempt.blockedUntil > now) {
+              res.setHeader("retry-after", String(Math.ceil((peerAttempt.blockedUntil - now) / 1000)));
+              throw new HttpError(429, "login_rate_limited", "尝试过多，请稍后再试");
+            }
+            // A code carries 256 bits of entropy, so a wrong guess is not an
+            // attack worth counting; the peer budget exists so a loop cannot
+            // turn this into a free oracle.
+            if (!identity.inviteIsValid(code, now)) {
+              recordLoginFailure(peerLoginFailures, remote, peerAttempt, Date.now(), ACCOUNT_PEER_FAILURE_LIMIT, ACCOUNT_PEER_WINDOW_MS);
+              setJson(res, 200, { valid: false });
+              return;
+            }
+            setJson(res, 200, { valid: true });
+            return;
+          }
+          if (path === "/api/auth/register" && req.method === "POST") {
+            // Redeeming an invite *is* the account creation: the person sets
+            // their own password, and the space is created inside the same
+            // transaction that consumes the code. A redeemed code can never
+            // create a second space, and neither the owner nor anybody else
+            // sees the password.
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+            hasOnlyKeys(input, ["code", "username", "displayName", "spaceName", "password"]);
+            const remote = req.socket.remoteAddress ?? "unknown";
+            const now = Date.now();
+            if (now - lastLoginFailureSweepAt >= 60_000) {
+              pruneLoginFailures(loginFailures, now);
+              pruneLoginFailures(peerLoginFailures, now, ACCOUNT_PEER_WINDOW_MS);
+              lastLoginFailureSweepAt = now;
+            }
+            const peerAttempt = peerLoginFailures.get(remote);
+            if (peerAttempt !== undefined && peerAttempt.blockedUntil > now) {
+              res.setHeader("retry-after", String(Math.ceil((peerAttempt.blockedUntil - now) / 1000)));
+              throw new HttpError(429, "login_rate_limited", "尝试过多，请稍后再试");
+            }
+            if (!reservePasswordWork(remote)) {
+              res.setHeader("retry-after", "1");
+              throw new HttpError(429, "login_rate_limited", "创建请求过多，请稍后再试");
+            }
+            let account: PublicAccount | null;
+            try {
+              account = await identity.redeemInvite(
+                stringField(input.code, "code", { nonEmpty: true }),
+                {
+                  username: stringField(input.username, "username", { nonEmpty: true }),
+                  password: stringField(input.password, "password", { nonEmpty: true }),
+                  displayName: stringField(input.displayName, "displayName", { nonEmpty: true }),
+                  spaceName: stringField(input.spaceName, "spaceName", { nonEmpty: true }),
+                },
+              );
+            } catch (error) {
+              throw accountAdminError(error);
+            } finally {
+              releasePasswordWork(remote);
+            }
+            if (account === null) {
+              recordLoginFailure(peerLoginFailures, remote, peerAttempt, Date.now(), ACCOUNT_PEER_FAILURE_LIMIT, ACCOUNT_PEER_WINDOW_MS);
+              throw new HttpError(400, "invite_invalid", "邀请码无效、已使用或已过期");
+            }
+            const token = randomBytes(32).toString("base64url");
+            const tokenHash = identity.tokenHash(token);
+            identity.createSession(account.id, tokenHash, Date.now() + ttlMs);
+            const session = identity.session(tokenHash);
+            if (session === null) throw new HttpError(401, "account_disabled", "账号已停用");
+            try { appFor(session.account); }
+            catch (error) { identity.disableAccount(account.id); throw error; }
+            setJson(res, 200, {
+              required: true,
+              authenticated: true,
+              accountMode: true,
+              account: accountPublicView(session.account),
+            }, { "set-cookie": cookieHeader(token, config, ttlMs / 1000) });
             return;
           }
           if (path === "/api/auth/login" && req.method === "POST") {
@@ -705,10 +831,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
             try {
               account = await identity.authenticate(username, password);
             } finally {
-              inFlightLogins -= 1;
-              const remaining = (inFlightByPeer.get(remote) ?? 1) - 1;
-              if (remaining <= 0) inFlightByPeer.delete(remote);
-              else inFlightByPeer.set(remote, remaining);
+              releasePasswordWork(remote);
             }
             if (account === null) {
               const failedAt = Date.now();
@@ -768,6 +891,38 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
               return;
             }
             throw new HttpError(405, "method_not_allowed", "Method not allowed");
+          }
+          if (path === "/api/admin/invites") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理邀请码");
+            if (req.method === "GET") {
+              setJson(res, 200, { invites: identity.listInvites() });
+              return;
+            }
+            if (req.method === "POST") {
+              requireJsonContentType(req, true);
+              const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+              hasOnlyKeys(input, ["expiresInHours"]);
+              let invite: ReturnType<IdentityStore["createInvite"]>;
+              try {
+                invite = identity.createInvite(session.account.id, input.expiresInHours === undefined
+                  ? undefined
+                  : boundedIntegerField(input.expiresInHours, "expiresInHours", 1, 720));
+              } catch (error) { throw accountAdminError(error); }
+              // The code itself is answered once and never again: only its hash
+              // is stored, so a lost code is replaced, not recovered.
+              setJson(res, 201, { invite });
+              return;
+            }
+            throw new HttpError(405, "method_not_allowed", "Method not allowed");
+          }
+          const inviteRevokeMatch = path.match(/^\/api\/admin\/invites\/([0-9a-f-]{36})\/revoke$/i);
+          if (inviteRevokeMatch !== null && req.method === "POST") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理邀请码");
+            requireJsonContentType(req, true);
+            try { identity.revokeInvite(inviteRevokeMatch[1]!, session.account.id); }
+            catch (error) { throw accountAdminError(error); }
+            setJson(res, 200, { ok: true });
+            return;
           }
           const disableMatch = path.match(/^\/api\/admin\/accounts\/([0-9a-f-]{36})\/disable$/i);
           if (disableMatch !== null && req.method === "POST") {

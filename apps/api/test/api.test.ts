@@ -442,7 +442,20 @@ test("passwordless mode rejects non-loopback Host and config requires password f
   throws(() => readConfig({ LIFEOS_HOST: "0.0.0.0" }), /LIFEOS_PASSWORD is required/);
   throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "0.0.0.0", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn" }), /COOKIE_SECURE=true/);
   throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "http://lifeos.dnbox.cn" }), /HTTPS origins only/);
-  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn/path" }), /HTTPS origins only/);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn/path" }), /without paths/);
+  // The development defaults are not a trust boundary: account mode must name
+  // its origins even when the only reachable host is loopback.
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "127.0.0.1" }), /explicit LIFEOS_ALLOWED_ORIGINS/);
+  // Local preview: plain HTTP is accepted on loopback alone, and a plaintext
+  // cookie is refused the moment any public origin joins the list.
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "false", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn,http://127.0.0.1:3013" }), /COOKIE_SECURE=true/);
+  const localPreview = readConfig({
+    LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "127.0.0.1", LIFEOS_COOKIE_SECURE: "false",
+    LIFEOS_ALLOWED_ORIGINS: "http://127.0.0.1:3013", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_PASSWORD: "owner-bootstrap-password",
+  });
+  equal(localPreview.accountMode, true);
+  equal(localPreview.cookieSecure, false);
+  deepEqual(localPreview.allowedOrigins, ["http://127.0.0.1:3013"]);
   throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn", LIFEOS_OWNER_USERNAME: "owner" }), /Set both/);
   throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "maybe" }), /must be 1\/true or 0\/false/);
   const bootstrap = readConfig({
@@ -574,7 +587,122 @@ test("tenant identity foundation isolates paths, keys, sessions, and remote back
   store = new IdentityStore(identityPath);
   equal((await store.authenticate("bob", "isolated-member-password"))?.tenantId, second.tenantId);
   equal(tenantConfigFor(ownerConfig, second, store.configMasterSecret).tenantConfigSecrets?.ai, bobConfig.tenantConfigSecrets?.ai);
-  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "127.0.0.1" }), /COOKIE_SECURE=true/);
+  // An invited person brings no keys of their own: their space borrows the
+  // owner's standing integrations — and nothing location-shaped, because a
+  // member in another city must not be shown the owner's forecast.
+  const shared = tenantConfigFor(ownerConfig, second, store.configMasterSecret, {
+    ai: { apiKey: "owner-ai-secret", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" },
+    weather: { apiKey: "owner-weather-secret", host: "devapi.qweather.com" },
+  });
+  equal(shared.deepseekApiKey, "owner-ai-secret");
+  equal(shared.deepseekBaseUrl, "https://api.deepseek.com");
+  equal(shared.deepseekModel, "deepseek-flash");
+  equal(shared.qweatherApiKey, "owner-weather-secret");
+  equal(shared.qweatherHost, "devapi.qweather.com");
+  equal(shared.qweatherLocation, undefined);
+  equal(shared.qweatherCity, undefined);
+  equal(shared.tmdbApiKey, undefined);
+  equal(shared.backupS3, undefined);
+  equal(shared.dataDirectory, join(root, "tenants", second.tenantId));
+});
+
+test("an invite code mints exactly one space and never grants owner rights", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-invite-"));
+  const store = new IdentityStore(join(root, "identity.sqlite"));
+  t.after(() => { try { store.close(); } catch { /* The test may have closed it already. */ } rmSync(root, { recursive: true, force: true }); });
+  const owner = store.ensureOwner("owner", "invite-owner-password");
+  const invite = store.createInvite(owner.id);
+  ok(invite.code.startsWith("LIFEOS-"));
+  equal(store.inviteIsValid(invite.code), true);
+  // Only the hash is stored: listing invites must never hand the code back.
+  equal(store.listInvites().length, 1);
+  equal("code" in (store.listInvites()[0] as unknown as Record<string, unknown>), false);
+
+  const created = await store.redeemInvite(invite.code, { username: "carol", password: "carol-space-password", displayName: "Carol", spaceName: "Carol 的空间" });
+  ok(created !== null);
+  equal(created!.role, "member");
+  equal(store.inviteIsValid(invite.code), false);
+  // Single use: the same code cannot mint a second space.
+  equal(await store.redeemInvite(invite.code, { username: "dave", password: "dave-space-password", displayName: "Dave", spaceName: "Dave 的空间" }), null);
+  equal(store.listAccounts().filter((account) => account.role === "owner").length, 1);
+
+  const revoked = store.createInvite(owner.id, 24);
+  store.revokeInvite(revoked.id, owner.id);
+  equal(store.inviteIsValid(revoked.code), false);
+  equal(await store.redeemInvite(revoked.code, { username: "erin", password: "erin-space-password", displayName: "Erin", spaceName: "Erin 的空间" }), null);
+
+  const expired = store.createInvite(owner.id, 1);
+  const afterExpiry = Date.parse(expired.expiresAt) + 1_000;
+  equal(store.inviteIsValid(expired.code, afterExpiry), false);
+  equal(await store.redeemInvite(expired.code, { username: "frank", password: "frank-space-password", displayName: "Frank", spaceName: "Frank 的空间" }, afterExpiry), null);
+
+  // Garbage never matches, and a failed redemption leaves no half-built space.
+  equal(await store.redeemInvite("not-a-code", { username: "gina", password: "gina-space-password", displayName: "Gina", spaceName: "Gina 的空间" }), null);
+  equal(store.listAccounts().length, 2);
+});
+
+test("invite redemption over HTTP creates one private space and signs it in", async (t) => {
+  const harness = await startAccountHarness();
+  t.after(async () => harness.stop());
+  const ownerLogin = await request(harness.base, "/api/auth/login", { method: "POST", ...json({ username: "owner", password: "isolated-owner-bootstrap-password" }) });
+  equal(ownerLogin.response.status, 200);
+  const ownerCookie = (ownerLogin.response.headers.get("set-cookie") ?? "").split(";")[0]!;
+  ok(ownerCookie.startsWith("lifeos_session="));
+
+  // A code nobody minted is answered, not thrown: the welcome screen asks this
+  // question before the person has any account at all.
+  const unknown = await request(harness.base, "/api/auth/invite/check", { method: "POST", ...json({ code: "LIFEOS-not-a-real-code" }) });
+  equal(unknown.response.status, 200);
+  deepEqual(unknown.body, { valid: false });
+
+  const minted = await request(harness.base, "/api/admin/invites", withCookie({ method: "POST", ...json({ expiresInHours: 24 }) }, ownerCookie));
+  equal(minted.response.status, 201);
+  const invite = (minted.body as { invite: { id: string; code: string } }).invite;
+  ok(invite.code.startsWith("LIFEOS-"));
+  const listed = await request(harness.base, "/api/admin/invites", withCookie({}, ownerCookie));
+  equal(listed.response.status, 200);
+  const listedInvites = (listed.body as { invites: readonly Record<string, unknown>[] }).invites;
+  equal(listedInvites.length, 1);
+  equal("code" in (listedInvites[0] as unknown as object), false);
+  const validCheck = await request(harness.base, "/api/auth/invite/check", { method: "POST", ...json({ code: invite.code }) });
+  deepEqual(validCheck.body, { valid: true });
+
+  const register = await request(harness.base, "/api/auth/register", {
+    method: "POST",
+    ...json({ code: invite.code, username: "carol", password: "carol-space-password", displayName: "Carol", spaceName: "Carol 的空间" }),
+  });
+  equal(register.response.status, 200);
+  const memberCookie = (register.response.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const memberAccount = (register.body as { authenticated: boolean; account: { role: string; tenantId: string } }).account;
+  equal((register.body as { authenticated: boolean }).authenticated, true);
+  equal(memberAccount.role, "member");
+
+  // Redeeming a code never confers ownership: a member cannot mint codes or
+  // reach the account list.
+  equal((await request(harness.base, "/api/admin/invites", withCookie({ method: "POST", ...json({}) }, memberCookie))).response.status, 403);
+  equal((await request(harness.base, "/api/admin/accounts", withCookie({}, memberCookie))).response.status, 403);
+
+  // The code is spent, and the person who already used it gets nothing more.
+  const reused = await request(harness.base, "/api/auth/register", {
+    method: "POST",
+    ...json({ code: invite.code, username: "dave", password: "dave-space-password", displayName: "Dave", spaceName: "Dave 的空间" }),
+  });
+  equal(reused.response.status, 400);
+
+  // Two sessions, two databases: what the owner writes is not in Carol's space.
+  equal((await request(harness.base, "/api/records", withCookie({ method: "POST", ...json({ kind: "journal", content: "OWNER_INVITE_TEST" }) }, ownerCookie))).response.status, 201);
+  const carolRecords = await request(harness.base, "/api/records", withCookie({}, memberCookie));
+  equal(carolRecords.response.status, 200);
+  equal((carolRecords.body as { items: readonly unknown[] }).items.length, 0);
+  const ownerRecords = await request(harness.base, "/api/records", withCookie({}, ownerCookie));
+  equal((ownerRecords.body as { items: readonly unknown[] }).items.length, 1);
+
+  // Revoking is only meaningful while a code is still untouched.
+  const second = await request(harness.base, "/api/admin/invites", withCookie({ method: "POST", ...json({ expiresInHours: 168 }) }, ownerCookie));
+  const secondInvite = (second.body as { invite: { id: string; code: string } }).invite;
+  equal((await request(harness.base, `/api/admin/invites/${secondInvite.id}/revoke`, withCookie({ method: "POST", ...json({}) }, ownerCookie))).response.status, 200);
+  deepEqual((await request(harness.base, "/api/auth/invite/check", { method: "POST", ...json({ code: secondInvite.code }) })).body, { valid: false });
+  equal((await request(harness.base, `/api/admin/invites/${invite.id}/revoke`, withCookie({ method: "POST", ...json({}) }, ownerCookie))).response.status, 409);
 });
 
 test("account gateway binds all APIs to isolated tenants and revokes disabled/reset sessions", async (t) => {

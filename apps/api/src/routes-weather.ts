@@ -4,6 +4,7 @@ import {
   decideForcedRefresh,
   fetchRealtimeWeather,
   fetchWeatherSnapshot,
+  lookupWeatherLocationByCoordinates,
   recordWeatherObservation,
   verifyWeatherLocation,
   WEATHER_OBSERVATION_TIME_ZONE,
@@ -22,6 +23,30 @@ import { weatherDeviceCookieHeader, weatherDeviceId, weatherLocationOverride } f
 import { readBody, requireJsonContentType } from "./http-body.js";
 import { booleanField, hasOnlyKeys, jsonObject, nowInstant, parseDateQuery, stringField } from "./field-validate.js";
 import type { RouteContext, RouteHandler } from "./route-context.js";
+
+/**
+ * A device asks the provider for its city at most once a minute. The row is
+ * keyed by the tenant data directory as well as the device, because the same
+ * browser cookie is presented to every space and each space has its own
+ * repository. When the map grows past its cap it is dropped whole: this is a
+ * throttle, not a record, and losing it only lets one lookup through early.
+ */
+const GEO_MIN_INTERVAL_MS = 60_000;
+const lastGeoLookupAt = new Map<string, number>();
+function geoLookupAllowed(key: string, now: number): boolean {
+  if (lastGeoLookupAt.size > 2048) lastGeoLookupAt.clear();
+  const previous = lastGeoLookupAt.get(key);
+  if (previous !== undefined && now - previous < GEO_MIN_INTERVAL_MS) return false;
+  lastGeoLookupAt.set(key, now);
+  return true;
+}
+
+function coordinateField(value: unknown, name: string, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new HttpError(400, "invalid_field", `${name} must be a number between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
 
 export const handleWeatherRoutes: RouteHandler = async (
   ctx: RouteContext,
@@ -153,6 +178,51 @@ export const handleWeatherRoutes: RouteHandler = async (
       total: all.length,
       items: selectDayObservations(all),
     });
+    return true;
+  }
+
+  if (pathname === "/api/weather/device/location" && req.method === "POST") {
+    // The welcome flow (and the settings picker) choose a city before any
+    // weather config file exists. This writes only the device row: it must not
+    // depend on a saved key, and it must never touch the space-wide default.
+    requireJsonContentType(req, true);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["locationId", "city"]);
+    const locationId = stringField(input.locationId ?? "", "locationId").trim();
+    const city = stringField(input.city ?? "", "city").trim();
+    if (!locationId && !city) throw new HttpError(400, "invalid_weather_location", "位置 ID 和城市名至少填写一个");
+    const deviceId = weatherDeviceId(req, res, config);
+    const deviceLocation = repository.saveWeatherDeviceLocation(deviceId, locationId, city, JSON.stringify(nowInstant()));
+    clearWeatherCache();
+    setJson(res, 200, { ...publicWeatherConfig(config, weatherLocationOverride(config, deviceLocation)), locationId: deviceLocation.locationId, city: deviceLocation.city, locationScope: "device" });
+    return true;
+  }
+  if (pathname === "/api/weather/device/locate" && req.method === "POST") {
+    // A phone reports where it is and the server names the city. The raw
+    // coordinates are used once for the lookup and are never persisted: only
+    // the resolved city id and label reach the repository.
+    requireJsonContentType(req, true);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["latitude", "longitude"]);
+    const latitude = coordinateField(input.latitude, "latitude", -90, 90);
+    const longitude = coordinateField(input.longitude, "longitude", -180, 180);
+    const deviceId = weatherDeviceId(req, res, config);
+    const runtime = readRuntimeWeatherConfig(config);
+    if (!runtime.apiKey) throw new HttpError(400, "weather_not_configured", "天气服务尚未配置，请联系空间管理员");
+    const now = Date.now();
+    // Being told to wait is not an error: answer with the city already in
+    // force. A client that re-locates in a tight loop cannot spend the shared
+    // provider quota, and the person still gets a coherent page.
+    if (!geoLookupAllowed(`${config.dataDirectory}|${deviceId}`, now)) {
+      const current = repository.getWeatherDeviceLocation(deviceId);
+      setJson(res, 200, { ...publicWeatherConfig(config, weatherLocationOverride(config, current)), locationScope: "device", throttled: true });
+      return true;
+    }
+    const location = await lookupWeatherLocationByCoordinates(runtime, longitude, latitude);
+    if (location === null) throw new HttpError(502, "weather_location_failed", "暂时无法根据当前位置确定城市，请手动选择");
+    const deviceLocation = repository.saveWeatherDeviceLocation(deviceId, location.id, location.name, JSON.stringify(nowInstant()));
+    clearWeatherCache();
+    setJson(res, 200, { ...publicWeatherConfig(config, weatherLocationOverride(config, deviceLocation)), locationId: deviceLocation.locationId, city: deviceLocation.city, locationScope: "device", location });
     return true;
   }
 

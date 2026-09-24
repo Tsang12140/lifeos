@@ -5,6 +5,8 @@ import { dirname } from "node:path";
 
 const HASH_BYTES = 64;
 const MAX_MEMBER_ACCOUNTS = 64;
+const DEFAULT_INVITE_LIFETIME_HOURS = 168;
+const MAX_INVITE_LIFETIME_HOURS = 720;
 const SCRYPT_OPTIONS = { N: 16_384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
 
 export type AccountRole = "owner" | "member";
@@ -28,6 +30,25 @@ export interface IdentitySession {
   readonly tokenHash: string;
   readonly account: AccountIdentity;
   readonly expiresAt: number;
+}
+
+export interface PublicInvite {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly redeemedAt: string | null;
+  readonly revokedAt: string | null;
+}
+
+export interface CreatedInvite extends PublicInvite {
+  readonly code: string;
+}
+
+export interface InviteAccountInput {
+  readonly username: string;
+  readonly password: string;
+  readonly displayName: string;
+  readonly spaceName: string;
 }
 
 function scryptKey(value: string, salt: string): Promise<Buffer> {
@@ -78,6 +99,20 @@ function accountRow(row: Record<string, unknown>): AccountIdentity {
   };
 }
 
+function inviteRow(row: Record<string, unknown>): PublicInvite {
+  return {
+    id: String(row.id),
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+    expiresAt: new Date(Number(row.expires_at)).toISOString(),
+    redeemedAt: row.redeemed_at === null ? null : new Date(Number(row.redeemed_at)).toISOString(),
+    revokedAt: row.revoked_at === null ? null : new Date(Number(row.revoked_at)).toISOString(),
+  };
+}
+
+function inviteCodeHash(code: string): string {
+  return createHash("sha256").update(code, "utf8").digest("hex");
+}
+
 export class IdentityStore {
   readonly #db: DatabaseSync;
   readonly #dummyPasswordHash: string;
@@ -116,6 +151,16 @@ export class IdentityStore {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS identity_sessions_expiry_idx ON identity_sessions(expires_at);
       CREATE INDEX IF NOT EXISTS identity_sessions_account_idx ON identity_sessions(account_id);
+      CREATE TABLE IF NOT EXISTS identity_invites (
+        id TEXT PRIMARY KEY NOT NULL,
+        code_hash TEXT NOT NULL UNIQUE,
+        created_by TEXT NOT NULL REFERENCES accounts(id),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        redeemed_at INTEGER,
+        revoked_at INTEGER
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS identity_invites_expiry_idx ON identity_invites(expires_at);
     `);
     const master = this.#db.prepare("SELECT value FROM identity_meta WHERE key = 'config_master_secret'").get() as { value?: unknown } | undefined;
     const masterSecret = typeof master?.value === "string" ? master.value : randomBytes(32).toString("base64url");
@@ -198,6 +243,115 @@ export class IdentityStore {
       ORDER BY a.role = 'owner' DESC, a.created_at ASC
     `).all() as Record<string, unknown>[];
     return rows.map((row) => ({ ...accountRow(row), createdAt: new Date(Number(row.created_at)).toISOString() }));
+  }
+
+  public createInvite(ownerAccountId: string, expiresInHours = DEFAULT_INVITE_LIFETIME_HOURS): CreatedInvite {
+    if (!Number.isSafeInteger(expiresInHours) || expiresInHours < 1 || expiresInHours > MAX_INVITE_LIFETIME_HOURS) {
+      throw new Error(`邀请码有效期需为 1–${MAX_INVITE_LIFETIME_HOURS} 小时`);
+    }
+    const code = `LIFEOS-${randomBytes(32).toString("base64url")}`;
+    const id = randomUUID();
+    const createdAt = Date.now();
+    const expiresAt = createdAt + expiresInHours * 60 * 60 * 1000;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const owner = this.#db.prepare("SELECT role, disabled_at FROM accounts WHERE id = ?").get(ownerAccountId) as { role?: unknown; disabled_at?: unknown } | undefined;
+      if (owner?.role !== "owner" || owner.disabled_at !== null) throw new Error("仅空间所有者可创建邀请码");
+      this.#db.prepare("INSERT INTO identity_invites (id, code_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
+        .run(id, inviteCodeHash(code), ownerAccountId, createdAt, expiresAt);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+    return {
+      id,
+      code,
+      createdAt: new Date(createdAt).toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
+      redeemedAt: null,
+      revokedAt: null,
+    };
+  }
+
+  public listInvites(): PublicInvite[] {
+    const rows = this.#db.prepare(`
+      SELECT id, created_at, expires_at, redeemed_at, revoked_at
+      FROM identity_invites
+      ORDER BY created_at DESC, id DESC
+    `).all() as Record<string, unknown>[];
+    return rows.map(inviteRow);
+  }
+
+  public inviteIsValid(codeValue: string, now = Date.now()): boolean {
+    const code = codeValue.trim();
+    if (code.length < 16 || code.length > 128) return false;
+    const row = this.#db.prepare(`
+      SELECT 1 AS valid
+      FROM identity_invites
+      WHERE code_hash = ? AND redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+      LIMIT 1
+    `).get(inviteCodeHash(code), now);
+    return row !== undefined;
+  }
+
+  public revokeInvite(inviteId: string, ownerAccountId: string, now = Date.now()): void {
+    const owner = this.#db.prepare("SELECT role, disabled_at FROM accounts WHERE id = ?").get(ownerAccountId) as { role?: unknown; disabled_at?: unknown } | undefined;
+    if (owner?.role !== "owner" || owner.disabled_at !== null) throw new Error("仅空间所有者可撤销邀请码");
+    const result = this.#db.prepare(`
+      UPDATE identity_invites SET revoked_at = ?
+      WHERE id = ? AND redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+    `).run(now, inviteId, now);
+    if (result.changes === 1) return;
+    const exists = this.#db.prepare("SELECT 1 AS found FROM identity_invites WHERE id = ?").get(inviteId);
+    if (exists === undefined) throw new Error("邀请码不存在");
+    throw new Error("邀请码已使用、已撤销或过期");
+  }
+
+  public async redeemInvite(codeValue: string, input: InviteAccountInput, now = Date.now()): Promise<PublicAccount | null> {
+    const username = assertAccountUsername(input.username);
+    const displayName = input.displayName.trim();
+    const spaceName = input.spaceName.trim();
+    if (input.password.length < 10 || input.password.length > 1024) throw new Error("密码长度需为 10–1024 个字符");
+    if (!displayName || displayName.length > 80) throw new Error("显示名称需为 1–80 个字符");
+    if (!spaceName || spaceName.length > 80) throw new Error("空间名称需为 1–80 个字符");
+    const code = codeValue.trim();
+    const passwordHash = await hashAccountPassword(input.password);
+    const inviteHash = code.length >= 16 && code.length <= 128 ? inviteCodeHash(code) : "";
+    const id = randomUUID();
+    const tenantId = randomUUID();
+    const createdAt = now;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const invite = inviteHash.length === 0 ? undefined : this.#db.prepare(`
+        SELECT id FROM identity_invites
+        WHERE code_hash = ? AND redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+        LIMIT 1
+      `).get(inviteHash, now) as { id?: unknown } | undefined;
+      if (invite === undefined) {
+        this.#db.exec("ROLLBACK");
+        return null;
+      }
+      const consumed = this.#db.prepare(`
+        UPDATE identity_invites SET redeemed_at = ?
+        WHERE id = ? AND redeemed_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+      `).run(now, String(invite.id), now);
+      if (consumed.changes !== 1) {
+        this.#db.exec("ROLLBACK");
+        return null;
+      }
+      const count = this.#db.prepare("SELECT COUNT(*) AS count FROM accounts WHERE role = 'member'").get() as { count: number };
+      if (count.count >= MAX_MEMBER_ACCOUNTS) throw new Error(`最多可创建 ${MAX_MEMBER_ACCOUNTS} 个独立账号`);
+      this.#db.prepare("INSERT INTO tenants (id, space_name, role, created_at) VALUES (?, ?, 'member', ?)").run(tenantId, spaceName, createdAt);
+      this.#db.prepare("INSERT INTO accounts (id, username, display_name, password_hash, tenant_id, role, created_at) VALUES (?, ?, ?, ?, ?, 'member', ?)")
+        .run(id, username, displayName, passwordHash, tenantId, createdAt);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      if (error instanceof Error && /UNIQUE constraint failed: accounts\.username/i.test(error.message)) throw new Error("账号已存在");
+      throw error;
+    }
+    return { id, username, displayName, spaceName, tenantId, role: "member", disabled: false, createdAt: new Date(createdAt).toISOString() };
   }
 
   public async createAccount(input: { username: string; password: string; displayName: string; spaceName: string }): Promise<PublicAccount> {

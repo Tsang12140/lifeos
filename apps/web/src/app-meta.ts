@@ -74,9 +74,9 @@ export function settingsHash(page: SettingsPageId): string {
 
 export function readAssistantVisibility(): boolean {
   try {
-    return window.localStorage.getItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY) !== "0";
+    return window.localStorage.getItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 

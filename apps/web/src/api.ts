@@ -67,6 +67,23 @@ export interface AccountSummary {
   readonly createdAt?: string;
 }
 
+/**
+ * An invite as the server will describe it again. The code itself is absent on
+ * purpose: only its hash is stored, so a code is shown exactly once, at the
+ * moment it is created.
+ */
+export interface InviteSummary {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly redeemedAt: string | null;
+  readonly revokedAt: string | null;
+}
+
+export interface CreatedInviteSummary extends InviteSummary {
+  readonly code: string;
+}
+
 export interface AiStatus {
   readonly preset: "quick" | "reflect" | "review" | "custom";
   readonly enabled: boolean;

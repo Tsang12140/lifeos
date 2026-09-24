@@ -152,6 +152,8 @@ import { NoteEditorDialog, NotesLibrary, RecordEditorDialog, RelationPanel, type
 import { TaskSummary, taskDueLabel } from "./task-summary";
 import { AssetPreview, CalendarDayMarkers, PrivacyMask, RecordPhotoGrid, Timeline, TimelineEntityChip, TimelineItem, assetContentUrl, assetThumbUrl, dayPhotoCandidates, dayPhotoIds, monthCellPhoto, periodMoonForDate, periodRuns, nextPredictedStart, weatherFromArchiveValue, recordsByDate, groupRecords, type ThumbnailWidth } from "./timeline";
 import { ConfirmDialog, EntitiesView, EntityEditDialog, ImportDialog, LoginGate, MobileMenuDialog, PersonCardDialog, SearchDialog } from "./dialogs";
+import { WelcomeGate } from "./WelcomeGate";
+import { useWeatherAutoFollow } from "./weather-follow";
 import { AiSettingsCard, AssetTrashSettingsCard, BackupSettingsCard, CycleSettingsCard, FontSettingsCard, SettingsView, ThumbnailCacheSettingsCard, WeatherSettingsCard } from "./settings-cards";
 import { Composer, ReviewComposer, type ComposerProps } from "./composer";
 import { AliasField, EntityCreateForm, MentionBox, aliasListFrom } from "./entity-forms";
@@ -466,6 +468,11 @@ function App() {
     setWeatherProfilesState((current) => ({ phase: "loading", status: current.status }));
     setWeatherProfilesRetry((current) => current + 1);
   }, []);
+
+  // Only runs for a signed-in space whose device opted into follow mode. The
+  // raw coordinates never reach storage; when the server resolves a different
+  // city the weather is re-read so the header stops showing the old one.
+  useWeatherAutoFollow(authState.account?.tenantId, retryWeatherProfiles);
 
   useEffect(() => {
     const option = UI_FONT_OPTIONS.find((candidate) => candidate.id === uiFont) ?? UI_FONT_OPTIONS[0];
@@ -1385,7 +1392,15 @@ function App() {
   };
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   if (!authResolved) return <main className="auth-screen"><div className="auth-panel surface" role="status"><LoaderCircle className="spin" size={22} aria-hidden="true" /><p className="auth-description">正在检查账号会话…</p></div></main>;
-  if (authState.required && !authState.authenticated) return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} accountMode={authState.accountMode === true} />;
+  if (authState.required && !authState.authenticated) {
+    // An invited person arrives with no account at all: the welcome screen has
+    // to cover "log in", "redeem an invite", "set your own password" and "pick
+    // your weather", not just a password box.
+    if (authState.accountMode === true) {
+      return <WelcomeGate onLogin={handleLogin} loginError={authError} loginLoading={loginLoading} onFinished={() => window.location.reload()} />;
+    }
+    return <LoginGate onLogin={handleLogin} error={authError} loading={loginLoading} />;
+  }
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
   const openCalendarBackfill = () => {

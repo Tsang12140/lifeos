@@ -133,23 +133,35 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const ownerUsername = env.LIFEOS_OWNER_USERNAME?.trim();
   const allowedOrigins = splitOrigins(env.LIFEOS_ALLOWED_ORIGINS, host);
   if (accountMode) {
-    if (!cookieSecure) throw new Error("LIFEOS_ACCOUNT_MODE requires LIFEOS_COOKIE_SECURE=true");
     if ((ownerUsername === undefined || ownerUsername === "") !== (password === undefined)) {
       throw new Error("Set both LIFEOS_OWNER_USERNAME and LIFEOS_PASSWORD for first-owner bootstrap, or remove both after bootstrap");
     }
     if (password !== undefined && (password.length < 10 || password.length > 1024)) {
       throw new Error("Account-mode LIFEOS_PASSWORD must be 10–1024 characters");
     }
-    if (allowedOrigins.length === 0) throw new Error("LIFEOS_ACCOUNT_MODE requires explicit HTTPS LIFEOS_ALLOWED_ORIGINS");
-    const normalizedOrigins = allowedOrigins.map((origin) => {
+    // Account mode never falls back to the development defaults: switching it on
+    // is a deliberate act, and the origins it accepts *are* the trust boundary.
+    const declaredOrigins = (env.LIFEOS_ALLOWED_ORIGINS ?? "").split(",").map((origin) => origin.trim()).filter(Boolean);
+    if (declaredOrigins.length === 0) throw new Error("LIFEOS_ACCOUNT_MODE requires explicit LIFEOS_ALLOWED_ORIGINS");
+    const normalizedOrigins = declaredOrigins.map((origin) => {
       let parsed: URL;
       try { parsed = new URL(origin); }
       catch { throw new Error("LIFEOS_ACCOUNT_MODE contains an invalid LIFEOS_ALLOWED_ORIGINS entry"); }
-      if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
-        throw new Error("LIFEOS_ACCOUNT_MODE allows HTTPS origins only; configure origin values without paths");
+      if (parsed.username !== "" || parsed.password !== "" || parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+        throw new Error("LIFEOS_ACCOUNT_MODE allows origin values without paths");
       }
-      return parsed.origin;
+      if (parsed.protocol === "https:") return parsed.origin;
+      // A loopback origin is reachable only from this machine, which is what a
+      // local preview of the account-mode front end needs. It can never publish
+      // a space: the cookie rule below refuses a plaintext cookie the moment a
+      // public origin is configured.
+      if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return parsed.origin;
+      throw new Error("LIFEOS_ACCOUNT_MODE allows HTTPS origins only, or plain HTTP on a loopback host for local preview");
     });
+    const loopbackOnly = normalizedOrigins.every((origin) => new URL(origin).protocol !== "https:");
+    if (!cookieSecure && !loopbackOnly) {
+      throw new Error("LIFEOS_ACCOUNT_MODE requires LIFEOS_COOKIE_SECURE=true unless every allowed origin is loopback HTTP");
+    }
     allowedOrigins.splice(0, allowedOrigins.length, ...new Set(normalizedOrigins));
   }
   const deepseekApiKey = env.LIFEOS_DEEPSEEK_API_KEY?.trim();

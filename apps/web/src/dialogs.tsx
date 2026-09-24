@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import {
   Check,
   CircleHelp,
@@ -149,8 +149,66 @@ export function SearchDialog({ open, initialQuery, onClose, onSearch }: { open: 
 
 export function MobileMenuDialog({ open, activeView, onClose, onNavigate, onOpenSearch }: { open: boolean; activeView: AppView; onClose: () => void; onNavigate: (view: AppView) => void; onOpenSearch: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (open && !dialog.open) dialog.showModal(); if (!open && dialog.open) dialog.close(); }, [open]);
-  return <dialog ref={dialogRef} className="mobile-menu-dialog" aria-label="LifeOS 菜单" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="mobile-menu-header"><div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><span /><span /><span /></span><span className="brand-name">LifeOS</span></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭菜单"><X size={18} aria-hidden="true" /></button></div><nav className="mobile-menu-nav" aria-label="移动端更多功能">{MOBILE_MORE_ITEMS.map((item) => { const Icon = item.icon; return <button className={`mobile-menu-nav-item ${activeView === item.id ? "is-active" : ""}`} type="button" key={item.id} onClick={() => { onNavigate(item.id); onClose(); }} aria-current={activeView === item.id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{item.label}</span></button>; })}<button className="mobile-menu-nav-item" type="button" onClick={() => { onClose(); onOpenSearch(); }}><Search size={18} aria-hidden="true" /><span>搜索记录</span></button></nav></dialog>;
+  // The parent hands down a fresh callback on every render. Holding it in a ref
+  // keeps the positioning effect from tearing down and re-focusing the first
+  // item every time anything else on the page changes.
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
+  // Layout effects, not passive ones: the popover has to be moved into place in
+  // the same frame it is shown, otherwise it flashes at its static position.
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.show();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const trigger = document.getElementById("mobile-more-trigger");
+    if (!dialog) return;
+
+    const positionMenu = () => {
+      if (!dialog.open) return;
+      if (!trigger || trigger.getClientRects().length === 0) {
+        closeRef.current();
+        return;
+      }
+      const anchor = trigger.getBoundingClientRect();
+      const menu = dialog.getBoundingClientRect();
+      const edge = 10;
+      const gap = 8;
+      const left = Math.max(edge, Math.min(anchor.left + anchor.width / 2 - menu.width / 2, window.innerWidth - menu.width - edge));
+      const top = Math.max(edge, Math.min(anchor.top - menu.height - gap, window.innerHeight - menu.height - edge));
+      dialog.style.left = `${left}px`;
+      dialog.style.top = `${top}px`;
+    };
+    const onOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && (dialog.contains(target) || trigger?.contains(target))) return;
+      closeRef.current();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeRef.current();
+      trigger?.focus({ preventScroll: true });
+    };
+
+    positionMenu();
+    dialog.querySelector<HTMLButtonElement>(".mobile-menu-nav-item")?.focus({ preventScroll: true });
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    document.addEventListener("pointerdown", onOutsidePointer, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
+  return <dialog ref={dialogRef} id="mobile-more-menu" className="mobile-menu-dialog" aria-label="更多功能" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><nav className="mobile-menu-nav" aria-label="移动端更多功能">{MOBILE_MORE_ITEMS.map((item) => { const Icon = item.icon; return <button className={`mobile-menu-nav-item ${activeView === item.id ? "is-active" : ""}`} type="button" key={item.id} onClick={() => { onNavigate(item.id); onClose(); }} aria-current={activeView === item.id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{item.label}</span></button>; })}<button className="mobile-menu-nav-item mobile-menu-nav-item--search" type="button" onClick={() => { onClose(); onOpenSearch(); }}><Search size={18} aria-hidden="true" /><span>搜索记录</span></button></nav></dialog>;
 }
 
 export function ImportDialog({ file, busy, error, onClose, onConfirm }: { file: File | null; busy: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {

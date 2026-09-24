@@ -9,6 +9,7 @@ import {
   CircleHelp,
   CloudSun,
   CloudUpload,
+  Copy,
   Download,
   Eraser,
   FileJson,
@@ -18,6 +19,7 @@ import {
   Heart,
   History,
   Image as ImageIcon,
+  KeyRound,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -26,6 +28,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
+  Ticket,
   Trash2,
   Type,
   Upload,
@@ -49,6 +52,8 @@ import {
   type BackupRetentionPolicy,
   type BackupRetentionView,
   type BackupStatus,
+  type CreatedInviteSummary,
+  type InviteSummary,
   type MovieModuleStatus,
   type WeatherProfilesResponse,
   type WeatherProfilesState,
@@ -58,6 +63,7 @@ import { BackupCalendar } from "./BackupCalendar";
 import { TimeMachine } from "./TimeMachine";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { WeatherSky } from "./WeatherBackground";
+import { locateWeatherDevice, setWeatherFollowEnabled, weatherFollowEnabled } from "./weather-follow";
 import { getWeatherEmoji, type WeatherCategory, type WeatherPhase } from "./weather";
 import { describeWeatherLocationByName, weatherLocationDisplayName } from "./weather-locations";
 import { MovieSettingsCard } from "./movie";
@@ -388,7 +394,7 @@ function WeatherScenePreviewDialog({ open, onClose }: { readonly open: boolean; 
   </dialog>;
 }
 
-export function WeatherSettingsCard({ profilesState, onChanged, onProfilesChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly onChanged: (status: WeatherStatus) => void; readonly onProfilesChanged: (payload: WeatherProfilesResponse) => void; readonly onRetry: () => void }) {
+export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged, onProfilesChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly tenantId?: string | null; readonly onChanged: (status: WeatherStatus) => void; readonly onProfilesChanged: (payload: WeatherProfilesResponse) => void; readonly onRetry: () => void }) {
   const profilesPayload = profilesState.status;
   const status = profilesPayload?.status ?? null;
   const profiles = profilesPayload?.items ?? [];
@@ -407,6 +413,31 @@ export function WeatherSettingsCard({ profilesState, onChanged, onProfilesChange
   const [error, setError] = useState<string | null>(null);
   const [manualLocationId, setManualLocationId] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Follow mode is a property of this device, not of the space: the phone that
+  // walks around enables it, the desk that does not can leave it alone.
+  const [followEnabled, setFollowEnabled] = useState(() => tenantId !== null && weatherFollowEnabled(tenantId));
+  const [followBusy, setFollowBusy] = useState(false);
+  const [followError, setFollowError] = useState<string | null>(null);
+  useEffect(() => { setFollowEnabled(tenantId !== null && weatherFollowEnabled(tenantId)); }, [tenantId]);
+  const toggleFollow = async (next: boolean) => {
+    if (tenantId === null || followBusy) return;
+    setFollowBusy(true); setFollowError(null);
+    try {
+      if (next) {
+        // Ask for the position first: turning the switch on should not claim
+        // to follow anything while the browser has not agreed yet.
+        await locateWeatherDevice();
+        setWeatherFollowEnabled(tenantId, true);
+        setFollowEnabled(true);
+        onRetry();
+      } else {
+        setWeatherFollowEnabled(tenantId, false);
+        setFollowEnabled(false);
+      }
+    } catch (caught) {
+      setFollowError(errorMessage(caught, "开启定位失败；仍可手动选择城市。"));
+    } finally { setFollowBusy(false); }
+  };
 
   /**
    * A saved location the dropdown cannot place — an overseas ID typed before
@@ -508,6 +539,11 @@ export function WeatherSettingsCard({ profilesState, onChanged, onProfilesChange
   const stateLabel = profilesState.phase === "ready" ? status?.configured ? "已连接" : "未配置" : profilesState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-weather-card">
     <div className="settings-weather-overview"><div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>天气动画与预报</strong><small className="settings-weather-scope">{status?.locationScope === "device" ? "本设备独立城市" : "沿用服务端默认城市"}</small></div><span className={`settings-status ${profilesState.phase === "ready" && status?.configured ? "is-ready" : ""}`} data-weather-status-phase={profilesState.phase}>{stateLabel}</span><button className="secondary-button settings-action" type="button" onClick={() => setPreviewOpen(true)}>预览天气效果</button></div>
+    {tenantId === null ? null : <div className="settings-weather-follow">
+      <div className="settings-card-copy"><strong>跟随当前位置</strong><small>{followEnabled ? "打开 LifeOS 或切回页面时会重新定位；城市明显变化才更新天气。" : "关闭时只使用当前手动选择的城市，不读取位置。"}</small></div>
+      <label className="settings-switch" title="跟随当前位置"><input type="checkbox" checked={followEnabled} disabled={followBusy} onChange={(event) => void toggleFollow(event.target.checked)} aria-label="跟随当前位置" /><span aria-hidden="true" /></label>
+      {followError ? <p className="settings-inline-error" role="alert">{followError}</p> : null}
+    </div>}
     {profilesState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{profilesState.error}</span>{status === null ? null : <small>上次确认：{status.configured ? "已连接" : "未配置"}</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
     {status === null ? <p className="settings-config-unavailable">状态确认后，才能调整天气、方案或提交测试。</p> : null}
     <div className="settings-weather-form">
@@ -803,6 +839,77 @@ function AccountManagementCard() {
   </section>;
 }
 
+/**
+ * Who an invited person becomes is decided here and nowhere else: the owner
+ * mints a one-time code, and the person who redeems it creates their own
+ * account and password. Redeeming a code never grants owner rights — the only
+ * owner is the one created when the instance was first put into account mode.
+ */
+const INVITE_LIFETIME_CHOICES: readonly { readonly hours: number; readonly label: string }[] = [
+  { hours: 24, label: "1 天" },
+  { hours: 168, label: "7 天" },
+  { hours: 720, label: "30 天" },
+];
+
+function formatInviteWhen(value: string): string {
+  return new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function inviteState(invite: InviteSummary): string {
+  if (invite.redeemedAt !== null) return "已使用";
+  if (invite.revokedAt !== null) return "已撤销";
+  return Date.parse(invite.expiresAt) <= Date.now() ? "已过期" : "可用";
+}
+
+function InviteManagementCard() {
+  const [invites, setInvites] = useState<readonly InviteSummary[]>([]);
+  const [lifetimeHours, setLifetimeHours] = useState(168);
+  const [fresh, setFresh] = useState<CreatedInviteSummary | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const reload = async () => {
+    const result = await apiRequest<{ invites: readonly InviteSummary[] }>("/api/admin/invites");
+    setInvites(result.invites);
+  };
+  useEffect(() => { void reload().catch((caught) => setError(errorMessage(caught, "邀请码列表读取失败"))); }, []);
+  const create = async () => {
+    if (busy) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await apiRequest<{ invite: CreatedInviteSummary }>("/api/admin/invites", { method: "POST", body: JSON.stringify({ expiresInHours: lifetimeHours }) });
+      setFresh(result.invite);
+      setNotice(null);
+      await reload();
+    } catch (caught) { setError(errorMessage(caught, "邀请码创建失败")); }
+    finally { setBusy(false); }
+  };
+  const revoke = async (invite: InviteSummary) => {
+    if (busy || !window.confirm("撤销这个邀请码？撤销后它立刻失效，已经创建的空间不受影响。")) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await apiRequest(`/api/admin/invites/${encodeURIComponent(invite.id)}/revoke`, { method: "POST" });
+      if (fresh?.id === invite.id) setFresh(null);
+      setNotice("邀请码已撤销。");
+      await reload();
+    } catch (caught) { setError(errorMessage(caught, "邀请码撤销失败")); }
+    finally { setBusy(false); }
+  };
+  const copyFresh = async () => {
+    if (fresh === null) return;
+    try { await navigator.clipboard.writeText(fresh.code); setNotice("邀请码已复制。"); }
+    catch { setNotice("无法自动复制，请手动选中上面的邀请码。"); }
+  };
+  return <section className="settings-card settings-invite-management" aria-labelledby="invite-management-title">
+    <div className="settings-card-icon"><Ticket size={18} aria-hidden="true" /></div>
+    <div className="settings-card-copy"><strong id="invite-management-title">邀请码</strong><small>把邀请码发给你的自己人；对方自己设置账号和密码，创建一个只有他能看见的独立空间。邀请码只能用一次。</small></div>
+    <div className="invite-create-row"><label className="dialog-field"><span>有效期</span><select value={lifetimeHours} onChange={(event) => setLifetimeHours(Number(event.target.value))} disabled={busy} aria-label="邀请码有效期">{INVITE_LIFETIME_CHOICES.map((choice) => <option value={choice.hours} key={choice.hours}>{choice.label}</option>)}</select></label><button className="primary-button" type="button" onClick={() => void create()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <KeyRound size={17} aria-hidden="true" />}<span>{busy ? "生成中…" : "生成邀请码"}</span></button></div>
+    {fresh === null ? null : <div className="invite-fresh" role="status"><code>{fresh.code}</code><button className="secondary-button" type="button" onClick={() => void copyFresh()}><Copy size={15} aria-hidden="true" /><span>复制</span></button><small>只显示这一次；关闭后无法再取出，只能重新生成。有效期至 {formatInviteWhen(fresh.expiresAt)}。</small></div>}
+    <div className="settings-invite-list" aria-label="邀请码列表">{invites.length === 0 ? <p className="settings-invite-empty">还没有生成过邀请码。</p> : invites.map((invite) => { const state = inviteState(invite); return <div className="settings-invite-row" key={invite.id}><div className="settings-card-copy"><strong>{state}</strong><small>生成于 {formatInviteWhen(invite.createdAt)} · {state === "可用" ? `有效期至 ${formatInviteWhen(invite.expiresAt)}` : state === "已使用" ? `使用于 ${formatInviteWhen(invite.redeemedAt!)}` : state === "已撤销" ? `撤销于 ${formatInviteWhen(invite.revokedAt!)}` : `过期于 ${formatInviteWhen(invite.expiresAt)}`}</small></div>{state === "可用" ? <button className="danger-button" type="button" onClick={() => void revoke(invite)} disabled={busy}>撤销</button> : null}</div>; })}</div>
+    {error ? <p className="settings-inline-error" role="alert">{error}</p> : null}{notice ? <p className="settings-inline-notice" role="status">{notice}</p> : null}
+  </section>;
+}
+
 export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onWeatherProfilesChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
@@ -820,14 +927,14 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     "private/cycle": "周期与亲密模块的私密设置。",
     about: "了解本机优先的数据边界。",
   };
-  const accountContent = <><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{accountMode ? account?.spaceName ?? "已登录空间" : authRequired ? "已登录" : "本机访问"}</strong><small>{accountMode ? `${account?.displayName ?? ""} · ${account?.username ?? ""} · ${account?.role === "owner" ? "空间所有者" : "独立账号"}` : authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : accountMode ? "退出并切换账号" : "退出登录"}</span></button> : null}</div>{accountMode && account?.role === "owner" ? <AccountManagementCard /> : null}</>;
+  const accountContent = <><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{accountMode ? account?.spaceName ?? "已登录空间" : authRequired ? "已登录" : "本机访问"}</strong><small>{accountMode ? `${account?.displayName ?? ""} · ${account?.username ?? ""} · ${account?.role === "owner" ? "空间所有者" : "独立账号"}` : authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : accountMode ? "退出并切换账号" : "退出登录"}</span></button> : null}</div>{accountMode && account?.role === "owner" ? <><InviteManagementCard /><AccountManagementCard /></> : null}</>;
   const pageContent = page === "account/session" ? accountContent
     : page === "data/import-export" ? <div className="settings-card settings-data-grid"><div className="settings-card-icon"><FileJson size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>备份与导出</strong><small>导入前请确认 JSON 来自可信的 LifeOS 实例；导出文件包含你的记录内容。</small></div><div className="settings-card-actions"><button className="secondary-button" type="button" onClick={onImport}><Upload size={15} aria-hidden="true" /><span>导入 JSON</span></button><a className="secondary-button" href="/api/export?format=json" download><FileJson size={15} aria-hidden="true" /><span>导出 JSON</span></a><a className="secondary-button" href="/api/export?format=markdown" download><FileText size={15} aria-hidden="true" /><span>导出 Markdown</span></a></div></div>
     : page === "data/backup" ? <BackupSettingsCard backupStatus={backupStatus} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} />
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <FontSettingsCard value={uiFont} onChange={onUiFontChange} />
-    : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} onRetry={onRetryWeatherProfiles} />
+    : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? null} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} onRetry={onRetryWeatherProfiles} />
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />

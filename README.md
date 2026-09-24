@@ -105,8 +105,8 @@ npm run build
 | `LIFEOS_ACCOUNT_MODE` | 默认关闭；明确设为 `1` 后启用账号登录和物理隔离租户 |
 | `LIFEOS_OWNER_USERNAME` | 账户模式首次启动时的 owner 用户名；owner 创建后与引导密码一并移除 |
 | `LIFEOS_PASSWORD` | legacy 单用户密码；账户模式只用于首次 owner 引导（至少 10 字符），owner 建立后移除用户名与密码两个引导值 |
-| `LIFEOS_ALLOWED_ORIGINS` | 逗号分隔的 Web Origin 白名单；不要用任意来源替代明确白名单 |
-| `LIFEOS_COOKIE_SECURE` | 账户模式必须为 `true`；HTTPS 反向代理后也应设为 `true` |
+| `LIFEOS_ALLOWED_ORIGINS` | 逗号分隔的 Web Origin 白名单，账户模式下**必须显式提供**（不回落开发默认值）。公网只接受 `https://`；`http://127.0.0.1:*` / `http://localhost:*` 仅在本地预览时接受 |
+| `LIFEOS_COOKIE_SECURE` | 账户模式默认必须为 `true`；只有当白名单里**全部**是回环 HTTP Origin（本机预览）时才允许为 `false` |
 | `LIFEOS_BODY_LIMIT_BYTES` | JSON 请求体上限，默认 1 MiB；导入较大 bundle 时按需调高 |
 | `LIFEOS_ASSET_ROOT` | 可选的本地原件根目录；只读预览会拒绝越界路径 |
 | `LIFEOS_BACKUP_DIR` / `BACKUP_DIR` | 覆盖本地备份目录，默认是数据目录下的 `backups/` |

@@ -39,8 +39,23 @@ function deriveConfigSecret(masterSecret: string, tenantId: string, module: stri
   return createHmac("sha256", masterSecret).update(`lifeos:tenant-config:v1:${tenantId}:${module}`, "utf8").digest("hex");
 }
 
+/**
+ * Integration keys a member space borrows from the server instead of bringing
+ * its own. Invites are handed out by the owner to people they trust, and the
+ * owner's standing instruction is that an invited person never has to go and
+ * register their own weather or AI account — so these are inherited.
+ *
+ * Nothing location-shaped is inherited: a member in another city must not be
+ * shown the owner's forecast. They pick their own city, and their device
+ * choice lives in their own database.
+ */
+export interface SharedIntegrations {
+  readonly ai?: { readonly apiKey: string; readonly baseUrl: string; readonly model: string };
+  readonly weather?: { readonly apiKey: string; readonly host: string };
+}
+
 /** Build an isolated runtime config. Client input never participates in any path. */
-export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, masterSecret: string): ApiConfig {
+export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, masterSecret: string, shared?: SharedIntegrations): ApiConfig {
   const dataDirectory = ensureTenantDirectory(root, account.tenantId);
   const {
     password: _rootPassword,
@@ -59,6 +74,10 @@ export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, maste
     ...safeRoot,
     accountMode: false,
     gatewayAuthenticated: true,
+    // Handed down as the env-level fallback, so a member's own saved settings
+    // still win and a key they never typed still works.
+    ...(shared?.ai === undefined ? {} : { deepseekApiKey: shared.ai.apiKey, deepseekBaseUrl: shared.ai.baseUrl, deepseekModel: shared.ai.model }),
+    ...(shared?.weather === undefined ? {} : { qweatherApiKey: shared.weather.apiKey, qweatherHost: shared.weather.host }),
     dataDirectory,
     databasePath: join(dataDirectory, "lifeos.sqlite"),
     assetRoot: join(dataDirectory, "assets"),

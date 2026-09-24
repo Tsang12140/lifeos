@@ -284,6 +284,31 @@ async function resolveLocation(runtime: RuntimeWeatherConfig): Promise<WeatherLo
   }
 }
 
+/**
+ * Turn a device's coordinates into the city the forecast should use. The GeoAPI
+ * answers `location=lon,lat` on the same lookup endpoint, so a phone can name
+ * its own city instead of asking the person to spell it.
+ *
+ * Coordinates are rounded to two decimals (roughly a kilometre) before leaving
+ * the process: the provider resolves a city, not a doorway, and a shorter
+ * string is one less precise trace handed to a third party. Only the resolved
+ * city id and name are ever stored.
+ */
+export async function lookupWeatherLocationByCoordinates(runtime: RuntimeWeatherConfig, longitude: number, latitude: number): Promise<WeatherLocation | null> {
+  const apiKey = runtime.apiKey;
+  if (!apiKey) return null;
+  const location = `${longitude.toFixed(2)},${latitude.toFixed(2)}`;
+  try {
+    const response = await fetch(`https://${GEO_HOST}/v2/city/lookup?location=${encodeURIComponent(location)}&key=${encodeURIComponent(apiKey)}`, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+    const data = await response.json() as QWeatherLocationResponse;
+    const match = data.code === "200" ? data.location?.[0] : undefined;
+    if (!match?.id) return null;
+    return { id: match.id, name: displayLocationName(match.name ?? "", match.adm2 ?? "", match.adm1 ?? "", match.id), adm2: match.adm2 ?? "", adm1: match.adm1 ?? "" };
+  } catch {
+    return null;
+  }
+}
+
 export function clearWeatherCache(): void {
   historyCache.clear();
   snapshotCache.clear();

@@ -22,5 +22,5 @@ export function MobileNav({ activeView, onNavigate, onMore, moreOpen }: { active
   return <nav className="mobile-nav" aria-label="移动端导航">{MOBILE_NAV_ITEMS.map((item) => {
     const Icon = item.icon;
     return <button className={`mobile-nav-item ${activeView === item.id ? "is-active" : ""}`} key={item.id} type="button" onClick={() => onNavigate(item.id)} aria-current={activeView === item.id ? "page" : undefined}><Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{item.label}</span></button>;
-  })}<button className={`mobile-nav-item ${moreActive ? "is-active" : ""}`} type="button" onClick={onMore} aria-expanded={moreOpen}><MoreHorizontal size={19} strokeWidth={1.8} aria-hidden="true" /><span>更多</span></button></nav>;
+  })}<button id="mobile-more-trigger" className={`mobile-nav-item ${moreActive ? "is-active" : ""}`} type="button" onClick={onMore} aria-controls="mobile-more-menu" aria-expanded={moreOpen}><MoreHorizontal size={19} strokeWidth={1.8} aria-hidden="true" /><span>更多</span></button></nav>;
 }
