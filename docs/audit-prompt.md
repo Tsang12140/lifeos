@@ -88,6 +88,7 @@
      `min-height: 0px !important`，CSS 里的 `min-height` 全是死代码）
 3. **状态与并发**
    - 乐观锁：任何「先建后改」的脚本，改写成功后必须**用返回体刷新本地缓存的 revision**
+   - 弹窗外侧点击关闭是否只看 `click.target === dialog`？输入框内按下、拖出弹窗松手也可能把合成 click 归到 dialog，导致草稿误关；须按同一 pointer 的按下/松开起点和终点判断，并验未保存草稿、Escape、快速关后重开。原生 `close` 事件可能在新弹窗打开后才到，不能重复改父状态。
    - React 批处理：同一事件里两次 `setState` 会进同一帧 → 依赖「中间必须有一次绘制」的动画会退化成硬切
    - 请求竞态：切日期/切筛选时旧请求后到会不会覆盖新状态（`AbortController` / 请求序号）
    - stale closure：`useCallback` / `useEffect` 依赖是否漏项
