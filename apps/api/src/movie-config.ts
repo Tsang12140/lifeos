@@ -34,7 +34,7 @@ function configPath(config: ApiConfig): string {
 }
 
 function encryptionKey(config: ApiConfig): Buffer {
-  const secret = process.env.LIFEOS_MOVIE_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-movie:${config.dataDirectory}`;
+  const secret = config.tenantConfigSecrets?.movie || process.env.LIFEOS_MOVIE_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-movie:${config.dataDirectory}`;
   return scryptSync(secret, "lifeos-movie-config-v1", 32);
 }
 
@@ -136,4 +136,3 @@ export function requireMovieApiKey(config: ApiConfig): RuntimeMovieConfig {
   if (runtime.apiKey === undefined) throw new Error("movie_api_key_required");
   return runtime;
 }
-

@@ -53,7 +53,7 @@ function configPath(config: ApiConfig): string {
 }
 
 function encryptionKey(config: ApiConfig): Buffer {
-  const secret = process.env.LIFEOS_AI_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-ai:${config.dataDirectory}`;
+  const secret = config.tenantConfigSecrets?.ai || process.env.LIFEOS_AI_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-ai:${config.dataDirectory}`;
   return scryptSync(secret, "lifeos-ai-config-v1", 32);
 }
 

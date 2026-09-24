@@ -6,8 +6,11 @@ import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
-import { readConfig } from "../src/config.js";
+import { readConfig, type ApiConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
+import { IdentityStore } from "../src/identity-store.js";
+import { tenantConfigFor } from "../src/tenant-config.js";
+import { publicBackupConfig, resolvedBackupS3, saveRuntimeBackupConfig } from "../src/backup-config.js";
 import { BackupScheduler, backupScheduleRunKey, nextDailyBackupAt } from "../src/backup-scheduler.js";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, describeBackupRetention, planBackupRetention, retentionHorizonDays } from "../src/backup-retention.js";
 import { SqliteRecordRepository } from "../src/repository.js";
@@ -406,6 +409,84 @@ test("login sessions persist in SQLite and AI assistant falls back without a key
   const aiReply = await request(harness.base, "/api/ai/assistant", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ message: "有几条记录？", history: [] }) });
   equal(aiReply.response.status, 200);
   ok((aiReply.body as { reply: string }).reply.includes("1 条非隐私记录"));
+});
+
+test("tenant identity foundation isolates paths, keys, sessions, and remote backup prefixes", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-tenant-foundation-"));
+  const identityPath = join(root, "identity", "identity.sqlite");
+  let store = new IdentityStore(identityPath);
+  t.after(() => { try { store.close(); } catch { /* The test may have closed a store before reopening it. */ } rmSync(root, { recursive: true, force: true }); });
+  const owner = store.ensureOwner("owner", "isolated-owner-password");
+  const member = await store.createAccount({ username: "alice", password: "isolated-member-password", displayName: "Alice", spaceName: "Alice 的空间" });
+  const second = await store.createAccount({ username: "bob", password: "isolated-member-password", displayName: "Bob", spaceName: "Bob 的空间" });
+  equal(owner.role, "owner");
+  equal((await store.authenticate("alice", "wrong-password")), null);
+  equal((await store.authenticate("missing-user", "wrong-password")), null);
+  equal((await store.authenticate("alice", "isolated-member-password"))?.tenantId, member.tenantId);
+
+  const tokenHash = store.tokenHash("unexposed-random-session-token");
+  store.createSession(member.id, tokenHash, Date.now() + 60_000);
+  equal(store.session(tokenHash)?.account.id, member.id);
+
+  const ownerAssetRoot = join(root, "owner-original-assets");
+  const ownerBackupRoot = join(root, "owner-original-backups");
+  const ownerDatabasePath = join(root, "owner-original.sqlite");
+  const ownerConfig: ApiConfig = {
+    host: "127.0.0.1", port: 3001, databasePath: ownerDatabasePath, password: "isolated-owner-password",
+    dataDirectory: root, webDirectory: join(root, "web"), assetRoot: ownerAssetRoot,
+    backupDirectory: ownerBackupRoot, allowedOrigins: [], cookieSecure: false,
+    bodyLimitBytes: 1024 * 1024, assetUploadLimitBytes: 25 * 1024 * 1024,
+    assetOrphanGraceDays: 7, assetTrashDays: 30,
+    deepseekApiKey: "owner-ai-secret", deepseekModel: "deepseek-flash", deepseekBaseUrl: "https://api.deepseek.com",
+    qweatherApiKey: "owner-weather-secret", qweatherLocation: "owner-location", qweatherCity: "owner-city", qweatherHost: "devapi.qweather.com",
+    tmdbApiKey: "owner-movie-secret",
+    backupS3: { enabled: true, endpoint: "https://backup.example", region: "test", bucket: "owner-bucket", prefix: "owner-prefix", forcePathStyle: true, accessKeyId: "owner-access", secretAccessKey: "owner-secret" },
+  };
+  const aliceConfig = tenantConfigFor(ownerConfig, member, store.configMasterSecret);
+  const bobConfig = tenantConfigFor(ownerConfig, second, store.configMasterSecret);
+  equal(aliceConfig.dataDirectory, join(root, "tenants", member.tenantId));
+  equal(aliceConfig.databasePath, join(aliceConfig.dataDirectory, "lifeos.sqlite"));
+  equal(aliceConfig.assetRoot, join(aliceConfig.dataDirectory, "assets"));
+  equal(aliceConfig.backupDirectory, join(aliceConfig.dataDirectory, "backups"));
+  equal(aliceConfig.databasePath === ownerDatabasePath, false);
+  equal(aliceConfig.assetRoot === ownerAssetRoot, false);
+  equal(aliceConfig.backupDirectory === ownerBackupRoot, false);
+  equal(aliceConfig.deepseekApiKey, undefined);
+  equal(aliceConfig.qweatherApiKey, undefined);
+  equal(aliceConfig.tmdbApiKey, undefined);
+  equal(aliceConfig.backupS3, undefined);
+  ok(aliceConfig.tenantConfigSecrets?.ai !== bobConfig.tenantConfigSecrets?.ai);
+  ok(aliceConfig.tenantConfigSecrets?.weather !== bobConfig.tenantConfigSecrets?.weather);
+  ok(aliceConfig.tenantConfigSecrets?.movie !== bobConfig.tenantConfigSecrets?.movie);
+  ok(aliceConfig.tenantConfigSecrets?.backup !== bobConfig.tenantConfigSecrets?.backup);
+  ok(existsSync(aliceConfig.assetRoot));
+  ok(existsSync(aliceConfig.backupDirectory));
+  equal(ownerConfig.databasePath, ownerDatabasePath);
+  equal(ownerConfig.assetRoot, ownerAssetRoot);
+  equal(ownerConfig.backupDirectory, ownerBackupRoot);
+
+  const previousFileBackup = process.env.LIFEOS_ALLOW_FILE_BACKUP;
+  process.env.LIFEOS_ALLOW_FILE_BACKUP = "1";
+  try {
+    const requestedPrefix = `lifeos-spaces/${member.tenantId}/already-scoped`;
+    saveRuntimeBackupConfig(aliceConfig, {
+      enabled: true, endpoint: "file:///isolated-test-bucket", region: "test-region", bucket: "tenant-bucket",
+      prefix: requestedPrefix, forcePathStyle: false, accessKeyId: "fake-access", secretAccessKey: "fake-secret",
+    });
+    equal(publicBackupConfig(aliceConfig).prefix, "already-scoped");
+    equal(resolvedBackupS3(aliceConfig)?.prefix, requestedPrefix);
+  } finally {
+    if (previousFileBackup === undefined) delete process.env.LIFEOS_ALLOW_FILE_BACKUP;
+    else process.env.LIFEOS_ALLOW_FILE_BACKUP = previousFileBackup;
+  }
+
+  store.disableAccount(member.id);
+  equal(store.session(tokenHash), null);
+  store.close();
+  store = new IdentityStore(identityPath);
+  equal((await store.authenticate("bob", "isolated-member-password"))?.tenantId, second.tenantId);
+  equal(tenantConfigFor(ownerConfig, second, store.configMasterSecret).tenantConfigSecrets?.ai, bobConfig.tenantConfigSecrets?.ai);
+  throws(() => readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_HOST: "127.0.0.1" }), /not available yet/);
 });
 
 test("AI config exposes effective presets, validates reasoning, and never returns the key", async (t) => {

@@ -35,7 +35,7 @@ function configPath(config: ApiConfig): string {
 }
 
 function encryptionKey(config: ApiConfig): Buffer {
-  const secret = process.env.LIFEOS_BACKUP_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-backup:${config.dataDirectory}`;
+  const secret = config.tenantConfigSecrets?.backup || process.env.LIFEOS_BACKUP_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-backup:${config.dataDirectory}`;
   return scryptSync(secret, "lifeos-backup-config-v1", 32);
 }
 
@@ -136,6 +136,20 @@ function storedRuntime(config: ApiConfig, stored: StoredBackupConfig): RuntimeBa
   };
 }
 
+function scopeBackupPrefix(config: ApiConfig, runtime: RuntimeBackupConfig): RuntimeBackupConfig {
+  const tenantPrefix = config.backupObjectPrefix?.trim().replace(/^\/+|\/+$/g, "");
+  return tenantPrefix && runtime.prefix !== tenantPrefix && !runtime.prefix.startsWith(`${tenantPrefix}/`)
+    ? { ...runtime, prefix: `${tenantPrefix}/${runtime.prefix}` }
+    : runtime;
+}
+
+function logicalBackupPrefix(config: ApiConfig, runtime: RuntimeBackupConfig): string {
+  const tenantPrefix = config.backupObjectPrefix?.trim().replace(/^\/+|\/+$/g, "");
+  return tenantPrefix && runtime.prefix.startsWith(`${tenantPrefix}/`)
+    ? runtime.prefix.slice(tenantPrefix.length + 1)
+    : runtime.prefix;
+}
+
 export function readRuntimeBackupConfig(config: ApiConfig): RuntimeBackupConfig | undefined {
   const stored = readStored(config);
   if (stored !== undefined) {
@@ -144,12 +158,12 @@ export function readRuntimeBackupConfig(config: ApiConfig): RuntimeBackupConfig 
     // letting it win would silently mask a complete BACKUP_S3_* environment
     // configuration — exactly the kind of "looks configured, does nothing"
     // state this module exists to prevent.
-    if (runtime.accessKeyId && runtime.secretAccessKey) return runtime;
-    if (config.backupS3 !== undefined) return { ...config.backupS3, source: "env" };
-    return runtime;
+    if (runtime.accessKeyId && runtime.secretAccessKey) return scopeBackupPrefix(config, runtime);
+    if (config.backupS3 !== undefined) return scopeBackupPrefix(config, { ...config.backupS3, source: "env" });
+    return scopeBackupPrefix(config, runtime);
   }
   if (config.backupS3 === undefined) return undefined;
-  return { ...config.backupS3, source: "env" };
+  return scopeBackupPrefix(config, { ...config.backupS3, source: "env" });
 }
 
 export function resolvedBackupS3(config: ApiConfig): BackupS3Config | undefined {
@@ -173,7 +187,7 @@ export function publicBackupConfig(config: ApiConfig): { readonly configured: bo
   if (runtime === undefined) return { configured: false, enabled: false, endpoint: "https://s3.bitiful.net", region: "cn-east-1", bucket: "cdnb", prefix: "product-backup/lifeos", forcePathStyle: false, keySource: "none", transport: "http" };
   const transport = backupTransportOf(runtime.endpoint);
   const blocked = transport === "file" && !fileBackupAllowed();
-  return { configured: Boolean(runtime.accessKeyId && runtime.secretAccessKey), enabled: runtime.enabled, endpoint: runtime.endpoint, region: runtime.region, bucket: runtime.bucket, prefix: runtime.prefix, forcePathStyle: runtime.forcePathStyle, keySource: runtime.source, transport, ...(blocked ? { warning: FILE_BACKUP_HINT } : {}) };
+  return { configured: Boolean(runtime.accessKeyId && runtime.secretAccessKey), enabled: runtime.enabled, endpoint: runtime.endpoint, region: runtime.region, bucket: runtime.bucket, prefix: logicalBackupPrefix(config, runtime), forcePathStyle: runtime.forcePathStyle, keySource: runtime.source, transport, ...(blocked ? { warning: FILE_BACKUP_HINT } : {}) };
 }
 
 export function saveRuntimeBackupConfig(config: ApiConfig, input: { readonly enabled: boolean; readonly endpoint: string; readonly region: string; readonly bucket: string; readonly prefix: string; readonly forcePathStyle: boolean; readonly accessKeyId?: string; readonly secretAccessKey?: string }): ReturnType<typeof publicBackupConfig> {

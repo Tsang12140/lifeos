@@ -72,7 +72,7 @@ function configPath(config: ApiConfig): string {
 }
 
 function encryptionKey(config: ApiConfig): Buffer {
-  const secret = process.env.LIFEOS_WEATHER_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-weather:${config.dataDirectory}`;
+  const secret = config.tenantConfigSecrets?.weather || process.env.LIFEOS_WEATHER_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-weather:${config.dataDirectory}`;
   return scryptSync(secret, "lifeos-weather-config-v1", 32);
 }
 

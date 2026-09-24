@@ -60,6 +60,10 @@ export interface ApiConfig {
   readonly qweatherHost: string;
   /** Optional TMDb key used only by the opt-in movie module. */
   readonly tmdbApiKey?: string;
+  /** Per-tenant key material derived from the identity database's stable master secret. */
+  readonly tenantConfigSecrets?: Partial<Record<"ai" | "weather" | "movie" | "backup", string>>;
+  /** Extra object-storage path segment used by non-owner spaces. */
+  readonly backupObjectPrefix?: string;
 }
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -103,6 +107,9 @@ function splitOrigins(raw: string | undefined, host: string): string[] {
 }
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
+  if (env.LIFEOS_ACCOUNT_MODE === "1") {
+    throw new Error("LIFEOS_ACCOUNT_MODE is not available yet; the account identity foundation is not connected to HTTP routes");
+  }
   const host = env.LIFEOS_HOST?.trim() || DEFAULT_HOST;
   const port = parsePort(env.LIFEOS_PORT);
   const dataDirectory = resolve(env.LIFEOS_DATA_DIR?.trim() || "data");
