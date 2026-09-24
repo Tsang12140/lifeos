@@ -180,8 +180,8 @@ docker compose up -d --build
 - 记录的 `body.original` 永远保留，编辑内容写入独立的 `body.edited`；删除是软删除，数据库备份仍可保留已删除行。
 - 隐私记录会在时间轴中遮罩，在日历摘要、任务摘要和 AI 上下文中排除。周期与亲密模块是单独的私密日历数据，关闭显示不会自动删除数据。
 - 图片、音频和文件只保存 `assetId` 与可替换的 `storageRefs`，不会把原件复制进 SQLite 或仓库。仓库不携带任何本地照片。
-- 设置页可以生成一致的 SQLite 本地副本；本地备份默认保留最近 30 天。可启用每天一次的定时备份，并在配置 S3-compatible 凭据后上传同一份副本。
-- JSON 导出适合迁移记录、实体和资产引用，Markdown 适合阅读；完整恢复可使用已验证的 SQLite 备份。恢复前请停写，并清理同目录中与目标数据库对应的 `-wal`/`-shm` 文件。
+- 设置页可以生成一致的**单个空间的 SQLite 副本**；本地备份默认保留最近 30 天。可启用每天一次的定时备份，并在配置 S3-compatible 凭据后上传同一份副本。它**不包含** `identity.sqlite`、其他租户数据库、照片原件或数据目录里的配置文件，不能单独用于多租户整站恢复。
+- JSON 导出适合迁移记录、实体和资产引用，Markdown 适合阅读；二者都不是整站灾难恢复方案。
 
 `npm run backup` 也可以从命令行创建一次 SQLite 备份：
 
@@ -190,6 +190,18 @@ npm run backup -- data/lifeos.sqlite backup/lifeos.sqlite
 ```
 
 备份文件可能包含隐私记录和密钥配置的密文，应和原数据库一样保护。不要把备份上传到公开 issue、公共对象存储或 Git 历史。
+
+账户模式上线前和每次重要升级后，请对**已停止写入的整个 `/data` 卷**做一次独立备份与空目录恢复演练。仓库提供 `scripts/backup-instance.mjs`：它逐个一致性复制活跃 SQLite 数据库（包括 `identity.sqlite` 与成员数据库），复制照片、配置和历史快照，写入 SHA-256 清单；`verify` 校验每个文件，`restore` 只接受**不存在的目标目录**，绝不覆盖现有数据。备份目标必须在 `/data` 卷之外，且需要足够容量。下面的 `/srv/lifeos-private-backups` 是示例，请换成服务器上仅管理员可访问、不会被宝塔网站直接提供的绝对路径；先创建该目录，并允许容器的 `node` 用户写入。
+
+```bash
+docker compose stop lifeos
+docker compose run --rm --no-deps -v /srv/lifeos-private-backups:/recovery lifeos node scripts/backup-instance.mjs backup --source /data --output /recovery/lifeos-first --asset-root /data/assets --account-mode --offline-confirmed
+docker compose run --rm --no-deps -v /srv/lifeos-private-backups:/recovery lifeos node scripts/backup-instance.mjs verify --snapshot /recovery/lifeos-first
+docker compose run --rm --no-deps -v /srv/lifeos-private-backups:/recovery lifeos node scripts/backup-instance.mjs restore --snapshot /recovery/lifeos-first --target /recovery/restore-smoke
+docker compose up -d lifeos
+```
+
+恢复演练的目标必须是新的空路径；上述命令只证明备份字节、身份主密钥、各数据库与资产可被还原，**还须在隔离实例验证登录和照片读取**。服务器 `.env` 中四个固定 `LIFEOS_*_CONFIG_SECRET` 不在 `/data` 内，必须单独安全保存并在恢复时原值注入；否则已保存的集成密钥可能无法解密。定期将这个整卷备份目录加密后复制到异地，并演练恢复；仅有设置页的单库 S3 备份不满足此要求。若将 `LIFEOS_ASSET_ROOT` 放在 `/data` 之外，此命令会拒绝声称“整站备份”，须先制定涵盖外部资产根的联合恢复方案。
 
 ## 当前边界
 

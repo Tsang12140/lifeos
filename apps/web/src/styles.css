@@ -1073,6 +1073,7 @@ textarea:focus-visible {
   height: 26px;
   border-radius: 999px;
   background: linear-gradient(90deg, rgb(255 255 255 / 0) 0%, var(--fog) 24%, var(--fog) 76%, rgb(255 255 255 / 0) 100%);
+  opacity: .34; /* match the first keyframe while delayed bands wait to start */
   animation: fog-drift 9s ease-in-out infinite;
 }
 .fog-band--1 { top: 14px; right: 18%; left: 4%; filter: blur(6px); }
@@ -9574,15 +9575,14 @@ button.relation-chip {
   white-space: nowrap;
 }
 
-/* 选中文字后的右键菜单。定位口径跟 `.calendar-summary-menu` 完全一致（`fixed` +
-   鼠标坐标），两处菜单才不会一个跟着滚动跑、一个钉在原地。`max-width` 是必须的：
-   `left/top` 直接吃鼠标坐标，贴着窗口右缘右键时菜单会整个跑到屏幕外。 */
+/* 两处右键菜单均用 fixed 定位；渲染后按真实矩形收进视口。限宽只管尺寸，
+   不能代替 left/top 的收边。 */
 .mention-context-menu {
   position: fixed;
   z-index: 62;
   display: grid;
   gap: 2px;
-  min-width: 172px;
+  min-width: min(172px, calc(100vw - 16px));
   max-width: min(280px, calc(100vw - 16px));
   padding: 5px;
   border: 1px solid var(--line);
@@ -11691,7 +11691,7 @@ button.relation-chip {
 .calendar-edit-actions .secondary-button { min-height: 34px; padding: 0 14px; font-size: 0.8rem; }
 
 /* 右键菜单：定位在指针处，所以是 fixed 而不是绝对定位到某一格。 */
-.calendar-summary-menu { position: fixed; z-index: 62; display: grid; min-width: 168px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
+.calendar-summary-menu { position: fixed; z-index: 62; display: grid; min-width: min(168px, calc(100vw - 16px)); max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
 .calendar-summary-menu button { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; cursor: pointer; font-family: inherit; font-size: 0.8rem; text-align: left; }
 .calendar-summary-menu button:hover,
 .calendar-summary-menu button:focus-visible { outline: none; color: var(--ink); background: var(--surface-soft); }

@@ -163,20 +163,24 @@ const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LOGIN_FAILURE_TTL_MS = 15 * 60 * 1000;
 const MAX_LOGIN_FAILURE_BUCKETS = 4096;
+const ACCOUNT_PEER_FAILURE_LIMIT = 30;
+const ACCOUNT_PEER_WINDOW_MS = 60_000;
+const ACCOUNT_LOGIN_MAX_GLOBAL_IN_FLIGHT = 8;
+const ACCOUNT_LOGIN_MAX_PEER_IN_FLIGHT = 2;
 interface LoginFailureBucket { readonly failures: number; readonly blockedUntil: number; readonly lastFailureAt: number; }
 
-function pruneLoginFailures(failures: Map<string, LoginFailureBucket>, now: number): void {
-  for (const [key, bucket] of failures) if (now - bucket.lastFailureAt > LOGIN_FAILURE_TTL_MS) failures.delete(key);
+function pruneLoginFailures(failures: Map<string, LoginFailureBucket>, now: number, ttlMs = LOGIN_FAILURE_TTL_MS): void {
+  for (const [key, bucket] of failures) if (now - bucket.lastFailureAt > ttlMs && bucket.blockedUntil <= now) failures.delete(key);
 }
 
-function recordLoginFailure(failures: Map<string, LoginFailureBucket>, key: string, previous: LoginFailureBucket | undefined, now: number): void {
+function recordLoginFailure(failures: Map<string, LoginFailureBucket>, key: string, previous: LoginFailureBucket | undefined, now: number, limit = 5, windowMs = LOGIN_FAILURE_TTL_MS): void {
+  // Never evict an active bucket to admit a new username/IP: that would let a
+  // rotating attacker reset somebody else's throttle. Callers refuse new keys
+  // before doing password work when the bounded map is full.
+  if (previous === undefined && failures.size >= MAX_LOGIN_FAILURE_BUCKETS) return;
   failures.delete(key);
-  if (failures.size >= MAX_LOGIN_FAILURE_BUCKETS) {
-    const oldest = failures.keys().next().value as string | undefined;
-    if (oldest !== undefined) failures.delete(oldest);
-  }
-  const count = (previous?.failures ?? 0) + 1;
-  failures.set(key, { failures: count, blockedUntil: count >= 5 ? now + 60_000 : 0, lastFailureAt: now });
+  const count = (previous !== undefined && now - previous.lastFailureAt <= windowMs ? previous.failures : 0) + 1;
+  failures.set(key, { failures: count, blockedUntil: count >= limit ? now + 60_000 : 0, lastFailureAt: now });
 }
 
 const RECORD_KINDS: readonly RecordKind[] = ["journal", "task", "event", "note"];
@@ -424,6 +428,10 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
         res.setHeader("retry-after", String(Math.ceil((attempt.blockedUntil - now) / 1000)));
         throw new HttpError(429, "login_rate_limited", "登录尝试过多，请稍后再试");
       }
+      if (attempt === undefined && loginFailures.size >= MAX_LOGIN_FAILURE_BUCKETS) {
+        res.setHeader("retry-after", "60");
+        throw new HttpError(429, "login_rate_limited", "登录尝试过多，请稍后再试");
+      }
       const expected = Buffer.from(config.password);
       const actual = Buffer.from(password);
       if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
@@ -629,6 +637,9 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     for (const account of identity.listAccounts()) if (!account.disabled) appFor(account);
     const ownerApp = appFor(owner);
     const loginFailures = new Map<string, LoginFailureBucket>();
+    const peerLoginFailures = new Map<string, LoginFailureBucket>();
+    const inFlightByPeer = new Map<string, number>();
+    let inFlightLogins = 0;
     let lastLoginFailureSweepAt = 0;
     const ttlMs = SESSION_TTL_MS;
     let closed = false;
@@ -666,15 +677,43 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
             const remote = req.socket.remoteAddress ?? "unknown";
             const loginKey = `${remote}:${createHash("sha256").update(username.toLowerCase(), "utf8").digest("hex")}`;
             const now = Date.now();
-            if (now - lastLoginFailureSweepAt >= 60_000) { pruneLoginFailures(loginFailures, now); lastLoginFailureSweepAt = now; }
+            if (now - lastLoginFailureSweepAt >= 60_000) {
+              pruneLoginFailures(loginFailures, now);
+              pruneLoginFailures(peerLoginFailures, now, ACCOUNT_PEER_WINDOW_MS);
+              lastLoginFailureSweepAt = now;
+            }
             const attempt = loginFailures.get(loginKey);
-            if (attempt !== undefined && attempt.blockedUntil > now) {
-              res.setHeader("retry-after", String(Math.ceil((attempt.blockedUntil - now) / 1000)));
+            const peerAttempt = peerLoginFailures.get(remote);
+            const blockedUntil = Math.max(attempt?.blockedUntil ?? 0, peerAttempt?.blockedUntil ?? 0);
+            if (blockedUntil > now) {
+              res.setHeader("retry-after", String(Math.ceil((blockedUntil - now) / 1000)));
               throw new HttpError(429, "login_rate_limited", "登录尝试过多，请稍后再试");
             }
-            const account = await identity.authenticate(username, password);
+            // A rotating username must not evade the peer-wide budget. Under a
+            // reverse proxy the TCP peer may be shared by many users, so allow
+            // ordinary bursts but never trust caller-supplied X-Forwarded-For.
+            if ((attempt === undefined && loginFailures.size >= MAX_LOGIN_FAILURE_BUCKETS)
+              || (peerAttempt === undefined && peerLoginFailures.size >= MAX_LOGIN_FAILURE_BUCKETS)
+              || inFlightLogins >= ACCOUNT_LOGIN_MAX_GLOBAL_IN_FLIGHT
+              || (inFlightByPeer.get(remote) ?? 0) >= ACCOUNT_LOGIN_MAX_PEER_IN_FLIGHT) {
+              res.setHeader("retry-after", "1");
+              throw new HttpError(429, "login_rate_limited", "登录尝试过多，请稍后再试");
+            }
+            inFlightLogins += 1;
+            inFlightByPeer.set(remote, (inFlightByPeer.get(remote) ?? 0) + 1);
+            let account: AccountIdentity | null;
+            try {
+              account = await identity.authenticate(username, password);
+            } finally {
+              inFlightLogins -= 1;
+              const remaining = (inFlightByPeer.get(remote) ?? 1) - 1;
+              if (remaining <= 0) inFlightByPeer.delete(remote);
+              else inFlightByPeer.set(remote, remaining);
+            }
             if (account === null) {
-              recordLoginFailure(loginFailures, loginKey, attempt, Date.now());
+              const failedAt = Date.now();
+              recordLoginFailure(loginFailures, loginKey, attempt, failedAt);
+              recordLoginFailure(peerLoginFailures, remote, peerAttempt, failedAt, ACCOUNT_PEER_FAILURE_LIMIT, ACCOUNT_PEER_WINDOW_MS);
               throw new HttpError(401, "invalid_credentials", "账号或密码不正确");
             }
             loginFailures.delete(loginKey);

@@ -16,8 +16,9 @@
     "backup": "node scripts/backup.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
     "start": "node --use-env-proxy --env-file-if-exists=.env apps/api/dist/src/main.js",
-    "test": "npm run test --workspace @lifeos/core && npm run test --workspace @lifeos/api && npm run test:web",
+    "test": "npm run test --workspace @lifeos/core && npm run test --workspace @lifeos/api && npm run test:web && npm run test:instance-backup",
     "test:web": "node --experimental-strip-types --test apps/web/test/*.test.ts",
+    "test:instance-backup": "node --test --test-isolation=none scripts/test/instance-backup.test.mjs",
     "check": "npm test && npm run typecheck --workspace @lifeos/web",
     "typecheck": "npm run typecheck --workspace @lifeos/core && npm run typecheck --workspace @lifeos/api && npm run typecheck --workspace @lifeos/web"
   },

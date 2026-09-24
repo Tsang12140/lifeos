@@ -21,6 +21,13 @@ import {
   timePartOf,
 } from "../src/time.ts";
 import { storyWeight } from "../src/photoScore.ts";
+import { clampFixedMenuPosition } from "../src/menu-position.ts";
+
+test("fixed context menus stay inside both viewport edges", () => {
+  assert.deepEqual(clampFixedMenuPosition(383, 775, 172, 180, 390, 800), { x: 210, y: 612 });
+  assert.deepEqual(clampFixedMenuPosition(1, 2, 172, 180, 390, 800), { x: 8, y: 8 });
+  assert.deepEqual(clampFixedMenuPosition(180, 300, 172, 180, 390, 800), { x: 180, y: 300 });
+});
 
 test("shiftDate walks calendar days including month ends", () => {
   assert.equal(shiftDate("2026-01-31", 1), "2026-02-01");

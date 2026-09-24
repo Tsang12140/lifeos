@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { LoaderCircle, MapPin, Plus, User, X } from "lucide-react";
 import { PLACE_MARKER, PLACE_ROLES, entitySearchTerms, normalizeEntitySearchTerm, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import type { Entity } from "@lifeos/core";
@@ -22,6 +22,7 @@ import {
   type SlashQuery,
 } from "./mention";
 import { slashSuggestions as slashSuggestionsFn } from "./mention";
+import { clampFixedMenuPosition } from "./menu-position";
 
 /**
  * One entry in the right-click menu. The menu is generic on purpose: the box
@@ -255,6 +256,8 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
   const [createFormOpen, setCreateFormOpen] = useState(false);
   const [slash, setSlash] = useState<SlashQuery | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string; actions: readonly ContextAction[] } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const [contextPosition, setContextPosition] = useState({ x: 0, y: 0 });
   // A right-click outside the selection collapses it before `contextmenu`
   // arrives, so the range is copied on the way down as well. Inside the
   // selection the live range still wins, which keeps a stale copy from ever
@@ -308,11 +311,20 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("pointerdown", close);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
     };
+  }, [contextMenu]);
+
+  useLayoutEffect(() => {
+    const menu = contextMenuRef.current;
+    if (contextMenu === null || menu === null) return;
+    const rect = menu.getBoundingClientRect();
+    setContextPosition(clampFixedMenuPosition(contextMenu.x, contextMenu.y, rect.width, rect.height, window.innerWidth, window.innerHeight));
   }, [contextMenu]);
 
   const openContextMenu = (element: HTMLTextAreaElement, clientX: number, clientY: number): boolean => {
@@ -452,7 +464,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
 
   return <div className="mention-box">
     <textarea ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onChange={(event) => { onChange(event.target.value); syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
-    {contextMenu !== null ? <div className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text; setContextMenu(null); if (action.disabled !== true) action.onSelect(text); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
+    {contextMenu !== null ? <div ref={contextMenuRef} className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextPosition.x, top: contextPosition.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text; setContextMenu(null); if (action.disabled !== true) action.onSelect(text); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")} · ` : ""}{command.description}</small></button>)}</div> : null}
     {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={`创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">

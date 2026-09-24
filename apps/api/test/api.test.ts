@@ -175,6 +175,37 @@ async function statusWithHost(base: string, host: string): Promise<number> {
   });
 }
 
+test("Compose forwards documented optional runtime integration settings", () => {
+  const compose = readFileSync(new URL("../../../../compose.yaml", import.meta.url), "utf8");
+  const environmentSection = compose.match(/^    environment:\r?\n((?:      .*(?:\r?\n|$))*)/m)?.[1] ?? "";
+  const composeEnvironment = new Map<string, string>(
+    [...environmentSection.matchAll(/^      ([A-Z][A-Z0-9_]*): (.*)$/gm)].map((match) => [match[1]!, match[2]!] as [string, string]),
+  );
+  const requiredNames = [
+    "LIFEOS_BODY_LIMIT_BYTES",
+    "LIFEOS_DEEPSEEK_API_KEY",
+    "LIFEOS_DEEPSEEK_MODEL",
+    "LIFEOS_DEEPSEEK_BASE_URL",
+    "QWEATHER_KEY",
+    "QWEATHER_LOCATION",
+    "QWEATHER_CITY",
+    "QWEATHER_HOST",
+    "BACKUP_S3_ENABLED",
+    "BACKUP_S3_ENDPOINT",
+    "BACKUP_S3_REGION",
+    "BACKUP_S3_BUCKET",
+    "BACKUP_S3_PREFIX",
+    "BACKUP_S3_FORCE_PATH_STYLE",
+    "BACKUP_S3_ACCESS_KEY_ID",
+    "BACKUP_S3_SECRET_ACCESS_KEY",
+  ];
+
+  for (const name of requiredNames) {
+    equal(composeEnvironment.get(name), `\${${name}:-}`, `compose.yaml forwards host ${name}`);
+  }
+  equal(composeEnvironment.get("LIFEOS_LOG_DIR"), "${LIFEOS_LOG_DIR:-/data/logs}", "Compose keeps logs on the persistent volume by default");
+});
+
 test("SQLite API persists records, preserves original content, filters, conflicts, and exports", async (t) => {
   const harness = await startHarness();
   t.after(async () => harness.stop());
@@ -706,10 +737,43 @@ test("account gateway binds all APIs to isolated tenants and revokes disabled/re
   equal((await as(bobResetLogin.cookie, "/api/records")).response.status, 401);
   equal((await login("bob", "bob-reset-password")).response.status, 401);
   equal((await as(aliceCookie, "/api/records")).response.status, 200);
-  const ownerStillOnOriginalRoot = (await as(ownerCookie, "/api/backup/status")).body as { localDirectory: string };
+  const ownerStillOnOriginalRoot = (await as(ownerCookie, "/api/backup/status")).body as { dataDirectory: string; databasePath: string; assetRoot: string | null; localDirectory: string };
+  equal(ownerStillOnOriginalRoot.dataDirectory, harness.root);
+  equal(ownerStillOnOriginalRoot.databasePath, join(harness.root, "lifeos.sqlite"));
   equal(ownerStillOnOriginalRoot.localDirectory, join(harness.root, "owner-backups"));
   equal(existsSync(join(harness.root, "lifeos.sqlite")), true);
   equal((await as(ownerCookie, "/api/records")).response.status, 200);
+});
+
+test("account login limits rotating unknown usernames on one TCP peer", async (t) => {
+  const harness = await startAccountHarness();
+  t.after(async () => harness.stop());
+  const attempt = (username: string, password = "wrong-account-password") => request(harness.base, "/api/auth/login", { method: "POST", ...json({ username, password }) });
+  // Every username has its own credential bucket, but they all spend the same
+  // peer-wide budget. This used to run one scrypt for every fresh username.
+  for (let index = 0; index < 30; index += 1) {
+    equal((await attempt(`unknown-rotation-${index}`)).response.status, 401);
+  }
+  const blocked = await attempt("unknown-rotation-30");
+  equal(blocked.response.status, 429);
+  ok(Number(blocked.response.headers.get("retry-after")) > 0);
+  // A valid password cannot bypass a currently exhausted peer budget. This
+  // is the deliberate availability trade-off behind a trusted local proxy.
+  equal((await attempt("owner", "isolated-owner-bootstrap-password")).response.status, 429);
+});
+
+test("account login bounds concurrent password checks", async (t) => {
+  const harness = await startAccountHarness();
+  t.after(async () => harness.stop());
+  const requests = await Promise.all(Array.from({ length: 12 }, (_, index) => request(harness.base, "/api/auth/login", {
+    method: "POST", ...json({ username: `parallel-unknown-${index}`, password: "wrong-account-password" }),
+  })));
+  const statuses = requests.map((item) => item.response.status);
+  ok(statuses.includes(429), `expected a concurrency refusal, got ${statuses.join(",")}`);
+  ok(statuses.every((status) => status === 401 || status === 429));
+  // The load burst must not poison a later correct login (only failed password
+  // checks count toward the per-peer minute budget).
+  equal((await request(harness.base, "/api/auth/login", { method: "POST", ...json({ username: "owner", password: "isolated-owner-bootstrap-password" }) })).response.status, 200);
 });
 
 test("AI config exposes effective presets, validates reasoning, and never returns the key", async (t) => {
@@ -916,7 +980,10 @@ test("local SQLite backups are recorded and unconfigured S3 fails clearly", asyn
 
   const status = await request(harness.base, "/api/backup/status");
   equal(status.response.status, 200);
-  const initial = status.body as { localDirectory: string; s3: { configured: boolean }; runs: unknown[] };
+  const initial = status.body as { dataDirectory: string; databasePath: string; assetRoot: string | null; localDirectory: string; s3: { configured: boolean }; runs: unknown[] };
+  equal(initial.dataDirectory, harness.root);
+  equal(initial.databasePath, join(harness.root, "lifeos.sqlite"));
+  equal(initial.assetRoot, null);
   equal(initial.localDirectory, join(harness.root, "backups"));
   equal(initial.s3.configured, false);
   equal(initial.runs.length, 0);

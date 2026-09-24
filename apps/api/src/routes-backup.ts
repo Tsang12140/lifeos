@@ -103,6 +103,11 @@ export const handleBackupRoutes: RouteHandler = async (
     const scheduledRuns = runs.filter((run) => run.kind === "scheduled");
     const latestScheduled = scheduledRuns[0];
     setJson(res, 200, {
+      // Acceptance tooling must inspect the paths actually used by this API.
+      // localDirectory is only the backup destination and may be overridden.
+      dataDirectory: config.dataDirectory,
+      databasePath: config.databasePath,
+      assetRoot: config.assetRoot ?? null,
       localDirectory: config.backupDirectory ?? null,
       s3,
       schedule: {

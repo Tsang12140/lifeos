@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { clampFixedMenuPosition } from "./menu-position";
 import {
   CalendarDays,
   Check,
@@ -234,21 +236,31 @@ export const CYCLE_EVENT_KINDS: readonly { kind: CycleIntimacyEventKind; label: 
  */
 export function CalendarSummaryMenu({ x, y, monthMode, busy, cycleEnabled, recordedKinds, onEdit, onRegenerate, onRevert, onToggleCycle, onPickCycle, onClose }: { x: number; y: number; monthMode: boolean; busy: boolean; cycleEnabled: boolean; recordedKinds: ReadonlySet<CycleIntimacyEventKind>; onEdit: () => void; onRegenerate: () => void; onRevert: () => void; onToggleCycle: (kind: CycleIntimacyEventKind) => void; onPickCycle: (kind: CycleIntimacyEventKind) => void; onClose: () => void }) {
   const [cycleOpen, setCycleOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ x, y });
   /** Near the right edge the submenu would fall off screen, so it opens leftwards. */
   const flip = x > window.innerWidth - 380;
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (menu === null) return;
+    const rect = menu.getBoundingClientRect();
+    setPosition(clampFixedMenuPosition(x, y, rect.width, rect.height, window.innerWidth, window.innerHeight));
+  }, [x, y, monthMode]);
   useEffect(() => {
     const close = () => onClose();
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("pointerdown", close);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
     };
   }, [onClose]);
-  return <div className="calendar-summary-menu" role="menu" aria-label="日历操作" style={{ left: x, top: y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+  return <div ref={menuRef} className="calendar-summary-menu" role="menu" aria-label="日历操作" style={{ left: position.x, top: position.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
     {/* Picking an action dismisses the menu. The window listener cannot do it:
         a click inside the panel stops its `pointerdown` from reaching the window.
         The cycle items are the exception — the menu stays up, so two things can be
