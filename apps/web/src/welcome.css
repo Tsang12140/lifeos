@@ -32,6 +32,11 @@
 .welcome-location-action strong { font-size: .91rem; }
 .welcome-location-action small { color: #5b6c84; font-size: .75rem; line-height: 1.4; }
 .welcome-location-action:hover { border-color: #90a9ea; background: #eef3ff; }
+.welcome-location-action > strong { flex: 1; font-size: .91rem; }
+.welcome-manual-weather { display: grid; gap: 12px; min-width: 0; }
+.welcome-manual-weather .settings-weather-location-row { grid-template-columns: minmax(0, 1fr); }
+.welcome-manual-weather .settings-weather-location-row label { min-width: 0; }
+.welcome-manual-weather .settings-weather-location-row select { width: 100%; }
 .welcome-choice-divider { position: relative; color: #8a97a9; font-size: .75rem; text-align: center; }
 .welcome-choice-divider::before { content: ""; position: absolute; z-index: 0; top: 50%; right: 0; left: 0; border-top: 1px solid #e2e7ef; }
 .welcome-choice-divider span { position: relative; padding: 0 11px; background: #fff; }
@@ -42,4 +47,6 @@
   .welcome-screen { align-items: start; padding-top: max(32px, env(safe-area-inset-top)); }
   .welcome-brand { margin-bottom: 19px; }
   .welcome-panel { border-radius: 18px; }
+  .welcome-weather { gap: 12px; }
+  .welcome-location-action { min-height: 56px; }
 }

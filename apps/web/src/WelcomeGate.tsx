@@ -28,6 +28,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [weatherLocation, setWeatherLocation] = useState<WeatherLocationOption | null>(null);
+  const [manualWeather, setManualWeather] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,8 +89,8 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
     <section className="welcome-panel" aria-labelledby="welcome-title">
       <div className="welcome-step-icon" aria-hidden="true">{stage === "weather" ? <CloudSun size={24} /> : stage === "login" ? <LockKeyhole size={24} /> : <KeyRound size={24} />}</div>
       <p className="welcome-eyebrow">{stage === "weather" ? "最后一步 · 天气" : stage === "login" ? "你的私人空间" : "受邀加入"}</p>
-      <h1 id="welcome-title">{stage === "login" ? "欢迎回来" : stage === "invite" ? "输入邀请码" : stage === "create" ? "创建你的空间" : "选择你的天气城市"}</h1>
-      <p className="welcome-intro">{stage === "login" ? "登录后，继续记录自己的生活。" : stage === "invite" ? "邀请码由管理员发放，只能用于创建一个独立空间。" : stage === "create" ? "设置自己的账号和密码。你的记录与其他空间互不相通。" : "可让此设备跟随当前位置，也可以手选城市或稍后再设。"}</p>
+      <h1 id="welcome-title">{stage === "login" ? "欢迎回来" : stage === "invite" ? "输入邀请码" : stage === "create" ? "创建你的空间" : "天气位置"}</h1>
+      <p className="welcome-intro">{stage === "login" ? "登录后，继续记录自己的生活。" : stage === "invite" ? "邀请码由管理员发放，只能用于创建一个独立空间。" : stage === "create" ? "设置自己的账号和密码。你的记录与其他空间互不相通。" : "选择定位，或固定一个城市。"}</p>
 
       {stage === "login" ? <form className="welcome-form" onSubmit={(event) => { event.preventDefault(); onLogin(username, password); }}>
         <label><span>账号</span><input autoFocus name="username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
@@ -118,12 +119,12 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
       </form> : null}
 
       {stage === "weather" ? <div className="welcome-weather">
-        <button className="welcome-location-action" type="button" onClick={() => void useCurrentLocation()} disabled={busy}><LocateFixed size={19} /><span><strong>使用当前位置</strong><small>允许定位后，此设备打开 LifeOS 时会自动更新天气城市</small></span><ArrowRight size={17} /></button>
-        <div className="welcome-choice-divider"><span>或者手动选择</span></div>
-        <WeatherLocationPicker locationId={weatherLocation?.locationId ?? ""} city={weatherLocation?.city ?? ""} onChange={setWeatherLocation} disabled={busy} />
-        <button className="secondary-button welcome-main-action" type="button" onClick={() => void useSelectedCity()} disabled={busy || weatherLocation === null}>使用所选城市</button>
+        <button className="welcome-location-action" type="button" onClick={() => void useCurrentLocation()} disabled={busy}><LocateFixed size={19} /><strong>允许定位</strong><ArrowRight size={17} /></button>
+        <button className="welcome-location-action" type="button" onClick={() => setManualWeather((open) => !open)} aria-expanded={manualWeather} aria-controls="welcome-manual-weather" disabled={busy}><CloudSun size={19} /><strong>选固定城市</strong><ArrowRight size={17} /></button>
+        {manualWeather ? <div id="welcome-manual-weather" className="welcome-manual-weather"><WeatherLocationPicker locationId={weatherLocation?.locationId ?? ""} city={weatherLocation?.city ?? ""} onChange={setWeatherLocation} disabled={busy} showDetail={false} />
+          <button className="secondary-button welcome-main-action" type="button" onClick={() => void useSelectedCity()} disabled={busy || !weatherLocation?.locationId}>使用所选城市</button></div> : null}
         {error ? <p className="welcome-error" role="alert">{error}</p> : null}
-        <button className="welcome-text-action" type="button" onClick={onFinished} disabled={busy}>暂时跳过，稍后在设置中选择</button>
+        <button className="welcome-text-action" type="button" onClick={onFinished} disabled={busy}>稍后再选</button>
       </div> : null}
     </section>
     <p className="welcome-footnote">每个账号拥有独立的记录、照片和设置。</p>

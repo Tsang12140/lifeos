@@ -8904,6 +8904,7 @@ button.relation-chip {
   font-size: 0.9rem;
   line-height: 1;
 }
+.month-day-weather.is-mobile { display: none; }
 
 .month-cell.is-outside .month-day-weather {
   opacity: 0.75;
@@ -11821,17 +11822,58 @@ button.relation-chip {
 
 /* --- 天气：跟随当前位置（设备级开关） --- */
 .settings-weather-follow {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
+  width: 100%;
+  min-width: 0;
   padding: 12px 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
-.settings-weather-follow .settings-card-copy { flex: 1; min-width: 0; }
-.settings-weather-follow > .settings-inline-error { flex: 0 0 100%; }
+.settings-weather-follow .settings-card-copy { min-width: 0; }
+.settings-weather-follow > .settings-inline-error { grid-column: 1 / -1; }
 
 @media (max-width: 560px) {
   .settings-invite-row { align-items: flex-start; flex-direction: column; }
   .settings-invite-row > .danger-button { margin-left: 0; }
+  .settings-weather-follow .settings-card-copy strong,
+  .settings-weather-follow .settings-card-copy small { overflow-wrap: normal; word-break: normal; }
+}
+
+/* Small screens: the date, status and weather occupy distinct parts of each
+   calendar tile. Summaries remain available in the day view, not the grid. */
+@media (max-width: 560px) {
+  .month-grid { gap: 4px; }
+  .month-cell { box-sizing: border-box; aspect-ratio: 1 / 1; min-height: 0; padding: 4px; border-radius: 10px; }
+  .month-cell:not(.is-editing) .month-day-summary { display: none; }
+  .month-cell.is-editing { aspect-ratio: auto; min-height: 66px; }
+  .month-cell-head { min-width: 0; gap: 1px; align-items: flex-start; }
+  .month-day-meta { gap: 1px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+  .month-day-status { min-width: 13px; padding: 0 2px; font-size: .54rem; }
+  /* Count remains in the tile's aria-label; the narrow visual slot belongs to
+     the holiday badge and date, otherwise the top row wraps into the weather. */
+  .month-day-count { display: none; }
+  .month-day-weather.is-desktop { display: none; }
+  .month-day-weather.is-mobile { position: absolute; z-index: 2; right: 3px; bottom: 3px; display: inline-grid; width: 17px; height: 17px; font-size: .79rem; }
+  .month-day-solar { max-width: calc(100% - 18px); font-size: .55rem; }
+  .month-cell .calendar-day-markers { right: auto; left: 1px; bottom: 1px; grid-template-columns: repeat(4, 8px); justify-content: start; width: 32px; transform: scale(.68); transform-origin: bottom left; }
+  .month-cell:has(.calendar-day-markers) .month-day-solar { display: none; }
+  .weather-date-navigation { flex: 0 1 auto; }
+  .weather-date-picker { flex: 0 0 auto; }
+  .date-flap { width: 23px; height: 42px; font-size: 1.55rem; line-height: 42px; }
+  .date-flap-leaf > span { height: 42px; line-height: 42px; }
+  .weather-date-flaps { height: 44px; }
+  .date-flap--day-start { margin-left: 4px; }
+  .weather-date-context { margin-left: 3px; font-size: .68rem; }
+}
+
+@media (max-width: 390px) {
+  .weather-date-step { flex-basis: 28px; width: 28px; height: 30px; }
+  .date-flap { width: 21px; height: 40px; font-size: 1.42rem; line-height: 40px; }
+  .date-flap-leaf > span { height: 40px; line-height: 40px; }
+  .weather-date-flaps { height: 42px; }
+  .weather-date-context { font-size: .62rem; }
+  .month-cell .calendar-day-markers { transform: scale(.5); }
 }
