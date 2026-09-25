@@ -10,6 +10,9 @@
 
 ## 环境
 
+- **跑 `npm test` 必须同时钉 PATH**：光用 `C:\Program Files\nodejs\node.exe` 的绝对路径不够 ——
+  `npm run test` 内层的 `node --test` 走 PATH，managed 22.x 排在前面会报
+  `node: bad option: --test-isolation=none`（退出码 9）。先 `export PATH="/c/Program Files/nodejs:$PATH"`。
 - **沙箱在 turn 结束时回收子进程** → **开工先探端口**，不在就 `.review/spawn-serve.mjs`。**「读不了 / 数据不见了」的第一嫌疑永远是服务没在跑。**
 - **删文件撞沙箱 `safe-delete` 闸门**：每 turn 累计 **50 个文件**，**在删任何东西之前**就抛 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`，四个 fs 字段全 `undefined`。**不是句柄占用**（`renameSync` 能成功即铁证）；**重试无用**。判定走 `.review/lib/delete-guard.mjs`。
 - **同一条命令会被跑两趟**（沙箱内一趟 + `Sandbox bypassed` 一趟）⇒ 第一趟的删除必被拒且**输出被丢弃**。**别拿脚本自己的「已清理」当证据**，收尾自己 `readdirSync` 数一遍。
@@ -28,10 +31,18 @@
 ## 验收
 
 - 跑前先 `node .review/audit-toolbox-targets.mjs`（有未守卫的写入脚本就 exit 1）。
+  **但它的「UNGUARDED = 0」不是安全证明**：只认 `3011`/`5199` 与 `method:"POST"` 两个字面量 ⇒
+  走别的端口的（`verify-privacy.mjs`：3012 + `LIFEOS_VERIFY_BASE`）和 CDP 打字点保存的
+  （`verify-composer-shots/pickers.mjs`）都被归进「只读」桶，而它们真会写。**别拿它当结论。**
+- **生产守卫判定的是「备份目录」不是「数据目录」**：`/api/backup/status` 的 `localDirectory`
+  = `config.backupDirectory`，可被 `LIFEOS_BACKUP_DIR` 独立指定 ⇒ 挪出去就静默放行；
+  `verify-production-guard.mjs` 的「放行」夹具正是这个形态，**所以它自己抓不到**。
 - **崩溃必须变成 FAIL**：脚本抛错时结果文件会留着上次的 `RESULT: PASS` → **看到 PASS 先确认断言条数**。
 - **断言必须自带证据**（数字写进消息）；**点错元素 CDP 不报错** → 用 `elementFromPoint` 命中测试；**判据挂在机制上，不挂在副产物上**。记录正文在 **`body.original`**，**没有 `content` 字段**。
 - **图片「加载成功」≠「画出来有东西」**：判据 = **画布采样**（`.review/probe-photo-content.mjs`），三条缺一不可：请求成功 + 滚动后仍成功 + 采样后有内容。
 - 瞬态缺陷**过程中**高频采样；日期夹具动态推导；脚手架用异步 `spawn`。
+- **量尺不能是「不可能满足的几何」**：popover 锚在最右标签上时「居中」必然溢出右边界 → 契约写成「**尽量贴标签、贴不住就贴边（±2px）**」+「必须是小 popover」；别写成 `|menuCenterX − triggerCenterX| ≤ 40`（永远绿不了，只会误导下一个人去改产品）。
+- **验收脚本里的天气拦截只许替换 `/api/weather` 这个快照端点**：宽泛的 `*api/weather*` 会把 `/api/weather/status`、`/api/weather/profiles` 一起换成快照 → 页面显示「天气未配置」，脚本**第一项**就超时（`verify-mobile-layout.mjs` 就是这么烂掉的，不是「脚本坏了」而是夹具把应用喂死了）。
 - **贴 3011 的验收需 `LIFEOS_ALLOW_PROD_ACCEPTANCE=1`**，否则被生产守卫拒、看着像脚本坏了。
 - **偶发的网络类 FAIL 先重跑一次再怀疑产品**：观影「测试连接」打 TMDb `/configuration`，本机代理抖一下就报「TMDb 暂时无法连接」，而同一刻 `resolve` 是通的（实测 4 连 4 成功）。
 - **给实体加字段要同时放行三处**，漏一处「导入」就静默 400：core 的 `movieFieldNames` 校验 + API 的 `MOVIE_FIELD_NAMES`（PATCH 走它）+ `MOVIE_INPUT_KEYS`（`hasOnlyKeys` 白名单）。
@@ -46,4 +57,4 @@
 
 ## 其余细则（全文在 `MEMORY-detail.md` 的 `## 细则全文`）
 
-**UI 红线**：卡片 430.08px、**双列已删不要恢复**、界面文字不可选中（白名单只放叶子）、`.settings-switch` 只画药丸、**状态不可读处不许配写盘按钮**。**时光机**（快照绝不原地打开、照片只在「今天还画得出来」时才给）与**日历**（编辑模式只活在月视图、初始为「周」、退出 = 先存后退）细则见 detail。
+**UI 红线**：卡片 430.08px、**双列已删不要恢复**、界面文字不可选中（白名单只放叶子）、`.settings-switch` 只画药丸、**状态不可读处不许配写盘按钮**。**移动端「更多」= 贴在「更多」标签上的上拉小 popover**（`width: min(calc(100vw - 20px), 264px)`、`inset: auto`、定位脚本写 left/top；**它绝不能和 `.modal-dialog` 共用一条规则** —— 共享的 `position/inset/margin/width` 会把所有模态框从 UA 的 `inset:0 + margin:auto` 居中拽到左上角）。**时光机**（快照绝不原地打开、照片只在「今天还画得出来」时才给）与**日历**（编辑模式只活在月视图、初始为「周」、退出 = 先存后退）细则见 detail。
