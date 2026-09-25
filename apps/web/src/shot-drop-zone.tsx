@@ -1,5 +1,5 @@
-import { useRef, useState, type DragEvent as ReactDragEvent, type Dispatch, type SetStateAction } from "react";
-import { CloudUpload, Eraser, LoaderCircle, Plus, X } from "lucide-react";
+import { forwardRef, useImperativeHandle, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { Eraser, LoaderCircle, Plus, X } from "lucide-react";
 import type { Asset, AssetLink } from "@lifeos/core";
 import { apiRequest } from "./api";
 import { ASSET_ROLE_LABEL, assetRoleFor, formatBytes } from "./app-meta";
@@ -10,7 +10,7 @@ function assetThumbUrl(assetId: string, width: number): string {
 }
 
 /**
- * The photo drop zone beside the entry box. This is the only place in LifeOS
+ * The photo strip inside the entry box. This is the only place in LifeOS
  * that writes a file: everywhere else an asset is a reference to an original
  * that stays where it lives. A dropped photo uploads immediately, so the
  * thumbnail on screen is the very asset the record will point at — saving the
@@ -59,13 +59,11 @@ interface ShotDropZoneProps {
   readonly onCleared: (cleared: readonly AssetLink[], restore: () => void) => void;
 }
 
-export function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }: ShotDropZoneProps) {
+export interface ShotDropZoneHandle { takeFiles: (files: readonly File[]) => void; }
+
+export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(0);
-  // dragenter/dragleave fire again for every child element, so only a depth
-  // counter can tell whether the pointer really left the zone.
-  const dragDepth = useRef(0);
 
   const takeFiles = async (files: readonly File[]) => {
     const images = files.filter((file) => file.type.startsWith("image/"));
@@ -101,6 +99,7 @@ export function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onClear
     // landing in the hand is the whole confirmation.
     if (failedCount > 0) onNotify(`${failedCount} 张没能传上去，可以重试`, "warn");
   };
+  useImperativeHandle(ref, () => ({ takeFiles: (files) => { void takeFiles(files); } }));
 
   const remove = (assetId: string) => onShotsChange((current) => current.filter((shot) => shot.assetId !== assetId));
 
@@ -119,17 +118,9 @@ export function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onClear
   // say is which ones are in it.
   const strip = shots;
 
-  // One state, one component. The add control is a dashed square like the slot
-  // it stands for, in every state — it is never a different thing. A labelled
-  // button for the empty case was what made this area read as a control bolted
-  // under the field rather than as the place photos go, so it is gone.
-  const zoneClass = `composer-shots ${dragging ? "is-dragging" : ""} ${empty ? "is-empty" : "has-shots"}`;
-  const zoneHandlers = {
-    onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current += 1; setDragging(true); },
-    onDragOver: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy" as const; },
-    onDragLeave: () => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragging(false); },
-    onDrop: (event: ReactDragEvent<HTMLDivElement>) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void takeFiles(Array.from(event.dataTransfer.files)); },
-  };
+  // The parent composer accepts dropped files across the whole input frame;
+  // this strip owns uploads, thumbnails and the file-picker button.
+  const zoneClass = `composer-shots ${empty ? "is-empty" : "has-shots"}`;
 
   const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void takeFiles(files); }} />;
 
@@ -146,20 +137,19 @@ export function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onClear
    * second rendering, no second set of rules, and nothing that has to be kept in
    * sync with the other one.
    */
-  return <div className={zoneClass} {...zoneHandlers}>
+  return <div className={zoneClass}>
     <div className="shot-row">
       <ul className="shot-strip" data-count={shots.length}>
         {strip.map((shot) => <li className="shot-tile" key={shot.assetId}>
           <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
           <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
         </li>)}
-        {/* The slot for the next photo, and the same dashed square whether or
-            not there are any yet. A dashed box with a plus is the one add
-            affordance nobody has to be taught; an empty composer just happens to
-            be showing only this one. */}
+        {/* Keep the plus slot in the photo row; only reveal its label when the
+            row has enough width to avoid squeezing the tiles or save control. */}
         <li className="shot-tile shot-tile-add">
           <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片">
             <Plus size={18} strokeWidth={2} aria-hidden="true" />
+            <span className="shot-add-label">添加照片</span>
           </button>
         </li>
       </ul>
@@ -180,4 +170,4 @@ export function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onClear
     </div>
     {fileInput}
   </div>;
-}
+});

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, CloudSun, KeyRound, LoaderCircle, LocateFixed, LockKeyhole } from "lucide-react";
 import { apiRequest, type AuthState } from "./api";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
@@ -13,24 +13,48 @@ function problem(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function inviteFromLink(): string {
+  return new URLSearchParams(window.location.hash.slice(1)).get("invite")?.trim() ?? "";
+}
+
 export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
   readonly onLogin: (username: string, password: string) => void;
   readonly loginError: string | null;
   readonly loginLoading: boolean;
   readonly onFinished: () => void;
 }) {
-  const [stage, setStage] = useState<Stage>("login");
+  const [stage, setStage] = useState<Stage>(() => inviteFromLink() ? "invite" : "login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
+  const [inviteCode, setInviteCode] = useState(inviteFromLink);
   const [displayName, setDisplayName] = useState("");
-  const [spaceName, setSpaceName] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [weatherLocation, setWeatherLocation] = useState<WeatherLocationOption | null>(null);
   const [manualWeather, setManualWeather] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // An invitation link only checks the code. It never consumes the invitation
+  // or creates an account until the recipient explicitly submits the form.
+  useEffect(() => {
+    let active = true;
+    const verifyFromLink = () => {
+      const code = inviteFromLink();
+      if (!code) return;
+      setInviteCode(code); setStage("invite"); setError(null); setBusy(true);
+      void apiRequest<{ valid: boolean }>("/api/auth/invite/check", { method: "POST", body: JSON.stringify({ code }) })
+        .then((result) => {
+          if (!active || inviteFromLink() !== code) return;
+          if (result.valid) setStage("create");
+          else setError("邀请码无效或已使用，请向邀请你的人索取新的邀请码。");
+        })
+        .catch((cause) => { if (active && inviteFromLink() === code) setError(problem(cause, "暂时无法验证邀请码，请稍后重试。")); })
+        .finally(() => { if (active && inviteFromLink() === code) setBusy(false); });
+    };
+    verifyFromLink();
+    window.addEventListener("hashchange", verifyFromLink);
+    return () => { active = false; window.removeEventListener("hashchange", verifyFromLink); };
+  }, []);
 
   const switchTo = (next: Stage) => { setError(null); setStage(next); };
   const checkInvite = async (event: FormEvent) => {
@@ -47,14 +71,15 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
   const register = async (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
-    if (password !== confirmPassword) { setError("两次输入的密码不一致。"); return; }
     setBusy(true); setError(null);
     try {
+      const chosenName = displayName.trim() || username.trim();
       const result = await apiRequest<AuthState>("/api/auth/register", {
         method: "POST",
-        body: JSON.stringify({ code: inviteCode.trim(), username: username.trim(), displayName: displayName.trim(), spaceName: spaceName.trim(), password }),
+        body: JSON.stringify({ code: inviteCode.trim(), username: username.trim(), displayName: chosenName, spaceName: `${chosenName.slice(0, 75)} 的空间`, password }),
       });
       if (!result.authenticated || !result.account?.tenantId) throw new Error("账号已创建，但登录状态无法确认，请重新登录。 ");
+      if (inviteFromLink()) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
       setTenantId(result.account.tenantId);
       switchTo("weather");
     } catch (cause) { setError(problem(cause, "创建账号失败，请重试。")); }
@@ -109,12 +134,10 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
 
       {stage === "create" ? <form className="welcome-form" onSubmit={(event) => void register(event)}>
         <label><span>登录账号</span><input autoFocus autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={32} required /></label>
-        <label><span>你的称呼</span><input autoComplete="nickname" value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} required /></label>
-        <label><span>空间名称</span><input value={spaceName} onChange={(event) => setSpaceName(event.target.value)} placeholder="例如：我的生活" maxLength={80} required /></label>
+        <label><span>称呼（选填，与登录账号不同）</span><input autoComplete="nickname" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="可以怎么称呼你" maxLength={80} /></label>
         <label><span>设置密码（至少 10 位）</span><input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} required /></label>
-        <label><span>确认密码</span><input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={10} required /></label>
         {error ? <p className="welcome-error" role="alert">{error}</p> : null}
-        <button className="primary-button welcome-main-action" type="submit" disabled={busy || !username.trim() || !displayName.trim() || !spaceName.trim() || password.length < 10 || !confirmPassword}>{busy ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{busy ? "创建中…" : "创建并登录"}</span></button>
+        <button className="primary-button welcome-main-action" type="submit" disabled={busy || !username.trim() || password.length < 10}>{busy ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{busy ? "创建中…" : "创建并登录"}</span></button>
         <button className="welcome-text-action" type="button" onClick={() => switchTo("invite")}><ArrowLeft size={15} />返回邀请码</button>
       </form> : null}
 

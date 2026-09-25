@@ -900,11 +900,17 @@ function InviteManagementCard() {
     try { await navigator.clipboard.writeText(fresh.code); setNotice("邀请码已复制。"); }
     catch { setNotice("无法自动复制，请手动选中上面的邀请码。"); }
   };
+  const inviteLink = fresh === null ? "" : `${window.location.origin}${window.location.pathname}#invite=${encodeURIComponent(fresh.code)}`;
+  const copyLink = async () => {
+    if (fresh === null) return;
+    try { await navigator.clipboard.writeText(inviteLink); setNotice("邀请链接已复制。对方打开后会自动填写并验证邀请码。"); }
+    catch { setNotice("无法自动复制，请手动选中上面的邀请链接。"); }
+  };
   return <section className="settings-card settings-invite-management" aria-labelledby="invite-management-title">
     <div className="settings-card-icon"><Ticket size={18} aria-hidden="true" /></div>
     <div className="settings-card-copy"><strong id="invite-management-title">邀请码</strong><small>把邀请码发给你的自己人；对方自己设置账号和密码，创建一个只有他能看见的独立空间。邀请码只能用一次。</small></div>
     <div className="invite-create-row"><label className="dialog-field"><span>有效期</span><select value={lifetimeHours} onChange={(event) => setLifetimeHours(Number(event.target.value))} disabled={busy} aria-label="邀请码有效期">{INVITE_LIFETIME_CHOICES.map((choice) => <option value={choice.hours} key={choice.hours}>{choice.label}</option>)}</select></label><button className="primary-button" type="button" onClick={() => void create()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <KeyRound size={17} aria-hidden="true" />}<span>{busy ? "生成中…" : "生成邀请码"}</span></button></div>
-    {fresh === null ? null : <div className="invite-fresh" role="status"><code>{fresh.code}</code><button className="secondary-button" type="button" onClick={() => void copyFresh()}><Copy size={15} aria-hidden="true" /><span>复制</span></button><small>只显示这一次；关闭后无法再取出，只能重新生成。有效期至 {formatInviteWhen(fresh.expiresAt)}。</small></div>}
+    {fresh === null ? null : <div className="invite-fresh" role="status"><code>{fresh.code}</code><button className="secondary-button" type="button" onClick={() => void copyFresh()}><Copy size={15} aria-hidden="true" /><span>复制邀请码</span></button><code className="invite-link">{inviteLink}</code><button className="secondary-button" type="button" onClick={() => void copyLink()}><Copy size={15} aria-hidden="true" /><span>复制邀请链接</span></button><small>只显示这一次；关闭后无法再取出，只能重新生成。有效期至 {formatInviteWhen(fresh.expiresAt)}。链接属于私密凭证，只发给受邀的人。</small></div>}
     <div className="settings-invite-list" aria-label="邀请码列表">{invites.length === 0 ? <p className="settings-invite-empty">还没有生成过邀请码。</p> : invites.map((invite) => { const state = inviteState(invite); return <div className="settings-invite-row" key={invite.id}><div className="settings-card-copy"><strong>{state}</strong><small>生成于 {formatInviteWhen(invite.createdAt)} · {state === "可用" ? `有效期至 ${formatInviteWhen(invite.expiresAt)}` : state === "已使用" ? `使用于 ${formatInviteWhen(invite.redeemedAt!)}` : state === "已撤销" ? `撤销于 ${formatInviteWhen(invite.revokedAt!)}` : `过期于 ${formatInviteWhen(invite.expiresAt)}`}</small></div>{state === "可用" ? <button className="danger-button" type="button" onClick={() => void revoke(invite)} disabled={busy}>撤销</button> : null}</div>; })}</div>
     {error ? <p className="settings-inline-error" role="alert">{error}</p> : null}{notice ? <p className="settings-inline-notice" role="status">{notice}</p> : null}
   </section>;

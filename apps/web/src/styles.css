@@ -3169,6 +3169,11 @@ h2 {
   box-shadow: var(--shadow-focus);
 }
 
+.composer-entry.is-dragging {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
 /* The photo band. One row, laid out like every picker the phone crowd already
    knows — WeChat, Weibo, Xiaohongshu all put a single line of square tiles
    under the field, newest last, with the add square trailing the queue.
@@ -3194,12 +3199,6 @@ h2 {
   border-radius: 0 0 13px 13px;
   background: transparent;
   transition: background-color 180ms ease;
-}
-
-/* The band keeps its own frame while a photo hovers over it — the tint is what
-   says "you can drop here", and it is now the only thing that can. */
-.composer-shots.is-dragging {
-  background: var(--primary-soft);
 }
 
 /* The strip itself: an unbroken row, nine tiles wide at most. `nowrap` is the
@@ -3292,17 +3291,8 @@ h2 {
   }
 }
 
-/* The add control rides at the end of the queue, as the next empty slot. Kept
-   the same size and radius as a tile so the row reads as one run of squares
-   rather than as eight photos and a control.
-
-   It is the same dashed square in every state, including when it is the only
-   thing in the row. There was a pill version for the empty case once — icon plus
-   the words "加照片" — and it was wrong twice over: it made an empty composer
-   look like a different widget from a filled one, and it put a labelled button
-   under the field where a slot for a picture should be. Everybody already reads
-   a dashed square with a plus as "add one"; the word was never carrying its
-   weight. */
+/* The add control stays at the end of the photo row. It can show a short label
+   when empty and wide, but remains a compact square when space is tight. */
 .shot-tile-add {
   display: grid;
   place-items: center;
@@ -3334,6 +3324,8 @@ h2 {
   opacity: 0.5;
   cursor: default;
 }
+
+.shot-add-label { display: none; }
 
 /* The count and the broom ride the end of the tile row.
 
@@ -11814,6 +11806,7 @@ button.relation-chip {
   font-size: 0.82rem;
   word-break: break-all;
 }
+.invite-fresh .invite-link { overflow-wrap: anywhere; }
 .invite-fresh small { color: var(--muted); font-size: 0.7rem; line-height: 1.5; }
 .settings-invite-list { display: grid; width: 100%; }
 .settings-invite-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 0; border-top: 1px solid var(--line); }
@@ -11849,8 +11842,12 @@ button.relation-chip {
   .month-cell { box-sizing: border-box; aspect-ratio: 1 / 1; min-height: 0; padding: 4px; border-radius: 10px; }
   .month-cell:not(.is-editing) .month-day-summary { display: none; }
   .month-cell.is-editing { aspect-ratio: auto; min-height: 66px; }
-  .month-cell-head { min-width: 0; gap: 1px; align-items: flex-start; }
-  .month-day-meta { gap: 1px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+  /* The date is the primary information: neither a holiday nor a weather icon
+     may participate in its line layout or push it out of a narrow tile. */
+  .month-cell-head { position: static; min-height: 0; }
+  .month-cell.is-editing .month-cell-head { min-height: 18px; }
+  .month-day-number { position: absolute; z-index: 3; top: 4px; left: 4px; line-height: 1.15; white-space: nowrap; }
+  .month-day-meta { position: absolute; z-index: 2; top: 3px; right: 3px; gap: 1px; flex-wrap: nowrap; min-width: 0; }
   .month-day-status { min-width: 13px; padding: 0 2px; font-size: .54rem; }
   /* Count remains in the tile's aria-label; the narrow visual slot belongs to
      the holiday badge and date, otherwise the top row wraps into the weather. */
@@ -11876,4 +11873,13 @@ button.relation-chip {
   .weather-date-flaps { height: 42px; }
   .weather-date-context { font-size: .62rem; }
   .month-cell .calendar-day-markers { transform: scale(.5); }
+}
+
+/* Let the empty photo affordance explain itself only when its own row can
+   afford the extra width; the tiles and save button never get squeezed. */
+.composer-mobile-action-row { container-type: inline-size; }
+@container (min-width: 350px) {
+  .shot-strip[data-count="0"] .shot-tile-add { flex-basis: 116px; width: 116px; }
+  .shot-strip[data-count="0"] .shot-tile-add button { display: flex; justify-content: center; align-items: center; gap: 7px; }
+  .shot-strip[data-count="0"] .shot-add-label { display: inline; font-size: 0.74rem; font-weight: 650; line-height: 1; white-space: nowrap; }
 }

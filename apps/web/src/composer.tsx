@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type DragEvent as ReactDragEvent, type SetStateAction } from "react";
 import {
   CalendarDays,
   Check,
@@ -37,7 +37,7 @@ import { entityHint, mentionQueryAt, mentionSuggestions, slashQueryAt, slashSugg
 import { localDateToday } from "./time";
 import { enabledModuleCommands, movieRef, MovieAddPanel } from "./movie";
 import { EntityCreateForm, MentionBox, type ContextAction } from "./entity-forms";
-import { ShotDropZone, type ShotUpload } from "./shot-drop-zone";
+import { ShotDropZone, type ShotDropZoneHandle, type ShotUpload } from "./shot-drop-zone";
 
 export interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
 
@@ -47,6 +47,30 @@ interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"
 export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const shotZoneRef = useRef<ShotDropZoneHandle>(null);
+  const dragDepth = useRef(0);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const isFileDrag = (event: ReactDragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes("Files");
+  const entryDragHandlers = {
+    onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault(); dragDepth.current += 1; setDraggingFiles(true);
+    },
+    onDragOver: (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault(); event.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave: (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!isFileDrag(event)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDraggingFiles(false);
+    },
+    onDrop: (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault(); dragDepth.current = 0; setDraggingFiles(false);
+      shotZoneRef.current?.takeFiles(Array.from(event.dataTransfer.files));
+    },
+  };
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -269,7 +293,7 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
         {dismissible ? <button className="icon-button compact-icon-button composer-close" type="button" onClick={onClose} aria-label="关闭记录编辑器"><X size={17} strokeWidth={1.9} aria-hidden="true" /></button> : null}
       </div>
     </div>
-    <div className="composer-entry">
+    <div className={`composer-entry ${draggingFiles ? "is-dragging" : ""}`} {...entryDragHandlers}>
     {/* Two collapsed rows. The fan used to be the reason for three — a turned
         square grows its box by about 1.3x, so a deep hand was paid for in height
         as well as width. The strip below is a flat 44px row and needs none of
@@ -282,7 +306,7 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
           gap moves, it does not go away. Cancelling the entry's slack here is
           what actually closes it. */}
       <div className="composer-mobile-action-row">
-        <ShotDropZone shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
+        <ShotDropZone ref={shotZoneRef} shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
         <button className="primary-button composer-inline-save" type="button" disabled={!content.trim() || saving} onClick={onSubmit} aria-label={saving ? "正在保存" : "保存"} title={saving ? "正在保存" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className="visually-hidden">{saving ? "保存中" : "保存"}</span></button>
       </div>
     </div>
