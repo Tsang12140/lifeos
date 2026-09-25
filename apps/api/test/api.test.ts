@@ -1283,9 +1283,14 @@ test("static file serving rejects encoded Windows absolute paths", async (t) => 
   const webDirectory = join(harness.root, "web");
   mkdirSync(webDirectory, { recursive: true });
   writeFileSync(join(webDirectory, "index.html"), "safe");
+  writeFileSync(join(webDirectory, "site.webmanifest"), '{"name":"LifeOS"}');
   const root = await request(harness.base, "/");
   equal(root.response.status, 200);
   equal(root.body, "safe");
+  const manifest = await request(harness.base, "/site.webmanifest");
+  equal(manifest.response.status, 200);
+  match(manifest.response.headers.get("content-type") ?? "", /^application\/manifest\+json/);
+  deepEqual(manifest.body, { name: "LifeOS" });
   const escaped = await request(harness.base, "/C:%5Coutside.txt");
   equal(escaped.response.status, 404);
 });
@@ -1656,6 +1661,33 @@ test("places carry role and period, and # mentions attach place refs on write", 
   equal(addressCleared.response.status, 200);
   equal((addressCleared.body as { address?: string }).address, undefined);
 
+  const optionalPlace = await request(harness.base, "/api/entities", {
+    method: "POST",
+    ...json({ type: "place", name: "普通饭店" }),
+  });
+  equal(optionalPlace.response.status, 201);
+  deepEqual({
+    role: (optionalPlace.body as { role?: string }).role,
+    period: (optionalPlace.body as { period?: unknown }).period,
+    address: (optionalPlace.body as { address?: string }).address,
+  }, { role: undefined, period: undefined, address: undefined });
+
+  const clearedClassification = await request(harness.base, `/api/entities/${encodeURIComponent(placeBody.id)}`, {
+    method: "PATCH",
+    ...json({ role: null, period: null }),
+  });
+  equal(clearedClassification.response.status, 200);
+  equal((clearedClassification.body as { role?: string }).role, undefined);
+  equal((clearedClassification.body as { period?: unknown }).period, undefined);
+
+  const roleBack = await request(harness.base, `/api/entities/${encodeURIComponent(placeBody.id)}`, {
+    method: "PATCH",
+    ...json({ role: "work", period: { from: "2025-09" } }),
+  });
+  equal(roleBack.response.status, 200);
+  equal((roleBack.body as { role?: string }).role, "work");
+  equal((roleBack.body as { period?: { from?: string } }).period?.from, "2025-09");
+
   const badRole = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "x", role: "cafe" }) });
   equal(badRole.response.status, 400);
   const roleOnPerson = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "人", role: "home" }) });
@@ -1671,6 +1703,11 @@ test("places carry role and period, and # mentions attach place refs on write", 
 
   const person = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "阿彬" }) });
   equal(person.response.status, 201);
+  const clearRoleOnPerson = await request(harness.base, `/api/entities/${encodeURIComponent((person.body as { id: string }).id)}`, {
+    method: "PATCH",
+    ...json({ role: null }),
+  });
+  equal(clearRoleOnPerson.response.status, 400);
   const record = await request(harness.base, "/api/records", {
     method: "POST",
     ...json({ kind: "journal", content: "回#父母家吃饭，和@阿彬 聊了会儿。" }),

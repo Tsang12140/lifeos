@@ -19,7 +19,7 @@ import {
 import type { Entity, EntityKind, PlacePeriod, PlaceRole } from "@lifeos/core";
 import { PLACE_ROLES } from "@lifeos/core";
 import { apiRequest, type AuthState, type EntitiesResponse, type MovieEntity, type RecordView } from "./api";
-import type { AppView, CreateEntity, EntityCreateRequest } from "./app-types";
+import type { AppView, CreateEntity, EntityCreateRequest, EntityEditPatch } from "./app-types";
 import { AliasField, EntityCreateForm, aliasListFrom } from "./entity-forms";
 import {
   ENTITY_KIND_ORDER,
@@ -61,28 +61,66 @@ export function PersonCardDialog({ entity, entities, onClose, onEdit, onViewReco
   </dialog>;
 }
 
-export function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity | null; onClose: () => void; onSave: (entity: Entity, patch: { name: string; aliases: readonly string[]; description?: string; address?: string | null }) => Promise<Entity | null> }) {
+export function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity | null; onClose: () => void; onSave: (entity: Entity, patch: EntityEditPatch) => Promise<Entity | null> }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
   const [description, setDescription] = useState("");
+  const [role, setRole] = useState<PlaceRole | "">("");
+  const [hasPeriod, setHasPeriod] = useState(false);
+  const [from, setFrom] = useState("");
+  const [until, setUntil] = useState("");
+  const [hasAddress, setHasAddress] = useState(false);
   const [address, setAddress] = useState("");
   const [saving, setSaving] = useState(false);
   // Existing aliases come back slash-separated, matching what the field now
   // accepts -- round-tripping through the old comma join would have shown them
   // as one unseparated run the moment anything was edited.
-  useEffect(() => { if (entity) { setName(entity.name); setAliases(entity.aliases?.join(" / ") ?? ""); setDescription(entity.description ?? ""); setAddress(entity.type === "place" ? entity.address ?? "" : ""); } }, [entity?.id]);
+  useEffect(() => { if (entity) {
+    setName(entity.name);
+    setAliases(entity.aliases?.join(" / ") ?? "");
+    setDescription(entity.description ?? "");
+    setRole(entity.type === "place" ? entity.role ?? "" : "");
+    setHasPeriod(entity.type === "place" && entity.period !== undefined);
+    setFrom(entity.type === "place" ? entity.period?.from ?? "" : "");
+    setUntil(entity.type === "place" ? entity.period?.until ?? "" : "");
+    setHasAddress(entity.type === "place" && Boolean(entity.address));
+    setAddress(entity.type === "place" ? entity.address ?? "" : "");
+  } }, [entity?.id]);
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (entity && !dialog.open) dialog.showModal(); if (!entity && dialog.open) dialog.close(); }, [entity]);
   if (entity === null) return <dialog ref={dialogRef} className="modal-dialog" />;
   const submit = async () => {
     const nextName = name.trim();
     if (!nextName || saving) return;
     setSaving(true);
-    const result = await onSave(entity, { name: nextName, aliases: aliasListFrom(aliases), description: description.trim(), ...(entity.type === "place" ? { address: address.trim() || null } : {}) });
+    const result = await onSave(entity, {
+      name: nextName,
+      aliases: aliasListFrom(aliases),
+      description: description.trim(),
+      ...(entity.type === "place" ? {
+        role: role || null,
+        period: hasPeriod && (from || until) ? { ...(from ? { from } : {}), ...(until ? { until } : {}) } : null,
+        address: hasAddress ? address.trim() || null : null,
+      } : {}),
+    });
     setSaving(false);
     if (result) onClose();
   };
-  return <dialog ref={dialogRef} className="modal-dialog entity-edit-dialog" aria-labelledby="entity-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">{entity.type === "place" ? "地点资料" : "联系人资料"}</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div><div className="entity-edit-body"><label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="dialog-field"><span>别名</span><AliasField value={aliases} onChange={setAliases} label="别名，用斜杠分隔" placeholder="多个别名用 / 分隔" /></label>{entity.type === "place" ? <label className="dialog-field"><span>详细地址</span><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="可选；平时不会展开" /></label> : null}<label className="dialog-field"><span>备注</span><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={entity.type === "place" ? "写下这个地点的一些背景" : "写下这个人的一些背景"} /></label></div><div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => void submit()} disabled={!name.trim() || saving}>{saving ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button></div></dialog>;
+  return <dialog ref={dialogRef} className="modal-dialog entity-edit-dialog" aria-labelledby="entity-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
+    <div className="dialog-header"><div><p className="eyebrow">{entity.type === "place" ? "地点资料" : "联系人资料"}</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div>
+    <div className="entity-edit-body">
+      <label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
+      <label className="dialog-field"><span>别名</span><AliasField value={aliases} onChange={setAliases} label="别名，用斜杠分隔" placeholder="多个别名用 / 分隔" /></label>
+      {entity.type === "place" ? <>
+        <div className="dialog-field"><span>角色</span><div className="entity-create-types entity-edit-roles"><button type="button" className={`entity-type-option ${role === "" ? "is-active" : ""}`} aria-pressed={role === ""} onClick={() => setRole("")}>未指定</button>{PLACE_ROLES.map((option) => <button key={option} type="button" className={`entity-type-option ${role === option ? "is-active" : ""}`} aria-pressed={role === option} onClick={() => setRole(option)}>{PLACE_ROLE_LABELS[option]}</button>)}</div></div>
+        <div className="entity-create-optional-row"><label className="entity-optional-toggle"><input type="checkbox" checked={hasPeriod} onChange={(event) => setHasPeriod(event.target.checked)} />添加时期</label><label className="entity-optional-toggle"><input type="checkbox" checked={hasAddress} onChange={(event) => setHasAddress(event.target.checked)} />添加详细地址</label></div>
+        {hasPeriod ? <div className="dialog-field"><span>时期</span><div className="entity-edit-period"><input type="month" value={from} onChange={(event) => setFrom(event.target.value)} aria-label="开始年月" /><span>至</span><input type="month" value={until} onChange={(event) => setUntil(event.target.value)} aria-label="结束年月，留空表示至今" /></div></div> : null}
+        {hasAddress ? <label className="dialog-field"><span>详细地址</span><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="街道、门牌等（可选）" /></label> : null}
+      </> : null}
+      <label className="dialog-field"><span>备注</span><textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder={entity.type === "place" ? "写下这个地点的一些背景" : "写下这个人的一些背景"} /></label>
+    </div>
+    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => void submit()} disabled={!name.trim() || saving}>{saving ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button></div>
+  </dialog>;
 }
 
 export function entityRelatedRecords(entity: Entity, records: readonly RecordView[]): readonly RecordView[] {

@@ -160,7 +160,7 @@ import { AliasField, EntityCreateForm, MentionBox, aliasListFrom } from "./entit
 import { DiagnosticsDrawer, EmptyState, ErrorState, LoadingState } from "./timeline-states";
 import { ShotDropZone, resolveKnownShot, type ShotUpload } from "./shot-drop-zone";
 
-import type { AppView, CalendarMode, ComposerKind, CreateEntity, EntityCreateRequest, SettingsPageId, UiFontId } from "./app-types";
+import type { AppView, CalendarMode, ComposerKind, CreateEntity, EntityCreateRequest, EntityEditPatch, SettingsPageId, UiFontId } from "./app-types";
 
 import {
   AI_ASSISTANT_VISIBLE_STORAGE_KEY,
@@ -1085,7 +1085,7 @@ function App() {
       return null;
     }
   };
-  const handleSaveEntity = async (entity: Entity, patch: { name: string; aliases: readonly string[]; description?: string; address?: string | null }): Promise<Entity | null> => {
+  const handleSaveEntity = async (entity: Entity, patch: EntityEditPatch): Promise<Entity | null> => {
     try {
       const updated = await apiRequest<Entity>(`/api/entities/${encodeURIComponent(entity.id)}`, { method: "PATCH", body: JSON.stringify(patch) });
       setEntities((current) => current.map((item) => item.id === updated.id ? updated : item));

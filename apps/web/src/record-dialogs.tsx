@@ -63,6 +63,7 @@ export function RelationPanel({ entities, assets, candidates, draft, onChange, o
   const [createKind, setCreateKind] = useState<EntityKind>("person");
   const [createName, setCreateName] = useState("");
   const [createAliases, setCreateAliases] = useState("");
+  const [createHasAddress, setCreateHasAddress] = useState(false);
   const [createAddress, setCreateAddress] = useState("");
   const [creating, setCreating] = useState(false);
   const selectedEntityIds = useMemo(() => new Set(draft.entityRefs.map((ref) => ref.entityId)), [draft.entityRefs]);
@@ -85,11 +86,12 @@ export function RelationPanel({ entities, assets, candidates, draft, onChange, o
     const aliases = aliasListFrom(createAliases);
     setCreating(true);
     try {
-      const entity = await onCreateEntity(createKind, name, { ...(aliases.length > 0 ? { aliases } : {}), ...(createKind === "place" && createAddress.trim() ? { address: createAddress.trim() } : {}) });
+      const entity = await onCreateEntity(createKind, name, { ...(aliases.length > 0 ? { aliases } : {}), ...(createKind === "place" && createHasAddress && createAddress.trim() ? { address: createAddress.trim() } : {}) });
       if (entity) {
         onChange({ entityRefs: [...draft.entityRefs, { entityType: entity.type, entityId: entity.id, label: entity.name }] });
         setCreateName("");
         setCreateAliases("");
+        setCreateHasAddress(false);
         setCreateAddress("");
       }
     } finally {
@@ -116,7 +118,7 @@ export function RelationPanel({ entities, assets, candidates, draft, onChange, o
       <select value={createKind} onChange={(event) => setCreateKind(event.target.value as EntityKind)} aria-label="要新建的关联对象类型">{ENTITY_KIND_ORDER.map((kind) => <option value={kind} key={kind}>{ENTITY_META[kind].label}</option>)}</select>
       <input value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="名称" aria-label="新关联对象名称" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
       <AliasField value={createAliases} onChange={setCreateAliases} label="新关联对象别名" placeholder="别名（可选，用 / 分隔）" compact />
-      {createKind === "place" ? <input value={createAddress} onChange={(event) => setCreateAddress(event.target.value)} placeholder="详细地址（可选）" aria-label="新地点详细地址" /> : null}
+      {createKind === "place" ? <><label className="entity-optional-toggle"><input type="checkbox" checked={createHasAddress} onChange={(event) => setCreateHasAddress(event.target.checked)} />添加详细地址</label>{createHasAddress ? <input value={createAddress} onChange={(event) => setCreateAddress(event.target.value)} placeholder="街道、门牌等（可选）" aria-label="新地点详细地址" /> : null}</> : null}
       <button className="secondary-button relation-create-button" type="button" onClick={() => void submitEntity()} disabled={!createName.trim() || creating}>{creating ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}<span>新建并关联</span></button>
     </div>
 

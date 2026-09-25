@@ -110,7 +110,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
   };
 
   return <main className="welcome-screen"><div className="welcome-shell">
-    <div className="welcome-brand" aria-label="LifeOS"><span className="welcome-brand-mark" aria-hidden="true"><span /><span /><span /></span><span>LifeOS</span></div>
+    <div className="welcome-brand" aria-label="LifeOS"><img className="welcome-brand-mark" src="/favicon.svg?v=2" alt="" /><span>LifeOS</span></div>
     <section className="welcome-panel" aria-labelledby="welcome-title">
       <div className="welcome-step-icon" aria-hidden="true">{stage === "weather" ? <CloudSun size={24} /> : stage === "login" ? <LockKeyhole size={24} /> : <KeyRound size={24} />}</div>
       <p className="welcome-eyebrow">{stage === "weather" ? "最后一步 · 天气" : stage === "login" ? "你的私人空间" : "受邀加入"}</p>

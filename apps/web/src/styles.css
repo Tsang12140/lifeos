@@ -218,28 +218,11 @@ textarea:focus-visible {
 }
 
 .brand-mark {
-  display: grid;
-  gap: 3px;
+  display: block;
   width: 28px;
   height: 28px;
-  padding: 7px 6px;
   border-radius: 9px;
-  background: var(--primary);
-}
-
-.brand-mark span {
-  display: block;
-  height: 2px;
-  border-radius: 999px;
-  background: white;
-}
-
-.brand-mark span:nth-child(2) {
-  width: 74%;
-}
-
-.brand-mark span:nth-child(3) {
-  width: 52%;
+  flex: none;
 }
 
 .primary-nav {
@@ -7630,6 +7613,17 @@ button.relation-chip {
   flex: 1 1 140px;
 }
 
+.relation-create .entity-optional-toggle {
+  flex: 1 1 100%;
+}
+
+.relation-create .entity-optional-toggle input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
 .relation-create-button {
   flex: 0 0 auto;
 }
@@ -7691,6 +7685,14 @@ button.relation-chip {
 .mention-chip.is-place {
   background: #e7edf1;
   color: #3c4a54;
+}
+
+.mention-chip.is-place svg {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 0.24em;
+  vertical-align: -0.1em;
 }
 
 .mention-chip.is-place:hover {
@@ -8109,6 +8111,49 @@ button.relation-chip {
 .entity-create-month {
   flex: 1 1 0;
   min-width: 0;
+}
+
+.entity-create-optional-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.entity-optional-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.entity-optional-toggle input {
+  accent-color: var(--primary);
+}
+
+.entity-edit-roles {
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.entity-edit-period {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.entity-edit-period input {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+@media (max-width: 420px) {
+  .entity-create-period-row { flex-wrap: wrap; }
+  .entity-create-period-row .entity-create-month { flex-basis: calc(50% - 20px); }
 }
 
 .entity-create-actions {

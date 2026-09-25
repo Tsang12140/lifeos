@@ -16,6 +16,15 @@ export interface EntityCreateRequest {
   readonly address?: string;
 }
 
+export interface EntityEditPatch {
+  readonly name: string;
+  readonly aliases: readonly string[];
+  readonly description?: string;
+  readonly role?: PlaceRole | null;
+  readonly period?: PlacePeriod | null;
+  readonly address?: string | null;
+}
+
 export type CreateEntity = (
   type: EntityKind,
   name: string,

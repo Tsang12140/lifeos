@@ -166,7 +166,7 @@ export function placePeriodField(value: unknown): PlacePeriod {
 }
 
 /** Role and period live on places only; anything else carrying them is a client bug. */
-export function placeOnlyFields(type: EntityKind, role: PlaceRole | undefined, period: PlacePeriod | undefined, address: string | null | undefined = undefined): void {
+export function placeOnlyFields(type: EntityKind, role: PlaceRole | null | undefined, period: PlacePeriod | null | undefined, address: string | null | undefined = undefined): void {
   if (type !== "place" && (role !== undefined || period !== undefined || (address !== undefined && address !== null))) {
     throw new HttpError(400, "invalid_field", "role, period and address are only allowed on a place");
   }
@@ -218,17 +218,19 @@ export function buildAsset(input: JsonObject, id: string, storageRefs: readonly 
  */
 export function withEntityEdits(
   entity: Entity,
-  edits: { readonly name?: string; readonly aliases?: readonly string[]; readonly description?: string; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string | null },
+  edits: { readonly name?: string; readonly aliases?: readonly string[]; readonly description?: string; readonly role?: PlaceRole | null; readonly period?: PlacePeriod | null; readonly address?: string | null },
 ): Entity {
-  const candidate: unknown = {
+  const candidate: Record<string, unknown> = {
     ...entity,
     ...(edits.name === undefined ? {} : { name: edits.name }),
     ...(edits.aliases === undefined ? {} : { aliases: edits.aliases }),
     ...(edits.description === undefined ? {} : { description: edits.description }),
-    ...(edits.role === undefined ? {} : { role: edits.role }),
-    ...(edits.period === undefined ? {} : { period: edits.period }),
-    ...(edits.address === undefined ? {} : { address: edits.address === null ? undefined : edits.address }),
   };
+  for (const field of ["role", "period", "address"] as const) {
+    const value = edits[field];
+    if (value === null) delete candidate[field];
+    else if (value !== undefined) candidate[field] = value;
+  }
   assertValidEntity(candidate);
   return candidate;
 }
@@ -416,5 +418,4 @@ export function withoutRelation(entity: Entity, targetId: string): Entity {
   assertValidEntity(candidate);
   return candidate;
 }
-
 

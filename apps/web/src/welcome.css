@@ -8,11 +8,7 @@
 
 .welcome-shell { width: min(100%, 440px); }
 .welcome-brand { display: flex; align-items: center; justify-content: center; gap: 11px; margin-bottom: 25px; color: #243147; font-size: 1.15rem; font-weight: 750; letter-spacing: -0.025em; }
-.welcome-brand-mark { display: flex; align-items: end; gap: 2px; width: 24px; height: 24px; padding: 5px; border-radius: 8px; background: #315dfa; }
-.welcome-brand-mark span { width: 4px; border-radius: 2px; background: #fff; }
-.welcome-brand-mark span:nth-child(1) { height: 7px; opacity: .72; }
-.welcome-brand-mark span:nth-child(2) { height: 13px; }
-.welcome-brand-mark span:nth-child(3) { height: 9px; opacity: .85; }
+.welcome-brand-mark { display: block; width: 24px; height: 24px; border-radius: 8px; }
 .welcome-panel { padding: clamp(24px, 5vw, 36px); border: 1px solid #dfe5ef; border-radius: 22px; background: #fff; box-shadow: 0 18px 60px rgb(29 48 85 / .09); }
 .welcome-step-icon { display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 23px; border-radius: 14px; color: #315dfa; background: #edf1ff; }
 .welcome-eyebrow { margin: 0 0 7px; color: #64738b; font-size: .76rem; font-weight: 700; letter-spacing: .06em; }

@@ -5,7 +5,7 @@ import { MOBILE_MORE_ITEMS, MOBILE_NAV_ITEMS, NAV_ITEMS, SETTINGS_NAV_ITEM } fro
 export function Sidebar({ activeView, onNavigate }: { activeView: AppView; onNavigate: (view: AppView) => void }) {
   return (
     <aside className="sidebar" aria-label="LifeOS 导航">
-      <div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><span /><span /><span /></span><span className="brand-name">LifeOS</span></div>
+      <div className="brand-lockup"><img className="brand-mark" src="/favicon.svg?v=2" alt="" /><span className="brand-name">LifeOS</span></div>
       <nav className="primary-nav" aria-label="主导航">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;

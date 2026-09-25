@@ -176,9 +176,11 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
   const [type, setType] = useState<"person" | "place">(defaultType);
   const [name, setName] = useState(defaultName);
   const [aliases, setAliases] = useState("");
-  const [role, setRole] = useState<PlaceRole>("home");
+  const [role, setRole] = useState<PlaceRole | "">("");
+  const [hasPeriod, setHasPeriod] = useState(false);
   const [from, setFrom] = useState("");
   const [until, setUntil] = useState("");
+  const [hasAddress, setHasAddress] = useState(false);
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const cleanName = name.replace(/[@#]/g, "").trim();
@@ -190,9 +192,9 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
       type,
       name: cleanName,
       ...(aliasList.length > 0 ? { aliases: aliasList } : {}),
-      ...(type === "place" ? { role } : {}),
-      ...(type === "place" && (from !== "" || until !== "") ? { period: { ...(from === "" ? {} : { from }), ...(until === "" ? {} : { until }) } } : {}),
-      ...(type === "place" && address.trim() ? { address: address.trim() } : {}),
+      ...(type === "place" && role !== "" ? { role } : {}),
+      ...(type === "place" && hasPeriod && (from !== "" || until !== "") ? { period: { ...(from === "" ? {} : { from }), ...(until === "" ? {} : { until }) } } : {}),
+      ...(type === "place" && hasAddress && address.trim() ? { address: address.trim() } : {}),
     });
     setBusy(false);
     if (created) onCancel();
@@ -217,19 +219,24 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
       <div className="entity-create-row">
         <span className="entity-create-label">角色</span>
         <div className="entity-create-types">
+          <button type="button" className={`entity-type-option ${role === "" ? "is-active" : ""}`} aria-pressed={role === ""} onClick={() => setRole("")}>未指定</button>
           {PLACE_ROLES.map((option) => <button key={option} type="button" className={`entity-type-option ${role === option ? "is-active" : ""}`} onClick={() => setRole(option)}>{PLACE_ROLE_LABELS[option]}</button>)}
         </div>
       </div>
-      <div className="entity-create-row">
+      <div className="entity-create-row entity-create-optional-row">
+        <label className="entity-optional-toggle"><input type="checkbox" checked={hasPeriod} onChange={(event) => setHasPeriod(event.target.checked)} />添加时期</label>
+        <label className="entity-optional-toggle"><input type="checkbox" checked={hasAddress} onChange={(event) => setHasAddress(event.target.checked)} />添加详细地址</label>
+      </div>
+      {hasPeriod ? <div className="entity-create-row entity-create-period-row">
         <span className="entity-create-label">时期</span>
         <input className="entity-create-input entity-create-month" type="month" value={from} onChange={(event) => setFrom(event.target.value)} aria-label="开始年月" />
         <span className="entity-create-label">至</span>
         <input className="entity-create-input entity-create-month" type="month" value={until} onChange={(event) => setUntil(event.target.value)} aria-label="结束年月，留空表示至今" />
-      </div>
-      <div className="entity-create-row">
+      </div> : null}
+      {hasAddress ? <div className="entity-create-row">
         <span className="entity-create-label">详细地址</span>
-        <input className="entity-create-input" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="可选；平时不会展开" />
-      </div>
+        <input className="entity-create-input" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="街道、门牌等（可选）" />
+      </div> : null}
     </> : null}
     <div className="entity-create-actions">
       <button type="button" className="text-button" onClick={onCancel}>取消</button>

@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" role="img" aria-label="LifeOS">
-  <rect width="100" height="100" rx="24" fill="#315DFA"/>
+  <rect width="100" height="100" fill="#315DFA"/>
   <path d="M69 66a25 25 0 1 1 0-32" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
   <circle cx="71" cy="24" r="5" fill="#fff"/>
 </svg>

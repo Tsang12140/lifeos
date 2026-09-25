@@ -126,8 +126,8 @@ export const handleEntitiesRoutes: RouteHandler = async (
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
     hasOnlyKeys(input, ["name", "aliases", "description", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
     assertMovieOnlyFields(existing.type, input);
-    const role = input.role === undefined ? undefined : placeRoleField(input.role);
-    const period = input.period === undefined ? undefined : placePeriodField(input.period);
+    const role = input.role === undefined ? undefined : input.role === null ? null : placeRoleField(input.role);
+    const period = input.period === undefined ? undefined : input.period === null ? null : placePeriodField(input.period);
     const address = input.address === undefined ? undefined : input.address === null ? null : addressField(input.address);
     const movieFields = movieFieldsField(input, true);
     placeOnlyFields(existing.type, role, period, address);
