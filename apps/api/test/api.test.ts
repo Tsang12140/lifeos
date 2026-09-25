@@ -2110,6 +2110,60 @@ test("weather status and encrypted configuration stay usable without a weather k
   ok(!stored.includes(secret), "weather key is encrypted at rest");
 });
 
+test("simplifying an active weather profile retains its private key", async (t) => {
+  const harness = await startHarness();
+  t.after(async () => harness.stop());
+  const cookieResponse = await request(harness.base, "/api/weather/status");
+  const deviceCookie = cookieResponse.response.headers.get("set-cookie")?.match(/lifeos_weather_device=[^;]+/)?.[0] ?? "";
+  ok(deviceCookie, "weather device cookie exists");
+  const headers = { "content-type": "application/json", cookie: deviceCookie };
+  const profile = await request(harness.base, "/api/weather/profiles", {
+    method: "POST", headers,
+    body: JSON.stringify({ label: "旧方案", locationId: "101280101", city: "广州", apiHost: "devapi.qweather.com", apiKey: "profile-only-private-key", activate: true }),
+  });
+  equal(profile.response.status, 200);
+  equal((profile.body as { activeProfileId: string | null }).activeProfileId !== null, true);
+  const saved = await request(harness.base, "/api/weather/config", {
+    method: "POST", headers,
+    body: JSON.stringify({ enabled: true, locationId: "101280601", city: "佛山", apiHost: "devapi.qweather.com" }),
+  });
+  equal(saved.response.status, 200);
+  equal((saved.body as { hasKey: boolean; source: string }).hasKey, true);
+  equal((saved.body as { source: string }).source, "file");
+  const current = await request(harness.base, "/api/weather/profiles", { headers: { cookie: deviceCookie } });
+  equal((current.body as { activeProfileId: string | null }).activeProfileId, null);
+  equal((current.body as { status: { hasKey: boolean } }).status.hasKey, true);
+  const stored = readFileSync(join(harness.root, "weather-config.json"), "utf8");
+  equal(stored.includes("profile-only-private-key"), false, "private key stays encrypted");
+  const profileId = (current.body as { items: Array<{ id: string }> }).items[0]?.id;
+  ok(profileId);
+  const activated = await request(harness.base, "/api/weather/profiles/activate", {
+    method: "POST", headers, body: JSON.stringify({ id: profileId }),
+  });
+  equal(activated.response.status, 200);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("https://geoapi.qweather.com/")) {
+      ok(url.includes("key=profile-only-private-key"), "geo lookup uses the active profile's private key");
+      return Response.json({ code: "200", location: [{ id: "101280803", name: "番禺", adm2: "广州", adm1: "广东" }] });
+    }
+    return originalFetch(input, init);
+  };
+  try {
+    const located = await request(harness.base, "/api/weather/device/locate", {
+      method: "POST", headers, body: JSON.stringify({ latitude: 23.08, longitude: 113.38 }),
+    });
+    equal(located.response.status, 200);
+    const afterLocate = await request(harness.base, "/api/weather/profiles", { headers: { cookie: deviceCookie } });
+    equal((afterLocate.body as { activeProfileId: string | null }).activeProfileId, null);
+    equal((afterLocate.body as { status: { hasKey: boolean } }).status.hasKey, true);
+    equal(readFileSync(join(harness.root, "weather-config.json"), "utf8").includes("113.38"), false, "raw coordinates never persist");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("weather uses a device location, archives daily snapshots, and pins live weather to records", async (t) => {
   const harness = await startHarness();
   t.after(async () => harness.stop());

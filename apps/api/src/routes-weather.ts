@@ -101,14 +101,22 @@ export const handleWeatherRoutes: RouteHandler = async (
     hasOnlyKeys(input, ["enabled", "locationId", "city", "apiHost", "apiKey", "clearApiKey"]);
     try {
       const deviceId = weatherDeviceId(req, res, config);
+      const activeProfileId = repository.getWeatherDeviceLocation(deviceId)?.profileId;
+      const activeProfile = activeProfileId ? readWeatherProfile(config, activeProfileId) : null;
       const locationId = stringField(input.locationId ?? "", "locationId").trim();
       const city = stringField(input.city ?? "", "city").trim();
+      // Saving the simpler single-city form clears the device's old profile.
+      // Carry across a key owned by that profile first, or weather would stop
+      // working even though the person left the API Key field blank.
+      const suppliedKey = input.apiKey === undefined ? undefined : stringField(input.apiKey, "apiKey");
+      const retainedProfileKey = !suppliedKey?.trim() && input.clearApiKey !== true && activeProfile?.source === "file"
+        ? activeProfile.apiKey : undefined;
       const status = saveRuntimeWeatherConfig(config, {
         enabled: input.enabled === undefined ? true : booleanField(input.enabled, "enabled"),
         locationId,
         city,
         apiHost: stringField(input.apiHost ?? readRuntimeWeatherConfig(config).apiHost, "apiHost", { nonEmpty: true }),
-        ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
+        ...(suppliedKey?.trim() ? { apiKey: suppliedKey } : retainedProfileKey ? { apiKey: retainedProfileKey } : {}),
         ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
       });
       const deviceLocation = repository.saveWeatherDeviceLocation(deviceId, locationId, city, JSON.stringify(nowInstant()));
@@ -207,7 +215,21 @@ export const handleWeatherRoutes: RouteHandler = async (
     const latitude = coordinateField(input.latitude, "latitude", -90, 90);
     const longitude = coordinateField(input.longitude, "longitude", -180, 180);
     const deviceId = weatherDeviceId(req, res, config);
-    const runtime = readRuntimeWeatherConfig(config);
+    const priorDeviceLocation = repository.getWeatherDeviceLocation(deviceId);
+    const activeProfile = priorDeviceLocation?.profileId ? readWeatherProfile(config, priorDeviceLocation.profileId) : null;
+    let runtime = readRuntimeWeatherConfig(config);
+    if (activeProfile?.source === "file" && activeProfile.apiKey) {
+      // Locating also clears the old profile id. Preserve its private key
+      // before switching this device to a resolved city.
+      saveRuntimeWeatherConfig(config, {
+        enabled: runtime.enabled,
+        locationId: priorDeviceLocation?.locationId || runtime.locationId,
+        city: priorDeviceLocation?.city || runtime.city,
+        apiHost: activeProfile.apiHost,
+        apiKey: activeProfile.apiKey,
+      });
+      runtime = readRuntimeWeatherConfig(config);
+    }
     if (!runtime.apiKey) throw new HttpError(400, "weather_not_configured", "天气服务尚未配置，请联系空间管理员");
     const now = Date.now();
     // Being told to wait is not an error: answer with the city already in

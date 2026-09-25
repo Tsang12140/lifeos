@@ -5138,9 +5138,6 @@ button.relation-chip {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-weather-profile-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
 
   .dialog-toggle-row {
     display: grid;
@@ -5639,11 +5636,6 @@ button.relation-chip {
   border-top: 1px solid var(--line);
 }
 
-.settings-weather-profile-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(150px, 0.8fr);
-  gap: 10px;
-}
 
 .settings-weather-form label:not(.settings-backup-checkbox) {
   display: grid;
@@ -5737,18 +5729,6 @@ button.relation-chip {
   font-size: 0.69rem;
 }
 
-/* 境外位置与旧配置的逃生口：默认折叠，不重新变成「手输城市」的入口。 */
-.settings-weather-manual > summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 0.69rem;
-  font-weight: 680;
-}
-
-.settings-weather-manual[open] > summary {
-  margin-bottom: 8px;
-}
-
 .settings-weather-actions {
   display: flex;
   justify-content: flex-end;
@@ -5761,13 +5741,6 @@ button.relation-chip {
   padding: 0 13px;
   border-radius: 9px;
   font-size: 0.74rem;
-}
-
-.settings-weather-note {
-  margin: 0;
-  color: #8b96a4;
-  font-size: 0.68rem;
-  line-height: 1.5;
 }
 
 /* Settings are laid out against the space left after the sidebar and task
@@ -5841,10 +5814,15 @@ button.relation-chip {
   }
 
   .settings-backup-actions,
-  .settings-weather-actions,
   .settings-ai-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .settings-weather-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     width: 100%;
   }
 
@@ -5856,7 +5834,6 @@ button.relation-chip {
 
   .settings-backup-form-row,
   .settings-weather-form-row,
-  .settings-weather-profile-row,
   .settings-weather-location-row {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -9187,7 +9164,7 @@ button.relation-chip {
 .cycle-entry-target strong { color: #8e4560; font-weight: 680; }
 /* The prediction is a line of small type she can tune, never a task: nothing
    here is written to the timeline or turned into a reminder. */
-.cycle-forecast-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; color: var(--muted); font-size: 0.74rem; }
+.cycle-forecast-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; color: var(--muted); font-size: 0.74rem; }
 .cycle-forecast-next { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cycle-forecast-next strong { color: #8e4560; font-weight: 680; }
 .cycle-forecast-length { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--muted); font-size: 0.72rem; }
@@ -11533,22 +11510,6 @@ button.relation-chip {
 .cycle-settings-card .dialog-field > span { color: var(--muted); font-size: 0.69rem; font-weight: 680; }
 .cycle-settings-card .dialog-field input { width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface); font: inherit; font-size: 0.75rem; }
 
-.weather-preview-dialog { width: min(100% - 32px, 620px); }
-.weather-preview-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 0.75fr); gap: 12px; margin-bottom: 14px; }
-.weather-preview-phase { min-width: 0; margin: 0; padding: 0; border: 0; }
-.weather-preview-phase legend,
-.weather-preview-category > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 0.7rem; font-weight: 680; }
-.weather-preview-segmented { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
-.weather-preview-segmented button { min-height: 36px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 0.74rem; font-weight: 680; }
-.weather-preview-segmented button.is-selected { color: var(--primary-strong); background: var(--surface); box-shadow: var(--shadow-soft); }
-.weather-preview-category { display: grid; gap: 0; }
-.weather-preview-category select { width: 100%; min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft); background: var(--surface); font: inherit; font-size: 0.75rem; }
-.weather-preview-scene { position: relative; min-height: 210px; overflow: hidden; border: 1px solid rgb(255 255 255 / 0.55); border-radius: 14px; isolation: isolate; background: #dce7f1; }
-.weather-preview-scene .weather-bg-layer { overflow: hidden; border-radius: inherit; }
-.weather-preview-scene .weather-bg { border-radius: inherit; }
-.weather-preview-scene-label { position: absolute; right: 12px; bottom: 10px; z-index: 4; padding: 5px 8px; border: 1px solid rgb(255 255 255 / 0.48); border-radius: 999px; color: #fff; background: rgb(18 35 67 / 0.62); font-size: 0.68rem; font-weight: 720; }
-.weather-preview-note { margin: 10px 0 0; color: var(--muted); font-size: 0.69rem; line-height: 1.5; }
-
 @container settings-page (max-width: 720px) {
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .settings-nav { display: none; }
@@ -11561,9 +11522,6 @@ button.relation-chip {
 @container settings-page (max-width: 480px) {
   .settings-page-header { margin-bottom: 16px; }
   .settings-page-header h1 { font-size: 1.35rem; }
-  .weather-preview-controls { grid-template-columns: minmax(0, 1fr); }
-  .weather-preview-dialog { width: min(100% - 20px, 620px); }
-  .weather-preview-scene { min-height: 180px; }
 }
 
 /* The main content column reserves space for the task rail, so the settings
@@ -11681,6 +11639,8 @@ button.relation-chip {
 .calendar-summary-caret { margin-left: auto; color: var(--muted); }
 .calendar-summary-menu button.is-open { color: var(--ink); background: var(--surface-soft); }
 .calendar-summary-submenu { position: absolute; top: -5px; left: 100%; z-index: 1; display: grid; min-width: 132px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
+.calendar-cycle-hint { padding: 4px 8px 6px; color: var(--muted); font-size: 0.67rem; white-space: nowrap; }
+.calendar-cycle-error { margin: 8px 0; }
 .calendar-summary-submenu.is-flipped { left: auto; right: 100%; }
 /* 一行两个点击目标：勾选框管多选（点了菜单不关，可以连着勾几件），文字管单选
    （点了就完事、菜单一起收）。基础规则 `.calendar-summary-menu button` 给了

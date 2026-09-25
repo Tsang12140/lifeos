@@ -55,17 +55,13 @@ import {
   type CreatedInviteSummary,
   type InviteSummary,
   type MovieModuleStatus,
-  type WeatherProfilesResponse,
   type WeatherProfilesState,
   type WeatherStatus,
 } from "./api";
 import { BackupCalendar } from "./BackupCalendar";
 import { TimeMachine } from "./TimeMachine";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
-import { WeatherSky } from "./WeatherBackground";
 import { locateWeatherDevice, setWeatherFollowEnabled, weatherFollowEnabled } from "./weather-follow";
-import { getWeatherEmoji, type WeatherCategory, type WeatherPhase } from "./weather";
-import { describeWeatherLocationByName, weatherLocationDisplayName } from "./weather-locations";
 import { MovieSettingsCard } from "./movie";
 import type { MovieModuleStatusState } from "./movie";
 import {
@@ -350,69 +346,19 @@ export function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChang
   </div>;
 }
 
-const WEATHER_PREVIEW_OPTIONS: readonly { readonly category: WeatherCategory; readonly label: string }[] = [
-  { category: "sunny", label: "晴" },
-  { category: "partly-cloudy", label: "少云" },
-  { category: "cloudy", label: "多云" },
-  { category: "overcast", label: "阴" },
-  { category: "rainy", label: "小雨" },
-  { category: "moderate-rainy", label: "中雨" },
-  { category: "heavy-rainy", label: "大雨" },
-  { category: "rainstorm", label: "暴雨" },
-  { category: "thunderstorm", label: "雷雨" },
-  { category: "snowy", label: "下雪" },
-  { category: "foggy", label: "雾" },
-];
-const WEATHER_PHASE_LABELS: readonly { readonly phase: WeatherPhase; readonly label: string }[] = [
-  { phase: "day", label: "白天" },
-  { phase: "night", label: "夜晚" },
-];
-
-function WeatherScenePreviewDialog({ open, onClose }: { readonly open: boolean; readonly onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const [phase, setPhase] = useState<WeatherPhase>("day");
-  const [category, setCategory] = useState<WeatherCategory>("sunny");
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) {
-      dialog.showModal();
-      window.requestAnimationFrame(() => closeButtonRef.current?.focus());
-    }
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-  return <dialog ref={dialogRef} className="modal-dialog weather-preview-dialog" aria-labelledby="weather-preview-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
-    <div className="dialog-header"><div><p className="eyebrow">天气场景</p><h2 id="weather-preview-title">预览天气效果</h2></div><button ref={closeButtonRef} className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭天气效果预览"><X size={17} aria-hidden="true" /></button></div>
-    <div className="weather-preview-controls">
-      <fieldset className="weather-preview-phase"><legend>时段</legend><div className="weather-preview-segmented" role="group" aria-label="选择时段">{WEATHER_PHASE_LABELS.map((option) => <button key={option.phase} type="button" aria-pressed={phase === option.phase} className={phase === option.phase ? "is-selected" : ""} onClick={() => setPhase(option.phase)}>{option.label}</button>)}</div></fieldset>
-      <label className="weather-preview-category"><span>天气类型</span><select value={category} onChange={(event) => setCategory(event.target.value as WeatherCategory)}>{WEATHER_PREVIEW_OPTIONS.map((option) => <option key={option.category} value={option.category}>{option.label}</option>)}</select></label>
-    </div>
-    <div className="weather-preview-scene" data-weather-preview-scene aria-label={`${WEATHER_PREVIEW_OPTIONS.find((option) => option.category === category)?.label ?? "天气"}，${phase === "night" ? "夜晚" : "白天"}`}><WeatherSky category={category} phase={phase} animate={false} /><span className="weather-preview-scene-label">{WEATHER_PREVIEW_OPTIONS.find((option) => option.category === category)?.label} · {phase === "night" ? "夜晚" : "白天"}</span></div>
-    <p className="weather-preview-note">这里只展示视觉效果，不保存选择、不请求天气 API，也不会消耗额度。</p>
-    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>完成</button></div>
-  </dialog>;
-}
-
-export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged, onProfilesChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly tenantId?: string | null; readonly onChanged: (status: WeatherStatus) => void; readonly onProfilesChanged: (payload: WeatherProfilesResponse) => void; readonly onRetry: () => void }) {
+export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly tenantId?: string | null; readonly onChanged: (status: WeatherStatus) => void; readonly onRetry: () => void }) {
   const profilesPayload = profilesState.status;
   const status = profilesPayload?.status ?? null;
-  const profiles = profilesPayload?.items ?? [];
-  const activeProfileId = profilesPayload?.activeProfileId ?? null;
   const statusReady = profilesState.phase === "ready" && profilesPayload !== null;
   const [enabled, setEnabled] = useState(status?.enabled ?? true);
   const [apiKey, setApiKey] = useState("");
   const [locationId, setLocationId] = useState(status?.locationId ?? "");
   const [city, setCity] = useState(status?.city ?? "");
   const [apiHost, setApiHost] = useState(status?.apiHost ?? "devapi.qweather.com");
-  const [profileName, setProfileName] = useState("");
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(activeProfileId);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [manualLocationId, setManualLocationId] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
   // Follow mode is a property of this device, not of the space: the phone that
   // walks around enables it, the desk that does not can leave it alone.
   const [followEnabled, setFollowEnabled] = useState(() => tenantId !== null && weatherFollowEnabled(tenantId));
@@ -439,19 +385,6 @@ export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged,
     } finally { setFollowBusy(false); }
   };
 
-  /**
-   * A saved location the dropdown cannot place — an overseas ID typed before
-   * this picker existed, or a hand-written one. It has nowhere to sit in the
-   * three rungs, so without the manual field below it would vanish from the
-   * form and be silently dropped on the next save. Auto-reveal that field in
-   * exactly that case; if the owner closes it again, respect that (the effect
-   * only re-runs when `unplaceable` itself changes).
-   */
-  const unplaceable = locationId.trim() !== "" && describeWeatherLocationByName(locationId) === null && (city.trim() === "" || describeWeatherLocationByName(city) === null);
-  useEffect(() => {
-    if (unplaceable) setManualLocationId(true);
-  }, [unplaceable]);
-
   useEffect(() => {
     if (!status) return;
     setEnabled(status.enabled);
@@ -459,12 +392,6 @@ export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged,
     setCity(status.city);
     setApiHost(status.apiHost || "devapi.qweather.com");
   }, [status]);
-
-  useEffect(() => {
-    setSelectedProfileId(activeProfileId);
-    const active = profiles.find((profile) => profile.id === activeProfileId);
-    if (active) setProfileName(active.label);
-  }, [activeProfileId, profiles]);
 
   const save = async () => {
     if (!statusReady || busy || (!locationId.trim() && !city.trim())) return;
@@ -475,7 +402,8 @@ export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged,
       const next = await apiRequest<WeatherStatus>("/api/weather/config", { method: "POST", body: JSON.stringify({ enabled, locationId, city, apiHost, ...(apiKey.trim() ? { apiKey } : {}) }) });
       onChanged(next);
       setApiKey("");
-      setMessage("天气配置已保存");
+      setMessage("已保存");
+      onRetry();
     } catch (caught) {
       setError(errorMessage(caught, "天气配置保存失败"));
     } finally {
@@ -498,72 +426,26 @@ export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged,
     }
   };
 
-  const activateProfile = async (id: string) => {
-    if (!statusReady || !id || busy || testing) return;
-    setBusy(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await apiRequest<WeatherProfilesResponse>("/api/weather/profiles/activate", { method: "POST", body: JSON.stringify({ id }) });
-      onProfilesChanged(next);
-      onChanged(next.status);
-      setSelectedProfileId(next.activeProfileId);
-      setApiKey("");
-      setMessage("天气方案已切换");
-    } catch (caught) {
-      setError(errorMessage(caught, "天气方案切换失败"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveProfile = async () => {
-    if (!statusReady || busy || testing || (!locationId.trim() && !city.trim())) return;
-    setBusy(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const next = await apiRequest<WeatherProfilesResponse>("/api/weather/profiles", { method: "POST", body: JSON.stringify({ ...(selectedProfileId === null ? {} : { id: selectedProfileId }), label: profileName.trim() || city.trim() || locationId.trim(), locationId, city, apiHost, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}), activate: true }) });
-      onProfilesChanged(next);
-      onChanged(next.status);
-      setSelectedProfileId(next.activeProfileId);
-      setApiKey("");
-      setMessage("天气方案已保存并应用");
-    } catch (caught) {
-      setError(errorMessage(caught, "天气方案保存失败"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const stateLabel = profilesState.phase === "ready" ? status?.configured ? "已连接" : "未配置" : profilesState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-weather-card">
-    <div className="settings-weather-overview"><div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>天气动画与预报</strong><small className="settings-weather-scope">{status?.locationScope === "device" ? "本设备独立城市" : "沿用服务端默认城市"}</small></div><span className={`settings-status ${profilesState.phase === "ready" && status?.configured ? "is-ready" : ""}`} data-weather-status-phase={profilesState.phase}>{stateLabel}</span><button className="secondary-button settings-action" type="button" onClick={() => setPreviewOpen(true)}>预览天气效果</button></div>
+    <div className="settings-weather-overview"><div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>天气</strong><small className="settings-weather-scope">{status?.city || status?.locationId || "未选择城市"}</small></div><span className={`settings-status ${profilesState.phase === "ready" && status?.configured ? "is-ready" : ""}`} data-weather-status-phase={profilesState.phase}>{stateLabel}</span></div>
     {tenantId === null ? null : <div className="settings-weather-follow">
-      <div className="settings-card-copy"><strong>跟随当前位置</strong><small>{followEnabled ? "打开 LifeOS 或切回页面时会重新定位；城市明显变化才更新天气。" : "关闭时只使用当前手动选择的城市，不读取位置。"}</small></div>
+      <div className="settings-card-copy"><strong>跟随当前位置</strong></div>
       <label className="settings-switch" title="跟随当前位置"><input type="checkbox" checked={followEnabled} disabled={followBusy} onChange={(event) => void toggleFollow(event.target.checked)} aria-label="跟随当前位置" /><span aria-hidden="true" /></label>
       {followError ? <p className="settings-inline-error" role="alert">{followError}</p> : null}
     </div>}
     {profilesState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{profilesState.error}</span>{status === null ? null : <small>上次确认：{status.configured ? "已连接" : "未配置"}</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
-    {status === null ? <p className="settings-config-unavailable">状态确认后，才能调整天气、方案或提交测试。</p> : null}
+    {status === null ? <p className="settings-config-unavailable">天气暂时不可设置。</p> : null}
     <div className="settings-weather-form">
-      <div className="settings-subsection-heading"><strong>当前方案</strong><small>切换已保存方案会立即应用；新方案请先填写位置。</small></div>
-      <div className="settings-weather-profile-row"><label><span>已保存的天气方案</span><select value={selectedProfileId ?? ""} onChange={(event) => { const id = event.target.value; setSelectedProfileId(id || null); if (id) void activateProfile(id); }} disabled={!statusReady || busy || testing}><option value="">当前手动配置 / 服务端默认</option>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.label} · {profile.city || profile.locationId}{profile.hasKey ? "" : " · 缺少 Key"}</option>)}</select></label><label><span>方案名称</span><input value={profileName} disabled={!statusReady} onChange={(event) => setProfileName(event.target.value)} placeholder="例如：佛山南海区" /></label></div>
-      <div className="settings-subsection-heading"><strong>位置</strong><small>天气预报和表头动画都使用这里的位置。</small></div>
-      <WeatherLocationPicker locationId={locationId} city={city} disabled={!statusReady || busy || testing} onChange={(option) => { setLocationId(option.locationId); setCity(option.city); }} />
-      <details className="settings-weather-manual" open={manualLocationId} onToggle={(event) => setManualLocationId(event.currentTarget.open)}>
-        <summary><span>手动输入位置 ID（境外位置 / 旧配置迁移）</span></summary>
-        <div className="settings-weather-form-row"><label><span>位置 ID</span><input value={locationId} disabled={!statusReady} onChange={(event) => setLocationId(event.target.value)} placeholder="例如 101280601" /></label><label><span>城市名（备用）</span><input value={city} disabled={!statusReady} onChange={(event) => setCity(event.target.value)} placeholder="例如 佛山南海区" /></label></div>
-      </details>
+      <div className="settings-subsection-heading"><strong>固定城市</strong></div>
+      <WeatherLocationPicker locationId={locationId} city={city} disabled={!statusReady || busy || testing} showDetail={false} onChange={(option) => { setLocationId(option.locationId); setCity(option.city); }} />
       <details className="settings-weather-advanced">
         <summary><SlidersHorizontal size={15} aria-hidden="true" /><span>高级：连接与密钥</span><ChevronDown size={15} aria-hidden="true" /></summary>
-        <div className="settings-weather-advanced-body"><label><span>API Key</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" placeholder={status?.hasKey ? "已保存，留空不变" : "填写和风天气 Key"} /></label><label><span>API Host</span><input value={apiHost} disabled={!statusReady} onChange={(event) => setApiHost(event.target.value)} placeholder="devapi.qweather.com" /></label><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} /><span>启用天气模块与表头动画</span></label></div>
+        <div className="settings-weather-advanced-body"><label><span>API Key</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" placeholder={status?.hasKey ? "已保存，留空不变" : "填写和风天气 Key"} /></label><label><span>API Host</span><input value={apiHost} disabled={!statusReady} onChange={(event) => setApiHost(event.target.value)} placeholder="devapi.qweather.com" /></label><div className="settings-weather-form-row"><label><span>位置 ID</span><input value={locationId} disabled={!statusReady} onChange={(event) => setLocationId(event.target.value)} /></label><label><span>城市名</span><input value={city} disabled={!statusReady} onChange={(event) => setCity(event.target.value)} /></label></div><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} /><span>启用天气</span></label><button className="icon-text-button" type="button" onClick={() => void test()} disabled={!statusReady || testing || busy || !locationId.trim()}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button></div>
       </details>
-      <div className="settings-weather-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={!statusReady || testing || busy || !locationId.trim()}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="secondary-button" type="button" onClick={() => void saveProfile()} disabled={!statusReady || busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存并应用方案"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "仅保存默认配置"}</span></button></div>
+      <div className="settings-weather-actions"><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || testing || (!locationId.trim() && !city.trim())}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存"}</span></button></div>
       {message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
-      <p className="settings-weather-note">测试成功后可保存为方案；方案会加密保存 API Host、API Key 和位置 ID，之后直接切换即可。未配置 Key 时，表头不会伪造天气数据。</p>
     </div>
-    <WeatherScenePreviewDialog open={previewOpen} onClose={() => setPreviewOpen(false)} />
   </div>;
 }
 
@@ -778,7 +660,7 @@ export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: C
   return <div className="settings-card cycle-settings-card">
     <div className="settings-card-icon"><Heart size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>周期与亲密记录</strong><small>关闭模块后已有私密记录仍会保留；日历中的快捷入口使用同一份配置。</small></div>
     <label className="cycle-enable"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => current ? { ...current, enabled: event.target.checked } : current)} /><span><strong>在日历中启用</strong><small>显示周期推算与私密记录入口。</small></span></label>
-    <div className="dialog-fields-grid"><label className="dialog-field"><span>周期天数</span><input type="number" min="15" max="90" value={draft.cycleLength} onChange={(event) => setDraft((current) => current ? { ...current, cycleLength: Number(event.target.value) } : current)} /></label><label className="dialog-field"><span>预计持续天数</span><input type="number" min="1" max="21" value={draft.periodLength} onChange={(event) => setDraft((current) => current ? { ...current, periodLength: Number(event.target.value) } : current)} /></label></div>
+    <div className="dialog-fields-grid"><label className="dialog-field"><span>经期间隔（两次开始相隔天数）</span><input type="number" min="15" max="90" value={draft.cycleLength} onChange={(event) => setDraft((current) => current ? { ...current, cycleLength: Number(event.target.value) } : current)} /></label><label className="dialog-field"><span>预计持续天数</span><input type="number" min="1" max="21" value={draft.periodLength} onChange={(event) => setDraft((current) => current ? { ...current, periodLength: Number(event.target.value) } : current)} /></label></div>
     <label className="dialog-field"><span>最近一次经期开始（可选）</span><input type="date" value={draft.anchorStart ?? ""} onChange={(event) => setDraft((current) => { if (!current) return current; const { anchorStart: _anchorStart, ...rest } = current; return event.target.value ? { ...rest, anchorStart: event.target.value } : rest; })} /></label>
     <p className="cycle-dialog-note">虚影月亮只表示按以上间隔推算的预计日期；确认开始或结束后，会以实心月亮覆盖它。</p>
     <div className="cycle-settings-actions"><button className="primary-button" type="button" onClick={() => void save()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}<span>{busy ? "保存中" : "保存周期设置"}</span></button></div>
@@ -916,7 +798,7 @@ function InviteManagementCard() {
   </section>;
 }
 
-export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onWeatherProfilesChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onWeatherProfilesChange: (payload: WeatherProfilesResponse) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
   useEffect(() => { window.requestAnimationFrame(() => pageHeadingRef.current?.focus()); }, [page]);
@@ -927,7 +809,7 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     "data/demo": "控制预置记录的显示与删除。",
     "data/photos": "管理照片回收站与可再生的缩略图缓存。",
     "appearance/interface": "调整当前浏览器里的界面显示。",
-    "integrations/weather": "天气位置、方案和天气场景。",
+    "integrations/weather": "定位或选择固定城市。",
     "integrations/ai": "AI 助手显示方式与服务配置。",
     "integrations/movie": "管理观影模块与影片识别服务。",
     "private/cycle": "周期与亲密模块的私密设置。",
@@ -940,7 +822,7 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <FontSettingsCard value={uiFont} onChange={onUiFontChange} />
-    : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? null} onChanged={onWeatherStatusChange} onProfilesChanged={onWeatherProfilesChange} onRetry={onRetryWeatherProfiles} />
+    : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? null} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} />
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />

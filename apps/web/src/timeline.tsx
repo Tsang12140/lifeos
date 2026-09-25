@@ -279,8 +279,9 @@ export function periodRuns(module: CycleIntimacyModuleData | null): readonly Per
  * A moon stays honest about what it knows. Inside a run, days up to and
  * including today are solid — the day arrived, so the period did — while the
  * days still ahead are pale predictions that turn solid by themselves as the
- * calendar moves forward. One cycle after the last run ended, the same run
- * comes back as a prediction, so the next start is never a surprise.
+ * calendar moves forward. The interval is start-to-start: a seven-day period
+ * with a 28-day interval predicts the next start 28 days after its start,
+ * not 28 days after its end.
  */
 export function periodMoonForDate(date: string, today: string, module: CycleIntimacyModuleData | null): PeriodMoonMarker | undefined {
   if (!module?.config.enabled) return undefined;
@@ -292,20 +293,20 @@ export function periodMoonForDate(date: string, today: string, module: CycleInti
     const inside = runs.some((run) => date >= run.start && date <= run.end);
     return inside ? { forecast: date > today } : undefined;
   }
-  const predicted = shiftDate(last.end, cycleLength);
+  const predicted = shiftDate(last.start, cycleLength);
   return date >= predicted && date <= shiftDate(predicted, periodLength - 1)
     ? { forecast: date > today }
     : undefined;
 }
 
-/** The next predicted start — one cycle after the last run ended, never in the past. */
+/** The next predicted start — one interval after the last recorded start. */
 export function nextPredictedStart(module: CycleIntimacyModuleData | null, today: string): string | undefined {
   if (!module?.config.enabled) return undefined;
   const { cycleLength } = module.config;
   const runs = periodRuns(module);
   const last = runs[runs.length - 1];
   if (last === undefined) return undefined;
-  let start = shiftDate(last.end, cycleLength);
+  let start = shiftDate(last.start, cycleLength);
   // `start === today` is a legitimate answer: the prediction landed exactly on today, and the
   // panel should say so. Only strictly-past predictions get rolled forward to the next cycle.
   for (let guard = 0; start < today && guard < 240; guard += 1) start = shiftDate(start, cycleLength);
@@ -450,4 +451,3 @@ export function TimelineItem({ record, assets, entities, movieEnabled, movieProm
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"} · {record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{weatherLocationDisplayName({ id: record.weather.locationId, name: record.weather.city })}</small></span></div>;
   return <article className={`timeline-item ${interactionDisabled ? "is-stale" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><div className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</>}</div>{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className={`record-action task-action ${task.task.status === "done" ? "" : "task-action-complete"}`} type="button" onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
 }
-
