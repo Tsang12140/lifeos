@@ -8792,17 +8792,6 @@ button.relation-chip {
   color: var(--primary-strong);
 }
 
-.month-day-count {
-  min-width: 17px;
-  padding: 1px 5px;
-  border-radius: 999px;
-  color: var(--muted);
-  background: #eef1f6;
-  font-size: 0.64rem;
-  font-weight: 700;
-  text-align: center;
-}
-
 .month-day-meta {
   display: inline-flex;
   align-items: center;
@@ -9042,11 +9031,6 @@ button.relation-chip {
 
   .month-day-number {
     font-size: 0.72rem;
-  }
-
-  .month-day-count {
-    min-width: 15px;
-    font-size: 0.6rem;
   }
 
   .month-day-summary {
@@ -11809,9 +11793,7 @@ button.relation-chip {
   .month-day-number { position: absolute; z-index: 3; top: 4px; left: 4px; line-height: 1.15; white-space: nowrap; }
   .month-day-meta { position: absolute; z-index: 2; top: 3px; right: 3px; gap: 1px; flex-wrap: nowrap; min-width: 0; }
   .month-day-status { min-width: 13px; padding: 0 2px; font-size: .54rem; }
-  /* Count remains in the tile's aria-label; the narrow visual slot belongs to
-     the holiday badge and date, otherwise the top row wraps into the weather. */
-  .month-day-count { display: none; }
+  /* Record count remains in the tile's aria-label, never as a visual badge. */
   .month-day-weather.is-desktop { display: none; }
   .month-day-weather.is-mobile { position: absolute; z-index: 2; right: 3px; bottom: 3px; display: inline-grid; width: 17px; height: 17px; font-size: .79rem; }
   .month-day-solar { max-width: calc(100% - 18px); font-size: .55rem; }
