@@ -11972,3 +11972,17 @@ button.relation-chip {
   .shot-strip[data-count="0"] .shot-tile-add button { display: flex; justify-content: center; align-items: center; gap: 7px; }
   .shot-strip[data-count="0"] .shot-add-label { display: inline; font-size: 0.74rem; font-weight: 650; line-height: 1; white-space: nowrap; }
 }
+
+/* Search needs its own row on phones: an absolute corner button covered the
+   weather summary's hit area at every mobile breakpoint. */
+@media (max-width: 900px) {
+  .topbar-layout { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+  .topbar-actions {
+    position: static;
+    order: -1;
+    align-self: flex-end;
+    flex: none;
+    margin: 0 10px 0 0;
+  }
+  .weather-header { flex: none; }
+}
