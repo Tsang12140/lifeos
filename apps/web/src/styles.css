@@ -2505,6 +2505,8 @@ h2 {
 }
 
 .content-grid:has(.settings-page) {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1100px;
   padding-top: 20px;
 }
 
@@ -11384,15 +11386,15 @@ button.relation-chip {
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
+  grid-template-columns: 188px minmax(0, 1fr);
   align-items: start;
-  gap: 24px;
+  gap: 22px;
   min-width: 0;
 }
 
 .settings-nav {
   display: grid;
-  gap: 18px;
+  gap: 10px;
   min-width: 0;
   position: sticky;
   top: 20px;
@@ -11400,22 +11402,30 @@ button.relation-chip {
 
 .settings-nav-group {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+  padding: 5px 6px 6px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.settings-nav-group.is-current {
+  border-color: var(--line);
+  background: var(--surface-soft);
 }
 
 .settings-nav-group h2 {
-  margin: 0 0 3px 10px;
-  color: var(--muted);
-  font-size: 0.67rem;
-  font-weight: 760;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  margin: 0 0 2px;
+  padding: 7px 10px;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 750;
+  letter-spacing: 0;
 }
 
 .settings-nav-group button {
   width: 100%;
   min-height: 36px;
-  padding: 0 10px;
+  padding: 0 10px 0 22px;
   border: 1px solid transparent;
   border-radius: 9px;
   color: var(--muted);
@@ -11436,11 +11446,11 @@ button.relation-chip {
 .settings-nav-group button.is-active {
   border-color: #d8e1f2;
   color: var(--primary-strong);
-  background: #f3f6ff;
-  box-shadow: inset 2px 0 0 #587cff;
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 #587cff;
 }
 
-.settings-mobile-selector { display: none; }
+.settings-mobile-nav { display: none; }
 
 .settings-page-content {
   display: grid;
@@ -11452,6 +11462,12 @@ button.relation-chip {
   display: grid;
   gap: 4px;
   margin-bottom: 3px;
+}
+
+.settings-content-parent {
+  color: var(--primary-strong);
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 
 .settings-page-content > .settings-section-heading h2 {
@@ -11561,10 +11577,48 @@ button.relation-chip {
 @container settings-page (max-width: 720px) {
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
   .settings-nav { display: none; }
-  .settings-mobile-selector { display: block; }
-  .settings-mobile-selector label { display: grid; gap: 5px; }
-  .settings-mobile-selector label > span { color: var(--muted); font-size: 0.68rem; font-weight: 680; }
-  .settings-mobile-selector select { width: 100%; min-height: 42px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft); background: var(--surface); font: inherit; font-size: 0.76rem; }
+  .settings-mobile-nav { display: grid; gap: 12px; min-width: 0; }
+  .settings-mobile-nav h2 { margin: 0; color: var(--ink); font-size: 1.1rem; }
+  .settings-mobile-list { display: grid; gap: 8px; min-width: 0; }
+  .settings-mobile-list button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 54px;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    color: var(--ink);
+    background: var(--surface);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .settings-mobile-list button strong { flex: 1; font-size: 0.88rem; font-weight: 700; }
+  .settings-mobile-list button span { color: var(--muted); font-size: 0.72rem; }
+  .settings-mobile-list button svg { flex: 0 0 auto; color: var(--muted); }
+  .settings-mobile-list button:focus-visible,
+  .settings-mobile-back:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .settings-mobile-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    justify-self: start;
+    min-height: 40px;
+    padding: 0 6px;
+    border: 0;
+    color: var(--primary-strong);
+    background: transparent;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .settings-page[data-mobile-level="groups"] .settings-page-content,
+  .settings-page[data-mobile-level="pages"] .settings-page-content { display: none; }
+  .settings-page[data-mobile-level="pages"] .settings-page-header,
+  .settings-page[data-mobile-level="detail"] .settings-page-header { display: none; }
 }
 
 @container settings-page (max-width: 480px) {

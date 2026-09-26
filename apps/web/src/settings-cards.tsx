@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   Activity,
+  ArrowLeft,
   AlertCircle,
   Archive,
   Bot,
   Check,
   ChevronDown,
+  ChevronRight,
   CircleHelp,
   CloudSun,
   CloudUpload,
@@ -823,10 +825,18 @@ function InviteManagementCard() {
   </section>;
 }
 
-export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
-  useEffect(() => { window.requestAnimationFrame(() => pageHeadingRef.current?.focus()); }, [page]);
+  const activeGroup = SETTINGS_PAGE_GROUPS.find((group) => group.pages.some((candidate) => candidate.id === page)) ?? SETTINGS_PAGE_GROUPS[0];
+  const [mobileLevel, setMobileLevel] = useState<"groups" | "pages" | "detail">(mobileEntry.root ? "groups" : "detail");
+  const [mobileGroupId, setMobileGroupId] = useState(activeGroup.id);
+  const mobileGroup = SETTINGS_PAGE_GROUPS.find((group) => group.id === mobileGroupId) ?? activeGroup;
+  useEffect(() => {
+    setMobileGroupId(activeGroup.id);
+    setMobileLevel(mobileEntry.root ? "groups" : "detail");
+  }, [mobileEntry.version]);
+  useEffect(() => { window.requestAnimationFrame(() => { if (pageHeadingRef.current?.getClientRects().length) pageHeadingRef.current.focus(); }); }, [page, mobileLevel]);
   const pageDescription: Record<SettingsPageId, string> = {
     "account/session": "访问权限与当前会话。",
     "data/import-export": "把记录带进来或导出为可保存的文件。",
@@ -852,12 +862,16 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />
     : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS · 本机优先</strong><small>记录、设置和已保存的服务配置由当前 LifeOS 实例管理。天气、AI 和观影服务只有在你主动启用并配置后才会连接外部服务。</small></div></div>;
-  return <section className="settings-page" aria-labelledby="settings-title">
-    <header className="settings-page-header"><p className="eyebrow">Workspace</p><h1 id="settings-title">设置</h1><p>按用途整理设置；选择一个页面后，只显示这一页的内容。</p></header>
+  return <section className="settings-page" data-mobile-level={mobileLevel} aria-labelledby="settings-title">
+    <header className="settings-page-header"><h1 id="settings-title">设置</h1></header>
     <div className="settings-layout">
-      <nav className="settings-nav" aria-label="设置分区">{SETTINGS_PAGE_GROUPS.map((group) => <div className="settings-nav-group" key={group.id}><h2>{group.label}</h2>{group.pages.map((item) => <button id={`settings-page-${item.id.replace("/", "-")}`} type="button" key={item.id} className={item.id === page ? "is-active" : ""} aria-current={item.id === page ? "page" : undefined} onClick={() => onNavigatePage(item.id)}>{item.label}</button>)}</div>)}</nav>
-      <div className="settings-mobile-selector"><label htmlFor="settings-mobile-selector"><span>设置页面</span><select id="settings-mobile-selector" value={page} onChange={(event) => onNavigatePage(event.target.value as SettingsPageId)}>{SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages.map((item) => <option value={item.id} key={item.id}>{group.label} · {item.label}</option>))}</select></label></div>
-      <article className="settings-page-content" aria-labelledby="settings-page-title"><div className="settings-section-heading"><h2 id="settings-page-title" ref={pageHeadingRef} tabIndex={-1}>{activePage.label}</h2><p>{pageDescription[page]}</p></div>{pageContent}</article>
+      <nav className="settings-nav" aria-label="设置分区">{SETTINGS_PAGE_GROUPS.map((group) => <div className={`settings-nav-group ${group.id === activeGroup.id ? "is-current" : ""}`} key={group.id}><h2>{group.label}</h2>{group.pages.map((item) => <button id={`settings-page-${item.id.replace("/", "-")}`} type="button" key={item.id} className={item.id === page ? "is-active" : ""} aria-current={item.id === page ? "page" : undefined} onClick={() => onNavigatePage(item.id)}>{item.label}</button>)}</div>)}</nav>
+      <nav className="settings-mobile-nav" aria-label="设置导航">
+        {mobileLevel === "groups" ? <div className="settings-mobile-list" data-settings-mobile-groups>{SETTINGS_PAGE_GROUPS.map((group) => <button type="button" key={group.id} data-settings-mobile-group={group.id} onClick={() => { setMobileGroupId(group.id); setMobileLevel("pages"); }}><strong>{group.label}</strong><span>{group.pages.length} 项</span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : null}
+        {mobileLevel === "pages" ? <><button className="settings-mobile-back" type="button" onClick={() => setMobileLevel("groups")}><ArrowLeft size={17} aria-hidden="true" />所有设置</button><h2>{mobileGroup.label}</h2><div className="settings-mobile-list" data-settings-mobile-pages>{mobileGroup.pages.map((item) => <button type="button" key={item.id} data-settings-mobile-page={item.id} onClick={() => { setMobileLevel("detail"); onNavigatePage(item.id); }}><strong>{item.label}</strong><ChevronRight size={17} aria-hidden="true" /></button>)}</div></> : null}
+        {mobileLevel === "detail" ? <button className="settings-mobile-back" type="button" onClick={() => { setMobileGroupId(activeGroup.id); setMobileLevel("pages"); }}><ArrowLeft size={17} aria-hidden="true" />返回{activeGroup.label}</button> : null}
+      </nav>
+      <article className="settings-page-content" aria-labelledby="settings-page-title"><div className="settings-section-heading"><span className="settings-content-parent">{activeGroup.label}</span><h2 id="settings-page-title" ref={pageHeadingRef} tabIndex={-1}>{activePage.label}</h2><p>{pageDescription[page]}</p></div>{pageContent}</article>
     </div>
   </section>;
 }
