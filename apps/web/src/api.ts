@@ -193,6 +193,8 @@ export interface BackupStatus {
   readonly retention?: { readonly policy: BackupRetentionPolicy; readonly described: readonly string[] };
 }
 
+export type BackupStatusState = ConfigReadState<BackupStatus>;
+
 export interface BackupRetentionPolicy {
   readonly dailyDays: number;
   readonly weeklyWeeks: number;

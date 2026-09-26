@@ -75,6 +75,7 @@ import {
   type AiStatusState,
   type AuthState,
   type BackupStatus,
+  type BackupStatusState,
   type BackupRetentionPolicy,
   type BackupRetentionView,
   type CycleModuleResponse,
@@ -336,7 +337,9 @@ function App() {
   // successful read. The settings card receives the source state separately
   // and never treats this display fallback as a persisted configuration.
   const movieStatus = movieStatusState.status ?? DEFAULT_MOVIE_MODULE_STATUS;
-  const [backupStatus, setBackupStatus] = useState<BackupStatus>({ localDirectory: null, s3: { configured: false, enabled: false, endpoint: "", region: "", bucket: "", prefix: "backups/db", forcePathStyle: true }, schedule: { enabled: false, hour: 2, minute: 0, timeZone: "Asia/Shanghai", nextRunAt: null }, lastDualBackup: null, runs: [] });
+  const [backupStatusState, setBackupStatusState] = useState<BackupStatusState>({ phase: "loading", status: null });
+  const [backupStatusRetry, setBackupStatusRetry] = useState(0);
+  const backupAccountRef = useRef<string | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchDialogOpen, setSearchDialogOpen] = useState(false);
@@ -461,6 +464,11 @@ function App() {
   const retryWeatherProfiles = useCallback(() => {
     setWeatherProfilesState((current) => ({ phase: "loading", status: current.status }));
     setWeatherProfilesRetry((current) => current + 1);
+  }, []);
+
+  const retryBackupStatus = useCallback(() => {
+    setBackupStatusState((current) => ({ phase: "loading", status: current.status }));
+    setBackupStatusRetry((current) => current + 1);
   }, []);
 
   // Only runs for a signed-in space whose device opted into follow mode. The
@@ -624,10 +632,29 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    if (authState.required && !authState.authenticated) return () => controller.abort();
-    apiRequest<BackupStatus>("/api/backup/status", { signal: controller.signal }).then((status) => { if (!controller.signal.aborted) setBackupStatus(status); }).catch(() => { if (!controller.signal.aborted) setBackupStatus((current) => current); });
+    const accountId = authState.account?.id ?? null;
+    const accountChanged = backupAccountRef.current !== accountId;
+    backupAccountRef.current = accountId;
+    if (authState.required && !authState.authenticated) {
+      setBackupStatusState({ phase: "failed", status: null, error: "登录后才能读取备份状态" });
+      return () => controller.abort();
+    }
+    setBackupStatusState((current) => ({ phase: "loading", status: accountChanged ? null : current.status }));
+    apiRequest<BackupStatus>("/api/backup/status", { signal: controller.signal }).then((status) => {
+      if (!controller.signal.aborted) setBackupStatusState({ phase: "ready", status });
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      if (errorStatus(error) === 401) {
+        const nextAuth = loggedOutAuth(authRef.current);
+        authRef.current = nextAuth;
+        setAuthState(nextAuth);
+        setBackupStatusState({ phase: "failed", status: null, error: "需要重新登录后才能读取备份状态" });
+        return;
+      }
+      setBackupStatusState((current) => ({ phase: "failed", status: current.status, error: errorMessage(error, "备份状态暂时无法读取，请重试") }));
+    });
     return () => controller.abort();
-  }, [authState.authenticated, authState.required]);
+  }, [authState.authenticated, authState.required, authState.account?.id, backupStatusRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -916,12 +943,12 @@ function App() {
     }
   };
   const handleBackup = async (action: "local" | "s3" | "test" | "dual") => {
-    if (backupBusy) return;
+    if (backupBusy || backupStatusState.phase !== "ready") return;
     setBackupBusy(true);
     try {
       const path = action === "local" ? "/api/backup/local" : action === "s3" ? "/api/backup/s3" : action === "dual" ? "/api/backup/dual" : "/api/backup/s3/test";
       const result = await apiRequest<{ ok: boolean; fileName?: string; location?: string; transport?: "http" | "file"; warning?: string; status?: "success" | "partial" | "local_only" | "failed"; s3?: { status?: "success" | "failed" | "skipped"; error?: string; location?: string } }> (path, { method: "POST", body: "{}" });
-      setBackupStatus(await apiRequest<BackupStatus>("/api/backup/status"));
+      setBackupStatusState({ phase: "ready", status: await apiRequest<BackupStatus>("/api/backup/status") });
       const remoteWroteLocally = result.transport === "file" || result.location?.startsWith("file:") === true || result.s3?.location?.startsWith("file:") === true;
       showToast(action === "test"
         ? remoteWroteLocally ? "连接测试只写入了本机目录，未联网 —— 请检查 Endpoint" : "对象存储连接成功"
@@ -931,7 +958,8 @@ function App() {
             ? result.status === "success" ? remoteWroteLocally ? "双备份已完成，但远端只写入了本机目录" : "双备份已完成" : result.status === "local_only" ? "本地备份已完成，远端已跳过" : result.status === "partial" ? "本地备份已完成，但远端失败" : "本地备份失败"
             : "本地备份已完成");
     } catch (error) {
-      try { setBackupStatus(await apiRequest<BackupStatus>("/api/backup/status")); } catch { /* keep the existing status when the follow-up read also fails */ }
+      try { setBackupStatusState({ phase: "ready", status: await apiRequest<BackupStatus>("/api/backup/status") }); }
+      catch (readError) { setBackupStatusState((current) => ({ phase: "failed", status: current.status, error: errorMessage(readError, "备份状态暂时无法读取，请重试") })); }
       showToast(handleRequestError(error, action === "test" ? "对象存储连接失败" : action === "dual" ? "双备份失败，请查看本地结果" : "备份失败，请检查配置"), "warn");
     } finally {
       setBackupBusy(false);
@@ -1409,7 +1437,7 @@ function App() {
   const onNavigate = navigate;
 
   return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation={activeView !== "calendar"} /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form><button className="icon-button mobile-search-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="搜索记录"><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast ? <ReviewComposer {...composerProps} /> : <Composer {...composerProps} />) : null}{activeView === "settings"
-       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} accountMode={authState.accountMode === true} account={authState.account} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatus={backupStatus} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={setBackupStatus} weatherProfilesState={weatherProfilesState} onWeatherStatusChange={onWeatherStatusChange} onRetryWeatherProfiles={retryWeatherProfiles} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
+       ? <SettingsView page={settingsPage} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} accountMode={authState.accountMode === true} account={authState.account} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatusState={backupAccountRef.current === (authState.account?.id ?? null) ? backupStatusState : { phase: "loading", status: null }} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={(status) => setBackupStatusState({ phase: "ready", status })} onRetryBackupStatus={retryBackupStatus} onBackupReadFailed={(cause) => { handleRequestError(cause, "备份状态读取失败"); setBackupStatusState((current) => ({ phase: "failed", status: errorStatus(cause) === 401 ? null : current.status, error: errorMessage(cause, "备份状态暂时无法读取，请重试") })); }} weatherProfilesState={weatherProfilesState} onWeatherStatusChange={onWeatherStatusChange} onRetryWeatherProfiles={retryWeatherProfiles} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "notes"

@@ -5138,6 +5138,25 @@ button.relation-chip {
   box-shadow: var(--shadow-soft);
 }
 
+.settings-backup-locked {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-backup-read-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--muted);
+}
+
+.settings-backup-read-state small { flex-basis: 100%; }
+
 .settings-ai-card {
   display: grid;
   align-items: stretch;

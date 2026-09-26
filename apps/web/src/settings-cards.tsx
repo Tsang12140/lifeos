@@ -52,6 +52,7 @@ import {
   type BackupRetentionPolicy,
   type BackupRetentionView,
   type BackupStatus,
+  type BackupStatusState,
   type CreatedInviteSummary,
   type InviteSummary,
   type MovieModuleStatus,
@@ -201,7 +202,18 @@ const RETENTION_TIER_LABELS: Record<BackupRetentionView["entries"][number]["tier
   none: "将清理",
 };
 
-export function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChanged }: { readonly backupStatus: BackupStatus; readonly backupBusy: boolean; readonly onBackup: (action: "local" | "s3" | "test" | "dual") => void; readonly onChanged: (status: BackupStatus) => void }) {
+export function BackupSettingsCard({ backupStatusState, backupBusy, onBackup, onChanged, onRetry, onReadFailed }: { readonly backupStatusState: BackupStatusState; readonly backupBusy: boolean; readonly onBackup: (action: "local" | "s3" | "test" | "dual") => void; readonly onChanged: (status: BackupStatus) => void; readonly onRetry: () => void; readonly onReadFailed: (cause: unknown) => void }) {
+  const status = backupStatusState.status;
+  return <div className="settings-backup-card" data-backup-status-phase={backupStatusState.phase}>
+    {backupStatusState.phase === "ready" ? null : <div className="settings-backup-read-state" role={backupStatusState.phase === "failed" ? "alert" : "status"}>
+      <span>{backupStatusState.phase === "loading" ? status ? "正在刷新备份状态，暂时不能修改" : "正在读取备份状态…" : status ? "备份状态读取失败，以下为上次确认的内容；暂时不能修改" : "备份状态暂时不可读取"}</span>
+      {backupStatusState.phase === "failed" ? <><small>{backupStatusState.error}</small><button className="secondary-button" type="button" onClick={onRetry}>重试</button></> : null}
+    </div>}
+    {status ? <BackupSettingsContent backupStatus={status} readReady={backupStatusState.phase === "ready"} backupBusy={backupBusy} onBackup={onBackup} onChanged={onChanged} onReadFailed={onReadFailed} /> : null}
+  </div>;
+}
+
+function BackupSettingsContent({ backupStatus, readReady, backupBusy, onBackup, onChanged, onReadFailed }: { readonly backupStatus: BackupStatus; readonly readReady: boolean; readonly backupBusy: boolean; readonly onBackup: (action: "local" | "s3" | "test" | "dual") => void; readonly onChanged: (status: BackupStatus) => void; readonly onReadFailed: (cause: unknown) => void }) {
   const s3 = backupStatus.s3;
   const localTransport = s3.transport === "file" || s3.endpoint.startsWith("file:");
   const [enabled, setEnabled] = useState(s3.enabled);
@@ -227,19 +239,25 @@ export function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChang
   const [retentionDraft, setRetentionDraft] = useState<BackupRetentionPolicy>(DEFAULT_RETENTION_DRAFT);
   const [retentionSaving, setRetentionSaving] = useState(false);
   const [retentionMessage, setRetentionMessage] = useState<string | null>(null);
+  const [retentionReady, setRetentionReady] = useState(false);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [retentionRetry, setRetentionRetry] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
+    setRetentionReady(false);
+    setRetentionError(null);
     apiRequest<BackupRetentionView>("/api/backup/retention", { signal: controller.signal })
       .then((view) => {
         if (controller.signal.aborted) return;
         setRetention(view);
         setRetentionDraft(view.policy);
+        setRetentionReady(true);
       })
-      .catch(() => { /* the panel stays hidden while the endpoint is unavailable */ });
+      .catch((cause) => { if (!controller.signal.aborted) setRetentionError(errorMessage(cause, "保留策略暂时无法读取")); });
     return () => controller.abort();
-  }, [backupStatus.runs]);
+  }, [backupStatus.runs, retentionRetry]);
   const saveRetention = async () => {
-    if (retentionSaving) return;
+    if (!readReady || !retentionReady || retentionSaving) return;
     setRetentionSaving(true);
     setRetentionMessage(null);
     try {
@@ -294,38 +312,45 @@ export function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChang
     setMessage("已填入 Bitiful（cdnb）预设，只剩 Access Key 和 Secret Key 需要粘贴");
   };
   const save = async () => {
-    if (saving) return;
+    if (!readReady || saving) return;
     setSaving(true); setMessage(null); setError(null);
+    let saved = false;
     try {
       await apiRequest("/api/backup/config", { method: "POST", body: JSON.stringify({ enabled, endpoint, region, bucket, prefix, forcePathStyle, ...(accessKeyId.trim() ? { accessKeyId: accessKeyId.trim() } : {}), ...(secretAccessKey.trim() ? { secretAccessKey: secretAccessKey.trim() } : {}) }) });
+      saved = true;
       setAccessKeyId(""); setSecretAccessKey("");
       onChanged(await apiRequest<BackupStatus>("/api/backup/status"));
       setMessage("对象存储配置已保存");
     } catch (cause) {
+      if (saved) onReadFailed(cause);
       setError(errorMessage(cause, "保存对象存储配置失败，请检查字段"));
     } finally { setSaving(false); }
   };
   const saveSchedule = async () => {
-    if (scheduleSaving) return;
+    if (!readReady || scheduleSaving) return;
     setScheduleSaving(true);
     setScheduleMessage(null);
+    let saved = false;
     try {
       await apiRequest("/api/backup/schedule", { method: "POST", body: JSON.stringify({ enabled: scheduleEnabled, hour: scheduleHour, minute: scheduleMinute }) });
+      saved = true;
       onChanged(await apiRequest<BackupStatus>("/api/backup/status"));
       setScheduleMessage(scheduleEnabled ? `已设置每天 ${String(scheduleHour).padStart(2, "0")}:${String(scheduleMinute).padStart(2, "0")} 执行` : "定时双备份已停用");
     } catch (cause) {
+      if (saved) onReadFailed(cause);
       setScheduleMessage(errorMessage(cause, "保存定时备份失败"));
     } finally {
       setScheduleSaving(false);
     }
   };
-  return <div className="settings-backup-card">
+  return <fieldset className="settings-backup-locked" disabled={!readReady}>
     <div className="settings-backup-overview"><div className="settings-backup-icon"><CloudUpload size={19} aria-hidden="true" /></div><div className="settings-card-copy"><strong>数据备份</strong></div><span className={`settings-status ${s3BadgeClass}`}>{s3BadgeLabel}</span></div>
     {localTransport ? <p className="settings-backup-warning" data-backup-local-transport>{s3.warning ?? "当前对象存储 Endpoint 是本机目录（file://），备份不会联网上传。"}</p> : null}
     <div className="settings-backup-stats"><div><small>最近本地结果</small><strong>{formatRun(localRun)}{localRun?.status === "success" && localRun.sizeBytes === undefined ? "" : localRun?.status === "success" && localRun.sizeBytes !== undefined ? ` · ${formatBytes(localRun.sizeBytes)}` : ""}</strong></div><div><small>最近对象存储结果</small><strong>{formatRun(s3Run)}{s3Run?.status === "success" && s3Run.sizeBytes !== undefined ? ` · ${formatBytes(s3Run.sizeBytes)}` : ""}{s3RunWroteLocally ? " · 本机目录" : ""}</strong></div><div><small>下次定时双备份</small><strong>{backupStatus.schedule.enabled && backupStatus.schedule.nextRunAt ? new Date(backupStatus.schedule.nextRunAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "未启用"}</strong></div></div>
     <div className="settings-backup-dual" data-backup-dual-status><div><span>双备份结果</span><strong className={`is-${dual?.status ?? "empty"}`}>{dualLabel}</strong>{dual?.s3.status === "skipped" || dual?.s3.status === "failed" ? <small>{dual.s3.error ?? "远端没有成功"}</small> : null}</div><button className="primary-button" data-backup-action="dual" type="button" onClick={() => onBackup("dual")} disabled={backupBusy || saving}>{backupBusy ? "执行中…" : "立即双备份"}</button></div>
     <div className="settings-backup-actions"><button className="secondary-button" type="button" onClick={() => onBackup("local")} disabled={backupBusy || saving}><HardDrive size={15} aria-hidden="true" /><span>{backupBusy ? "备份中" : "备份到本地"}</span></button><button className="primary-button" type="button" onClick={() => onBackup("s3")} disabled={backupBusy || saving || !s3.configured || !s3.enabled}><CloudUpload size={15} aria-hidden="true" /><span>备份到对象存储</span></button><button className="icon-text-button" type="button" onClick={() => onBackup("test")} disabled={backupBusy || saving || !s3.configured || !s3.enabled}><PlugZap size={15} aria-hidden="true" /><span>测试连接</span></button></div>
     <details className="settings-backup-advanced" data-backup-schedule-details><summary><History size={15} aria-hidden="true" /><span>高级：定时双备份</span><ChevronDown size={15} aria-hidden="true" /></summary><div className="settings-backup-schedule" data-backup-schedule><div className="settings-backup-schedule-head"><div><span>定时双备份</span><small>服务端执行 · Asia/Shanghai</small></div><label className="settings-switch"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /><span aria-hidden="true" /></label></div><div className="settings-backup-schedule-controls"><label><span>每天</span><select value={scheduleHour} onChange={(event) => setScheduleHour(Number(event.target.value))}>{Array.from({ length: 24 }, (_, hour) => <option value={hour} key={hour}>{String(hour).padStart(2, "0")}</option>)}</select></label><b>:</b><label><span>时刻</span><select value={scheduleMinute} onChange={(event) => setScheduleMinute(Number(event.target.value))}>{[0, 15, 30, 45].map((minute) => <option value={minute} key={minute}>{String(minute).padStart(2, "0")}</option>)}</select></label><button className="secondary-button" type="button" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? "保存中…" : "保存排程"}</button></div><div className="settings-backup-schedule-next">{scheduleEnabled && backupStatus.schedule.nextRunAt ? `即将执行：${new Date(backupStatus.schedule.nextRunAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}` : "定时双备份未启用"}{scheduleMessage ? <span role="status"> · {scheduleMessage}</span> : null}</div></div></details>
+    {retentionError ? <div className="settings-backup-read-state" role="alert"><span>{retention === null ? "保留策略暂时不可读取" : "保留策略读取失败，暂时不能修改"}</span><small>{retentionError}</small><button className="secondary-button" type="button" onClick={() => setRetentionRetry((current) => current + 1)}>重试保留策略</button></div> : null}
     {retention === null ? null : <details className="settings-backup-retention settings-backup-advanced" data-backup-retention open={retentionOpen} onToggle={(event) => setRetentionOpen(event.currentTarget.open)}><summary><Archive size={15} aria-hidden="true" /><span>高级：保留策略 · 日备 {retention.policy.dailyDays} 天 · 周备 {retention.policy.weeklyWeeks} 周 · 月备 {retention.policy.monthlyMonths} 个月</span><span className="settings-backup-retention-count" data-backup-retention-count>{retention.summary.keepCount} 份保留 · {retention.summary.deleteCount} 份待清理</span><ChevronDown size={15} aria-hidden="true" /></summary>
       <div className="settings-backup-retention-body">
         <ul className="settings-backup-retention-rules" data-backup-retention-rules>{retention.described.map((line) => <li key={line}>{line}</li>)}</ul>
@@ -338,12 +363,12 @@ export function BackupSettingsCard({ backupStatus, backupBusy, onBackup, onChang
         <div className="settings-backup-retention-list">{retention.entries.length === 0 ? <p className="settings-backup-retention-note">还没有备份。</p> : retention.entries.slice(0, 12).map((entry) => <div className={`settings-backup-retention-row ${entry.keep ? "is-keep" : "is-drop"}`} key={entry.fileName} data-backup-retention-row={entry.keep ? "keep" : "drop"}><span className={`settings-backup-retention-tier is-${entry.tier}`}>{RETENTION_TIER_LABELS[entry.tier]}</span><span className="settings-backup-retention-when">{formatWhen(entry.startedAt)}{entry.sizeBytes === undefined ? "" : ` · ${formatBytes(entry.sizeBytes)}`}</span><span className="settings-backup-retention-why">{entry.reason}</span></div>)}{retention.entries.length > 12 ? <p className="settings-backup-retention-note">仅显示最近 12 份，共 {retention.entries.length} 份。</p> : null}</div>
         {retention.trashed.length > 0 ? <div className="settings-backup-retention-trashed" data-backup-retention-trashed><p className="settings-backup-retention-note">已清理 {retention.trashed.length} 份，仍在回收站里（可以拿回来）。最近几份：</p>{retention.trashed.slice(0, 6).map((entry) => <div className="settings-backup-retention-row is-drop" key={entry.id ?? `${entry.fileName}@${entry.prunedAt}`}><span className="settings-backup-retention-tier is-none">回收站</span><span className="settings-backup-retention-when">{formatWhen(entry.prunedAt)}</span><span className="settings-backup-retention-why">{entry.fileName} · {entry.provider === "s3" ? "云端" : "本地"}</span></div>)}</div> : null}
         {retention.connectionTestCount > 0 ? <p className="settings-backup-retention-note">另有 {retention.connectionTestCount} 个连接测试文件（{formatBytes(retention.connectionTestBytes)}）不算备份，不参与保留。</p> : null}
-        <div className="settings-backup-retention-form"><label><span>日备保留天数</span><input type="number" min={retention.limits.dailyDays.min} max={retention.limits.dailyDays.max} value={retentionDraft.dailyDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, dailyDays: Number(event.target.value) })} /></label><label><span>周备保留周数</span><input type="number" min={retention.limits.weeklyWeeks.min} max={retention.limits.weeklyWeeks.max} value={retentionDraft.weeklyWeeks} onChange={(event) => setRetentionDraft({ ...retentionDraft, weeklyWeeks: Number(event.target.value) })} /></label><label><span>月备保留月数</span><input type="number" min={retention.limits.monthlyMonths.min} max={retention.limits.monthlyMonths.max} value={retentionDraft.monthlyMonths} onChange={(event) => setRetentionDraft({ ...retentionDraft, monthlyMonths: Number(event.target.value) })} /></label><label><span>回收站保留天数</span><input type="number" min={retention.limits.trashDays.min} max={retention.limits.trashDays.max} value={retentionDraft.trashDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, trashDays: Number(event.target.value) })} /></label><button className="secondary-button" type="button" data-backup-retention-save onClick={() => void saveRetention()} disabled={retentionSaving}>{retentionSaving ? "保存中…" : "保存保留策略"}</button></div>
+        <div className="settings-backup-retention-form"><label><span>日备保留天数</span><input type="number" min={retention.limits.dailyDays.min} max={retention.limits.dailyDays.max} value={retentionDraft.dailyDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, dailyDays: Number(event.target.value) })} disabled={!retentionReady} /></label><label><span>周备保留周数</span><input type="number" min={retention.limits.weeklyWeeks.min} max={retention.limits.weeklyWeeks.max} value={retentionDraft.weeklyWeeks} onChange={(event) => setRetentionDraft({ ...retentionDraft, weeklyWeeks: Number(event.target.value) })} disabled={!retentionReady} /></label><label><span>月备保留月数</span><input type="number" min={retention.limits.monthlyMonths.min} max={retention.limits.monthlyMonths.max} value={retentionDraft.monthlyMonths} onChange={(event) => setRetentionDraft({ ...retentionDraft, monthlyMonths: Number(event.target.value) })} disabled={!retentionReady} /></label><label><span>回收站保留天数</span><input type="number" min={retention.limits.trashDays.min} max={retention.limits.trashDays.max} value={retentionDraft.trashDays} onChange={(event) => setRetentionDraft({ ...retentionDraft, trashDays: Number(event.target.value) })} disabled={!retentionReady} /></label><button className="secondary-button" type="button" data-backup-retention-save onClick={() => void saveRetention()} disabled={retentionSaving || !retentionReady}>{retentionSaving ? "保存中…" : "保存保留策略"}</button></div>
         {retentionMessage ? <p className="settings-inline-success" role="status">{retentionMessage}</p> : null}
       </div></details>}
     <details className="settings-backup-details settings-backup-advanced" data-backup-config-details open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}><summary><FolderOpen size={15} aria-hidden="true" /><span>{needsConfiguring ? "高级：填写对象存储配置（Endpoint / Region / Bucket / 密钥）" : "高级：对象存储配置与本地目录"}</span><ChevronDown size={15} aria-hidden="true" /></summary><div className="settings-backup-details-body"><div><small>本地目录</small><code>{backupStatus.localDirectory ?? "未配置"}</code></div><div><small>当前 Endpoint</small><code>{s3.endpoint || "未配置"}</code></div><div><small>当前 Bucket / Prefix</small><code>{s3.configured ? `${s3.bucket} / ${s3.prefix}` : "尚未保存云端配置"}</code></div><div className="settings-backup-form"><label><span>Endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://s3.bitiful.net" /></label><div className="settings-backup-form-row"><label><span>Region</span><input value={region} onChange={(event) => setRegion(event.target.value)} placeholder="cn-east-1" /></label><label><span>Bucket</span><input value={bucket} onChange={(event) => setBucket(event.target.value)} placeholder="cdnb" /></label></div><label><span>Prefix / 文件夹</span><input value={prefix} onChange={(event) => setPrefix(event.target.value)} placeholder="product-backup/lifeos" /></label><div className="settings-backup-form-row"><label><span>Access Key</span><input value={accessKeyId} onChange={(event) => setAccessKeyId(event.target.value)} autoComplete="off" placeholder={s3.configured ? "已保存，留空不变" : "填写 Access Key"} /></label><label><span>Secret Key</span><input value={secretAccessKey} onChange={(event) => setSecretAccessKey(event.target.value)} type="password" autoComplete="new-password" placeholder={s3.configured ? "已保存，留空不变" : "填写 Secret Key"} /></label></div><label className="settings-backup-checkbox"><input type="checkbox" checked={forcePathStyle} onChange={(event) => setForcePathStyle(event.target.checked)} /><span>使用 Path-style URL（MinIO / 自建 S3 时开启；cdnb 保持关闭）</span></label><label className="settings-backup-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>启用对象存储自动备份</span></label><div className="settings-backup-form-actions"><button className="secondary-button" type="button" data-backup-preset onClick={applyPreset} disabled={saving}>填入 Bitiful 预设</button><button className="primary-button" type="button" onClick={() => void save()} disabled={saving || !endpoint.trim() || !region.trim() || !bucket.trim()}>{saving ? "保存中…" : "保存对象存储配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}<p className="settings-backup-note">密钥只提交给 API 服务端并加密保存，不会进入浏览器本地存储或 SQLite 备份。保存后再点上方“测试连接”，确认 cdnb 真实可写。</p></div></div></details>
     <details className="settings-backup-advanced settings-backup-history"><summary><History size={15} aria-hidden="true" /><span>高级：备份历史</span><ChevronDown size={15} aria-hidden="true" /></summary><BackupCalendar initialRuns={backupStatus.runs} /></details>
-  </div>;
+  </fieldset>;
 }
 
 export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly tenantId?: string | null; readonly onChanged: (status: WeatherStatus) => void; readonly onRetry: () => void }) {
@@ -798,7 +823,7 @@ function InviteManagementCard() {
   </section>;
 }
 
-export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatus, backupBusy, onBackup, onBackupStatusChange, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatus: BackupStatus; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const activePage = SETTINGS_PAGE_GROUPS.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? SETTINGS_PAGE_GROUPS[0].pages[0];
   useEffect(() => { window.requestAnimationFrame(() => pageHeadingRef.current?.focus()); }, [page]);
@@ -818,7 +843,7 @@ export function SettingsView({ page, onNavigatePage, onImport, onLogout, logoutB
   const accountContent = <><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{accountMode ? account?.spaceName ?? "已登录空间" : authRequired ? "已登录" : "本机访问"}</strong><small>{accountMode ? `${account?.displayName ?? ""} · ${account?.username ?? ""} · ${account?.role === "owner" ? "空间所有者" : "独立账号"}` : authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : accountMode ? "退出并切换账号" : "退出登录"}</span></button> : null}</div>{accountMode && account?.role === "owner" ? <><InviteManagementCard /><AccountManagementCard /></> : null}</>;
   const pageContent = page === "account/session" ? accountContent
     : page === "data/import-export" ? <div className="settings-card settings-data-grid"><div className="settings-card-icon"><FileJson size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>备份与导出</strong><small>导入前请确认 JSON 来自可信的 LifeOS 实例；导出文件包含你的记录内容。</small></div><div className="settings-card-actions"><button className="secondary-button" type="button" onClick={onImport}><Upload size={15} aria-hidden="true" /><span>导入 JSON</span></button><a className="secondary-button" href="/api/export?format=json" download><FileJson size={15} aria-hidden="true" /><span>导出 JSON</span></a><a className="secondary-button" href="/api/export?format=markdown" download><FileText size={15} aria-hidden="true" /><span>导出 Markdown</span></a></div></div>
-    : page === "data/backup" ? <BackupSettingsCard backupStatus={backupStatus} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} />
+    : page === "data/backup" ? <BackupSettingsCard backupStatusState={backupStatusState} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} onRetry={onRetryBackupStatus} onReadFailed={onBackupReadFailed} />
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <FontSettingsCard value={uiFont} onChange={onUiFontChange} />
