@@ -2459,6 +2459,11 @@ h2 {
   background: var(--surface-soft);
 }
 
+.auth-password-field { position: relative; }
+.auth-password-field input { padding-right: 54px; }
+.auth-password-field button { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 9px; color: var(--muted); background: transparent; cursor: pointer; }
+.auth-password-field button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
 .auth-label input:focus {
   border-color: #bdcbfa;
   background: #fff;
@@ -2474,6 +2479,30 @@ h2 {
 .auth-submit {
   width: 100%;
   margin-top: 20px;
+}
+
+@media (max-width: 600px) {
+  .auth-screen {
+    display: block;
+    min-height: 100dvh;
+    padding: max(28px, env(safe-area-inset-top)) 20px calc(30px + env(safe-area-inset-bottom));
+    background: #fff;
+  }
+
+  .auth-panel {
+    width: min(100%, 440px);
+    margin: 0 auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .auth-icon { margin-bottom: 38px; }
+  .auth-panel h1 { font-size: clamp(2rem, 9vw, 2.4rem); }
+  .auth-description { margin-bottom: 32px; }
+  .auth-label input { min-height: 52px; background: #f8faff; font-size: 16px; }
+  .auth-submit { min-height: 52px; margin-top: 26px; border-radius: 13px; }
 }
 
 .export-button {

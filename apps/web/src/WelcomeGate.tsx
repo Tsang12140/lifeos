@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, CloudSun, KeyRound, LoaderCircle, LocateFixed, LockKeyhole } from "lucide-react";
+import { ArrowLeft, ArrowRight, CloudSun, Eye, EyeOff, KeyRound, LoaderCircle, LocateFixed, LockKeyhole } from "lucide-react";
 import { apiRequest, type AuthState } from "./api";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { locateWeatherDevice, setWeatherFollowEnabled } from "./weather-follow";
@@ -15,6 +15,24 @@ function problem(error: unknown, fallback: string): string {
 
 function inviteFromLink(): string {
   return new URLSearchParams(window.location.hash.slice(1)).get("invite")?.trim() ?? "";
+}
+
+function WelcomePasswordField({ id, label, value, onChange, autoComplete, minLength }: {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly autoComplete: "current-password" | "new-password";
+  readonly minLength?: number;
+}) {
+  const [visible, setVisible] = useState(false);
+  return <div className="welcome-password-control">
+    <label htmlFor={id}>{label}</label>
+    <div className="welcome-password-field">
+      <input id={id} type={visible ? "text" : "password"} name="password" autoComplete={autoComplete} value={value} onChange={(event) => onChange(event.target.value)} minLength={minLength} required />
+      <button type="button" aria-label={visible ? "隐藏密码" : "显示密码"} aria-pressed={visible} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={19} aria-hidden="true" /> : <Eye size={19} aria-hidden="true" />}</button>
+    </div>
+  </div>;
 }
 
 export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
@@ -41,7 +59,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
     const verifyFromLink = () => {
       const code = inviteFromLink();
       if (!code) return;
-      setInviteCode(code); setStage("invite"); setError(null); setBusy(true);
+      setInviteCode(code); setPassword(""); setStage("invite"); setError(null); setBusy(true);
       void apiRequest<{ valid: boolean }>("/api/auth/invite/check", { method: "POST", body: JSON.stringify({ code }) })
         .then((result) => {
           if (!active || inviteFromLink() !== code) return;
@@ -56,7 +74,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
     return () => { active = false; window.removeEventListener("hashchange", verifyFromLink); };
   }, []);
 
-  const switchTo = (next: Stage) => { setError(null); setStage(next); };
+  const switchTo = (next: Stage) => { setError(null); setPassword(""); setStage(next); };
   const checkInvite = async (event: FormEvent) => {
     event.preventDefault();
     if (busy || !inviteCode.trim()) return;
@@ -118,24 +136,24 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
       <p className="welcome-intro">{stage === "login" ? "登录后，继续记录自己的生活。" : stage === "invite" ? "邀请码由管理员发放，只能用于创建一个独立空间。" : stage === "create" ? "设置自己的账号和密码。你的记录与其他空间互不相通。" : "选择定位，或固定一个城市。"}</p>
 
       {stage === "login" ? <form className="welcome-form" onSubmit={(event) => { event.preventDefault(); onLogin(username, password); }}>
-        <label><span>账号</span><input autoFocus name="username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
-        <label><span>密码</span><input type="password" name="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+        <label><span>账号</span><input name="username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
+        <WelcomePasswordField id="welcome-login-password" label="密码" value={password} onChange={setPassword} autoComplete="current-password" />
         {loginError ? <p className="welcome-error" role="alert">{loginError}</p> : null}
         <button className="primary-button welcome-main-action" type="submit" disabled={loginLoading || !username.trim() || !password}>{loginLoading ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{loginLoading ? "登录中…" : "进入 LifeOS"}</span></button>
         <button className="welcome-text-action" type="button" onClick={() => switchTo("invite")}>第一次来？使用邀请码创建空间</button>
       </form> : null}
 
       {stage === "invite" ? <form className="welcome-form" onSubmit={(event) => void checkInvite(event)}>
-        <label><span>邀请码</span><input autoFocus autoComplete="off" value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="粘贴管理员给你的邀请码" required /></label>
+        <label><span>邀请码</span><input autoComplete="off" value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="粘贴管理员给你的邀请码" required /></label>
         {error ? <p className="welcome-error" role="alert">{error}</p> : null}
         <button className="primary-button welcome-main-action" type="submit" disabled={busy || !inviteCode.trim()}>{busy ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{busy ? "验证中…" : "继续"}</span></button>
         <button className="welcome-text-action" type="button" onClick={() => switchTo("login")}><ArrowLeft size={15} />返回登录</button>
       </form> : null}
 
       {stage === "create" ? <form className="welcome-form" onSubmit={(event) => void register(event)}>
-        <label><span>登录账号</span><input autoFocus autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={32} required /></label>
+        <label><span>登录账号</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={32} required /></label>
         <label><span>称呼（选填，与登录账号不同）</span><input autoComplete="nickname" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="可以怎么称呼你" maxLength={80} /></label>
-        <label><span>设置密码（至少 10 位）</span><input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} required /></label>
+        <WelcomePasswordField id="welcome-create-password" label="设置密码（至少 10 位）" value={password} onChange={setPassword} autoComplete="new-password" minLength={10} />
         {error ? <p className="welcome-error" role="alert">{error}</p> : null}
         <button className="primary-button welcome-main-action" type="submit" disabled={busy || !username.trim() || password.length < 10}>{busy ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{busy ? "创建中…" : "创建并登录"}</span></button>
         <button className="welcome-text-action" type="button" onClick={() => switchTo("invite")}><ArrowLeft size={15} />返回邀请码</button>
