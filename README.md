@@ -191,6 +191,32 @@ npm run backup -- data/lifeos.sqlite backup/lifeos.sqlite
 
 备份文件可能包含隐私记录和密钥配置的密文，应和原数据库一样保护。不要把备份上传到公开 issue、公共对象存储或 Git 历史。
 
+### 宝塔 + PM2：整站本地与异地备份
+
+现有宝塔部署不用 Docker。`scripts/run-instance-backup-pm2.sh` 只停止并重新启动名为 `lifeos` 的 PM2 进程，不碰其他项目：停止写入 → 完整本地快照 → 立即恢复服务 → 校验 → 上传异地。它需要 Node 24、`flock`、已启用的 S3-compatible 配置，并要求在服务器 `.env` **显式填写** `LIFEOS_INSTANCE_BACKUP_S3_BUCKET`。推荐专用私有桶；不要直接假设现有 `cdnb` 桶私有。专用桶若使用不同连接或密钥，`.env.example` 提供独立覆盖项。上传前脚本会放一个无害探针，若匿名可读取，便拒绝上传任何真实账号库和照片。
+
+```bash
+cd /www/server/lifeos-app
+export LIFEOS_NODE_BIN=/www/server/nodejs/v24.21.0/bin/node
+export LIFEOS_INSTANCE_DATA_DIR=/www/server/lifeos-data
+export LIFEOS_INSTANCE_BACKUP_ROOT=/www/server/lifeos-private-backups
+bash scripts/run-instance-backup-pm2.sh
+```
+
+脚本返回本地快照位置和异地 `manifestKey`，后者须安全保留。**先手动成功跑一次并完成恢复演练**，再安排宝塔计划任务/cron 在低峰期每天运行同一脚本；计划任务必须使用拥有 `lifeos` 的 PM2 用户并显式带入上述三个环境变量，失败时要告警。脚本会在本地备份失败时尽力恢复 LifeOS 服务，但不能代替运维监控。整站异地对象暂不自动删除，避免清理策略误删唯一恢复点；需要监测私有桶容量。
+
+异地恢复演练只使用两个新的空目录，不覆盖运行数据：
+
+```bash
+cd /www/server/lifeos-app
+LIFEOS_DATA_DIR=/www/server/lifeos-data /www/server/nodejs/v24.21.0/bin/node --env-file=.env scripts/backup-instance-remote.mjs download --manifest-key '上传返回的 manifestKey' --target /www/server/lifeos-private-backups/download-smoke
+/www/server/nodejs/v24.21.0/bin/node scripts/backup-instance.mjs restore --snapshot /www/server/lifeos-private-backups/download-smoke --target /www/server/lifeos-private-backups/restore-smoke
+```
+
+恢复副本还应在隔离端口验证成员登录与照片读取。服务器 `.env` 里的固定配置密钥不在数据目录中，必须另行安全保存。整站上传通过 HTTPS 到私有桶，**不是客户端加密归档**；若需防止存储服务商读取，后续还须增加客户端加密。
+
+### Docker 部署的离线备份示例
+
 账户模式上线前和每次重要升级后，请对**已停止写入的整个 `/data` 卷**做一次独立备份与空目录恢复演练。仓库提供 `scripts/backup-instance.mjs`：它逐个一致性复制活跃 SQLite 数据库（包括 `identity.sqlite` 与成员数据库），复制照片、配置和历史快照，写入 SHA-256 清单；`verify` 校验每个文件，`restore` 只接受**不存在的目标目录**，绝不覆盖现有数据。备份目标必须在 `/data` 卷之外，且需要足够容量。下面的 `/srv/lifeos-private-backups` 是示例，请换成服务器上仅管理员可访问、不会被宝塔网站直接提供的绝对路径；先创建该目录，并允许容器的 `node` 用户写入。
 
 ```bash
