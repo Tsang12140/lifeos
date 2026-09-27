@@ -160,6 +160,7 @@ import { Composer, ReviewComposer, type ComposerProps } from "./composer";
 import { AliasField, EntityCreateForm, MentionBox, aliasListFrom } from "./entity-forms";
 import { DiagnosticsDrawer, EmptyState, ErrorState, LoadingState } from "./timeline-states";
 import { ShotDropZone, resolveKnownShot, type ShotUpload } from "./shot-drop-zone";
+import { clearComposerDraft, composerDraftScope, readComposerDraft, writeComposerDraft } from "./composer-draft";
 
 import type { AppView, CalendarMode, ComposerKind, CreateEntity, EntityCreateRequest, EntityEditPatch, SettingsPageId, UiFontId } from "./app-types";
 
@@ -216,7 +217,6 @@ import {
   statusLabel,
   timelineHeading,
   weekCardRecords,
-  writeComposerShotsDraft,
 } from "./app-meta";
 import {
   PLACE_ROLE_LABELS,
@@ -309,7 +309,9 @@ function App() {
   const [composerMovieRefs, setComposerMovieRefs] = useState<readonly EntityRef[]>([]);
   // Photos dropped beside the entry box. They are already uploaded by the time
   // they sit here; saving the entry is what links them to the record.
-  const [composerShots, setComposerShots] = useState<readonly AssetLink[]>(readComposerShotsDraft);
+  const [composerShots, setComposerShots] = useState<readonly AssetLink[]>([]);
+  const [composerDraftOwner, setComposerDraftOwner] = useState<string | null>(null);
+  const composerDraftWarningShown = useRef(false);
   const shotsDraftChecked = useRef(false);
   const [saving, setSaving] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
@@ -893,14 +895,45 @@ function App() {
    */
   const handleShotsCleared = (cleared: readonly AssetLink[], restore: () => void) => showToast(`已清空 ${cleared.length} 张照片`, "ok", () => { restore(); showToast(`已恢复 ${cleared.length} 张照片`); });
 
-  // An unsent drop is worth keeping: the files are already on disk, so losing
-  // the draft would leave nothing behind but orphans.
-  useEffect(() => { writeComposerShotsDraft(composerShots); }, [composerShots]);
+  const draftScope = composerDraftScope(authResolved, authState);
+
+  // Never hydrate a previous account's text or photos into the next account.
+  // Legacy installations migrate only their old photo-only draft.
+  useEffect(() => {
+    if (draftScope === null) {
+      setComposerDraftOwner(null);
+      setComposerContent("");
+      setComposerShots([]);
+      return;
+    }
+    const saved = readComposerDraft(draftScope);
+    const legacyShots = draftScope === "legacy" && saved === null ? readComposerShotsDraft() : [];
+    setComposerContent(saved?.content ?? "");
+    setComposerKind(saved?.kind ?? "journal");
+    setComposerPrivate(saved?.isPrivate ?? false);
+    setComposerShots(saved?.shots ?? legacyShots);
+    shotsDraftChecked.current = false;
+    setComposerDraftOwner(draftScope);
+    if (saved?.content) showToast("已恢复上次没发出的正文草稿");
+  }, [draftScope]);
+
+  useEffect(() => {
+    if (draftScope === null || composerDraftOwner !== draftScope) return;
+    const saved = writeComposerDraft(draftScope, {
+      content: composerContent, kind: composerKind, isPrivate: composerPrivate, shots: composerShots,
+    });
+    if (saved && draftScope === "legacy") window.localStorage.removeItem(COMPOSER_SHOTS_STORAGE_KEY);
+    if (!saved && !composerDraftWarningShown.current) {
+      composerDraftWarningShown.current = true;
+      showToast("浏览器无法保存草稿；请先复制正文再离开页面", "warn");
+    }
+  }, [draftScope, composerDraftOwner, composerContent, composerKind, composerPrivate, composerShots]);
 
   // A restored draft can name an asset the collector already took away. Check
   // it once against the real asset list rather than rendering a broken
   // thumbnail forever, and say what happened.
   useEffect(() => {
+    if (draftScope === null || composerDraftOwner !== draftScope) return;
     if (shotsDraftChecked.current) return;
     if (composerShots.length === 0) { shotsDraftChecked.current = true; return; }
     if (!assetsLoaded) return;
@@ -911,7 +944,7 @@ function App() {
     if (dropped === 0) { showToast(`已恢复上次没发出的 ${kept.length} 张照片`); return; }
     setComposerShots(kept);
     showToast(kept.length === 0 ? `草稿里 ${dropped} 张照片已被清理，已从投放区移除` : `草稿里 ${dropped} 张照片已被清理，保留剩下 ${kept.length} 张`);
-  }, [assets, assetsLoaded, composerShots, showToast]);
+  }, [assets, assetsLoaded, composerShots, composerDraftOwner, draftScope, showToast]);
   const rememberMovieEntity = (movie: MovieEntity) => {
     setEntities((current) => {
       const next = current.filter((item) => item.id !== movie.id);
@@ -1235,7 +1268,7 @@ function App() {
     const payload: RecordWritePayload = { kind: composerKind, content, ...(occurred ? { occurredAt: occurred } : {}), ...(composerKind === "task" && dueAt && due ? { dueAt: due } : {}), ...(composerPrivate ? { isPrivate: true } : {}), ...(composerBackfill && !isTodaySelection ? { isBackfill: true } : {}), ...(composerWeather === null ? {} : { weather: composerWeather }), ...(composerMovieRefs.length === 0 ? {} : { entityRefs: composerMovieRefs }), ...(composerShots.length === 0 ? {} : { assetRefs: composerShots }) };
     setSaving(true);
     setActionMessage(null);
-    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); setComposerContent(""); setComposerMovieRefs([]); setComposerShots([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { showToast(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
+    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); if (draftScope !== null) clearComposerDraft(draftScope); setComposerContent(""); setComposerMovieRefs([]); setComposerShots([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { showToast(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
   };
 
   const noteDetailsPayload = (draft: NoteDraft): NoteDetails => {
@@ -1417,7 +1450,7 @@ function App() {
     onUploadShot: uploadComposerShot,
     onNotify: showToast,
     onSubmit: () => void handleCreate(),
-    onClose: () => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); setComposerShots([]); },
+    onClose: () => { setComposerOpen(false); setComposerWeather(null); setComposerMovieRefs([]); },
   };
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   if (!authResolved) return <main className="auth-screen"><div className="auth-panel surface" role="status"><LoaderCircle className="spin" size={22} aria-hidden="true" /><p className="auth-description">正在检查账号会话…</p></div></main>;

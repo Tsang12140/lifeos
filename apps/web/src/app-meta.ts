@@ -112,15 +112,6 @@ export function readComposerShotsDraft(): readonly AssetLink[] {
   }
 }
 
-export function writeComposerShotsDraft(shots: readonly AssetLink[]): void {
-  try {
-    if (shots.length === 0) window.localStorage.removeItem(COMPOSER_SHOTS_STORAGE_KEY);
-    else window.localStorage.setItem(COMPOSER_SHOTS_STORAGE_KEY, JSON.stringify({ shots, savedAt: new Date().toISOString() }));
-  } catch {
-    // Storage can be blocked or full; the draft simply will not survive a reload.
-  }
-}
-
 export const UI_FONT_OPTIONS: readonly { id: UiFontId; label: string; stack: string }[] = [
   { id: "misans", label: "MiSans", stack: '"LifeOS MiSans", "MiSans", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
 ];
