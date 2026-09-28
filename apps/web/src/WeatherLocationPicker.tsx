@@ -127,7 +127,7 @@ export function WeatherLocationPicker({ locationId, city, onChange, disabled = f
       {showDetail ? <p className="settings-weather-location-note" data-weather-location-note>
         {selected === null
           ? `下拉数据内置了 ${meta.provinceCount} 个省级、${meta.cityCount} 个市级、共 ${meta.locationCount} 个和风天气位置，选择即得 Location ID，不依赖网络。`
-          : <>将使用 <code>{selected.locationId}</code> · {selected.city}{selected.districtName === undefined ? "（全市）" : ""}{selected.seatOnly === true ? " · 该州没有全域记录，此为州府数据" : ""}</>}
+          : <>将使用 <code>{selected.locationId}</code>，{selected.city}{selected.districtName === undefined ? "（全市）" : ""}{selected.seatOnly === true ? "，该州没有全域记录，此为州府数据" : ""}</>}
       </p> : null}
     </fieldset>
   );

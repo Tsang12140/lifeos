@@ -20,7 +20,7 @@ export const PLACE_ROLE_LABELS: Record<(typeof PLACE_ROLES)[number], string> = {
  */
 export function entityHint(entity: Entity, entities: readonly Entity[] = []): string {
   if (isMovieEntity(entity)) {
-    return [entity.originalTitle, entity.releaseYear === undefined ? undefined : String(entity.releaseYear), entity.doubanRating === undefined ? undefined : `豆瓣 ${entity.doubanRating}`].filter(Boolean).join(" · ");
+    return [entity.originalTitle, entity.releaseYear === undefined ? undefined : String(entity.releaseYear), entity.doubanRating === undefined ? undefined : `豆瓣 ${entity.doubanRating}`].filter(Boolean).join("，");
   }
   const parts: string[] = [];
   if (entity.type === "person") {
@@ -40,7 +40,7 @@ export function entityHint(entity: Entity, entities: readonly Entity[] = []): st
     const description = entity.description.trim().replace(/\s+/g, " ");
     parts.push(description.length > 36 ? `${description.slice(0, 36)}…` : description);
   }
-  return parts.join(" · ");
+  return parts.join("，");
 }
 
 export interface MentionQuery {

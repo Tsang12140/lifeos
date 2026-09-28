@@ -20,7 +20,7 @@ const HOLIDAYS: readonly HolidayEntry[] = [
   ...dateRange("2025-05-01", "2025-05-05", "holiday", "劳动节"),
   ...dateRange("2025-05-31", "2025-06-02", "holiday", "端午节"),
   { date: "2025-09-28", kind: "workday", name: "国庆节调休" },
-  ...dateRange("2025-10-01", "2025-10-08", "holiday", "国庆节·中秋节"),
+  ...dateRange("2025-10-01", "2025-10-08", "holiday", "国庆节、中秋节"),
   { date: "2025-10-11", kind: "workday", name: "国庆节调休" },
   ...dateRange("2026-01-01", "2026-01-03", "holiday", "元旦"),
   { date: "2026-01-04", kind: "workday", name: "元旦调休" },

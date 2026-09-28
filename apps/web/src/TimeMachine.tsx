@@ -247,7 +247,7 @@ export function TimeMachine() {
         <div className="tm-empty">
           <History size={22} strokeWidth={1.7} aria-hidden="true" />
           <strong>还没有任何快照</strong>
-          <p>备份跑过一次之后，这里会出现可以回看的刻度。备份入口在「设置 · 备份」。</p>
+          <p>备份跑过一次之后，这里会出现可以回看的刻度。备份入口在「设置」里的「备份」。</p>
         </div>
       </section>
     );
@@ -324,9 +324,9 @@ export function TimeMachine() {
               <h2>{`${dayLabel(dayKeyOf(selectedEntry.startedAt)).monthDay} ${timeOf(selectedEntry.startedAt)}`}</h2>
               <p className="tm-panel-sub">
                 {selectedEntry.fileName}
-                <span aria-hidden="true"> · </span>
+                <span aria-hidden="true">，</span>
                 {selectedEntry.local ? "本地副本" : "仅对象存储"}
-                <span aria-hidden="true"> · </span>
+                <span aria-hidden="true">，</span>
                 {selectedEntry.reason}
               </p>
             </div>
@@ -455,8 +455,8 @@ function DiffRow({
               </span>
               <span className="tm-diff-meta">
                 {sample.occurredDay ?? ""}
-                {sample.revisions === undefined ? "" : ` · v${sample.revisions.then}→v${sample.revisions.now}`}
-                {sample.restorable === true ? " · 回收站里还在" : ""}
+                {sample.revisions === undefined ? "" : `，v${sample.revisions.then}→v${sample.revisions.now}`}
+                {sample.restorable === true ? "，回收站里还在" : ""}
               </span>
               <DiffPhotos sample={sample} />
             </li>

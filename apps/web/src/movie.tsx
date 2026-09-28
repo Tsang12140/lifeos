@@ -194,7 +194,7 @@ export function movieRef(movie: MovieEntity): MovieEntityRef {
 }
 
 function movieMeta(movie: Pick<MovieEntity, "originalTitle" | "releaseYear">): string {
-  return [movie.originalTitle, movie.releaseYear === undefined ? undefined : String(movie.releaseYear)].filter(Boolean).join(" · ");
+  return [movie.originalTitle, movie.releaseYear === undefined ? undefined : String(movie.releaseYear)].filter(Boolean).join("，");
 }
 
 /**
@@ -243,7 +243,7 @@ export function MovieSettingsCard({ statusState, onChanged, onRetry }: { readonl
   const confirmedLabel = status === null ? null : !status.enabled ? "已关闭" : status.connected ? "已连接" : status.keyConfigured ? "待测试" : "未配置";
   const stateLabel = statusState.phase === "ready" ? testPassed ? "测试通过" : confirmedLabel : statusState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-card movie-settings-card" data-movie-settings>
-    <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选 · TMDb 仅用于识别，豆瓣链接只保存为外部 ID</small></div><span className={`settings-status ${statusState.phase === "ready" && (testPassed || (status?.enabled && status.connected)) ? "is-ready" : ""}`} data-movie-status-phase={statusState.phase} data-movie-test-result={testPassed ? "passed" : undefined}>{stateLabel}</span></div>
+    <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选，TMDb 仅用于识别，豆瓣链接只保存为外部 ID</small></div><span className={`settings-status ${statusState.phase === "ready" && (testPassed || (status?.enabled && status.connected)) ? "is-ready" : ""}`} data-movie-status-phase={statusState.phase} data-movie-test-result={testPassed ? "passed" : undefined}>{stateLabel}</span></div>
     {statusState.phase === "failed" ? <div className="movie-settings-read-error" role="alert"><span>{statusState.error}</span>{status === null ? null : <small>上次确认：{confirmedLabel}（模块{status.enabled ? "已启用" : "已关闭"}）</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
     <div className="movie-settings-fields">
       {/* 这一行**只能**吃 `.movie-enabled-toggle`（原生 checkbox + 文字的一整行）。

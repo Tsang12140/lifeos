@@ -131,7 +131,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
     <div className="welcome-brand" aria-label="LifeOS"><img className="welcome-brand-mark" src="/favicon.svg?v=2" alt="" /><span>LifeOS</span></div>
     <section className="welcome-panel" aria-labelledby="welcome-title">
       <div className="welcome-step-icon" aria-hidden="true">{stage === "weather" ? <CloudSun size={24} /> : stage === "login" ? <LockKeyhole size={24} /> : <KeyRound size={24} />}</div>
-      <p className="welcome-eyebrow">{stage === "weather" ? "最后一步 · 天气" : stage === "login" ? "你的私人空间" : "受邀加入"}</p>
+      <p className="welcome-eyebrow">{stage === "weather" ? "最后一步，天气" : stage === "login" ? "你的私人空间" : "受邀加入"}</p>
       <h1 id="welcome-title">{stage === "login" ? "欢迎回来" : stage === "invite" ? "输入邀请码" : stage === "create" ? "创建你的空间" : "天气位置"}</h1>
       <p className="welcome-intro">{stage === "login" ? "登录后，继续记录自己的生活。" : stage === "invite" ? "邀请码由管理员发放，只能用于创建一个独立空间。" : stage === "create" ? "设置自己的账号和密码。你的记录与其他空间互不相通。" : "选择定位，或固定一个城市。"}</p>
 

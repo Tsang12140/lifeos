@@ -137,7 +137,7 @@ export function BackupCalendar({ initialRuns = [] }: { readonly initialRuns?: re
         {selectedRuns.map((run) => <div className="backup-calendar-run" key={run.id}>
           <span className={`backup-calendar-run-dot is-${run.status}`} />
           <span className="backup-calendar-run-icon">{run.provider === "local" ? <HardDrive size={14} aria-hidden="true" /> : <Cloud size={14} aria-hidden="true" />}</span>
-          <span className="backup-calendar-run-copy"><strong>{providerLabel(run.provider)}</strong><small>{run.status === "success" ? `${formatTime(run.startedAt)}${formatBytes(run.sizeBytes) ? ` · ${formatBytes(run.sizeBytes)}` : ""}` : run.status === "skipped" ? `已跳过：${run.error ?? "未配置"}` : `失败：${run.error ?? "未知错误"}`}</small></span>
+          <span className="backup-calendar-run-copy"><strong>{providerLabel(run.provider)}</strong><small>{run.status === "success" ? `${formatTime(run.startedAt)}${formatBytes(run.sizeBytes) ? `，${formatBytes(run.sizeBytes)}` : ""}` : run.status === "skipped" ? `已跳过：${run.error ?? "未配置"}` : `失败：${run.error ?? "未知错误"}`}</small></span>
           {run.kind === "scheduled" ? <em>定时</em> : null}
         </div>)}
       </div>}

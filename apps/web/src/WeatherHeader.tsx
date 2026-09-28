@@ -79,12 +79,11 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
               {isChanging ? <span className="date-flap-leaf"><span>{previousDigits[index]}</span></span> : null}
             </span>;
           })}
+          <strong className="weather-date-weekday">{weekdayShort(selectedDate)}</strong>
         </span>
         <input type="date" value={selectedDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
       </label>
       <div className="weather-date-meta" aria-label={`${weekdayShort(selectedDate)}${isToday ? "，今天" : "，回今天"}`}>
-        <strong className="weather-date-weekday">{weekdayShort(selectedDate)}</strong>
-        <span className="weather-date-meta-separator" aria-hidden="true">·</span>
         {selectedDate === today
           ? <span className="weather-date-return is-current">今天</span>
           : <button className="weather-date-return is-return" type="button" onClick={() => onChange(today)} aria-label="回到今天" title="回到今天">回今天</button>}
