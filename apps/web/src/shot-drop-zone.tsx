@@ -146,12 +146,11 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
           <img src={assetThumbUrl(shot.assetId, 400)} alt={shot.label ?? "已添加的照片"} loading="lazy" decoding="async" />
           <button className="shot-tile-remove" type="button" onClick={() => remove(shot.assetId)} aria-label={`移除 ${shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
         </li>)}
-        {/* Keep the plus slot in the photo row; only reveal its label when the
-            row has enough width to avoid squeezing the tiles or save control. */}
+        {/* The same dashed square is the only photo slot when empty and stays
+            at the end of the row after photos are added. */}
         <li className="shot-tile shot-tile-add">
           <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} aria-label="添加照片">
             <Plus size={18} strokeWidth={2} aria-hidden="true" />
-            <span className="shot-add-label">添加照片</span>
           </button>
         </li>
       </ul>

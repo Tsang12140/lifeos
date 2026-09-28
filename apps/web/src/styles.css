@@ -3323,8 +3323,8 @@ h2 {
   }
 }
 
-/* The add control stays at the end of the photo row. It can show a short label
-   when empty and wide, but remains a compact square when space is tight. */
+/* The add control stays at the end of the photo row as the same dashed square
+   whether it is the only tile or follows photos. */
 .shot-tile-add {
   display: grid;
   place-items: center;
@@ -3356,8 +3356,6 @@ h2 {
   opacity: 0.5;
   cursor: default;
 }
-
-.shot-add-label { display: none; }
 
 /* The count and the broom ride the end of the tile row.
 
@@ -11997,15 +11995,6 @@ button.relation-chip {
   .weather-date-flaps { height: 42px; }
   .weather-date-context { font-size: .62rem; }
   .month-cell .calendar-day-markers { transform: scale(.5); }
-}
-
-/* Let the empty photo affordance explain itself only when its own row can
-   afford the extra width; the tiles and save button never get squeezed. */
-.composer-mobile-action-row { container-type: inline-size; }
-@container (min-width: 350px) {
-  .shot-strip[data-count="0"] .shot-tile-add { flex-basis: 116px; width: 116px; }
-  .shot-strip[data-count="0"] .shot-tile-add button { display: flex; justify-content: center; align-items: center; gap: 7px; }
-  .shot-strip[data-count="0"] .shot-add-label { display: inline; font-size: 0.74rem; font-weight: 650; line-height: 1; white-space: nowrap; }
 }
 
 /* Search needs its own row on phones: an absolute corner button covered the
