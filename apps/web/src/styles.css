@@ -489,7 +489,7 @@ textarea:focus-visible {
   gap: clamp(12px, 2.2vw, 28px);
 }
 
-.weather-date-navigation { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; }
+.weather-date-navigation { display: grid; grid-template-columns: 38px minmax(144px, max-content) 38px; align-items: center; flex: 0 0 auto; gap: 6px; }
 
 .weather-date-step,
 .weather-header-refresh {
@@ -517,11 +517,12 @@ textarea:focus-visible {
   position: relative;
   z-index: 1;
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
-  min-height: 62px;
-  padding: 5px 9px 5px 5px;
-  border-radius: 14px;
+  justify-content: center;
+  min-height: 50px;
+  padding: 0 5px;
+  border-radius: 10px;
   color: var(--ink);
   cursor: pointer;
 }
@@ -565,60 +566,15 @@ textarea:focus-visible {
 @keyframes date-flip-forward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(-76deg); filter: brightness(.82); } 100% { transform: rotateX(-90deg); opacity: .08; } }
 @keyframes date-flip-backward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(76deg); filter: brightness(.82); } 100% { transform: rotateX(90deg); opacity: .08; } }
 
-.weather-date-context { position: relative; z-index: 4; display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 32px; margin-left: 9px; color: var(--weather-header-ink); text-align: center; text-shadow: var(--weather-header-text-shadow); font-size: 0.78rem; line-height: 1.1; white-space: nowrap; }
-.weather-date-context strong { font-weight: 760; }
-.weather-date-calendar { margin-left: 8px; color: #62779e; }
-
-/* The badge starts at the literal card corner.  The header clips its lower-left
-   edge with the same radius as the card, so this is an inset corner detail—not
-   a tab attached below the card.  The modest left inset makes the short word
-   look centred after that corner has been clipped away. */
-.weather-corner-today,
-.weather-corner-today-hit {
-  position: absolute;
-  z-index: 3;
-  bottom: 0;
-  left: 0;
-  width: 74px;
-  margin: 0;
-  border: 0;
-}
-
-.weather-corner-today {
-  box-sizing: border-box;
-  display: grid;
-  height: 26px;
-  padding: 0 5px 0 8px;
-  border-top: 1.5px solid rgb(255 255 255 / 0.72);
-  border-right: 1.5px solid rgb(255 255 255 / 0.72);
-  border-radius: 0 11px 0 0;
-  place-items: center;
-  color: var(--weather-header-ink);
-  background: transparent;
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 800;
-  letter-spacing: 0.01em;
-  line-height: 1;
-  pointer-events: none;
-  text-shadow: var(--weather-header-text-shadow);
-}
-
-.weather-corner-today.is-current { padding-left: 10px; }
-.weather-corner-today.is-return { letter-spacing: 0; }
-
-/* The transparent wrapper supplies a dependable touch target without drawing
-   a second button shape; only the weather-colored text remains visible. */
-.weather-corner-today-hit {
-  height: 44px;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.weather-corner-today-hit:hover .weather-corner-today { opacity: 0.78; }
-.weather-corner-today-hit:active .weather-corner-today { opacity: 0.64; }
-.weather-corner-today-hit:focus-visible { outline: 2px solid var(--weather-header-ink); outline-offset: -3px; }
+.weather-date-center { display: grid; justify-items: center; align-content: center; min-width: 0; }
+.weather-date-meta { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 18px; color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.72rem; line-height: 1; white-space: nowrap; }
+.weather-date-weekday { color: var(--weather-header-ink); font-weight: 760; }
+.weather-date-meta-separator { opacity: 0.62; }
+.weather-date-return { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 4em; height: 18px; margin: 0; padding: 0; border: 0; color: var(--weather-header-muted); background: transparent; font: inherit; font-weight: 620; line-height: 1; white-space: nowrap; }
+.weather-date-return.is-current { opacity: 0.72; }
+.weather-date-return.is-return { cursor: pointer; }
+.weather-date-return.is-return:hover { color: var(--weather-header-ink); text-decoration: underline; text-underline-offset: 2px; }
+.weather-date-return.is-return:focus-visible { border-radius: 4px; outline: 2px solid var(--weather-header-ink); outline-offset: 2px; }
 
 .weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -654,11 +610,10 @@ textarea:focus-visible {
 .weather-header--night .weather-date-picker { color: var(--weather-header-ink); }
 .weather-header--night .weather-date-picker:hover { background: rgb(255 255 255 / 0.08); }
 .weather-header--night .weather-date-picker:focus-within { background: rgb(255 255 255 / 0.1); }
-.weather-header--night .weather-date-calendar { color: #b8c9f1; }
 .weather-header--night .date-flap { border-color: rgb(167 190 235 / 0.3); color: #eef3ff; background: rgb(18 32 65 / 0.86); box-shadow: inset 0 1px 0 rgb(221 231 255 / 0.14), 0 2px 5px rgb(2 8 23 / 0.22); }
 .weather-header--night .date-flap::after { background: rgb(211 224 255 / 0.18); box-shadow: 0 1px 0 rgb(4 10 25 / 0.5); }
 .weather-header--night .date-flap-leaf { background: linear-gradient(180deg, rgb(37 55 93 / 0.94), rgb(15 28 58 / 0.9)); }
-.weather-header--night .weather-date-context { color: #dce7ff; }
+.weather-header--night .weather-date-meta { color: #c4d2ee; }
 .weather-header--night .weather-configure-button { border-color: rgb(165 188 235 / 0.3); color: #e2eaff; background: rgb(14 28 59 / 0.68); }
 .weather-header--night .weather-configure-button:hover { border-color: rgb(181 202 246 / 0.56); background: rgb(28 48 88 / 0.82); }
 
@@ -7483,7 +7438,6 @@ button.relation-chip {
 
   .weather-header-content { justify-content: center; }
   .weather-date-navigation { min-width: 0; }
-  .weather-date-navigation > .weather-date-step:first-child { margin-left: 38px; }
   .weather-header-summary { margin-left: 0; }
   .weather-header-refresh { margin-left: 0; margin-right: 38px; }
 }
@@ -7491,17 +7445,16 @@ button.relation-chip {
 @media (max-width: 560px) {
   .weather-header { justify-content: flex-start; min-width: 0; min-height: 94px; padding-right: 8px; padding-left: 8px; border-radius: 18px; }
   .weather-header-content { display: flex; align-items: center; justify-content: center; gap: 5px; }
-  .weather-date-navigation { gap: 4px; }
-  .weather-date-navigation > .weather-date-step:first-child { margin-left: 34px; }
+  .weather-date-navigation { width: 100%; grid-template-columns: 32px minmax(0, 1fr) 32px; gap: 4px; }
   .weather-date-step,
   .weather-header-refresh { flex-basis: 32px; width: 32px; height: 32px; border-radius: 9px; }
-  .weather-date-picker { min-height: 54px; padding-right: 4px; padding-left: 2px; }
+  .weather-date-picker { min-height: 45px; padding-right: 2px; padding-left: 2px; }
   .weather-date-flaps { height: 45px; }
   .date-flap { width: 26px; height: 43px; font-size: 1.88rem; line-height: 43px; }
   .date-flap-leaf > span { height: 43px; line-height: 43px; }
   .date-flap--day-start { margin-left: 6px; }
-  .weather-date-context { margin-left: 6px; font-size: 0.72rem; }
-  .weather-date-calendar { display: none; }
+  .weather-date-meta { gap: 4px; min-height: 17px; font-size: 0.68rem; }
+  .weather-date-return { height: 17px; }
   .weather-header-place { display: none; }
   .weather-header-condition strong { font-size: 0.8rem; }
   .weather-header-temperature { font-size: 0.78rem; }
@@ -7510,9 +7463,9 @@ button.relation-chip {
 }
 
 @media (max-width: 390px) {
-  .weather-date-navigation > .weather-date-step:first-child { margin-left: 30px; }
   .weather-header-refresh { margin-right: 30px; }
-  .weather-date-step { display: none; }
+  .weather-date-navigation { grid-template-columns: 28px minmax(0, 1fr) 28px; gap: 2px; }
+  .weather-date-step { flex-basis: 28px; width: 28px; height: 30px; }
   .weather-date-picker { padding-right: 0; }
   .weather-header-summary { position: absolute; right: 48px; bottom: 12px; }
   .weather-header-condition strong { display: none; }
@@ -11105,15 +11058,14 @@ button.relation-chip {
   }
 
   .weather-date-navigation {
+    display: grid;
+    width: 100%;
+    flex: 1 1 auto;
+    grid-template-columns: 38px minmax(0, 1fr) 38px;
     min-width: 0;
-    justify-content: flex-start;
-    gap: 5px;
+    justify-content: stretch;
+    gap: 4px;
   }
-
-  /* The older compact header reserved 30px before the first arrow. On a
-     calendar view that made the whole page control look accidentally centred
-     instead of belonging to the left edge of the date block. */
-  .weather-date-navigation > .weather-date-step:first-child { margin-left: 0; }
 
   .weather-date-step {
     display: inline-grid !important;
@@ -11123,13 +11075,13 @@ button.relation-chip {
     border-radius: 11px;
   }
 
-  .weather-date-picker { min-width: 0; min-height: 64px; padding: 5px 3px; }
+  .weather-date-center { width: 100%; min-width: 0; }
+  .weather-date-picker { min-width: 0; min-height: 52px; padding: 0 3px; }
   .weather-date-flaps { height: 52px; }
   .date-flap { width: 29px; height: 50px; font-size: 2.16rem; line-height: 50px; }
   .date-flap-leaf > span { height: 50px; line-height: 50px; }
   .date-flap--day-start { margin-left: 6px; }
-  .weather-date-context { min-width: 0; margin-left: 5px; font-size: 0.74rem; }
-  .weather-date-calendar { display: none; }
+  .weather-date-meta { gap: 5px; min-height: 18px; font-size: 0.72rem; }
 
   .weather-header-summary {
     position: relative !important;
@@ -11237,12 +11189,13 @@ button.relation-chip {
 @media (max-width: 560px) {
   .weather-header { min-height: 120px; padding-right: 10px; padding-left: 10px; }
   .weather-header-content { grid-template-columns: minmax(0, 1fr) minmax(88px, auto); gap: 7px; }
-  .weather-date-step { flex-basis: 34px; width: 34px; height: 34px; border-radius: 10px; }
+  .weather-date-navigation { grid-template-columns: 32px minmax(0, 1fr) 32px; }
+  .weather-date-step { flex-basis: 32px; width: 32px; height: 32px; border-radius: 10px; }
   .weather-date-picker { min-height: 60px; }
   .weather-date-flaps { height: 50px; }
   .date-flap { width: 27px; height: 48px; font-size: 2rem; line-height: 48px; }
   .date-flap-leaf > span { height: 48px; line-height: 48px; }
-  .weather-date-context { margin-left: 4px; font-size: 0.71rem; }
+  .weather-date-meta { gap: 4px; font-size: 0.68rem; }
   .weather-header-summary { min-width: 88px; }
   .weather-header-place { max-width: 98px; }
 }
@@ -11250,10 +11203,11 @@ button.relation-chip {
 @media (max-width: 390px) {
   .weather-header-content { gap: 5px; }
   .weather-header-content { grid-template-columns: minmax(0, 1fr) minmax(76px, auto); gap: 4px; }
-  .weather-date-navigation { gap: 2px; }
-  .weather-date-step { flex-basis: 30px; width: 30px; height: 30px; }
+  .weather-date-navigation { grid-template-columns: 28px minmax(0, 1fr) 28px; gap: 2px; }
+  .weather-date-step { flex-basis: 28px; width: 28px; height: 28px; }
   .weather-date-picker { padding-right: 0; padding-left: 0; }
-  .weather-date-context { margin-left: 2px; font-size: 0.66rem; }
+  .weather-date-meta { gap: 3px; font-size: 0.62rem; }
+  .weather-date-return { height: 16px; }
   .weather-header-summary { min-width: 76px; }
   .weather-header-place { max-width: 88px; }
   .weather-header-condition strong { font-size: 0.76rem; }
@@ -11348,24 +11302,6 @@ button.relation-chip {
    fields. Keep each action discoverable through its icon and accessible name;
    the verbose labels are the first thing to yield when the rail is tight. */
 @media (max-width: 900px) {
-  .weather-date-context {
-    flex-direction: column;
-    align-items: center;
-    gap: 1px;
-    line-height: 1;
-  }
-
-  .weather-date-context small {
-    padding: 0;
-    border-radius: 0;
-    color: var(--weather-header-muted);
-    text-shadow: var(--weather-header-muted-text-shadow);
-    background: transparent;
-    font-size: 0.58rem;
-    font-weight: 650;
-    line-height: 1;
-  }
-
   .composer-fields {
     display: flex;
     flex-wrap: nowrap;
@@ -11724,19 +11660,6 @@ button.relation-chip {
   .settings-backup-stats { grid-template-columns: minmax(0, 1fr); }
 }
 
-@media (max-width: 560px) {
-  .weather-corner-today,
-  .weather-corner-today-hit { width: 70px; }
-  .weather-corner-today { height: 24px; padding-right: 4px; padding-left: 7px; border-radius: 0 10px 0 0; font-size: 0.78rem; }
-  .weather-corner-today.is-current { padding-left: 9px; }
-}
-
-@media (max-width: 390px) {
-  .weather-corner-today,
-  .weather-corner-today-hit { width: 66px; }
-  .weather-corner-today { height: 23px; border-radius: 0 9px 0 0; font-size: 0.76rem; }
-}
-
 /* ── 日历自己的设置（周期旁边那个齿轮） ────────────────────────────────────────
    日历只留两个旋钮：小结怎么产生、文字能不能就地改。面板沿用周期面板那套
    「内联卡片」语言，好让点开齿轮看起来是同一类表面，不是另一个页面。 */
@@ -11979,13 +11902,13 @@ button.relation-chip {
   .month-day-solar { max-width: calc(100% - 18px); font-size: .55rem; }
   .month-cell .calendar-day-markers { right: auto; left: 1px; bottom: 1px; grid-template-columns: repeat(4, 8px); justify-content: start; width: 32px; transform: scale(.68); transform-origin: bottom left; }
   .month-cell:has(.calendar-day-markers) .month-day-solar { display: none; }
-  .weather-date-navigation { flex: 0 1 auto; }
+  .weather-date-navigation { flex: 1 1 auto; }
   .weather-date-picker { flex: 0 0 auto; }
   .date-flap { width: 23px; height: 42px; font-size: 1.55rem; line-height: 42px; }
   .date-flap-leaf > span { height: 42px; line-height: 42px; }
   .weather-date-flaps { height: 44px; }
   .date-flap--day-start { margin-left: 4px; }
-  .weather-date-context { margin-left: 3px; font-size: .68rem; }
+  .weather-date-meta { gap: 4px; font-size: .68rem; }
 }
 
 @media (max-width: 390px) {
@@ -11993,7 +11916,7 @@ button.relation-chip {
   .date-flap { width: 21px; height: 40px; font-size: 1.42rem; line-height: 40px; }
   .date-flap-leaf > span { height: 40px; line-height: 40px; }
   .weather-date-flaps { height: 42px; }
-  .weather-date-context { font-size: .62rem; }
+  .weather-date-meta { gap: 3px; font-size: .62rem; }
   .month-cell .calendar-day-markers { transform: scale(.5); }
 }
 

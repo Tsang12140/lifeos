@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CalendarDays, CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
 import { getWeatherDecision, getWeatherPhase, findWeatherDay, type WeatherCategory, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherSky } from "./WeatherBackground";
@@ -41,6 +41,7 @@ function WeatherConditionGlyph({ category }: { readonly category: WeatherCategor
 
 function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void }) {
   const today = localDateToday();
+  const isToday = selectedDate === today;
   const previousDateRef = useRef(selectedDate);
   const flipIdRef = useRef(0);
   const [flip, setFlip] = useState<DateFlipState | null>(null);
@@ -68,20 +69,27 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   const accessibleDate = `${Number(selectedDate.slice(5, 7))}月${Number(selectedDate.slice(8, 10))}日${weekdayShort(selectedDate)}`;
   return <div className="weather-date-navigation" aria-label="日期导航">
     <button className="weather-date-step" type="button" onClick={() => step(-1)} aria-label="前一天"><ArrowLeft size={18} strokeWidth={2} aria-hidden="true" /></button>
-    <label className="weather-date-picker" aria-label={`选择日期，当前${accessibleDate}`}>
-      <span className="weather-date-flaps" aria-hidden="true">
-        {digits.map((digit, index) => {
-          const isChanging = flip?.changed[index] === true;
-          return <span className={`date-flap ${index === 2 ? "date-flap--day-start" : ""} ${isChanging ? `is-flipping is-flipping--${flip?.direction}` : ""}`} key={isChanging ? `${flip?.id}-${index}` : index}>
-            <span className="date-flap-face">{digit}</span>
-            {isChanging ? <span className="date-flap-leaf"><span>{previousDigits[index]}</span></span> : null}
-          </span>;
-        })}
-      </span>
-      <CalendarDays className="weather-date-calendar" size={15} strokeWidth={1.9} aria-hidden="true" />
-      <input type="date" value={selectedDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
-    </label>
-    <span className="weather-date-context"><strong>{weekdayShort(selectedDate)}</strong></span>
+    <div className="weather-date-center">
+      <label className="weather-date-picker" aria-label={`选择日期，当前${accessibleDate}`}>
+        <span className="weather-date-flaps" aria-hidden="true">
+          {digits.map((digit, index) => {
+            const isChanging = flip?.changed[index] === true;
+            return <span className={`date-flap ${index === 2 ? "date-flap--day-start" : ""} ${isChanging ? `is-flipping is-flipping--${flip?.direction}` : ""}`} key={isChanging ? `${flip?.id}-${index}` : index}>
+              <span className="date-flap-face">{digit}</span>
+              {isChanging ? <span className="date-flap-leaf"><span>{previousDigits[index]}</span></span> : null}
+            </span>;
+          })}
+        </span>
+        <input type="date" value={selectedDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
+      </label>
+      <div className="weather-date-meta" aria-label={`${weekdayShort(selectedDate)}${isToday ? "，今天" : "，回今天"}`}>
+        <strong className="weather-date-weekday">{weekdayShort(selectedDate)}</strong>
+        <span className="weather-date-meta-separator" aria-hidden="true">·</span>
+        {selectedDate === today
+          ? <span className="weather-date-return is-current">今天</span>
+          : <button className="weather-date-return is-return" type="button" onClick={() => onChange(today)} aria-label="回到今天" title="回到今天">回今天</button>}
+      </div>
+    </div>
     <button className="weather-date-step" type="button" onClick={() => step(1)} aria-label="后一天"><ArrowRight size={18} strokeWidth={2} aria-hidden="true" /></button>
   </div>;
 }
@@ -150,8 +158,6 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
   const weatherSceneClass = displayDay && decision ? `weather-header--${decision.category} weather-header--${phase}` : "weather-header--empty";
-  const isToday = selectedDate === today;
-  const cornerBadge = <span className={`weather-corner-today ${isToday ? "is-current" : "is-return"}`}>{isToday ? "今天" : "回今天"}</span>;
   return <section className={`weather-header ${weatherSceneClass} ${showDateNavigation ? "" : "weather-header--summary-only"}`} aria-label={`${selectedDate} 的天气`}>
     {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
@@ -164,7 +170,6 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
         </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>
-    {isToday ? cornerBadge : <button className="weather-corner-today-hit" type="button" onClick={() => onDateChange(today)} aria-label="回到今天" title="回到今天">{cornerBadge}</button>}
     {status?.configured && manualBusy ? <span className="weather-header-refresh-status" aria-hidden="true"><LoaderCircle className="spin" size={15} /></span> : null}
   </section>;
 }
