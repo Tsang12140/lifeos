@@ -48,6 +48,13 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   const digits = dateDigits(selectedDate);
   const previousDigits = dateDigits(flip?.previous ?? selectedDate);
   const step = onStep ?? ((direction: number) => onChange(shiftDate(selectedDate || today, direction)));
+  const renderDigit = (digit: string, index: number) => {
+    const isChanging = flip?.changed[index] === true;
+    return <span className={`date-flap ${isChanging ? `is-flipping is-flipping--${flip?.direction}` : ""}`} key={isChanging ? `${flip?.id}-${index}` : index}>
+      <span className="date-flap-face">{digit}</span>
+      {isChanging ? <span className="date-flap-leaf"><span>{previousDigits[index]}</span></span> : null}
+    </span>;
+  };
 
   useEffect(() => {
     const previous = previousDateRef.current;
@@ -72,13 +79,8 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
     <div className="weather-date-center">
       <label className="weather-date-picker" aria-label={`选择日期，当前${accessibleDate}`}>
         <span className="weather-date-flaps" aria-hidden="true">
-          {digits.map((digit, index) => {
-            const isChanging = flip?.changed[index] === true;
-            return <span className={`date-flap ${index === 2 ? "date-flap--day-start" : ""} ${isChanging ? `is-flipping is-flipping--${flip?.direction}` : ""}`} key={isChanging ? `${flip?.id}-${index}` : index}>
-              <span className="date-flap-face">{digit}</span>
-              {isChanging ? <span className="date-flap-leaf"><span>{previousDigits[index]}</span></span> : null}
-            </span>;
-          })}
+          <span className="weather-date-flap-pair weather-date-month-pair">{digits.slice(0, 2).map((digit, index) => renderDigit(digit, index))}</span>
+          <span className="weather-date-flap-pair weather-date-day-pair">{digits.slice(2).map((digit, offset) => renderDigit(digit, offset + 2))}</span>
         </span>
         <input type="date" value={selectedDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
       </label>
