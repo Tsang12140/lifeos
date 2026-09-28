@@ -489,7 +489,7 @@ textarea:focus-visible {
   gap: clamp(12px, 2.2vw, 28px);
 }
 
-.weather-date-navigation { display: grid; grid-template-columns: 38px minmax(228px, max-content) 38px; grid-template-rows: max-content max-content; align-items: center; flex: 0 0 auto; column-gap: 6px; row-gap: 0; }
+.weather-date-navigation { display: grid; grid-template-columns: 38px minmax(144px, max-content) 38px; align-items: center; flex: 0 0 auto; gap: 6px; }
 
 .weather-date-step,
 .weather-header-refresh {
@@ -566,20 +566,14 @@ textarea:focus-visible {
 @keyframes date-flip-forward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(-76deg); filter: brightness(.82); } 100% { transform: rotateX(-90deg); opacity: .08; } }
 @keyframes date-flip-backward { 0% { transform: rotateX(0deg); filter: brightness(1); } 48% { transform: rotateX(76deg); filter: brightness(.82); } 100% { transform: rotateX(90deg); opacity: .08; } }
 
-.weather-date-center { display: contents; }
-.weather-date-navigation > .weather-date-step[aria-label="前一天"] { grid-column: 1; grid-row: 1; justify-self: center; align-self: center; }
-.weather-date-navigation > .weather-date-step[aria-label="后一天"] { grid-column: 3; grid-row: 1; justify-self: center; align-self: center; }
-.weather-date-picker { grid-column: 2; grid-row: 1; justify-self: center; }
-.weather-date-flaps { position: relative; }
-.weather-date-weekday { position: absolute; z-index: 2; top: 50%; left: calc(100% + 6px); transform: translateY(-50%); color: var(--weather-header-ink); font-size: 0.72rem; font-weight: 760; line-height: 1; white-space: nowrap; pointer-events: none; }
-.weather-date-meta { grid-column: 2; grid-row: 2; justify-self: center; display: inline-flex; align-items: center; justify-content: center; width: 4em; min-height: 18px; color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.72rem; line-height: 1; white-space: nowrap; }
+.weather-date-center { display: grid; justify-items: center; align-content: center; min-width: 0; }
+.weather-date-meta { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 18px; color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.72rem; line-height: 1; white-space: nowrap; }
+.weather-date-weekday { color: var(--weather-header-ink); font-weight: 760; }
 .weather-date-return { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 4em; height: 18px; margin: 0; padding: 0; border: 0; color: var(--weather-header-muted); background: transparent; font: inherit; font-weight: 620; line-height: 1; white-space: nowrap; }
-.weather-date-return { border-radius: 8px; text-decoration: none; transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
 .weather-date-return.is-current { opacity: 0.72; }
 .weather-date-return.is-return { cursor: pointer; }
-.weather-date-return.is-return:hover { color: var(--weather-header-ink); background: rgb(255 255 255 / 0.38); box-shadow: 0 3px 9px rgb(35 51 78 / 0.13); transform: translateY(-1px); text-decoration: none; }
-.weather-date-return.is-return:focus-visible { outline: 2px solid rgb(102 132 212 / 0.66); outline-offset: 2px; background: rgb(255 255 255 / 0.42); box-shadow: 0 3px 10px rgb(35 51 78 / 0.14); }
-.weather-date-return.is-return:active { background: rgb(255 255 255 / 0.52); box-shadow: 0 1px 3px rgb(35 51 78 / 0.12); transform: translateY(0); }
+.weather-date-return.is-return:hover { color: var(--weather-header-ink); text-decoration: underline; text-underline-offset: 2px; }
+.weather-date-return.is-return:focus-visible { border-radius: 4px; outline: 2px solid var(--weather-header-ink); outline-offset: 2px; }
 
 .weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -11923,12 +11917,6 @@ button.relation-chip {
   .weather-date-flaps { height: 42px; }
   .weather-date-meta { gap: 3px; font-size: .62rem; }
   .month-cell .calendar-day-markers { transform: scale(.5); }
-}
-
-@media (max-width: 340px) {
-  .date-flap { width: 20px; }
-  .date-flap--day-start { margin-left: 3px; }
-  .weather-date-weekday { left: calc(100% + 1px); font-size: .62rem; }
 }
 
 /* Search needs its own row on phones: an absolute corner button covered the
