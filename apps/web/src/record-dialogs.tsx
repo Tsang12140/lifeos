@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   BookOpen,
   Check,
@@ -252,17 +252,17 @@ export function NoteEditorDialog({ record, createOpen, entities, onCreateEntity,
   </dialog>;
 }
 
-export function NotesLibrary({ records, loading, error, entities, onRetry, onCreateEntity, onSave, onDelete }: { readonly records: readonly RecordView[] | null; readonly loading: boolean; readonly error: string | null; readonly entities: readonly Entity[]; readonly onRetry: () => void; readonly onCreateEntity: CreateEntity; readonly onSave: NoteSaveHandler; readonly onDelete: (record: RecordView) => void }) {
+export function NotesLibrary({ records, loading, error, entities, onRetry, onCreateEntity, onSave, onEdit, onDelete, editor }: { readonly records: readonly RecordView[] | null; readonly loading: boolean; readonly error: string | null; readonly entities: readonly Entity[]; readonly onRetry: () => void; readonly onCreateEntity: CreateEntity; readonly onSave: NoteSaveHandler; readonly onEdit: (record: RecordView) => void; readonly onDelete: (record: RecordView) => void; readonly editor?: ReactNode }) {
   const [filter, setFilter] = useState<NoteFormat | "all">("all");
-  const [editorRecord, setEditorRecord] = useState<RecordView | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const items = useMemo(() => [...(records ?? [])]
     .filter((record) => record.kind === "note")
     .filter((record) => filter === "all" || noteFormatOf(record) === filter)
     .sort((left, right) => Date.parse(right.updatedAt?.value ?? right.createdAt.value) - Date.parse(left.updatedAt?.value ?? left.createdAt.value)), [records, filter]);
-  const closeEditor = () => { setEditorRecord(null); setCreateOpen(false); };
+  const closeEditor = () => setCreateOpen(false);
   return <section className="notes-library" data-view="notes" aria-labelledby="notes-library-title">
-    <div className="page-heading notes-library-heading"><div><p className="eyebrow">文字资料库</p><h1 id="notes-library-title">笔记</h1><p>按内容浏览、检索和续写文章、碎片与摘抄。</p></div><button className="primary-button" data-note-create type="button" onClick={() => { setEditorRecord(null); setCreateOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建笔记</span></button></div>
+    <div className="page-heading notes-library-heading"><div><p className="eyebrow">文字资料库</p><h1 id="notes-library-title">笔记</h1><p>按内容浏览、检索和续写文章、碎片与摘抄。</p></div><button className="primary-button" data-note-create type="button" onClick={() => setCreateOpen(true)}><Plus size={16} aria-hidden="true" /><span>新建笔记</span></button></div>
+    {editor}
     <div className="notes-filter-tabs" role="tablist" aria-label="笔记格式筛选">{(["all", ...NOTE_FORMATS.map((item) => item.value)] as const).map((value) => { const label = value === "all" ? "全部" : NOTE_FORMATS.find((item) => item.value === value)?.label ?? value; return <button className={`notes-filter-tab ${filter === value ? "is-active" : ""}`} data-note-filter={value} type="button" role="tab" aria-selected={filter === value} key={value} onClick={() => setFilter(value)}>{label}</button>; })}</div>
     {loading ? <LoadingState /> : null}
     {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
@@ -271,15 +271,15 @@ export function NotesLibrary({ records, loading, error, entities, onRetry, onCre
       const format = noteFormatOf(record);
       const details = record.kind === "note" ? record.note : undefined;
       return <article className="note-card" data-note-card data-note-format={format} key={record.id}>
-        <button className="note-card-main" type="button" onClick={() => { setCreateOpen(false); setEditorRecord(record); }}>
+        <button className="note-card-main" type="button" onClick={() => { setCreateOpen(false); onEdit(record); }}>
           <div className="note-card-meta"><span className="note-format-label">{NOTE_FORMATS.find((item) => item.value === format)?.label ?? "碎片"}</span><time data-note-updated>{noteUpdatedAt(record)}</time></div>
           {format === "article" ? <h2 data-note-title>{details?.title}</h2> : null}
           <p className="note-card-excerpt">{recordText(record)}</p>
           {format === "quote" && details?.source ? <p className="note-card-source" data-note-source>出处：{details.source}</p> : null}
         </button>
-        <div className="note-card-actions"><button className="text-button" type="button" onClick={() => { setCreateOpen(false); setEditorRecord(record); }}><Edit3 size={14} aria-hidden="true" /><span>编辑</span></button><button className="text-button note-card-delete" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" /><span>删除</span></button></div>
+        <div className="note-card-actions"><button className="text-button" type="button" onClick={() => { setCreateOpen(false); onEdit(record); }}><Edit3 size={14} aria-hidden="true" /><span>编辑</span></button><button className="text-button note-card-delete" type="button" onClick={() => onDelete(record)}><Trash2 size={14} aria-hidden="true" /><span>删除</span></button></div>
       </article>;
     })}</div> : null}
-    <NoteEditorDialog record={editorRecord} createOpen={createOpen} entities={entities} onCreateEntity={onCreateEntity} onClose={closeEditor} onSave={onSave} />
+    <NoteEditorDialog record={null} createOpen={createOpen} entities={entities} onCreateEntity={onCreateEntity} onClose={closeEditor} onSave={onSave} />
   </section>;
 }

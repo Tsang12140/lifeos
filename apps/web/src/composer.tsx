@@ -17,7 +17,7 @@ import {
   MapPin,
   X,
 } from "lucide-react";
-import type { AssetLink, Entity, EntityRef, PlacePeriod, PlaceRole, WeatherAttachment } from "@lifeos/core";
+import type { AssetLink, Entity, EntityRef, NoteFormat, PlacePeriod, PlaceRole, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import { PLACE_MARKER, cleanMovieQuery, entitySearchTerms, normalizeEntitySearchTerm } from "@lifeos/core";
 import type { MovieEntity, RecordView } from "./api";
 import type { ComposerKind, CreateEntity, EntityCreateRequest } from "./app-types";
@@ -29,6 +29,7 @@ import {
   COMPOSER_META,
   ENTITY_META,
   MAX_IMPLICIT_CJK_MENTION_NAME_LENGTH,
+  NOTE_FORMATS,
   entityRefKey,
   isMovieEntity,
   isMovieRef,
@@ -39,17 +40,22 @@ import { enabledModuleCommands, movieRef, MovieAddPanel } from "./movie";
 import { EntityCreateForm, MentionBox, type ContextAction } from "./entity-forms";
 import { ShotDropZone, type ShotDropZoneHandle, type ShotUpload } from "./shot-drop-zone";
 
-export interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
+export interface NoteEditMeta { format: NoteFormat; title: string; source: string; metadataTouched: boolean; }
+
+export interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
+export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const shotZoneRef = useRef<ShotDropZoneHandle>(null);
   const dragDepth = useRef(0);
   const [draggingFiles, setDraggingFiles] = useState(false);
+  const [shotUploading, setShotUploading] = useState(false);
+  const canSave = content.trim().length > 0 && !saving && !shotUploading && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
+  useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
   const isFileDrag = (event: ReactDragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes("Files");
   const entryDragHandlers = {
     onDragEnter: (event: ReactDragEvent<HTMLDivElement>) => {
@@ -280,19 +286,23 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
     onMovieEntity(movie);
   };
   const removeMovie = (id: string) => onMovieRefsChange(movieRefs.filter((item) => !(isMovieRef(item) && item.entityId === id)));
-  return <section ref={composerRef} className="composer surface" aria-label="记录编辑器">
+  return <section ref={composerRef} className={`composer surface ${editing ? "is-editing" : ""}`} aria-label="记录编辑器">
     <div className="composer-toolbar">
-      <div className="kind-switcher" role="tablist" aria-label="记录类型">
+      {editing ? <strong className="composer-edit-title">编辑{activeMeta.label}</strong> : <div className="kind-switcher" role="tablist" aria-label="记录类型">
         {(Object.keys(COMPOSER_META) as ComposerKind[]).map((item) => {
           const Icon = COMPOSER_META[item].icon;
           return <button className={`kind-option ${kind === item ? "is-active" : ""}`} key={item} type="button" role="tab" aria-selected={kind === item} onClick={() => onKindChange(item)}><Icon size={15} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></button>;
         })}
-      </div>
+      </div>}
       <div className="composer-toolbar-actions">
         <button className="icon-button compact-icon-button composer-search" type="button" onClick={onOpenSearch} aria-label={`搜索${activeMeta.label}`}><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button>
-        {dismissible ? <button className="icon-button compact-icon-button composer-close" type="button" onClick={onClose} aria-label="关闭记录编辑器"><X size={17} strokeWidth={1.9} aria-hidden="true" /></button> : null}
+        {dismissible ? <button className={editing ? "secondary-button composer-edit-cancel" : "icon-button compact-icon-button composer-close"} type="button" onClick={onClose} aria-label={editing ? "取消编辑" : "关闭记录编辑器"}>{editing ? "取消" : <X size={17} strokeWidth={1.9} aria-hidden="true" />}</button> : null}
       </div>
     </div>
+    {editing && kind === "note" && noteMeta && onNoteMetaChange ? <div className="composer-note-fields">
+      <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${noteMeta.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={noteMeta.format === item.value} key={item.value} onClick={() => onNoteMetaChange({ ...noteMeta, format: item.value, metadataTouched: true })}><span className="note-format-option-title">{item.label}</span><small>{item.hint}</small></button>)}</div>
+      {noteMeta.format === "article" ? <label className="composer-note-field"><span>标题</span><input data-note-title value={noteMeta.title} maxLength={300} onChange={(event) => onNoteMetaChange({ ...noteMeta, title: event.target.value, metadataTouched: true })} placeholder="给文章一个标题" /></label> : null}
+    </div> : null}
     <div className={`composer-entry ${draggingFiles ? "is-dragging" : ""}`} {...entryDragHandlers}>
     {/* Two collapsed rows. The fan used to be the reason for three — a turned
         square grows its box by about 1.3x, so a deep hand was paid for in height
@@ -306,10 +316,12 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
           gap moves, it does not go away. Cancelling the entry's slack here is
           what actually closes it. */}
       <div className="composer-mobile-action-row">
-        <ShotDropZone ref={shotZoneRef} shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} />
-        <button className="primary-button composer-inline-save" type="button" disabled={!content.trim() || saving} onClick={onSubmit} aria-label={saving ? "正在保存" : "保存"} title={saving ? "正在保存" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className="visually-hidden">{saving ? "保存中" : "保存"}</span></button>
+        <ShotDropZone ref={shotZoneRef} shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} />
+        <button className="primary-button composer-inline-save" type="button" disabled={!canSave} onClick={onSubmit} aria-label={saving ? "正在保存" : editing ? "保存修改" : "保存"} title={saving ? "正在保存" : editing ? "保存修改" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className={editing ? "composer-inline-save-label" : "visually-hidden"}>{saving ? "保存中" : editing ? "保存修改" : "保存"}</span></button>
       </div>
     </div>
+    {editing && kind === "note" && noteMeta?.format === "quote" && onNoteMetaChange ? <label className="composer-note-field composer-note-source"><span>出处（可选）</span><input data-note-source value={noteMeta.source} maxLength={1000} onChange={(event) => onNoteMetaChange({ ...noteMeta, source: event.target.value, metadataTouched: true })} placeholder="书名、作者或网页链接" /></label> : null}
+    {error ? <div className="composer-edit-error" role="alert"><span>{error}</span>{onReloadLatest ? <button type="button" onClick={onReloadLatest}>读取最新版本</button> : null}</div> : null}
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => { setMoviePanelOpen(false); setMovieQuery(undefined); }} initialQuery={movieQuery} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
     <div className="composer-footer">
@@ -330,11 +342,12 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
         {kind === "task"
           ? <TaskScheduleField start={occurredAt} end={dueAt} onStartChange={onOccurredAtChange} onEndChange={onDueAtChange} />
           : <DateField value={occurredAt} onChange={onOccurredAtChange} label="发生时间" showTime capped />}
+        {editing && kind === "task" && taskStatus && onTaskStatusChange ? <label className="composer-status-field"><span>状态</span><select value={taskStatus} onChange={(event) => onTaskStatusChange(event.target.value as TaskStatus)}><option value="todo">待办</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label> : null}
         {isBackfillDate ? <label className={`backfill-toggle ${isBackfill ? "is-on" : ""}`} title="将这条记录标记为补记"><input type="checkbox" checked={isBackfill} onChange={(event) => onBackfillChange(event.target.checked)} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label> : null}
         <label className={`privacy-toggle ${isPrivate ? "is-on" : ""}`} title="隐私记录"><input type="checkbox" checked={isPrivate} onChange={(event) => onPrivateChange(event.target.checked)} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私</span></label>
-        <button className={`weather-pin-toggle ${weather ? "is-on" : ""}`} type="button" onClick={weather ? onClearWeather : onCaptureWeather} disabled={weatherBusy} title={weather ? "取消天气" : "读取此刻室外天气"} aria-label={weather ? `天气 · 现场 ${weather.text}，点击取消` : "天气，点击读取此刻室外天气"}>{weatherBusy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CloudSun size={14} aria-hidden="true" />}<span>{weatherBusy ? "读取中" : weather ? `现场 · ${weather.text}` : "天气"}</span></button>
+        {editing ? null : <button className={`weather-pin-toggle ${weather ? "is-on" : ""}`} type="button" onClick={weather ? onClearWeather : onCaptureWeather} disabled={weatherBusy} title={weather ? "取消天气" : "读取此刻室外天气"} aria-label={weather ? `天气 · 现场 ${weather.text}，点击取消` : "天气，点击读取此刻室外天气"}>{weatherBusy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CloudSun size={14} aria-hidden="true" />}<span>{weatherBusy ? "读取中" : weather ? `现场 · ${weather.text}` : "天气"}</span></button>}
       </div>
-      <button className="primary-button composer-desktop-save" type="button" disabled={!content.trim() || saving} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : "保存"}</span></button>
+      <button className="primary-button composer-desktop-save" type="button" disabled={!canSave} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : editing ? "保存修改" : "保存"}</span></button>
     </div>
   </section>;
 }

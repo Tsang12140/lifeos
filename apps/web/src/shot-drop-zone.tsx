@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Eraser, LoaderCircle, Plus, X } from "lucide-react";
 import type { Asset, AssetLink } from "@lifeos/core";
 import { apiRequest } from "./api";
@@ -57,13 +57,15 @@ interface ShotDropZoneProps {
    *  it has to be undoable. The zone hands the undo back to whoever owns the
    *  toast: it can put the photos back, but only the shell can offer the button. */
   readonly onCleared: (cleared: readonly AssetLink[], restore: () => void) => void;
+  readonly onBusyChange?: (busy: boolean) => void;
 }
 
 export interface ShotDropZoneHandle { takeFiles: (files: readonly File[]) => void; }
 
-export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared }, ref) {
+export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ shots, onShotsChange, onUpload, onNotify, onCleared, onBusyChange }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(0);
+  useEffect(() => { onBusyChange?.(uploading > 0); }, [uploading, onBusyChange]);
 
   const takeFiles = async (files: readonly File[]) => {
     const images = files.filter((file) => file.type.startsWith("image/"));
