@@ -489,7 +489,7 @@ textarea:focus-visible {
   gap: clamp(12px, 2.2vw, 28px);
 }
 
-.weather-date-navigation { display: grid; grid-template-columns: 38px minmax(144px, max-content) 38px; align-items: center; flex: 0 0 auto; gap: 6px; }
+.weather-date-navigation { --weather-date-flap-height: 48px; display: grid; grid-template-columns: 38px minmax(144px, max-content) 38px; align-items: center; flex: 0 0 auto; gap: 6px; }
 
 .weather-date-step,
 .weather-header-refresh {
@@ -512,6 +512,7 @@ textarea:focus-visible {
 .weather-header-refresh:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.7); transform: translateY(-1px); }
 .weather-date-step:active,
 .weather-header-refresh:active { transform: translateY(0); }
+.weather-date-navigation > .weather-date-step { top: -9px; height: var(--weather-date-flap-height); }
 
 .weather-date-picker {
   position: relative;
@@ -11056,6 +11057,7 @@ button.relation-chip {
   }
 
   .weather-date-navigation {
+    --weather-date-flap-height: 50px;
     display: grid;
     width: 100%;
     flex: 1 1 auto;
@@ -11899,9 +11901,18 @@ button.relation-chip {
   .month-day-solar { max-width: calc(100% - 18px); font-size: .55rem; }
   .month-cell .calendar-day-markers { right: auto; left: 1px; bottom: 1px; grid-template-columns: repeat(4, 8px); justify-content: start; width: 32px; transform: scale(.68); transform-origin: bottom left; }
   .month-cell:has(.calendar-day-markers) .month-day-solar { display: none; }
-  .weather-date-navigation { flex: 1 1 auto; }
-  .weather-date-picker { flex: 0 0 auto; }
-  .weather-date-center { --weather-date-flap-width: 23px; --weather-date-seam: 4px; }
+  .weather-date-navigation {
+    --weather-date-flap-height: 42px;
+    --weather-date-step-width: 44px;
+    flex: 0 0 auto;
+    width: max-content;
+    grid-template-columns: var(--weather-date-step-width) max-content var(--weather-date-step-width);
+    gap: 4px;
+    justify-self: center;
+  }
+  .weather-date-step { flex-basis: var(--weather-date-step-width); width: var(--weather-date-step-width); }
+  .weather-date-picker { flex: 0 0 auto; padding-right: 2px; padding-left: 2px; }
+  .weather-date-center { --weather-date-flap-width: 23px; --weather-date-seam: 4px; width: max-content; }
   .date-flap { width: var(--weather-date-flap-width); height: 42px; font-size: 1.55rem; line-height: 42px; }
   .date-flap-leaf > span { height: 42px; line-height: 42px; }
   .weather-date-flaps { height: 44px; }
@@ -11909,8 +11920,9 @@ button.relation-chip {
 }
 
 @media (max-width: 390px) {
+  .weather-date-navigation { --weather-date-flap-height: 40px; }
   .weather-date-center { --weather-date-flap-width: 21px; }
-  .weather-date-step { flex-basis: 28px; width: 28px; height: 30px; }
+  .weather-date-step { flex-basis: var(--weather-date-step-width); width: var(--weather-date-step-width); height: 30px; }
   .date-flap { width: var(--weather-date-flap-width); height: 40px; font-size: 1.42rem; line-height: 40px; }
   .date-flap-leaf > span { height: 40px; line-height: 40px; }
   .weather-date-flaps { height: 42px; }
