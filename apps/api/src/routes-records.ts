@@ -27,6 +27,7 @@ import {
 } from "@lifeos/core";
 import { collectSummarisableRecords, summaryPayload } from "./summary-routes.js";
 import type { RouteContext, RouteHandler } from "./route-context.js";
+import { POOL_SOURCE_ID } from "./storage-pool.js";
 
 const RECORD_KINDS: readonly RecordKind[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
@@ -250,6 +251,9 @@ export const handleRecordsRoutes: RouteHandler = async (
     }
     // A bundle is the one payload that can carry a reference to nothing; check
     // the whole graph before it reaches the transaction.
+    if (bundle.assets.some((asset) => asset.storageRefs.some((reference) => reference.sourceId === POOL_SOURCE_ID))) {
+      throw new HttpError(400, "pool_reference_forbidden", "导入文件不能携带弹指存储池对象引用");
+    }
     assertImportReferences(bundle, repository);
     try {
       repository.importData(bundle);

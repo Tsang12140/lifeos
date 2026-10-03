@@ -77,6 +77,8 @@ export interface ThumbnailStats {
 export interface ThumbnailCache {
   /** The file holding `width` px of `sourceFile`, derived on first use. */
   ensure(reference: StorageReference, sourceFile: string, width: ThumbnailWidth): Promise<string>;
+  /** Returns an existing cache entry without needing to open the original. */
+  cached(reference: StorageReference, width: ThumbnailWidth): string | null;
   stats(): ThumbnailStats;
   /** Deletes every derived thumbnail. Never a loss: the next request rebuilds. */
   clear(): { readonly removed: number; readonly freedBytes: number };
@@ -90,6 +92,13 @@ export function createThumbnailCache(dataDirectory: string): ThumbnailCache {
   const pending = new Map<string, Promise<string>>();
 
   return {
+    cached(reference, width) {
+      // Pool references are created only by the upload route and always carry a
+      // content hash, so their cache key does not require an original download.
+      if (reference.contentHash === undefined) return null;
+      const target = resolve(directory, `${thumbnailKey(reference, "")}-${width}.${THUMBNAIL_FORMAT}`);
+      return existsSync(target) ? target : null;
+    },
     async ensure(reference, sourceFile, width) {
       const target = resolve(directory, `${thumbnailKey(reference, sourceFile)}-${width}.${THUMBNAIL_FORMAT}`);
       if (existsSync(target)) return target;

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
-import { extname, isAbsolute, relative, resolve } from "node:path";
+import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
   PLACE_ROLES,
@@ -55,7 +56,7 @@ import {
 import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
 import { IdentityStore, type AccountIdentity, type PublicAccount } from "./identity-store.js";
-import { tenantConfigFor, type SharedIntegrations } from "./tenant-config.js";
+import { tenantConfigFor, tenantDirectoryFor, type SharedIntegrations } from "./tenant-config.js";
 import { HttpError, backupHttpError, setJson, setEmpty } from "./http-kit.js";
 import {
   type JsonObject,
@@ -155,8 +156,10 @@ import { handleWeatherRoutes } from "./routes-weather.js";
 import { handleModulesRoutes } from "./routes-modules.js";
 import { summaryPayload, collectSummarisableRecords } from "./summary-routes.js";
 import { dateForTime, sortTimeline, filterDate, assertTimeZone, filterDateRange, datesBetween } from "./timeline-query.js";
-import type { RouteContext } from "./route-context.js";
+import type { PoolPreflight, RouteContext } from "./route-context.js";
 import { readBody, requireJsonContentType, readRawBody } from "./http-body.js";
+import { PoolConsumerBridge, StoragePoolError } from "./storage-pool.js";
+import { StoragePoolStore } from "./storage-pool-store.js";
 
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
@@ -290,6 +293,7 @@ function parseDateQuery(value: string | null, name: string): string | undefined 
 
 
 interface LifeosApp {
+  readonly config: ApiConfig;
   readonly repository: SqliteRecordRepository;
   readonly backupScheduler: BackupScheduler;
   readonly weatherArchiveScheduler: WeatherArchiveScheduler;
@@ -328,7 +332,23 @@ export const requestLog = (() => {
 })();
 
 
-function createApp(config: ApiConfig, repository = new SqliteRecordRepository(config.databasePath)): LifeosApp {
+interface PoolServices {
+  readonly bridge: PoolConsumerBridge;
+  readonly store: StoragePoolStore | null;
+  readonly accountId: string;
+  readonly admin: boolean;
+  readonly preflight: () => Promise<PoolPreflight>;
+}
+
+function createApp(config: ApiConfig, repository = new SqliteRecordRepository(config.databasePath), poolServices?: PoolServices): LifeosApp {
+  const poolBridge = poolServices?.bridge ?? new PoolConsumerBridge();
+  const poolStore = poolServices === undefined
+    ? (poolBridge.enabled ? new StoragePoolStore(config.databasePath) : null)
+    : poolServices.store;
+  const ownsPoolStore = poolServices === undefined && poolStore !== null;
+  const poolAccountId = poolServices?.accountId ?? "local-owner";
+  const poolAdmin = poolServices?.admin ?? true;
+  const poolPreflight = poolServices?.preflight ?? (async () => { throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪"); });
   const loginFailures = new Map<string, LoginFailureBucket>();
   let lastLoginFailureSweepAt = 0;
   const backupScheduler = new BackupScheduler({
@@ -398,6 +418,11 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       backupScheduler,
       weatherArchiveScheduler,
       thumbnails,
+      poolBridge,
+      poolStore,
+      poolAccountId,
+      poolAdmin,
+      poolPreflight,
       loginFailures,
       authenticated,
       requireAuth,
@@ -502,6 +527,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
 
   let closed = false;
   const app: LifeosApp = {
+    config,
     repository,
     backupScheduler,
     weatherArchiveScheduler,
@@ -550,9 +576,10 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       weatherArchiveScheduler.stop();
       assetGcScheduler.stop();
       repository.close();
+      if (ownsPoolStore) poolStore?.close();
     },
   };
-  return app;
+  return { ...app, config };
 }
 
 function accountOwnerConfig(config: ApiConfig): ApiConfig {
@@ -585,6 +612,98 @@ function accountPublicView(account: AccountIdentity | PublicAccount) {
     spaceName: account.spaceName,
     tenantId: account.tenantId,
     role: account.role,
+  };
+}
+
+interface LegacyInventory {
+  readonly legacyAssetCount: number | null;
+  readonly legacyBytes: number | null;
+  readonly legacyUnknownAssetCount: number | null;
+  readonly unassignedLegacyBytes: number | null;
+  readonly complete: boolean;
+}
+
+function inventoryLegacyAssets(app: LifeosApp | undefined, databasePath: string, assetRoot: string | undefined): LegacyInventory {
+  let assets: readonly Asset[];
+  try {
+    if (app !== undefined) assets = app.repository.listAssets();
+    else if (!existsSync(databasePath)) assets = [];
+    else {
+      const db = new DatabaseSync(databasePath, { readOnly: true, enableForeignKeyConstraints: true, timeout: 5000 });
+      try {
+        assets = db.prepare("SELECT value_json FROM assets").all().map((row) => {
+          const value = JSON.parse(String((row as { value_json: unknown }).value_json)) as unknown;
+          assertValidAsset(value);
+          return value;
+        });
+      } finally { db.close(); }
+    }
+  } catch {
+    return { legacyAssetCount: null, legacyBytes: null, legacyUnknownAssetCount: null, unassignedLegacyBytes: null, complete: false };
+  }
+  const localRefs = new Set<string>();
+  for (const asset of assets) {
+    for (const ref of asset.storageRefs) if (ref.sourceId === "local") localRefs.add(ref.sourceRef);
+  }
+  let realRoot: string | undefined;
+  let assetRootAbsent = assetRoot === undefined;
+  try { if (assetRoot !== undefined) realRoot = realpathSync(assetRoot); }
+  catch (error) { assetRootAbsent = (error as NodeJS.ErrnoException).code === "ENOENT"; }
+  let bytes = 0;
+  let unknown = 0;
+  const referencedFiles = new Set<string>();
+  for (const sourceRef of localRefs) {
+    try {
+      if (assetRoot === undefined) throw new Error("asset_root_unconfigured");
+      const { file } = resolveLocalAsset(assetRoot, sourceRef);
+      const size = statSync(file).size;
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error("asset_size_invalid");
+      bytes += size;
+      if (!Number.isSafeInteger(bytes)) throw new Error("inventory_size_invalid");
+      if (realRoot !== undefined) referencedFiles.add(relative(realRoot, file).split(sep).join("/"));
+    } catch {
+      unknown += 1;
+    }
+  }
+  let orphanBytes = 0;
+  let scanComplete = true;
+  // A freshly created account may have no asset directory yet. With no local
+  // references there is nothing historical to attribute for that account.
+  if (realRoot === undefined) scanComplete = assetRootAbsent && localRefs.size === 0;
+  if (assetRoot !== undefined && realRoot !== undefined) {
+    const uploadsRoot = join(realRoot, "uploads");
+    if (existsSync(uploadsRoot)) {
+      try {
+        if (lstatSync(uploadsRoot).isSymbolicLink()) throw new Error("upload_root_symlink");
+        const pending = [uploadsRoot];
+        while (pending.length > 0) {
+          const directory = pending.pop()!;
+          for (const entry of readdirSync(directory, { withFileTypes: true })) {
+            if (entry.name === "_orphan-trash" && directory === uploadsRoot) continue;
+            const full = join(directory, entry.name);
+            if (entry.isSymbolicLink()) { scanComplete = false; continue; }
+            if (entry.isDirectory()) { pending.push(full); continue; }
+            if (!entry.isFile()) { scanComplete = false; continue; }
+            const fileBytes = statSync(full).size;
+            if (!Number.isSafeInteger(fileBytes) || fileBytes < 0) { scanComplete = false; continue; }
+            const relativeName = relative(realRoot, full).split(sep).join("/");
+            if (!referencedFiles.has(relativeName)) orphanBytes += fileBytes;
+            if (!Number.isSafeInteger(orphanBytes)) scanComplete = false;
+          }
+        }
+      } catch { scanComplete = false; }
+    }
+  } else if (localRefs.size > 0) {
+    scanComplete = false;
+  }
+  const allSizesKnown = unknown === 0 && scanComplete;
+  const complete = allSizesKnown && orphanBytes === 0;
+  return {
+    legacyAssetCount: localRefs.size,
+    legacyBytes: allSizesKnown ? bytes : null,
+    legacyUnknownAssetCount: unknown,
+    unassignedLegacyBytes: scanComplete ? orphanBytes : null,
+    complete,
   };
 }
 
@@ -623,6 +742,8 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
   }
 
   const ownerConfig = accountOwnerConfig(config);
+  const poolBridge = new PoolConsumerBridge();
+  const poolStore = poolBridge.enabled ? new StoragePoolStore(ownerConfig.databasePath) : null;
   /**
    * What a member space is allowed to borrow. Read at the moment the space is
    * created so a key the owner saved in settings is picked up, and read from
@@ -640,6 +761,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     },
   });
   const apps = new Map<string, { readonly app: LifeosApp; lastUsedAt: number }>();
+  let poolReadiness: () => Promise<PoolPreflight> = async () => { throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪"); };
   const appFor = (account: AccountIdentity | PublicAccount): LifeosApp => {
     const key = account.tenantId;
     const existing = apps.get(key);
@@ -648,9 +770,99 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       return existing.app;
     }
     const tenantConfig = account.role === "owner" ? ownerConfig : tenantConfigFor(config, account, identity.configMasterSecret, sharedIntegrationsForMembers());
-    const app = createApp(tenantConfig);
+    const app = createApp(tenantConfig, undefined, {
+      bridge: poolBridge,
+      store: poolStore,
+      accountId: account.id,
+      admin: account.role === "owner",
+      preflight: () => poolReadiness(),
+    });
     apps.set(key, { app, lastUsedAt: Date.now() });
     return app;
+  };
+
+  const poolAdminSnapshot = async () => {
+    if (!poolBridge.enabled || poolStore === null) throw new StoragePoolError("storage_pool_disabled", "存储池尚未启用", 503);
+    const projectUsage = await poolBridge.usage();
+    const accounts = identity.listAccounts();
+    const month = projectUsage.traffic_month;
+    const userRows = accounts.map((account) => {
+      const app = apps.get(account.tenantId)?.app;
+      const tenantDirectory = account.role === "owner" ? ownerConfig.dataDirectory : tenantDirectoryFor(config, account.tenantId);
+      const databasePath = app?.config.databasePath ?? join(tenantDirectory, "lifeos.sqlite");
+      const assetRoot = app?.config.assetRoot ?? (account.role === "owner" ? ownerConfig.assetRoot : join(tenantDirectory, "assets"));
+      const legacy = app === undefined && !existsSync(tenantDirectory) && !existsSync(databasePath)
+        ? { legacyAssetCount: 0, legacyBytes: 0, legacyUnknownAssetCount: 0, unassignedLegacyBytes: 0, complete: true }
+        : inventoryLegacyAssets(app, databasePath, assetRoot);
+      const usage = poolStore.usage(account.id, month);
+      return {
+        accountId: account.id,
+        username: account.username,
+        displayName: account.displayName,
+        spaceName: account.spaceName,
+        role: account.role,
+        disabled: account.disabled,
+        storageUsedBytes: usage.storageUsedBytes,
+        storageReservedBytes: usage.storageReservedBytes,
+        storageLimitBytes: usage.storageLimitBytes,
+        trafficUsedBytes: usage.trafficUsedBytes,
+        trafficReservedBytes: usage.trafficReservedBytes,
+        trafficLimitBytes: usage.trafficLimitBytes,
+        legacyAssetCount: legacy.legacyAssetCount,
+        legacyBytes: legacy.legacyBytes,
+        legacyUnknownAssetCount: legacy.legacyUnknownAssetCount,
+        unassignedLegacyBytes: legacy.unassignedLegacyBytes,
+        legacyComplete: legacy.complete,
+      };
+    });
+    const totals = poolStore.totals(accounts.map((account) => account.id), month);
+    const mapped = poolStore.projectAccounted(month);
+    const accountingMismatch = {
+      storageBytes: Math.max(0, mapped.storageBytes - projectUsage.storage_used),
+      trafficBytes: Math.max(0, mapped.trafficBytes - projectUsage.traffic_used),
+    };
+    const unassignedStorageBytes = Math.max(0, projectUsage.storage_used - mapped.storageBytes);
+    const unassignedTrafficBytes = Math.max(0, projectUsage.traffic_used - mapped.trafficBytes);
+    const knownPoolObjectCount = poolStore.objectIssues().length === 0 && unassignedStorageBytes === 0;
+    return {
+      available: true as const,
+      consumer: projectUsage.consumer,
+      month,
+      project: {
+        storageUsedBytes: projectUsage.storage_used,
+        storageLimitBytes: projectUsage.storage_limit,
+        storageFreeBytes: projectUsage.storage_free,
+        trafficUsedBytes: projectUsage.traffic_used,
+        trafficLimitBytes: projectUsage.traffic_limit,
+        trafficFreeBytes: projectUsage.traffic_free,
+      },
+      allocationFree: {
+        storageBytes: projectUsage.storage_limit - totals.storageLimitBytes,
+        trafficBytes: projectUsage.traffic_limit - totals.trafficLimitBytes,
+      },
+      users: userRows.map(({ legacyComplete: _legacyComplete, ...user }) => user),
+      unassigned: {
+        storageObjects: unassignedStorageBytes === 0 ? 0 : knownPoolObjectCount ? 0 : null,
+        storageBytes: unassignedStorageBytes,
+        trafficBytes: unassignedTrafficBytes,
+      },
+      legacyInventoryComplete: userRows.every((user) => user.legacyComplete),
+      ...(accountingMismatch.storageBytes > 0 || accountingMismatch.trafficBytes > 0 ? { accountingMismatch } : {}),
+      poolObjectIssues: poolStore.objectIssues().map(({ accountId, assetId, bytes, state }) => ({ accountId, assetId, bytes, state })),
+      poolDownloadIssues: poolStore.downloadIssues(),
+    };
+  };
+  poolReadiness = async () => {
+    const snapshot = await poolAdminSnapshot();
+    if (!snapshot.legacyInventoryComplete || snapshot.accountingMismatch !== undefined || snapshot.poolObjectIssues.length > 0 || snapshot.poolDownloadIssues.length > 0
+      || snapshot.unassigned.storageBytes !== 0 || snapshot.unassigned.trafficBytes !== 0) {
+      throw new HttpError(409, "pool_accounting_unreconciled", "历史文件或存储池账目尚未核实，暂停新的上传和下载");
+    }
+    return {
+      storageFreeBytes: snapshot.project.storageFreeBytes,
+      trafficFreeBytes: snapshot.project.trafficFreeBytes,
+      month: snapshot.month,
+    };
   };
 
   try {
@@ -867,6 +1079,57 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
 
           const session = sessionFor(req);
           if (session === null) throw new HttpError(401, "authentication_required", "Authentication required");
+          if (path === "/api/admin/storage-pool") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可查看存储池用量");
+            if (req.method !== "GET") throw new HttpError(405, "method_not_allowed", "Method not allowed");
+            if (!poolBridge.enabled || poolStore === null) {
+              setJson(res, 503, { available: false, status: "disabled", issue: "LifeOS 存储池接入尚未启用" });
+              return;
+            }
+            try {
+              const snapshot = await poolAdminSnapshot();
+              setJson(res, 200, snapshot);
+            } catch (error) {
+              const disabled = error instanceof StoragePoolError && error.code === "storage_pool_disabled";
+              setJson(res, 503, {
+                available: false,
+                status: disabled ? "disabled" : "unavailable",
+                issue: disabled ? "LifeOS 存储池接入尚未启用" : "弹指用量暂时无法核实，请检查同机 PHP CLI 与 PoolConsumer 配置",
+              });
+            }
+            return;
+          }
+          const poolQuotaMatch = path.match(/^\/api\/admin\/accounts\/([0-9a-f-]{36})\/pool-quota$/i);
+          if (poolQuotaMatch !== null && req.method === "PUT") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理存储池额度");
+            if (!poolBridge.enabled || poolStore === null) throw new HttpError(503, "storage_pool_disabled", "存储池尚未启用，额度未保存");
+            const accountId = poolQuotaMatch[1]!;
+            if (!identity.listAccounts().some((account) => account.id === accountId)) throw new HttpError(404, "account_not_found", "账号不存在");
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+            hasOnlyKeys(input, ["storageLimitBytes", "trafficLimitBytes"]);
+            const quota = {
+              storageLimitBytes: boundedIntegerField(input.storageLimitBytes, "storageLimitBytes", 0, Number.MAX_SAFE_INTEGER),
+              trafficLimitBytes: boundedIntegerField(input.trafficLimitBytes, "trafficLimitBytes", 0, Number.MAX_SAFE_INTEGER),
+            };
+            let snapshot: Awaited<ReturnType<typeof poolAdminSnapshot>>;
+            try { snapshot = await poolAdminSnapshot(); }
+            catch { throw new HttpError(503, "storage_pool_unavailable", "弹指用量无法核实，额度未保存"); }
+            if (!snapshot.legacyInventoryComplete || snapshot.accountingMismatch !== undefined || snapshot.poolObjectIssues.length > 0 || snapshot.poolDownloadIssues.length > 0
+              || snapshot.unassigned.storageBytes !== 0 || snapshot.unassigned.trafficBytes !== 0) {
+              throw new HttpError(409, "pool_accounting_unreconciled", "历史文件或存储池账目尚未核实，暂不能启用强制额度");
+            }
+            try {
+              poolStore.saveQuota(accountId, quota, snapshot.project.storageLimitBytes, snapshot.project.trafficLimitBytes);
+            } catch (error) {
+              if (error instanceof Error && error.message === "分配额度总和超过 LifeOS 当前项目额度") {
+                throw new HttpError(409, "pool_allocation_exceeded", error.message);
+              }
+              throw new HttpError(409, "pool_quota_save_failed", "存储池额度保存失败，请刷新后重试");
+            }
+            setJson(res, 200, { ok: true });
+            return;
+          }
           if (path === "/api/admin/accounts") {
             if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理账号");
             if (req.method === "GET") {
@@ -972,6 +1235,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     };
 
     const app: LifeosApp = {
+      config: ownerApp.config,
       repository: ownerApp.repository,
       backupScheduler: ownerApp.backupScheduler,
       weatherArchiveScheduler: ownerApp.weatherArchiveScheduler,
@@ -982,18 +1246,24 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
         closed = true;
         for (const entry of apps.values()) entry.app.close();
         apps.clear();
+        poolStore?.close();
         identity.close();
       },
     };
     return app;
   } catch (error) {
     for (const entry of apps.values()) entry.app.close();
+    poolStore?.close();
     identity.close();
     throw error;
   }
 }
 
 export function createHttpServer(config: ApiConfig): { server: Server; app: LifeosApp } {
+  const poolRequested = /^(1|true)$/i.test(process.env.LIFEOS_STORAGE_POOL_ENABLED?.trim() ?? "");
+  if (poolRequested && config.accountMode !== true) {
+    throw new Error("存储池强制额度目前要求启用 LifeOS 账户模式；单用户旧模式没有可管理的额度界面");
+  }
   const app = config.accountMode === true ? createAccountModeApp(config) : createApp(config);
   const server = createServer((req, res) => {
     void app.handler(req, res);

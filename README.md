@@ -138,6 +138,8 @@ API 默认前缀为 `/api`，所有写请求使用 JSON。密码模式下，除�
 
 更完整的 API 说明见 [apps/api/README.md](apps/api/README.md)，领域模型和存储边界见 [docs/architecture.md](docs/architecture.md)。
 
+同机弹指存储池的启用前检查、权限和验收顺序见 [docs/storage-pool-deployment.md](docs/storage-pool-deployment.md)。该功能默认关闭；LifeOS 通过本机 PHP CLI 调用弹指现有 `PoolConsumer`。
+
 ## 部署与安全
 
 LifeOS 默认保持旧的单用户本机模式；账户模式是显式开启的可选部署方式，一个账号对应一个私有空间，不支持公开注册或共享空间。停用账号会立即撤销已有会话。部署到公网或容器时请把以下事项当作必需配置：

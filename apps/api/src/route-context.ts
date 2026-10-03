@@ -4,6 +4,14 @@ import type { SqliteRecordRepository } from "./repository.js";
 import type { BackupScheduler } from "./backup-scheduler.js";
 import type { WeatherArchiveScheduler } from "./weather-archive-scheduler.js";
 import type { createThumbnailCache } from "./derived-thumbs.js";
+import type { PoolConsumerBridge } from "./storage-pool.js";
+import type { StoragePoolStore } from "./storage-pool-store.js";
+
+export interface PoolPreflight {
+  readonly storageFreeBytes: number;
+  readonly trafficFreeBytes: number;
+  readonly month: string;
+}
 
 export type ThumbnailCache = ReturnType<typeof createThumbnailCache>;
 
@@ -13,6 +21,11 @@ export interface RouteContext {
   readonly backupScheduler: BackupScheduler;
   readonly weatherArchiveScheduler: WeatherArchiveScheduler;
   readonly thumbnails: ThumbnailCache;
+  readonly poolBridge: PoolConsumerBridge;
+  readonly poolStore: StoragePoolStore | null;
+  readonly poolAccountId: string;
+  readonly poolAdmin: boolean;
+  readonly poolPreflight: () => Promise<PoolPreflight>;
   readonly loginFailures: Map<string, { failures: number; blockedUntil: number; lastFailureAt: number }>;
   readonly authenticated: (req: IncomingMessage) => boolean;
   readonly requireAuth: (req: IncomingMessage) => void;
