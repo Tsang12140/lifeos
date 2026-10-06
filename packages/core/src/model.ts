@@ -178,12 +178,21 @@ export interface StorageReference {
   readonly mediaType?: string;
 }
 
+/** Header-only upload evidence. Never retains EXIF names, dates or GPS. */
+export interface PhotoMetadata {
+  readonly version: 1;
+  readonly width: number;
+  readonly height: number;
+  readonly cameraEvidence: "none" | "device" | "capture";
+}
+
 export interface Asset {
   readonly id: AssetId;
   readonly kind: AssetKind;
   readonly mediaType?: string;
   readonly originalName?: string;
   readonly sizeBytes?: number;
+  readonly photoMetadata?: PhotoMetadata;
   readonly createdAt?: InstantTime;
   /**
    * The last time this asset was put to use — currently only set when a
@@ -869,6 +878,17 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
   nonEmptyStringValue(asset.id, "asset.id");
   optionalStringValue(asset.mediaType, "asset.mediaType");
   optionalStringValue(asset.originalName, "asset.originalName");
+  if (asset.photoMetadata !== undefined) {
+    const metadata = objectValue(asset.photoMetadata, "asset.photoMetadata");
+    if (asset.kind !== "photo" || metadata.version !== 1) throw new Error("asset.photoMetadata requires a photo and version 1");
+    for (const key of ["width", "height"] as const) {
+      const dimension = metadata[key];
+      if (typeof dimension !== "number" || !Number.isSafeInteger(dimension) || dimension < 1 || dimension > 100_000) {
+        throw new Error(`asset.photoMetadata.${key} must be a positive image dimension`);
+      }
+    }
+    enumValue(metadata.cameraEvidence, ["none", "device", "capture"], "asset.photoMetadata.cameraEvidence");
+  }
   if (asset.sizeBytes !== undefined && (typeof asset.sizeBytes !== "number" || !Number.isFinite(asset.sizeBytes) || asset.sizeBytes < 0)) {
     throw new Error("asset.sizeBytes must be a non-negative number");
   }

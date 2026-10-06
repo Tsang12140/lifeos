@@ -66,7 +66,7 @@ import {
 } from "./api";
 import type { AppView, CalendarMode, ComposerKind, CreateEntity, SettingsPageId } from "./app-types";
 import { calendarDayInfo } from "./calendarData";
-import { peekScore, scorePhoto, storyWeight } from "./photoScore";
+import { peekCover, peekScore, photoSourceScore, storyWeight, type PhotoHints } from "./photoScore";
 import { getWeatherEmoji, type WeatherCategory, type WeatherDay, type WeatherPhase } from "./weather";
 import { weatherLocationDisplayName } from "./weather-locations";
 import { MoviePrompt } from "./movie";
@@ -98,6 +98,7 @@ import {
   weekCardRecords,
 } from "./app-meta";
 import { RecordText } from "./mention";
+import { JournalText } from "./journal-text";
 import { DiagnosticsDrawer, EmptyState, ErrorState, LoadingState } from "./timeline-states";
 import type { TaskUndoEntry } from "./task-summary";
 import {
@@ -191,14 +192,17 @@ export function assetThumbUrl(assetId: string, width: ThumbnailWidth): string {
  * machine); asking `/thumbnail` for one answers 404, so anything built from it
  * renders as a hole. The ref's role alone does not tell you that.
  */
-export function dayPhotoCandidates(items: readonly RecordView[], assets: readonly Asset[]): readonly { assetId: string; story: number }[] {
-  const found: { assetId: string; story: number }[] = [];
+export interface DayPhotoCandidate { readonly assetId: string; readonly story: number; readonly hints?: PhotoHints }
+
+export function dayPhotoCandidates(items: readonly RecordView[], assets: readonly Asset[]): readonly DayPhotoCandidate[] {
+  const found: DayPhotoCandidate[] = [];
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const record = items[index];
     for (const ref of record.assetRefs) {
       if (ref.role !== "photo") continue;
-      if (!isPhotoAsset(assets.find((candidate) => candidate.id === ref.assetId))) continue;
-      found.push({ assetId: ref.assetId, story: storyWeight(recordText(record).length, record.entityRefs.length) });
+      const asset = assets.find((candidate) => candidate.id === ref.assetId);
+      if (!isPhotoAsset(asset)) continue;
+      found.push({ assetId: ref.assetId, story: storyWeight(recordText(record).length, record.entityRefs.length), hints: asset });
     }
   }
   return found;
@@ -222,18 +226,19 @@ export function dayPhotoIds(items: readonly RecordView[], assets: readonly Asset
 }
 
 /**
- * The one photo a month cell shows. Until scores arrive the day's first
- * photo stands in; once measured, the highest pixel-plus-story score wins,
- * chronological order breaking ties. Unmeasurable photos never win.
+ * Choose once the whole day's batch is ready; before that use cheap source hints.
+ * Chronological order breaks ties. Failed decodes cannot beat a measured photo.
  */
-export function monthCellPhoto(candidates: readonly { assetId: string; story: number }[]): string | undefined {
+export function monthCellPhoto(candidates: readonly DayPhotoCandidate[], aspect = 1): string | undefined {
   if (candidates.length === 0) return undefined;
   let bestId = candidates[0].assetId;
   let bestScore = -Infinity;
+  const ready = candidates.every((candidate) => peekScore(assetThumbUrl(candidate.assetId, 1200), candidate.hints, aspect) !== undefined);
   for (const candidate of candidates) {
-    const measured = peekScore(assetThumbUrl(candidate.assetId, 1200));
-    if (measured === undefined || measured < 0) continue;
-    const total = measured + candidate.story;
+    const cover = ready ? peekCover(assetThumbUrl(candidate.assetId, 1200), candidate.hints, aspect) : undefined;
+    if (ready && cover === undefined) continue;
+    const hints = candidate.hints ?? {};
+    const total = (cover?.score ?? photoSourceScore(hints, hints.photoMetadata?.width ?? 0, hints.photoMetadata?.height ?? 0)) + candidate.story * 3;
     if (total > bestScore) {
       bestScore = total;
       bestId = candidate.assetId;
@@ -443,11 +448,17 @@ export function TimelineItem({ record, assets, entities, movieEnabled, movieProm
   const chipAssetRefs = record.assetRefs.filter((ref) => !photoAssetIds.includes(ref.assetId));
   const relationCount = record.entityRefs.length + record.relatedRecordIds.length + chipAssetRefs.length;
   const vocabulary = useMemo(() => mentionVocabulary(record, entities), [record, entities]);
-  const showMoviePrompt = !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && recordText(record).includes("电影") && !record.entityRefs.some(isMovieRef);
+  const bodyText = recordText(record);
+  const showMoviePrompt = !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && bodyText.includes("电影") && !record.entityRefs.some(isMovieRef);
+  const journalLayoutKey = `${record.id}\u0000${bodyText}\u0000${JSON.stringify(vocabulary)}`;
+  const noteDetails = record.kind === "note" ? record.note : undefined;
+  const noteLine = noteDetails !== undefined && (noteDetails.title || noteDetails.source)
+    ? <div className="timeline-note-metadata">{masked ? <PrivacyMask onReveal={reveal} /> : <>{noteDetails.title ? <strong className="timeline-note-title">{noteDetails.title}</strong> : null}{noteDetails.source ? <span className="timeline-note-source">出处：{noteDetails.source}</span> : null}</>}</div>
+    : null;
   const photoLine = masked || photoAssetIds.length === 0 ? null : <RecordPhotoGrid assetIds={photoAssetIds} assets={assets} onPreview={onPreviewAsset} />;
   const relationLine = relationCount > 0 ? masked
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"}，{record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{weatherLocationDisplayName({ id: record.weather.locationId, name: record.weather.city })}</small></span></div>;
-  return <article className={`timeline-item ${interactionDisabled ? "is-stale" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div><div className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : <><RecordText text={recordText(record)} entities={vocabulary} />{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</>}</div>{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className={`record-action task-action ${task.task.status === "done" ? "" : "task-action-complete"}`} type="button" onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
+  return <article className={`timeline-item ${interactionDisabled ? "is-stale" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} />}</div>{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className={`record-action task-action ${task.task.status === "done" ? "" : "task-action-complete"}`} type="button" onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
 }

@@ -18,9 +18,21 @@ import type {
   WeatherAttachment,
 } from "@lifeos/core";
 
-/** Response shared by the calendar's private cycle panel and its settings view. */
-export type CycleModuleResponse = CycleIntimacyModuleData;
+/** The cycle event signature supports compare-and-swap on mobile day edits. */
+export type CycleModuleResponse = CycleIntimacyModuleData & { readonly eventRevision: string };
+export type MobileCycleEventKind = Extract<CycleIntimacyModuleData["events"][number]["kind"], "period_start" | "period_end" | "intimacy">;
+export interface CycleDayEditResponse {
+  readonly module: CycleIntimacyModuleData;
+  readonly eventRevision: string;
+  readonly changed: boolean;
+  readonly undoToken?: string;
+}
+export interface CycleDayUndoResponse {
+  readonly module: CycleIntimacyModuleData;
+  readonly eventRevision: string;
+}
 import { logApiFailure } from "./diagnostics";
+import { uploadRequest, type ApiUploadProgress, type UploadRequestOptions } from "./upload-request";
 import type { WeatherConfigStatus, WeatherProfile } from "./weather";
 
 export type RecordView = TimelineRecord & { readonly revision: number };
@@ -451,3 +463,17 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   }
   return (await response.json()) as T;
 }
+
+/** Upload bytes with the same-origin session cookie and API error convention. */
+export function apiUploadRequest<T>(
+  path: string,
+  body: Blob,
+  options: UploadRequestOptions = {},
+): Promise<T> {
+  return uploadRequest<T>(path, body, options, {
+    createError: createApiError,
+    logFailure: logApiFailure,
+  });
+}
+
+export type { ApiUploadProgress };

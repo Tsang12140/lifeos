@@ -308,14 +308,6 @@ textarea:focus-visible {
   margin: 0 auto;
 }
 
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 0;
-}
-
 /* The selected day is one card: weather stays inside its radius and the date
    owns the foreground as an intentionally large, tactile control. */
 .weather-header {
@@ -429,6 +421,25 @@ textarea:focus-visible {
   --weather-header-muted-text-shadow: 0 1px 2px rgb(19 31 58 / 0.4);
 }
 
+/* Clear and broken-cloud dawns keep ink on a pale morning wash; at dusk a
+   translucent plum wash protects the same text without bleaching the sky. */
+.weather-header--sunny.weather-header--dawn,
+.weather-header--partly-cloudy.weather-header--dawn,
+.weather-header--cloudy.weather-header--dawn {
+  --weather-scrim-strong: rgb(255 246 238 / 0.4);
+  --weather-scrim-mid: rgb(255 246 238 / 0.29);
+  --weather-scrim-soft: rgb(255 246 238 / 0.16);
+  --weather-scrim-edge: rgb(255 246 238 / 0.08);
+}
+.weather-header--sunny.weather-header--dusk,
+.weather-header--partly-cloudy.weather-header--dusk,
+.weather-header--cloudy.weather-header--dusk {
+  --weather-scrim-strong: rgb(35 41 76 / 0.56);
+  --weather-scrim-mid: rgb(35 41 76 / 0.39);
+  --weather-scrim-soft: rgb(35 41 76 / 0.34);
+  --weather-scrim-edge: rgb(35 41 76 / 0.28);
+}
+
 /* Night is a different material, not a daylight scene with a darker wash.
    These tokens also recolour the controls so the moonlit field stays visible
    behind the date without turning the content into a black-on-grey strip. */
@@ -489,9 +500,8 @@ textarea:focus-visible {
   gap: clamp(12px, 2.2vw, 28px);
 }
 
-.weather-date-navigation { --weather-date-flap-height: 48px; display: grid; grid-template-columns: 38px minmax(144px, max-content) 38px; align-items: center; flex: 0 0 auto; gap: 6px; }
+.weather-date-navigation { --weather-date-flap-height: 48px; display: grid; grid-template-columns: 38px max-content 38px; align-items: center; flex: 0 0 auto; gap: 6px; }
 
-.weather-date-step,
 .weather-header-refresh {
   position: relative;
   z-index: 3;
@@ -508,11 +518,41 @@ textarea:focus-visible {
   transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease;
 }
 
-.weather-date-step:hover,
 .weather-header-refresh:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.7); transform: translateY(-1px); }
-.weather-date-step:active,
 .weather-header-refresh:active { transform: translateY(0); }
-.weather-date-navigation > .weather-date-step { top: -9px; height: var(--weather-date-flap-height); }
+/* Approved thin translucent material with fourth B's independent chevron. */
+.weather-date-navigation > .weather-date-step {
+  position: relative;
+  top: -9px;
+  z-index: 3;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 38px;
+  width: 38px;
+  height: var(--weather-date-flap-height);
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  color: var(--ink-soft);
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  transition: transform 160ms ease;
+}
+.weather-date-step > .rect-date-surface { position: absolute; inset: 0; display: block; box-sizing: border-box; border: 1px solid rgb(255 255 255 / .52); border-radius: inherit; background: linear-gradient(160deg, rgb(255 255 255 / .22), rgb(255 255 255 / .02)), rgb(233 244 255 / .28); box-shadow: inset 0 1px 0 rgb(255 255 255 / .4), 0 2px 5px rgb(18 34 64 / .08); pointer-events: none; transition: background-color 160ms ease, border-color 160ms ease; }
+.material-date-arrow { position: absolute; left: 50%; top: 50%; width: 38px; height: 48px; transform: translate(-50%, -50%); overflow: visible; pointer-events: none; color: var(--weather-header-ink); }
+.weather-date-step:hover { transform: translateY(-1px); }
+.weather-date-step:hover > .rect-date-surface { background: rgb(255 255 255 / .7); border-color: rgb(230 242 255 / .64); box-shadow: inset 0 1px 0 rgb(255 255 255 / .26), 0 3px 8px rgb(10 22 46 / .15); }
+.weather-date-step:active { transform: none; }
+.weather-date-step:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(49 93 250 / 0.14); }
+.weather-header--dusk .weather-date-step > .rect-date-surface { background: linear-gradient(160deg, rgb(255 255 255 / .14), rgb(255 255 255 / .015)), rgb(35 40 69 / .30); border-color: rgb(255 255 255 / .28); box-shadow: inset 0 1px 0 rgb(255 255 255 / .16), 0 2px 5px rgb(15 22 45 / .12); }
+.weather-header--night .weather-date-step > .rect-date-surface { background: linear-gradient(160deg, rgb(220 236 255 / .12), rgb(220 236 255 / .015)), rgb(20 36 66 / .28); border-color: rgb(165 188 235 / .32); box-shadow: inset 0 1px 0 rgb(220 235 255 / .14), 0 2px 5px rgb(2 8 25 / .16); }
+.weather-header--night .weather-date-step:hover > .rect-date-surface { background: linear-gradient(160deg, rgb(220 236 255 / .17), rgb(220 236 255 / .035)), rgb(20 36 66 / .28); }
+@media (max-width: 560px) {
+  .weather-date-navigation > .weather-date-step { flex-basis: 44px; width: 44px; }
+}
 
 .weather-date-picker {
   position: relative;
@@ -571,10 +611,12 @@ textarea:focus-visible {
 .weather-date-meta { --weather-date-meta-height: 18px; display: grid; grid-template-columns: repeat(2, var(--weather-date-pair-width)); column-gap: var(--weather-date-seam); align-items: center; justify-self: center; width: max-content; min-height: var(--weather-date-meta-height); color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.72rem; line-height: 1; white-space: nowrap; }
 .weather-date-weekday { box-sizing: border-box; display: flex; grid-column: 1; align-items: center; justify-content: center; width: 100%; height: var(--weather-date-meta-height); color: var(--weather-header-ink); font-weight: 760; line-height: var(--weather-date-meta-height); text-align: center; }
 .weather-date-return { box-sizing: border-box; display: inline-flex; grid-column: 2; align-items: center; justify-content: center; width: 100%; height: var(--weather-date-meta-height); margin: 0; padding: 0; border: 0; color: var(--weather-header-muted); background: transparent; font: inherit; font-weight: 620; line-height: var(--weather-date-meta-height); text-align: center; white-space: nowrap; }
+.weather-date-return.is-return { border-radius: 8px; text-decoration: none; background: rgb(255 255 255 / 0.22); box-shadow: 0 1px 4px rgb(35 51 78 / 0.08); transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease; }
 .weather-date-return.is-current { opacity: 0.72; }
 .weather-date-return.is-return { cursor: pointer; }
-.weather-date-return.is-return:hover { color: var(--weather-header-ink); text-decoration: underline; text-underline-offset: 2px; }
-.weather-date-return.is-return:focus-visible { border-radius: 4px; outline: 2px solid var(--weather-header-ink); outline-offset: 2px; }
+.weather-date-return.is-return:hover { color: var(--weather-header-ink); background: rgb(255 255 255 / 0.38); box-shadow: 0 3px 9px rgb(35 51 78 / 0.13); text-decoration: none; }
+.weather-date-return.is-return:focus-visible { outline: 2px solid rgb(102 132 212 / 0.66); outline-offset: 2px; background: rgb(255 255 255 / 0.42); box-shadow: 0 3px 10px rgb(35 51 78 / 0.14); }
+.weather-date-return.is-return:active { background: rgb(255 255 255 / 0.52); box-shadow: 0 1px 3px rgb(35 51 78 / 0.12); text-decoration: none; }
 
 .weather-header-summary { display: grid; justify-items: end; align-content: center; min-width: 0; margin-left: auto; gap: 4px; color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); white-space: nowrap; }
 .weather-header-place, .weather-header-reading, .weather-header-condition { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
@@ -584,6 +626,8 @@ textarea:focus-visible {
 .weather-header-condition strong { color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); font-weight: 600; }
 .weather-header-glyph { flex: 0 0 18px; width: 18px; height: 18px; color: var(--weather-header-glyph, #2f6a78); }
 .weather-header-temperature { color: var(--weather-header-ink); text-shadow: var(--weather-header-text-shadow); font-size: 0.86rem; font-variant-numeric: tabular-nums; font-weight: 600; }
+.weather-header-sun-event { display: inline-flex; align-items: center; justify-self: end; gap: 4px; min-height: 16px; max-width: 100%; color: var(--weather-header-muted); font-size: 0.7rem; font-weight: 550; line-height: 1; font-variant-numeric: tabular-nums; text-shadow: var(--weather-header-muted-text-shadow); white-space: nowrap; }
+.weather-header-sun-event svg { flex: 0 0 16px; width: 16px; height: 16px; opacity: 0.82; }
 .weather-header-unavailable { color: var(--weather-header-muted); text-shadow: var(--weather-header-muted-text-shadow); font-size: 0.78rem; }
 .weather-header-actions { display: inline-flex; align-items: center; margin-left: 10px; }
 .weather-header-refresh { margin-left: 10px; }
@@ -594,14 +638,12 @@ textarea:focus-visible {
 .weather-configure-button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 9px; border: 1px solid rgb(119 135 161 / 0.2); border-radius: 10px; color: var(--ink-soft); background: rgb(255 255 255 / 0.58); cursor: pointer; font-size: 0.78rem; font-weight: 680; }
 .weather-configure-button:hover { border-color: #aebed8; background: rgb(255 255 255 / 0.86); }
 
-.weather-header--night .weather-date-step,
 .weather-header--night .weather-header-refresh {
   border-color: rgb(165 188 235 / 0.3);
   color: #dce7ff;
   background: rgb(14 28 59 / 0.68);
 }
 
-.weather-header--night .weather-date-step:hover,
 .weather-header--night .weather-header-refresh:hover {
   border-color: rgb(181 202 246 / 0.56);
   background: rgb(28 48 88 / 0.82);
@@ -630,6 +672,7 @@ textarea:focus-visible {
   position: absolute;
   inset: 0;
   z-index: 0;
+  container-type: size;
   overflow: hidden;
   pointer-events: none;
   /* The wash is a category tint painted on top of the phase gradient. Two
@@ -648,9 +691,9 @@ textarea:focus-visible {
 .weather-bg--dawn {
   --sky-top: #46568f; --sky-mid: #b98aa0; --sky-low: #ffd7a6;
   --horizon: linear-gradient(0deg, rgb(255 192 122 / 0.8) 0%, rgb(255 215 166 / 0) 100%);
-  --halo: rgb(255 185 141 / 0.85); --rays: rgb(255 200 150 / 0.5);
+  --halo: rgb(255 185 141 / 0.85);
   --disc: radial-gradient(circle at 40% 30%, #fff4dc 0%, #ffb85e 52%, #f2762f 100%);
-  --lum-right: 92px; --lum-top: 32px; --lum-size: 40px;
+  --lum-right: 92px; --lum-top: 32px;
   --cloud-far: #d2d8e6; --cloud-mid: #b0b8cb; --cloud-near: #8b94a8; --cloud-under: #6b7488;
   --rain: rgb(150 165 195 / 0.62); --rain-dark: rgb(88 102 130 / 0.5);
   --fog: rgb(196 200 210 / 0.42); --snow: rgb(226 236 248 / 0.85);
@@ -658,12 +701,12 @@ textarea:focus-visible {
 .weather-bg--morning {
   --sky-top: #6fb0e6; --sky-mid: #b6dcf6; --sky-low: #e8f5fd;
   --horizon: linear-gradient(0deg, rgb(255 255 255 / 0.6) 0%, rgb(255 255 255 / 0) 100%);
-  --halo: rgb(255 246 207 / 0.85); --rays: rgb(255 246 210 / 0.42);
+  --halo: rgb(255 246 207 / 0.85);
   /* Morning light is cooler and paler than noon: the sun is still low and the
      air is thicker. The disc itself has to differ per phase or three of the six
      phases would be the same sun in a different place. */
   --disc: radial-gradient(circle at 38% 32%, #fffefa 0%, #ffefc2 55%, #ffdf8f 100%);
-  --lum-right: 58px; --lum-top: 16px; --lum-size: 34px;
+  --lum-right: 58px; --lum-top: 16px;
   --cloud-far: #e2ecf6; --cloud-mid: #c6d6e6; --cloud-near: #a2b4c8; --cloud-under: #7e90a6;
   --rain: rgb(140 175 210 / 0.6); --rain-dark: rgb(76 112 145 / 0.5);
   --fog: rgb(184 194 204 / 0.4); --snow: rgb(226 240 252 / 0.9);
@@ -671,9 +714,9 @@ textarea:focus-visible {
 .weather-bg--day {
   --sky-top: #5aa4e0; --sky-mid: #a8d2f2; --sky-low: #f2f8fd;
   --horizon: linear-gradient(0deg, rgb(255 255 255 / 0.62) 0%, rgb(255 255 255 / 0) 100%);
-  --halo: rgb(255 242 196 / 0.9); --rays: rgb(255 240 190 / 0.44);
+  --halo: rgb(255 242 196 / 0.9);
   --disc: radial-gradient(circle at 38% 32%, #fffdf2 0%, #ffe491 55%, #ffcb52 100%);
-  --lum-right: 40px; --lum-top: 10px; --lum-size: 32px;
+  --lum-right: 40px; --lum-top: 10px;
   --cloud-far: #e8f1fa; --cloud-mid: #ccdcec; --cloud-near: #a8bacc; --cloud-under: #8496aa;
   --rain: rgb(144 202 249 / 0.62); --rain-dark: rgb(77 104 132 / 0.5);
   --fog: rgb(176 190 197 / 0.42); --snow: rgb(226 240 252 / 0.9);
@@ -681,10 +724,10 @@ textarea:focus-visible {
 .weather-bg--afternoon {
   --sky-top: #5aa0dd; --sky-mid: #b4d6ef; --sky-low: #fdf6ea;
   --horizon: linear-gradient(0deg, rgb(255 236 200 / 0.72) 0%, rgb(255 246 226 / 0) 100%);
-  --halo: rgb(255 233 168 / 0.9); --rays: rgb(255 230 170 / 0.46);
+  --halo: rgb(255 233 168 / 0.9);
   /* Afternoon light is the warmest of the three daylight phases. */
   --disc: radial-gradient(circle at 36% 30%, #fffbe6 0%, #ffdc78 55%, #ffbf3f 100%);
-  --lum-right: 28px; --lum-top: 12px; --lum-size: 36px;
+  --lum-right: 28px; --lum-top: 12px;
   --cloud-far: #f0ecdf; --cloud-mid: #d8d2c2; --cloud-near: #b2aa98; --cloud-under: #8c8474;
   --rain: rgb(150 180 205 / 0.62); --rain-dark: rgb(90 108 130 / 0.5);
   --fog: rgb(198 196 190 / 0.42); --snow: rgb(238 238 232 / 0.88);
@@ -692,9 +735,9 @@ textarea:focus-visible {
 .weather-bg--dusk {
   --sky-top: #2b4373; --sky-mid: #8d5a72; --sky-low: #ffc078;
   --horizon: linear-gradient(0deg, rgb(255 154 74 / 0.9) 0%, rgb(255 176 102 / 0) 100%);
-  --halo: rgb(255 201 138 / 0.95); --rays: rgb(255 190 130 / 0.55);
+  --halo: rgb(255 201 138 / 0.95);
   --disc: radial-gradient(circle at 40% 30%, #fff4dc 0%, #ffb85e 50%, #f2762f 100%);
-  --lum-right: 18px; --lum-top: 30px; --lum-size: 44px;
+  --lum-right: 18px; --lum-top: 30px;
   --cloud-far: #b7a6b6; --cloud-mid: #9a8296; --cloud-near: #776078; --cloud-under: #5b4658;
   --rain: rgb(190 170 175 / 0.6); --rain-dark: rgb(110 96 108 / 0.5);
   --fog: rgb(206 192 190 / 0.42); --snow: rgb(244 232 228 / 0.85);
@@ -702,9 +745,9 @@ textarea:focus-visible {
 .weather-bg--night {
   --sky-top: #050b1b; --sky-mid: #0b1732; --sky-low: #1b3158;
   --horizon: linear-gradient(0deg, rgb(55 89 145 / 0.42) 0%, rgb(31 54 96 / 0) 100%);
-  --halo: rgb(183 207 255 / 0.48); --rays: rgb(184 211 255 / 0.24);
+  --halo: rgb(183 207 255 / 0.48);
   --disc: radial-gradient(circle at 36% 32%, #ffffff 0%, #eef3ff 64%, #bcccf0 100%);
-  --lum-right: 64px; --lum-top: 14px; --lum-size: 28px;
+  --lum-right: 64px; --lum-top: 14px;
   --cloud-far: #40577d; --cloud-mid: #2d4268; --cloud-near: #203457; --cloud-under: #142644;
   /* Rain has to read against a dark sky, so at night it gets lighter, not darker. */
   --rain: rgb(175 207 255 / 0.54); --rain-dark: rgb(208 228 255 / 0.46);
@@ -772,6 +815,37 @@ textarea:focus-visible {
 .weather-bg--night::before { opacity: 0.8; }
 .weather-bg--night::after { background: linear-gradient(120deg, rgb(3 10 28 / 0.04), rgb(1 8 24 / 0.28)); opacity: 0.72; }
 
+/* Dawn and dusk are light in the air, not a ruled line. These static washes
+   enrich the phases only where the sky can show them through the weather. */
+.weather-bg--sunny.weather-bg--dawn {
+  --sky-wash: radial-gradient(ellipse 68% 105% at 78% 72%, rgb(255 224 170 / 0.43), transparent 72%), linear-gradient(180deg, rgb(174 205 239 / 0.18), rgb(255 233 212 / 0.08));
+  --sky-atmosphere: radial-gradient(ellipse 70% 100% at 80% 74%, rgb(255 239 203 / 0.32), transparent 72%);
+}
+.weather-bg--sunny.weather-bg--dusk {
+  --sky-wash: radial-gradient(ellipse 72% 115% at 89% 73%, rgb(255 157 104 / 0.48), transparent 70%), linear-gradient(180deg, rgb(55 62 112 / 0.15), rgb(174 89 121 / 0.19));
+  --sky-atmosphere: radial-gradient(ellipse 72% 100% at 87% 75%, rgb(255 196 134 / 0.31), transparent 72%);
+}
+.weather-bg--partly-cloudy.weather-bg--dawn {
+  --sky-wash: radial-gradient(ellipse 70% 100% at 78% 74%, rgb(255 216 171 / 0.33), transparent 74%), linear-gradient(180deg, rgb(172 195 229 / 0.17), rgb(250 221 209 / 0.09));
+  --sky-atmosphere: radial-gradient(ellipse 70% 95% at 78% 76%, rgb(255 228 193 / 0.27), transparent 72%);
+  --cloud-mid: #c7b7c9; --cloud-near: #a7a0b8; --cloud-under: #777b9b;
+}
+.weather-bg--partly-cloudy.weather-bg--dusk {
+  --sky-wash: radial-gradient(ellipse 72% 105% at 88% 75%, rgb(255 166 116 / 0.37), transparent 72%), linear-gradient(180deg, rgb(65 70 117 / 0.2), rgb(175 100 130 / 0.18));
+  --sky-atmosphere: radial-gradient(ellipse 70% 95% at 86% 76%, rgb(255 191 139 / 0.26), transparent 72%);
+  --cloud-mid: #b99db0; --cloud-near: #866e90; --cloud-under: #634f73;
+}
+.weather-bg--cloudy.weather-bg--dawn {
+  --sky-wash: linear-gradient(180deg, rgb(142 170 205 / 0.22), rgb(255 213 187 / 0.27));
+  --sky-atmosphere: radial-gradient(ellipse 78% 90% at 78% 77%, rgb(255 224 189 / 0.32), transparent 74%);
+  --cloud-far: #e3dbe2; --cloud-mid: #c8b9c9; --cloud-near: #a49eb5; --cloud-under: #777b97;
+}
+.weather-bg--cloudy.weather-bg--dusk {
+  --sky-wash: linear-gradient(180deg, rgb(69 77 123 / 0.3), rgb(214 129 134 / 0.29));
+  --sky-atmosphere: radial-gradient(ellipse 78% 90% at 84% 77%, rgb(255 182 143 / 0.31), transparent 74%);
+  --cloud-far: #bcaabc; --cloud-mid: #9c819e; --cloud-near: #786782; --cloud-under: #584d6e;
+}
+
 .sky-horizon {
   position: absolute;
   right: 0;
@@ -782,19 +856,33 @@ textarea:focus-visible {
 }
 
 /* --- Sun by day, moon by night: same three elements either way ------------- */
-.sky-rays {
+.sky-light {
+  /* A shared base prevents phase swaps from overriding the continuous scale. */
+  --lum-size: 32px;
   position: absolute;
-  width: calc(var(--lum-size) * 4.4);
-  height: calc(var(--lum-size) * 4.4);
-  /* Centre the burst on the disc: disc centre sits lum-size/2 in from the
-     element's own edge, and half of 4.4x is 2.2x. */
-  right: calc(var(--lum-right) - var(--lum-size) * 1.7);
-  top: calc(var(--lum-top) - var(--lum-size) * 1.7);
-  border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, var(--rays) 0deg 2.4deg, rgb(255 255 255 / 0) 2.4deg 24deg);
-  -webkit-mask-image: radial-gradient(circle, #000 6%, rgb(0 0 0 / 0) 66%);
-  mask-image: radial-gradient(circle, #000 6%, rgb(0 0 0 / 0) 66%);
-  opacity: 0.48;
+  top: 0;
+  left: 0;
+  width: var(--lum-size);
+  height: var(--lum-size);
+  opacity: var(--solar-opacity, 1);
+  transform: translate3d(calc(var(--solar-x, 84cqi) - 50%), calc(var(--solar-y, 32cqb) - 50%), 0) scale(var(--celestial-scale, 1));
+  transform-origin: center;
+  transition: transform 520ms ease-out, opacity 520ms ease-out;
+  pointer-events: none;
+}
+.sky-light--moon {
+  --lum-size: 28px;
+  --halo: rgb(183 207 255 / 0.48);
+}
+.sky-light--moon .sky-halo { animation: none; }
+.sky-moon-disc {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: var(--lum-size);
+  height: var(--lum-size);
+  transform: translate(-50%, -50%);
 }
 /* Soft by construction: the gradient reaches zero over a long tail, so there is
    no hard circle edge. The hard ring in the old `.sun-core` was most of what
@@ -803,23 +891,27 @@ textarea:focus-visible {
   position: absolute;
   width: calc(var(--lum-size) * 3);
   height: calc(var(--lum-size) * 3);
-  right: calc(var(--lum-right) - var(--lum-size));
-  top: calc(var(--lum-top) - var(--lum-size));
+  top: 50%;
+  left: 50%;
   border-radius: 50%;
   background: radial-gradient(circle, var(--halo) 0%, var(--halo) 30%, rgb(255 255 255 / 0) 72%);
   opacity: 0.64;
+  transform: translate(-50%, -50%);
   animation: lum-breathe 14s ease-in-out infinite;
 }
 .sky-disc {
   position: absolute;
+  top: 50%;
+  left: 50%;
   width: var(--lum-size);
   height: var(--lum-size);
-  right: var(--lum-right);
-  top: var(--lum-top);
   border-radius: 50%;
   background: var(--disc);
+  transform: translate(-50%, -50%);
 }
-@keyframes lum-breathe { 0%, 100% { transform: scale(1); opacity: 0.58; } 50% { transform: scale(1.025); opacity: 0.7; } }
+.weather-bg--night .sky-light--sun { opacity: 0; }
+.weather-bg--night .sky-light--sun .sky-halo { animation: none; }
+@keyframes lum-breathe { 0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.58; } 50% { transform: translate(-50%, -50%) scale(1.025); opacity: 0.7; } }
 
 /* --- Stars: one element, many painted dots, twinkle on opacity only -------- */
 @keyframes star-breathe { 0%, 100% { opacity: 0.76; } 50% { opacity: 0.9; } }
@@ -981,10 +1073,6 @@ textarea:focus-visible {
 .fog-band--2 { top: 44px; right: 6%; left: 16%; filter: blur(3px); animation-delay: 1.4s; }
 .fog-band--3 { top: 74px; right: 28%; left: 2%; filter: blur(9px); animation-delay: 2.6s; }
 
-.mobile-search-button {
-  display: none;
-}
-
 .logout-button {
   display: inline-flex;
   align-items: center;
@@ -1070,10 +1158,6 @@ textarea:focus-visible {
   transition: color 180ms ease, border-color 180ms ease, transform 180ms ease, background-color 180ms ease;
 }
 
-.icon-button.mobile-search-button {
-  display: none;
-}
-
 .icon-button:hover {
   border-color: #c8d2e5;
   color: var(--primary);
@@ -1100,124 +1184,6 @@ textarea:focus-visible {
   background: var(--primary-soft);
 }
 
-.search-form {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-width: 0;
-  min-height: 48px;
-  padding: 0 8px 0 15px;
-  border: 1px solid #cfd6e1;
-  border-radius: 999px;
-  color: #6b7584;
-  background: #fff;
-  box-shadow: 0 2px 9px rgb(24 36 61 / 0.045);
-  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
-}
-
-.search-form:hover {
-  border-color: #b9c4d2;
-  box-shadow: 0 4px 13px rgb(24 36 61 / 0.07);
-}
-
-/*
- * The box the owner kept seeing was never drawn by the bar. The global
- * `button/a/input/textarea:focus-visible` rule near the top of this file paints
- * `--shadow-focus` (a 3px ring with no offset) on any focused input, and the input in
- * here is a bare rectangle (radius 0) sitting inside a 999px pill — so a click produced
- * a SQUARE ring inside a rounded bar. The first pass took the halo off the bar and
- * stopped there, and its pixel check only ever asked whether anything painted *outside*
- * the bar, which is exactly where the inner square is not. That blind spot is closed in
- * .review/probe-search-click.mjs, which now measures the collar of pixels hugging the
- * field itself.
- *
- * So: the field paints nothing at all, and focus shows up on the bar's own outline —
- * which follows the pill's curve because it *is* the pill's border. That is the owner's
- * own suggestion, and it adds no new shape to the header.
- *
- * A `:has(input:focus-visible)` guard was the first idea and it does not work: Chrome
- * matches `:focus-visible` on a text input for a plain mouse click too (measured), so it
- * would not have separated click from Tab.
- */
-.search-form:focus-within {
-  border-color: var(--primary);
-  background: #fff;
-  box-shadow: 0 4px 14px rgb(24 36 61 / 0.08);
-}
-
-.search-leading-icon {
-  flex: 0 0 auto;
-  color: #697586;
-}
-
-.search-form input {
-  min-width: 0;
-  flex: 1;
-  height: 46px;
-  padding: 0 11px;
-  border: 0;
-  outline: none;
-  color: var(--ink);
-  background: transparent;
-  font-size: 0.9rem;
-  line-height: 1.2;
-}
-
-/*
- * `outline: none` above was never enough: it silences the native ring, but the global
- * `:focus-visible` rule sets `box-shadow` as well, and that one kept landing on this
- * rectangle. Same specificity as `input:focus-visible`, later in the file, so this wins.
- */
-.search-form input:focus,
-.search-form input:focus-visible {
-  box-shadow: none;
-}
-
-.search-form input::placeholder {
-  color: #697586;
-}
-
-.search-clear,
-.search-submit {
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  color: #667387;
-  background: transparent;
-  cursor: pointer;
-  transition: color 160ms ease, background-color 160ms ease, transform 160ms ease;
-}
-
-.search-clear:hover,
-.search-submit:hover {
-  color: var(--ink);
-  background: #f0f3f8;
-}
-
-.search-submit {
-  color: var(--primary);
-}
-
-.search-submit:hover {
-  color: var(--primary-strong);
-  background: var(--primary-soft);
-}
-
-.search-clear:active,
-.search-submit:active {
-  transform: scale(0.96);
-}
-
-.search-divider {
-  flex: 0 0 1px;
-  width: 1px;
-  height: 24px;
-  margin: 0 2px;
-  background: #e1e5eb;
-}
 
 .mobile-menu-button,
 .mobile-nav {
@@ -1555,6 +1521,7 @@ h2 {
   box-sizing: border-box;
   min-height: 40px;
   padding: 0 14px;
+  margin: 0;
   border-radius: 10px;
   cursor: pointer;
   font-size: 0.84rem;
@@ -1584,7 +1551,6 @@ h2 {
 }
 
 .secondary-button {
-  margin-top: 14px;
   border: 1px solid #ccd7ff;
   color: var(--primary);
   background: var(--primary-soft);
@@ -1837,6 +1803,26 @@ h2 {
   background: var(--cyan);
 }
 
+.timeline-note-metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 9px;
+}
+
+.timeline-note-title {
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.timeline-note-source {
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
 .kind-task {
   color: #766e19;
   background: var(--lemon);
@@ -1866,6 +1852,47 @@ h2 {
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.journal-text {
+  min-width: 0;
+}
+
+.journal-text-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+
+.journal-text-body.is-expanded:not(.is-measuring-clamp) {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.journal-text-body.is-expanded.is-measuring-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+
+.journal-text-toggle {
+  display: inline-flex;
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  color: var(--primary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.45;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.journal-text-toggle:hover {
+  text-decoration: underline;
 }
 
 .privacy-mask {
@@ -2495,6 +2522,7 @@ h2 {
 }
 
 .settings-card-icon {
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -2563,11 +2591,15 @@ h2 {
 }
 
 .settings-font-card {
-  align-items: flex-start;
+  align-items: center;
+  display: grid;
+  grid-template-columns: 36px minmax(max-content, 1fr) minmax(100px, 144px);
 }
+.settings-font-card .settings-card-copy strong { white-space: nowrap; }
 
 .settings-font-select {
-  flex: 0 1 260px;
+  width: 100%;
+  min-width: 0;
   min-height: 38px;
   padding: 0 10px;
   border: 1px solid var(--line);
@@ -2584,14 +2616,73 @@ h2 {
   box-shadow: 0 0 0 3px rgb(86 120 255 / 0.12);
 }
 
+.weather-simulator-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+}
+
+.weather-simulator {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 13px;
+  min-width: 0;
+  width: 100%;
+}
+
+.weather-simulator-preview {
+  width: 100%;
+  min-height: 154px;
+  padding: 20px;
+}
+
+.weather-simulator-preview-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 1;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  color: var(--weather-header-ink);
+  text-shadow: var(--weather-header-text-shadow);
+}
+
+.weather-simulator-preview-time,
+.weather-simulator-preview-condition { display: grid; gap: 3px; }
+.weather-simulator-preview-time strong { font-size: clamp(2rem, 5vw, 2.8rem); font-variant-numeric: tabular-nums; line-height: 1; }
+.weather-simulator-preview-time span,
+.weather-simulator-preview-condition span { color: var(--weather-header-muted); font-size: 0.72rem; font-weight: 620; text-shadow: var(--weather-header-muted-text-shadow); }
+.weather-simulator-preview-condition { justify-items: end; text-align: right; }
+.weather-simulator-preview-condition strong { font-size: 1rem; font-weight: 750; }
+
+.weather-simulator-controls { display: grid; gap: 7px; min-width: 0; }
+.weather-simulator-choice,
+.weather-simulator-time-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ink); font-size: 0.78rem; font-weight: 700; }
+.weather-simulator-choice select { width: min(58%, 230px); min-width: 150px; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-soft); font: inherit; font-weight: 550; }
+.weather-simulator-choice select:focus-visible { border-color: #9eb4ff; outline: 2px solid rgb(86 120 255 / 0.24); outline-offset: 2px; }
+.weather-simulator-time-control output { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.weather-simulator-range { width: 100%; height: 40px; margin: 0; appearance: none; background: transparent; cursor: pointer; }
+.weather-simulator-range::-webkit-slider-runnable-track { height: 6px; border-radius: 999px; background: linear-gradient(90deg, #596585, #edb69d 25%, #a8d5ef 50%, #eaa88b 75%, #4c587c); }
+.weather-simulator-range::-moz-range-track { height: 6px; border-radius: 999px; background: linear-gradient(90deg, #596585, #edb69d 25%, #a8d5ef 50%, #eaa88b 75%, #4c587c); }
+.weather-simulator-range::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -7px; appearance: none; border: 3px solid #fff; border-radius: 50%; background: #6179b5; box-shadow: 0 2px 7px rgb(28 47 82 / 0.23); }
+.weather-simulator-range::-moz-range-thumb { width: 14px; height: 14px; border: 3px solid #fff; border-radius: 50%; background: #6179b5; box-shadow: 0 2px 7px rgb(28 47 82 / 0.23); }
+.weather-simulator-range:focus-visible { outline: 2px solid rgb(86 120 255 / 0.45); outline-offset: 2px; border-radius: 9px; }
+.weather-simulator-ticks { display: flex; justify-content: space-between; gap: 2px; margin-top: -5px; color: var(--muted); font-size: 0.66rem; font-variant-numeric: tabular-nums; }
+.weather-simulator-note { margin: 0; color: var(--muted); font-size: 0.71rem; line-height: 1.5; }
+.weather-simulator-preview .sky-light { transition-duration: 120ms; }
+
 .settings-action {
   flex: 0 0 auto;
 }
 
 .settings-data-grid {
-  align-items: center;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
 }
+.settings-data-grid .settings-card-actions { grid-column: 1 / -1; flex-wrap: wrap; margin-left: 0; }
 
 .settings-card-actions {
   display: flex;
@@ -3234,11 +3325,77 @@ h2 {
   object-fit: cover;
 }
 
+.shot-tile-local-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.shot-upload-progress {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 0.64);
+}
+
+.shot-upload-progress span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width 100ms linear;
+}
+
+.shot-upload-state {
+  position: absolute;
+  z-index: 3;
+  right: 3px;
+  bottom: 5px;
+  left: 3px;
+  overflow: hidden;
+  border-radius: 4px;
+  padding: 1px 2px;
+  color: #fff;
+  background: rgb(20 26 38 / 0.7);
+  font-size: 8px;
+  line-height: 1.25;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.shot-tile-retry {
+  position: absolute;
+  z-index: 4;
+  top: 2px;
+  left: 2px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(20 26 38 / 0.72);
+  cursor: pointer;
+}
+
+.shot-tile-retry:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* Two states for the ✕: hidden while the pointer is elsewhere, offered on
    hover. On a touch screen there is no hover, so the rule below the strip
    re-shows it for coarse pointers. */
 .shot-tile-remove {
   position: absolute;
+  z-index: 5;
   top: -5px;
   right: -5px;
   display: grid;
@@ -3419,11 +3576,6 @@ h2 {
  * `input[type=datetime-local]` with `border-radius: 0`, sitting inside a 10px
  * capsule. Square ring, round capsule.
  *
- * `.search-form` hit the same thing and settled it the same way: nothing inside
- * the capsule paints a ring, and focus is shown by the capsule's own border,
- * which follows the 10px curve because it *is* the border. `outline: none`
- * alone was never enough — the global rule sets `box-shadow` too, and that is
- * the part that was visible. Same specificity, later in the file, so this wins.
  */
 .composer-date-control {
   display: inline-flex;
@@ -3894,11 +4046,6 @@ h2 {
  * `input[type=datetime-local]` with `border-radius: 0`, sitting inside a 10px
  * capsule. Square ring, round capsule.
  *
- * `.search-form` hit the same thing and settled it the same way: nothing inside
- * the capsule paints a ring, and focus is shown by the capsule's own border,
- * which follows the 10px curve because it *is* the border. `outline: none`
- * alone was never enough — the global rule sets `box-shadow` too, and that is
- * the part that was visible. Same specificity, later in the file, so this wins.
  */
 .date-field .date-trigger,
 .date-field .date-trigger:focus,
@@ -5100,7 +5247,8 @@ button.relation-chip {
   }
 
   .composer-footer > .primary-button {
-    width: 100%;
+    width: auto;
+    justify-self: end;
   }
 
   .settings-demo-card {
@@ -5596,9 +5744,13 @@ button.relation-chip {
 .settings-backup-form-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.settings-backup-form-actions .primary-button {
+.settings-backup-form-actions .primary-button,
+.settings-backup-form-actions .secondary-button,
+.settings-backup-form-actions .danger-button {
   min-height: 36px;
   padding: 0 13px;
   border-radius: 9px;
@@ -6246,7 +6398,7 @@ button.relation-chip {
 
 @container settings-page (max-width: 480px) {
   .settings-backup-dual { align-items: stretch; flex-direction: column; }
-  .settings-backup-dual .primary-button { width: 100%; }
+  .settings-backup-dual > button { align-self: flex-start; }
   .settings-backup-schedule-controls { flex-wrap: wrap; }
   .settings-backup-schedule-controls .secondary-button { width: 100%; margin-left: 0; }
   .backup-calendar { padding: 12px; }
@@ -6913,7 +7065,14 @@ button.relation-chip {
 }
 
 .search-dialog form {
-  padding-top: 19px;
+  padding-top: 16px;
+}
+
+.search-dialog-description {
+  margin: 0 25px 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .search-dialog-input {
@@ -7051,10 +7210,6 @@ button.relation-chip {
     display: inline-grid;
   }
 
-  .topbar-actions {
-    gap: 7px;
-  }
-
   .weather-header {
     flex: 0 1 215px;
     min-width: 140px;
@@ -7070,14 +7225,6 @@ button.relation-chip {
     font-size: 0.75rem;
   }
 
-  .icon-button.mobile-search-button {
-    display: inline-grid;
-  }
-
-  .search-form {
-    display: none;
-  }
-
   .logout-button {
     display: none;
   }
@@ -7085,27 +7232,6 @@ button.relation-chip {
   .date-navigation {
     flex: 1;
     justify-content: center;
-  }
-
-  .search-form {
-    width: 42px;
-    flex: 0 0 auto;
-    padding: 0 12px;
-  }
-
-  .search-form input,
-  .search-clear {
-    display: none;
-  }
-
-  .search-form:focus-within,
-  .search-form:hover {
-    width: min(220px, 42vw);
-  }
-
-  .search-form:focus-within input,
-  .search-form:hover input {
-    display: block;
   }
 
   .content-grid {
@@ -7279,10 +7405,6 @@ button.relation-chip {
     width: 100%;
   }
 
-  .primary-button {
-    width: 100%;
-  }
-
   .dialog-footer .primary-button {
     width: auto;
   }
@@ -7352,7 +7474,6 @@ button.relation-chip {
   }
 
   .mobile-menu-button,
-  .icon-button.mobile-search-button,
   .date-navigation > .icon-button {
     width: 36px;
     height: 36px;
@@ -7380,18 +7501,13 @@ button.relation-chip {
     font-size: 0.7rem;
   }
 
-  .topbar-actions {
-    gap: 3px;
-  }
-
   .content-grid {
     padding-top: 32px;
   }
 }
 
 /* The compact header keeps the weather card aligned with the composer on
-   phones too; navigation and search become small overlays, never siblings
-   that shrink the card. */
+   phones; navigation overlays the card without shrinking it. */
 @media (max-width: 900px) {
   .topbar { padding-top: 16px; }
 
@@ -7412,24 +7528,6 @@ button.relation-chip {
     background: rgb(255 255 255 / 0.58);
   }
 
-  .topbar-actions {
-    position: absolute;
-    z-index: 4;
-    top: 17px;
-    right: 10px;
-  }
-
-  .topbar-actions .mobile-search-button {
-    display: inline-grid;
-    width: 40px;
-    height: 40px;
-    flex: 0 0 40px;
-    border-color: rgb(119 135 161 / 0.22);
-    background: rgb(255 255 255 / 0.58);
-  }
-
-  .topbar-actions .search-form { display: none; }
-
   .weather-header {
     width: 100%;
     min-height: 100px;
@@ -7445,7 +7543,7 @@ button.relation-chip {
 @media (max-width: 560px) {
   .weather-header { justify-content: flex-start; min-width: 0; min-height: 94px; padding-right: 8px; padding-left: 8px; border-radius: 18px; }
   .weather-header-content { display: flex; align-items: center; justify-content: center; gap: 5px; }
-  .weather-date-navigation { width: 100%; grid-template-columns: 32px minmax(0, 1fr) 32px; gap: 4px; }
+  .weather-date-navigation { width: 100%; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; }
   .weather-date-step,
   .weather-header-refresh { flex-basis: 32px; width: 32px; height: 32px; border-radius: 9px; }
   .weather-date-picker { min-height: 45px; padding-right: 2px; padding-left: 2px; }
@@ -7463,7 +7561,7 @@ button.relation-chip {
 
 @media (max-width: 390px) {
   .weather-header-refresh { margin-right: 30px; }
-  .weather-date-navigation { grid-template-columns: 28px minmax(0, 1fr) 28px; gap: 2px; }
+  .weather-date-navigation { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 2px; }
   .weather-date-step { flex-basis: 28px; width: 28px; height: 30px; }
   .weather-date-picker { padding-right: 0; }
   .weather-header-summary { position: absolute; right: 48px; bottom: 12px; }
@@ -7495,7 +7593,6 @@ button.relation-chip {
   .weather-bg .cloud,
   .weather-bg .snow-flake,
   .weather-bg .snow-field,
-  .weather-bg .sky-rays,
   .weather-bg .sky-halo,
   .weather-bg .sky-stars { animation: none !important; }
   /* The fog keyframes carry the opacity; without them the bands would sit at
@@ -8795,6 +8892,7 @@ button.relation-chip {
 .month-cell-veil {
   position: absolute;
   inset: 0;
+  z-index: 1;
   background: linear-gradient(180deg, rgb(255 255 255 / 0.92) 0%, rgb(255 255 255 / 0.82) 55%, rgb(255 255 255 / 0.68) 100%);
 }
 
@@ -8912,6 +9010,11 @@ button.relation-chip {
 .month-day-summary.is-fallback {
   color: var(--muted);
   font-weight: 520;
+}
+
+.month-cell.has-date-art .month-day-solar,
+.month-cell.has-date-art .month-day-summary.is-fallback {
+  color: var(--ink-soft);
 }
 
 .month-day-weather {
@@ -9162,24 +9265,26 @@ button.relation-chip {
 .calendar-module-button:hover, .calendar-module-button.is-enabled { border-color: #dec1ce; color: #94506a; background: #fff8fa; }
 
 /* Four fixed slots keep sensitive markers in a predictable, quiet corner. */
-.calendar-day-markers { position: absolute; right: 11px; bottom: 10px; z-index: 2; display: grid; grid-template-columns: repeat(4, 14px); align-items: center; justify-content: end; width: 62px; min-height: 14px; }
+.calendar-day-markers { position: absolute; right: 14px; bottom: 13px; z-index: 2; display: grid; grid-template-columns: repeat(4, 14px); align-items: center; justify-content: end; width: 62px; min-height: 14px; }
 .calendar-day-marker { display: inline-grid; place-items: center; width: 14px; height: 14px; color: #a45270; }
-/* One moon means one recorded day. The start/end halves are gone because a
-   start and an end are now the same mark; only the forecast keeps a second
-   look (pale) so a calculation never reads as something she entered. The glyph
-   is lucide's line-art crescent, mirrored left-right so it opens the other way.
-   It inks the same pink as the heart: the calendar carries exactly one cycle
-   pink, and the two marks are told apart by shape, not by colour. */
+.calendar-period-marker { position: relative; display: inline-grid; place-items: center; width: 12px; height: 12px; }
+.calendar-period-start-cap, .calendar-period-end-cap { position: absolute; z-index: 1; box-sizing: border-box; width: 3px; height: 3px; }
+.calendar-period-start-cap { top: 0; right: 0; border-radius: 50%; background: #a45270; box-shadow: 0 0 0 1px var(--surface); }
+.calendar-period-end-cap { right: 0; bottom: 0; border: 1px solid #a45270; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 1px var(--surface); }
+/* One moon slot represents the recorded or predicted period day. Explicit start
+   and end events add tiny endpoint caps to that slot; the faint crescent remains
+   reserved for predictions. The glyph is mirrored left-right and shares the
+   heart's single cycle pink, so the event kind stays distinct by shape. */
 .calendar-moon, .cycle-option-moon { color: #a45270; transform: scaleX(-1); transform-origin: center; }
 .calendar-moon.is-forecast { opacity: 0.34; }
 .calendar-heart { fill: transparent; }
 .calendar-fitness { color: #557a71; }
 .calendar-marker-more { color: var(--muted); font-size: 0.58rem; font-weight: 760; letter-spacing: -0.04em; }
-.month-cell .calendar-day-markers { right: 7px; bottom: 6px; z-index: 1; }
+.month-cell .calendar-day-markers { right: 9px; bottom: 8px; z-index: 1; }
 .month-cell.is-outside .calendar-day-markers { display: none; }
 
 @media (max-width: 560px) {
-  .month-cell .calendar-day-markers { right: 4px; bottom: 3px; transform: scale(0.88); transform-origin: bottom right; }
+  .month-cell .calendar-day-markers { right: auto; left: 4px; bottom: 4px; transform: none; transform-origin: bottom left; }
   .cycle-entry-options { grid-template-columns: 1fr; }
   .cycle-entry-option { min-height: 0; flex-direction: row; align-items: center; }
 }
@@ -9218,6 +9323,94 @@ button.relation-chip {
 .cycle-forecast-length input { width: 54px; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; color: var(--ink-soft); background: var(--surface); font-family: inherit; font-size: inherit; text-align: center; }
 .cycle-forecast-length input:focus-visible { border-color: #d7a2b5; }
 .cycle-inline-error { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: #a34f62; font-size: 0.74rem; }
+
+.cycle-entry-panel-host { min-width: 0; }
+.cycle-entry-desktop { min-width: 0; }
+.cycle-entry-mobile { display: none; }
+.cycle-mobile-entry { display: grid; gap: 7px; min-width: 0; margin: 0 0 14px; padding: 8px; border: 1px solid #ead9e0; border-radius: 12px; background: #fffafb; }
+.cycle-mobile-entry-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.cycle-mobile-entry-head h3 { min-width: 0; margin: 0; color: var(--ink); font-size: 0.86rem; font-weight: 700; }
+.cycle-mobile-settings { display: inline-grid; flex: 0 0 44px; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 9px; color: var(--muted); background: transparent; cursor: pointer; }
+.cycle-mobile-settings:hover, .cycle-mobile-settings:focus-visible { color: #8e4560; background: #fff3f7; }
+.cycle-mobile-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; min-width: 0; }
+.cycle-mobile-action { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: flex-start; gap: 4px; min-width: 0; width: max-content; height: 32px; min-height: 32px; padding: 0 4px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--surface); cursor: pointer; font: inherit; font-size: 0.7rem; line-height: 1.15; text-align: left; white-space: nowrap; }
+.cycle-mobile-checkbox { display: inline-grid; flex: 0 0 16px; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line-strong); border-radius: 4px; color: #8e4560; background: var(--surface); }
+.cycle-mobile-action-icon { flex: 0 0 12px; width: 12px; height: 12px; color: currentColor; }
+.cycle-mobile-action.is-selected .cycle-mobile-checkbox { border-color: #d7a2b5; background: #fff3f7; }
+.cycle-mobile-action-label { flex: 0 0 auto; min-width: 0; }
+.cycle-mobile-action.is-selected { border-color: #d7a2b5; color: #8e4560; background: #fff3f7; box-shadow: inset 0 0 0 1px #d7a2b5; }
+.cycle-mobile-action:disabled { cursor: wait; }
+.cycle-mobile-settings:disabled { cursor: wait; }
+.cycle-mobile-error-row { display: grid; gap: 6px; min-width: 0; }
+.cycle-mobile-error { margin: 0; color: #a34f62; font-size: 0.74rem; line-height: 1.4; overflow-wrap: anywhere; }
+.cycle-mobile-reload { justify-self: start; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--surface); cursor: pointer; font: inherit; font-size: 0.74rem; }
+.calendar-module-button.cycle-mobile-weather-toggle[aria-pressed="true"] { border-color: #dec1ce; color: #94506a; background: #fff8fa; }
+.calendar-day-weather-icon { position: absolute; top: 9px; right: 12px; z-index: 4; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; background: rgb(255 255 255 / 0.72); font-size: 0.9rem; line-height: 1; pointer-events: none; }
+.week-card-head { padding-right: 26px; }
+.week-card.has-weather-icons .week-card-body { padding-top: 25px; }
+.week-card .calendar-day-markers { right: 14px; bottom: 14px; }
+.month-cell .calendar-day-weather-icon { position: static; flex: 0 0 18px; width: 18px; height: 18px; font-size: 0.78rem; }
+.month-cell-footer { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-top: auto; }
+.month-cell-footer .month-day-solar { flex: 0 0 auto; min-width: max-content; margin: 0 auto 0 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
+.month-cell .calendar-day-markers { position: static; display: flex; flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; width: max-content; max-width: 100%; min-width: 0; right: auto; bottom: auto; left: auto; z-index: 2; gap: 0; margin-left: auto; }
+.month-cell .calendar-day-marker { flex: 0 0 14px; }
+.month-cell-date-art[data-date-art-tone="1"] { background-color: var(--calendar-date-art-tone-1); }
+.month-cell-date-art[data-date-art-tone="2"] { background-color: var(--calendar-date-art-tone-2); }
+.month-cell-date-art[data-date-art-tone="3"] { background-color: var(--calendar-date-art-tone-3); }
+.month-cell-date-art[data-date-art-tone="4"] { background-color: var(--calendar-date-art-tone-4); }
+.month-cell-date-art[data-date-art-tone="5"] { background-color: var(--calendar-date-art-tone-5); }
+.month-cell-date-art[data-date-art-tone="6"] { background-color: var(--calendar-date-art-tone-6); }
+.calendar-date-art-safe-area {
+  position: absolute;
+  inset: 28px 4px 24px;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  container-type: size;
+  pointer-events: none;
+}
+.month-cell.has-date-art-status .calendar-date-art-safe-area { top: 34px; }
+.month-cell.has-date-art-solar .calendar-date-art-safe-area,
+.month-cell.has-date-art-markers .calendar-date-art-safe-area { bottom: 26px; }
+.month-cell.has-date-art-solar.has-date-art-markers .calendar-date-art-safe-area { bottom: 34px; }
+.month-cell.has-date-art .calendar-date-art { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 1px; max-width: 100%; max-height: 100%; color: var(--calendar-date-art-foreground); font-size: min(14px, 100cqh, 100cqw); line-height: 1; }
+.month-cell.has-date-art .calendar-date-glyph { display: block; flex: 0 0 1em; width: 1em; height: 1em; overflow: visible; }
+
+.calendar-section[data-date-art-desktop-layout="horizontal"] .calendar-date-art { flex-direction: row; }
+.calendar-section[data-date-art-desktop-layout="horizontal"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(14px, 100cqh, calc((100cqw - 1px) / 2)); }
+.calendar-section[data-date-art-desktop-layout="vertical"] .calendar-date-art { flex-direction: column; gap: 0; font-size: min(14px, 50cqh, 100cqw); }
+.calendar-section[data-date-art-desktop-layout="big"] .calendar-date-art { flex-direction: row; gap: 0; font-size: min(clamp(14px, 2.1vw, 30px), 100cqh, 100cqw); }
+.calendar-section[data-date-art-desktop-layout="big"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(clamp(14px, 2.1vw, 30px), 100cqh, 50cqw); }
+
+@media (min-width: 1101px) {
+  .month-cell-head { justify-content: flex-start; }
+  .month-day-meta { display: contents; }
+  .month-cell .month-day-status { position: static; }
+  .month-cell .calendar-day-weather-icon { margin-left: auto; }
+}
+
+@media (max-width: 1100px) {
+  .month-cell .calendar-day-weather-icon { font-size: 0.61rem; }
+}
+
+@media (min-width: 561px) and (max-width: 1100px) {
+  .month-cell { padding-right: 4px; padding-left: 4px; }
+  .month-cell-head { position: static; display: grid; grid-template-columns: minmax(0, 1fr) 13.5px; column-gap: 1px; row-gap: 2px; align-items: start; justify-content: initial; min-height: 0; }
+  .month-day-number { position: static; grid-column: 1; grid-row: 1; justify-self: start; white-space: nowrap; }
+  .month-day-meta { display: contents; }
+  .month-cell .month-day-status { position: static; grid-column: 1; grid-row: 2; justify-self: start; }
+  .month-cell .calendar-day-weather-icon { position: static; grid-column: 2; grid-row: 1; justify-self: end; flex: 0 0 13.5px; width: 13.5px; height: 18px; margin: 0; }
+  .month-cell.has-date-art { --date-art-narrow-size: clamp(14px, 1.5vw, 16px); }
+  .month-cell.has-date-art-status .calendar-date-art-safe-area { top: 46px; }
+  .month-cell.has-date-art-solar.has-date-art-markers .calendar-date-art-safe-area { bottom: 54px; }
+  .month-cell.has-date-art-status.has-date-art-solar.has-date-art-markers { min-height: 110px; }
+  .calendar-section[data-date-art-desktop-layout="horizontal"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(14px, 100cqh, calc((100cqw - 1px) / 2)); }
+  .calendar-section[data-date-art-desktop-layout="vertical"] .month-cell.has-date-art .calendar-date-art { font-size: min(12px, 50cqh, 100cqw); }
+  .calendar-section[data-date-art-desktop-layout="big"] .month-cell.has-date-art .calendar-date-art { font-size: min(var(--date-art-narrow-size), 100cqh, 100cqw); }
+  .calendar-section[data-date-art-desktop-layout="big"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(var(--date-art-narrow-size), 100cqh, 50cqw); }
+}
 
 @media (max-width: 560px) {
   .cycle-inline-panel { padding: 10px; }
@@ -10105,6 +10298,8 @@ button.relation-chip {
 /* --- Settings: photo trash (orphan uploads + collected files) --- */
 .settings-asset-trash-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 14px;
   padding: 16px 17px;
   border: 1px solid var(--line);
@@ -10114,10 +10309,15 @@ button.relation-chip {
 }
 
 .settings-asset-trash-overview {
-  display: flex;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   min-width: 0;
+}
+@container settings-page (max-width: 480px) {
+  .settings-asset-trash-overview { grid-template-columns: 36px minmax(0, 1fr); }
+  .settings-asset-trash-overview > button { grid-column: 2; justify-self: start; }
 }
 
 .settings-asset-trash-stats {
@@ -10270,8 +10470,8 @@ button.relation-chip {
     grid-template-columns: 40px minmax(0, 1fr);
   }
 
-  .settings-asset-trash-days,
-  .settings-asset-trash-actions {
+  .settings-asset-trash-row .settings-asset-trash-days,
+  .settings-asset-trash-row .settings-asset-trash-actions {
     grid-column: 2;
   }
 }
@@ -10962,7 +11162,6 @@ button.relation-chip {
 @media (max-width: 390px) {
   .notes-library { margin-top: 26px; gap: 16px; }
   .notes-library-heading { align-items: start; gap: 12px; }
-  .notes-library-heading .primary-button { width: 100%; }
   .notes-filter-tabs { gap: 5px; }
   .notes-filter-tab { flex: 1 1 0; padding: 0 8px; }
   .note-format-picker { grid-template-columns: minmax(0, 1fr); }
@@ -11020,28 +11219,11 @@ button.relation-chip {
   .mobile-nav-item.is-active { color: var(--primary); background: transparent; }
   .mobile-nav-item.is-active::after { width: 18px; height: 2px; margin-top: 1px; border-radius: 999px; content: ""; background: currentColor; }
 
-  /* Menu is replaced by the bottom nav "more" sheet on the narrowest phones,
-     but search must stay one tap away (todo §10): keep the icon, drop the rest
-     of the topbar actions (the full search form is already display:none). */
+  /* The bottom nav's more sheet replaces the compact menu on the narrowest phones. */
   .mobile-menu-button { display: none !important; }
-  .mobile-search-button,
-  .icon-button.mobile-search-button { display: inline-grid !important; }
 
   .topbar { min-height: 0; padding-top: 16px; }
   .topbar-layout { display: block; }
-  .topbar-actions {
-    display: flex;
-    position: absolute;
-    z-index: 4;
-    top: 17px;
-    right: 10px;
-  }
-  .topbar-actions .search-form { display: none; }
-  .topbar-actions .mobile-search-button {
-    display: inline-grid;
-    width: 40px;
-    height: 40px;
-  }
 
   .weather-header {
     min-height: 116px;
@@ -11059,9 +11241,9 @@ button.relation-chip {
   .weather-date-navigation {
     --weather-date-flap-height: 50px;
     display: grid;
-    width: 100%;
-    flex: 1 1 auto;
-    grid-template-columns: 38px minmax(0, 1fr) 38px;
+    width: max-content;
+    flex: 0 0 auto;
+    grid-template-columns: 38px max-content 38px;
     min-width: 0;
     justify-content: stretch;
     gap: 4px;
@@ -11075,7 +11257,7 @@ button.relation-chip {
     border-radius: 11px;
   }
 
-  .weather-date-center { --weather-date-flap-width: 29px; --weather-date-seam: 6px; width: 100%; min-width: 0; }
+  .weather-date-center { --weather-date-flap-width: 29px; --weather-date-seam: 6px; width: max-content; min-width: 0; }
   .weather-date-picker { min-width: 0; min-height: 52px; padding: 0 3px; }
   .weather-date-flaps { height: 52px; }
   .date-flap { width: var(--weather-date-flap-width); height: 50px; font-size: 2.16rem; line-height: 50px; }
@@ -11188,7 +11370,7 @@ button.relation-chip {
 @media (max-width: 560px) {
   .weather-header { min-height: 120px; padding-right: 10px; padding-left: 10px; }
   .weather-header-content { grid-template-columns: minmax(0, 1fr) minmax(88px, auto); gap: 7px; }
-  .weather-date-navigation { grid-template-columns: 32px minmax(0, 1fr) 32px; }
+  .weather-date-navigation { grid-template-columns: 44px minmax(0, 1fr) 44px; }
   .weather-date-step { flex-basis: 32px; width: 32px; height: 32px; border-radius: 10px; }
   .weather-date-picker { min-height: 60px; }
   .weather-date-flaps { height: 50px; }
@@ -11202,7 +11384,7 @@ button.relation-chip {
 @media (max-width: 390px) {
   .weather-header-content { gap: 5px; }
   .weather-header-content { grid-template-columns: minmax(0, 1fr) minmax(76px, auto); gap: 4px; }
-  .weather-date-navigation { grid-template-columns: 28px minmax(0, 1fr) 28px; gap: 2px; }
+  .weather-date-navigation { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 2px; }
   .weather-date-step { flex-basis: 28px; width: 28px; height: 28px; }
   .weather-date-picker { padding-right: 0; padding-left: 0; }
   .weather-date-meta { column-gap: var(--weather-date-seam); font-size: 0.62rem; }
@@ -11660,15 +11842,44 @@ button.relation-chip {
 }
 
 /* ── 日历自己的设置（周期旁边那个齿轮） ────────────────────────────────────────
-   日历只留两个旋钮：小结怎么产生、文字能不能就地改。面板沿用周期面板那套
-   「内联卡片」语言，好让点开齿轮看起来是同一类表面，不是另一个页面。 */
+   外观与小结分区显示；外观即时生效，小结配置在固定底栏保存。 */
 .calendar-module-button.calendar-gear-button,
-.calendar-module-button.calendar-edit-button { padding: 0 8px; }
-.calendar-settings-panel { display: grid; gap: 12px; margin: 0 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
-.calendar-settings-badge { padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 0.68rem; font-weight: 620; }
+.calendar-module-button.calendar-edit-button,
+.calendar-module-button.cycle-mobile-weather-toggle { padding: 0 8px; }
+.calendar-settings-dialog { width: min(100% - 32px, 680px); max-height: min(760px, calc(100dvh - 32px)); overflow: hidden; }
+.calendar-settings-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.calendar-settings-dialog .dialog-header { align-items: center; padding: 20px 22px 16px; }
+.calendar-settings-dialog .dialog-header > div { min-width: 0; }
+.calendar-settings-dialog .dialog-header h2 { margin: 0; font-size: 1.1rem; }
+.calendar-settings-tabs { display: flex; gap: 6px; padding: 12px 22px; border-bottom: 1px solid var(--line); }
+.calendar-settings-tabs button { min-height: 38px; padding: 0 16px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); background: transparent; font: inherit; font-size: 0.84rem; cursor: pointer; }
+.calendar-settings-tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--line); background: var(--surface-soft); }
+.calendar-settings-dialog-body { min-height: 0; max-height: none; padding: 18px 22px 22px; overflow-y: auto; overscroll-behavior: contain; }
+.calendar-settings-dialog [hidden] { display: none; }
+.calendar-settings-footer { display: grid; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--line); }
+.calendar-settings-footer p { margin: 0; }
+.calendar-settings-dialog #calendar-settings-summary { padding-top: 0; border-top: 0; }
+.calendar-settings-badge { justify-self: start; padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 0.68rem; font-weight: 620; }
 .calendar-settings-block { display: grid; gap: 8px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .calendar-settings-block:first-of-type { padding-top: 0; border-top: 0; }
 .calendar-settings-block .eyebrow { margin: 0; }
+.calendar-date-art-settings { gap: 9px; }
+.calendar-date-art-settings-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.calendar-date-art-settings-heading > span { color: var(--muted); font-size: 0.68rem; }
+.calendar-date-art-palette-group,
+.calendar-date-art-layout-group { display: grid; gap: 5px; min-width: 0; }
+.calendar-date-art-label { color: var(--muted); font-size: 0.68rem; font-weight: 650; }
+.calendar-date-art-palettes,
+.calendar-date-art-layouts { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.calendar-date-art-palette,
+.calendar-date-art-layout { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--surface); cursor: pointer; font: inherit; font-size: 0.7rem; line-height: 1.2; }
+.calendar-date-art-palette { gap: 7px; }
+.calendar-date-art-palette.is-selected,
+.calendar-date-art-layout.is-selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); color: var(--ink); }
+.calendar-date-art-palette-swatches { display: grid; flex: 0 0 30px; grid-template-columns: repeat(3, 8px); grid-auto-rows: 8px; gap: 2px; }
+.calendar-date-art-palette-swatches > span { border-radius: 50%; }
+.calendar-date-art-palette-name { white-space: nowrap; }
+.calendar-date-art-layout { min-width: 74px; }
 .calendar-settings-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ink); font-size: 0.84rem; font-weight: 620; }
 .calendar-settings-switch small { display: block; margin-top: 2px; color: var(--muted); font-size: 0.68rem; font-weight: 500; }
 .calendar-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -11677,17 +11888,17 @@ button.relation-chip {
 .calendar-settings-grid label > span,
 .calendar-settings-prompt > span { color: var(--muted); font-size: 0.7rem; font-weight: 600; }
 .calendar-settings-wide { grid-column: 1 / -1; }
-.calendar-settings-panel input,
-.calendar-settings-panel textarea { box-sizing: border-box; width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font-family: inherit; font-size: 0.8rem; }
-.calendar-settings-panel textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; line-height: 1.6; }
+.calendar-settings-dialog input,
+.calendar-settings-dialog textarea { box-sizing: border-box; width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font-family: inherit; font-size: 0.8rem; }
+.calendar-settings-dialog textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; line-height: 1.6; }
 /* 面板是圆角表面，全局 :focus-visible 会在里面画一个方框 —— 焦点改落在字段自己的描边上。 */
-.calendar-settings-panel input:focus,
-.calendar-settings-panel input:focus-visible,
-.calendar-settings-panel textarea:focus,
-.calendar-settings-panel textarea:focus-visible { outline: none; box-shadow: none; border-color: var(--primary); }
-.calendar-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.calendar-settings-dialog input:focus,
+.calendar-settings-dialog input:focus-visible,
+.calendar-settings-dialog textarea:focus,
+.calendar-settings-dialog textarea:focus-visible { outline: none; box-shadow: none; border-color: var(--primary); }
+.calendar-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .calendar-settings-actions .primary-button,
-.calendar-settings-actions .secondary-button { min-height: 34px; padding: 0 12px; font-size: 0.78rem; }
+.calendar-settings-actions .secondary-button { min-height: 34px; margin: 0; padding: 0 12px; font-size: 0.78rem; }
 
 /* 开关不是复选框：一眼要能看出状态，所以位置和颜色同时变。 */
 .toggle-button { position: relative; flex: 0 0 auto; width: 40px; height: 22px; padding: 0; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease; }
@@ -11739,6 +11950,11 @@ button.relation-chip {
 
 @media (max-width: 760px) {
   .calendar-settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .calendar-settings-dialog { width: calc(100% - 20px); max-height: calc(100dvh - 20px); border-radius: 16px; }
+  .calendar-settings-dialog .dialog-header { padding: 14px 16px; }
+  .calendar-settings-tabs { padding: 10px 16px; }
+  .calendar-settings-dialog-body { padding: 16px; }
+  .calendar-settings-footer { padding: 12px 16px; }
 }
 /* 跟着月格摘要自己的字号走，否则窄屏下字段会比它替代的那行字大一截。 */
 @media (max-width: 560px) {
@@ -11759,22 +11975,20 @@ button.relation-chip {
 .calendar-range-step:hover { border-color: var(--line-strong); color: var(--ink); background: var(--surface-soft); }
 .calendar-range-label { min-width: 88px; margin: 0; color: var(--ink); font-size: 0.92rem; font-weight: 720; letter-spacing: 0.02em; line-height: 1; text-align: center; white-space: nowrap; }
 .calendar-heading-tools { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
-.calendar-backfill-button { border-color: #c6d4ef; color: #496b9d; background: #f7faff; }
-.calendar-backfill-button:hover { border-color: #a9c0e8; color: #365987; background: #eef4ff; }
 
-/* The weather card no longer has to reserve room for four date flaps while the
-   calendar is open. Centering the weather reading keeps that compact card from
-   gaining a new blank side after the range moves into the calendar control bar. */
+/* Calendar navigation owns week/month stepping, so WeatherHeader keeps the
+   selected date without duplicate arrows and places the weather reading at right. */
 .weather-header.weather-header--summary-only { min-height: 84px; }
-.weather-header-content.weather-header-content--summary-only { justify-content: center; }
-.weather-header-content--summary-only .weather-header-summary { margin-left: 0; justify-items: center; }
+.weather-header-content.weather-header-content--summary-only { justify-content: space-between; }
+.weather-header-content--summary-only .weather-header-summary { margin-left: 0; justify-items: end; }
+.weather-header-content--summary-only .weather-date-navigation--date-only { justify-self: start; }
 
 @media (max-width: 900px) {
   .calendar-section-heading { flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
   .calendar-heading-primary { width: 100%; justify-content: space-between; }
   .calendar-heading-tools { width: 100%; margin-left: 0; }
   .weather-header.weather-header--summary-only { min-height: 86px; }
-  .weather-header-content.weather-header-content--summary-only { grid-template-columns: minmax(0, 1fr); }
+  .weather-header-content.weather-header-content--summary-only { grid-template-columns: minmax(0, 1fr) minmax(76px, auto); justify-content: stretch; }
 }
 
 @media (max-width: 560px) {
@@ -11782,6 +11996,8 @@ button.relation-chip {
   .calendar-range-label { min-width: 82px; font-size: 0.86rem; }
   .calendar-heading-tools { gap: 6px; }
   .calendar-heading-tools .record-count { display: none; }
+  .cycle-entry-desktop { display: none; }
+  .cycle-entry-mobile { display: block; }
 }
 
 .settings-account-management {
@@ -11884,23 +12100,53 @@ button.relation-chip {
 /* Small screens: the date, status and weather occupy distinct parts of each
    calendar tile. Summaries remain available in the day view, not the grid. */
 @media (max-width: 560px) {
+  /* Touch can leave :hover on the last tapped calendar tile. Keep cycle edits
+     from appearing to jump when that transient hover state clears. */
+  .month-cell:hover,
+  .calendar-section .week-card:hover { transform: none; }
   .month-grid { gap: 4px; }
-  .month-cell { box-sizing: border-box; aspect-ratio: 1 / 1; min-height: 0; padding: 4px; border-radius: 10px; }
+  .month-cell { box-sizing: border-box; aspect-ratio: auto; min-height: 64px; padding: 4px; border-radius: 10px; }
   .month-cell:not(.is-editing) .month-day-summary { display: none; }
   .month-cell.is-editing { aspect-ratio: auto; min-height: 66px; }
-  /* The date is the primary information: neither a holiday nor a weather icon
-     may participate in its line layout or push it out of a narrow tile. */
-  .month-cell-head { position: static; min-height: 0; }
+  .month-cell.has-date-art-status.has-date-art-solar.has-date-art-markers { min-height: 74px; }
+  /* Keep the date in the first column; weather stays at the upper right. A
+     holiday/workday badge only creates a second row when it actually exists. */
+  .month-cell-head { position: static; display: grid; grid-template-columns: minmax(0, 1fr) 13.5px; column-gap: 1px; row-gap: 0; align-items: start; min-height: 0; }
   .month-cell.is-editing .month-cell-head { min-height: 18px; }
-  .month-day-number { position: absolute; z-index: 3; top: 4px; left: 4px; line-height: 1.15; white-space: nowrap; }
-  .month-day-meta { position: absolute; z-index: 2; top: 3px; right: 3px; gap: 1px; flex-wrap: nowrap; min-width: 0; }
+  .month-day-number { position: static; z-index: 3; grid-column: 1; grid-row: 1; justify-self: start; line-height: 1.15; white-space: nowrap; }
+  .month-day-meta { display: contents; }
   .month-day-status { min-width: 13px; padding: 0 2px; font-size: .54rem; }
+  .month-cell .month-day-status { position: static; z-index: 2; grid-column: 1; grid-row: 2; justify-self: start; line-height: 1; }
   /* Record count remains in the tile's aria-label, never as a visual badge. */
-  .month-day-weather.is-desktop { display: none; }
-  .month-day-weather.is-mobile { position: absolute; z-index: 2; right: 3px; bottom: 3px; display: inline-grid; width: 17px; height: 17px; font-size: .79rem; }
-  .month-day-solar { max-width: calc(100% - 18px); font-size: .55rem; }
-  .month-cell .calendar-day-markers { right: auto; left: 1px; bottom: 1px; grid-template-columns: repeat(4, 8px); justify-content: start; width: 32px; transform: scale(.68); transform-origin: bottom left; }
-  .month-cell:has(.calendar-day-markers) .month-day-solar { display: none; }
+  .week-card-head { padding-right: 0; }
+  .week-card .calendar-day-weather-icon { top: 12px; right: 13px; }
+  .month-cell .calendar-day-weather-icon { position: static; grid-column: 2; grid-row: 1; justify-self: end; flex: 0 0 13.5px; width: 13.5px; height: 18px; margin: 0; }
+  .month-day-solar { position: absolute; z-index: 2; top: 34px; right: 4px; left: 4px; max-width: none; margin: 0; font-size: .55rem; text-align: right; white-space: nowrap; }
+  .month-cell-footer { display: contents; }
+  .month-cell .calendar-day-markers { position: absolute; display: grid; right: auto; left: 4px; bottom: 4px; grid-template-columns: repeat(3, 10px); justify-content: start; gap: 1px; width: 32px; max-width: none; transform: none; }
+  .month-cell.is-editing .month-cell-footer { display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; justify-content: flex-end; gap: 2px; min-width: 0; margin-top: auto; }
+  .month-cell.is-editing .month-cell-footer .month-day-solar { position: static; inset: auto; width: 100%; max-width: none; margin: 0; text-align: right; }
+  .month-cell.is-editing .calendar-day-markers { position: static; right: auto; bottom: auto; left: auto; align-self: flex-start; margin: 0; }
+  .calendar-date-art-safe-area { inset: 22px 4px 14px; }
+  .month-cell.has-date-art-status .calendar-date-art-safe-area { top: 32px; }
+  .month-cell.has-date-art-solar .calendar-date-art-safe-area,
+  .month-cell.has-date-art-markers .calendar-date-art-safe-area { bottom: 16px; }
+  .month-cell.has-date-art-solar.has-date-art-markers .calendar-date-art-safe-area { bottom: 32px; }
+  .calendar-section[data-date-art-mobile-layout="horizontal"] .month-cell.has-date-art .calendar-date-art { flex-direction: row; gap: 1px; font-size: min(12px, 100cqh, 100cqw); }
+  .calendar-section[data-date-art-mobile-layout="horizontal"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(12px, 100cqh, calc((100cqw - 1px) / 2)); }
+  .calendar-section[data-date-art-mobile-layout="vertical"] .month-cell.has-date-art .calendar-date-art { flex-direction: column; gap: 0; font-size: min(12px, 100cqh, 100cqw); }
+  .calendar-section[data-date-art-mobile-layout="vertical"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(12px, 50cqh, 100cqw); }
+  .calendar-section[data-date-art-mobile-layout="big"] .month-cell.has-date-art .calendar-date-art { flex-direction: row; gap: 0; font-size: min(13px, 100cqh, 100cqw); }
+  .calendar-section[data-date-art-mobile-layout="big"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(13px, 100cqh, 50cqw); }
+  .month-cell.has-date-art .month-cell-footer { display: flex; flex: 0 0 auto; flex-direction: column; align-items: stretch; justify-content: flex-end; gap: 2px; min-width: 0; margin-top: auto; }
+  .month-cell.has-date-art .month-cell-footer .month-day-solar { position: static; inset: auto; width: 100%; max-width: none; margin: 0; text-align: right; }
+  .month-cell.has-date-art .calendar-day-markers { position: static; right: auto; bottom: auto; left: auto; align-self: flex-start; margin: 0; }
+  .month-cell .calendar-day-marker { flex: initial; width: 10px; height: 11px; }
+  .month-cell .calendar-day-marker > svg { width: 10px; height: 10px; }
+  .month-cell .calendar-period-marker { width: 10px; height: 10px; }
+  .month-cell .calendar-period-marker > svg { width: 10px; height: 10px; }
+  .month-cell .calendar-period-start-cap, .month-cell .calendar-period-end-cap { width: 3px; height: 3px; }
+  .month-cell .calendar-day-markers .calendar-day-marker { grid-column-start: auto !important; }
   .weather-date-navigation {
     --weather-date-flap-height: 42px;
     --weather-date-step-width: 44px;
@@ -11908,7 +12154,7 @@ button.relation-chip {
     width: max-content;
     grid-template-columns: var(--weather-date-step-width) max-content var(--weather-date-step-width);
     gap: 4px;
-    justify-self: center;
+    justify-self: start;
   }
   .weather-date-step { flex-basis: var(--weather-date-step-width); width: var(--weather-date-step-width); }
   .weather-date-picker { flex: 0 0 auto; padding-right: 2px; padding-left: 2px; }
@@ -11927,19 +12173,18 @@ button.relation-chip {
   .date-flap-leaf > span { height: 40px; line-height: 40px; }
   .weather-date-flaps { height: 42px; }
   .weather-date-meta { column-gap: var(--weather-date-seam); font-size: .62rem; }
-  .month-cell .calendar-day-markers { transform: scale(.5); }
+  .month-cell { aspect-ratio: auto; min-height: 64px; }
 }
 
-/* Search needs its own row on phones: an absolute corner button covered the
-   weather summary's hit area at every mobile breakpoint. */
-@media (max-width: 900px) {
-  .topbar-layout { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
-  .topbar-actions {
-    position: static;
-    order: -1;
-    align-self: flex-end;
-    flex: none;
-    margin: 0 10px 0 0;
+/* The calendar range controls already step by week/month. Keep the selected
+   date visible in WeatherHeader without repeating day-step buttons. */
+.weather-date-navigation--date-only { width: max-content; grid-template-columns: max-content; gap: 0; }
+
+@container (max-height: 11px) {
+  .calendar-section[data-date-art-desktop-layout="vertical"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art,
+  .calendar-section[data-date-art-mobile-layout="vertical"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art {
+    flex-direction: row;
+    gap: 1px;
+    font-size: min(11px, 100cqh, calc((100cqw - 1px) / 2));
   }
-  .weather-header { flex: none; }
 }

@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type DragEvent as ReactDragEvent, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type Dispatch, type DragEvent as ReactDragEvent, type SetStateAction } from "react";
 import {
   CalendarDays,
   Check,
-  CloudSun,
   Film,
   History,
   ListChecks,
@@ -19,7 +18,7 @@ import {
 } from "lucide-react";
 import type { AssetLink, Entity, EntityRef, NoteFormat, PlacePeriod, PlaceRole, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import { PLACE_MARKER, cleanMovieQuery, entitySearchTerms, normalizeEntitySearchTerm } from "@lifeos/core";
-import type { MovieEntity, RecordView } from "./api";
+import type { ApiUploadProgress, MovieEntity, RecordView } from "./api";
 import type { ComposerKind, CreateEntity, EntityCreateRequest } from "./app-types";
 import type { ModuleCommand } from "./movie";
 import { DateField } from "./date-field";
@@ -42,19 +41,37 @@ import { ShotDropZone, type ShotDropZoneHandle, type ShotUpload } from "./shot-d
 
 export interface NoteEditMeta { format: NoteFormat; title: string; source: string; metadataTouched: boolean; }
 
-export interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; onUploadShot: (file: File) => Promise<ShotUpload | null>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => void) => void; }
+export interface ComposerProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
+export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const shotZoneRef = useRef<ShotDropZoneHandle>(null);
   const dragDepth = useRef(0);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [shotUploading, setShotUploading] = useState(false);
-  const canSave = content.trim().length > 0 && !saving && !shotUploading && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
+  const [shotSubmissionState, setShotSubmissionState] = useState<"active" | "failed" | null>(null);
+  const shotSubmissionStateRef = useRef<"active" | "failed" | null>(null);
+  const currentShotScopeRef = useRef(shotScopeKey);
+  currentShotScopeRef.current = shotScopeKey;
+  const reportShotSubmissionState = (scope: string, state: "active" | "failed" | null) => {
+    onShotSubmissionState(scope, state);
+    if (scope !== currentShotScopeRef.current) return;
+    shotSubmissionStateRef.current = state;
+    setShotSubmissionState(state);
+  };
+  const canSave = content.trim().length > 0 && !saving && !shotUploading && shotSubmissionState === null && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
+  const submitIfReady = () => {
+    const state = shotSubmissionStateRef.current;
+    if (state !== null) {
+      onNotify(state === "failed" ? "有照片未上传，请重试或移除后保存" : "照片正在处理，请完成后再保存", "warn");
+      return;
+    }
+    if (!saving && content.trim().length > 0) onSubmit();
+  };
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
   const isFileDrag = (event: ReactDragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes("Files");
   const entryDragHandlers = {
@@ -75,6 +92,16 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
       if (!isFileDrag(event)) return;
       event.preventDefault(); dragDepth.current = 0; setDraggingFiles(false);
       shotZoneRef.current?.takeFiles(Array.from(event.dataTransfer.files));
+    },
+    onPaste: (event: ReactClipboardEvent<HTMLDivElement>) => {
+      if (saving) return;
+      const files = Array.from(event.clipboardData.items)
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null && file.type.startsWith("image/"));
+      if (files.length === 0) return;
+      event.preventDefault();
+      shotZoneRef.current?.takeFiles(files);
     },
   };
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
@@ -289,7 +316,7 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
   return <section ref={composerRef} className={`composer surface ${editing ? "is-editing" : ""}`} aria-label="记录编辑器">
     <div className="composer-toolbar">
       {editing ? <strong className="composer-edit-title">编辑{activeMeta.label}</strong> : <div className="kind-switcher" role="tablist" aria-label="记录类型">
-        {(Object.keys(COMPOSER_META) as ComposerKind[]).map((item) => {
+        {(["journal", "task"] as const).map((item) => {
           const Icon = COMPOSER_META[item].icon;
           return <button className={`kind-option ${kind === item ? "is-active" : ""}`} key={item} type="button" role="tab" aria-selected={kind === item} onClick={() => onKindChange(item)}><Icon size={15} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></button>;
         })}
@@ -316,8 +343,8 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
           gap moves, it does not go away. Cancelling the entry's slack here is
           what actually closes it. */}
       <div className="composer-mobile-action-row">
-        <ShotDropZone ref={shotZoneRef} shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} />
-        <button className="primary-button composer-inline-save" type="button" disabled={!canSave} onClick={onSubmit} aria-label={saving ? "正在保存" : editing ? "保存修改" : "保存"} title={saving ? "正在保存" : editing ? "保存修改" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className={editing ? "composer-inline-save-label" : "visually-hidden"}>{saving ? "保存中" : editing ? "保存修改" : "保存"}</span></button>
+        <ShotDropZone ref={shotZoneRef} scopeKey={shotScopeKey} disabled={saving} shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} onSubmissionState={reportShotSubmissionState} />
+        <button className="primary-button composer-inline-save" type="button" disabled={!canSave} onClick={submitIfReady} aria-label={saving ? "正在保存" : editing ? "保存修改" : "保存"} title={saving ? "正在保存" : editing ? "保存修改" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className={editing ? "composer-inline-save-label" : "visually-hidden"}>{saving ? "保存中" : editing ? "保存修改" : "保存"}</span></button>
       </div>
     </div>
     {editing && kind === "note" && noteMeta?.format === "quote" && onNoteMetaChange ? <label className="composer-note-field composer-note-source"><span>出处（可选）</span><input data-note-source value={noteMeta.source} maxLength={1000} onChange={(event) => onNoteMetaChange({ ...noteMeta, source: event.target.value, metadataTouched: true })} placeholder="书名、作者或网页链接" /></label> : null}
@@ -327,10 +354,9 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
     <div className="composer-footer">
       <div className="composer-fields">
         <div className="place-anchor">
-          <button className={`icon-button compact-icon-button universal-mention-button ${smartPromptOpen ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if ((smartPromptOpen || smartHintVisible) && selectionRef.current === null) closePicker(); else openSmartMention("universal"); }} aria-label="万能键" aria-expanded={smartPromptOpen}><Sparkles size={15} strokeWidth={1.9} aria-hidden="true" /></button>
           <button className={`icon-button compact-icon-button ${pickerKind === "person" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if (selectionRef.current !== null) openSmartMention("person"); else { setPickerKind((current) => (current === "person" ? null : "person")); setCreateOpen(false); setSmartMentionPrompt(null); } }} aria-label="插入人物" aria-expanded={pickerKind === "person"}><User size={15} strokeWidth={1.9} aria-hidden="true" /></button>
           <button className={`icon-button compact-icon-button ${pickerKind === "place" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if (selectionRef.current !== null) openSmartMention("place"); else { setPickerKind((current) => (current === "place" ? null : "place")); setCreateOpen(false); setSmartMentionPrompt(null); } }} aria-label="插入地点" aria-expanded={pickerKind === "place"}><MapPin size={15} strokeWidth={1.9} aria-hidden="true" /></button>
-          {smartHintVisible ? <p className="smart-mention-toast" role="status">先选中一段文字，再点万能键</p> : null}
+          {smartHintVisible ? <p className="smart-mention-toast" role="status">先选中一段文字，再关联人物或地点</p> : null}
           {smartPromptOpen ? <div className="place-popover smart-mention-popover"><div className="smart-mention-header"><Sparkles size={14} aria-hidden="true" /><strong>{smartPromptTitle}</strong></div>{smartChoices.length > 0 ? <div className="smart-choice-grid">{smartChoices.map(({ entity, type }) => { const KindIcon = type === "person" ? User : MapPin; const detail = entityHint(entity, entities) || (type === "person" ? "@ 人物" : "# 地点"); return <button className="smart-choice" key={`${type}-${entity.id}`} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => replaceSelection(`${type === "place" ? PLACE_MARKER : "@"}${entity.name}`, smartMentionPrompt.selection)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{entity.name}</strong><small>{detail}</small></span></button>; })}</div> : <div className="smart-choice-grid">{smartCreateTypes.map((type) => { const KindIcon = type === "person" ? User : MapPin; return <button className={`smart-choice smart-choice-${type}`} key={type} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => beginSmartCreate(type)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{type === "person" ? "人物" : "地点"}，{smartSelectionText}</strong><small>新建并插入 {type === "person" ? "@" : "#"}</small></span></button>; })}</div>}</div> : null}
           {pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} placeholder={`搜索${pickerKind === "place" ? "地点" : "人物"}，或直接输入新名称`} aria-label="搜索" autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建并插入" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => insertAtCaret(`${pickerKind === "place" ? PLACE_MARKER : "@"}${entity.name}`)}><KindIcon size={13} strokeWidth={1.8} aria-hidden="true" /><span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
         </div>
@@ -343,11 +369,10 @@ export function Composer({ kind, content, occurredAt, dueAt, isPrivate, isBackfi
           ? <TaskScheduleField start={occurredAt} end={dueAt} onStartChange={onOccurredAtChange} onEndChange={onDueAtChange} />
           : <DateField value={occurredAt} onChange={onOccurredAtChange} label="发生时间" showTime capped />}
         {editing && kind === "task" && taskStatus && onTaskStatusChange ? <label className="composer-status-field"><span>状态</span><select value={taskStatus} onChange={(event) => onTaskStatusChange(event.target.value as TaskStatus)}><option value="todo">待办</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label> : null}
-        {isBackfillDate ? <label className={`backfill-toggle ${isBackfill ? "is-on" : ""}`} title="将这条记录标记为补记"><input type="checkbox" checked={isBackfill} onChange={(event) => onBackfillChange(event.target.checked)} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label> : null}
+        {kind === "journal" && isBackfillDate ? <label className={`backfill-toggle ${isBackfill ? "is-on" : ""}`} title="将这条记录标记为补记"><input type="checkbox" checked={isBackfill} onChange={(event) => onBackfillChange(event.target.checked)} /><History size={14} strokeWidth={1.9} aria-hidden="true" /><span>补记</span></label> : null}
         <label className={`privacy-toggle ${isPrivate ? "is-on" : ""}`} title="隐私记录"><input type="checkbox" checked={isPrivate} onChange={(event) => onPrivateChange(event.target.checked)} /><LockKeyhole size={14} strokeWidth={1.9} aria-hidden="true" /><span>隐私</span></label>
-        {editing ? null : <button className={`weather-pin-toggle ${weather ? "is-on" : ""}`} type="button" onClick={weather ? onClearWeather : onCaptureWeather} disabled={weatherBusy} title={weather ? "取消天气" : "读取此刻室外天气"} aria-label={weather ? `天气，现场：${weather.text}，点击取消` : "天气，点击读取此刻室外天气"}>{weatherBusy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CloudSun size={14} aria-hidden="true" />}<span>{weatherBusy ? "读取中" : weather ? `现场：${weather.text}` : "天气"}</span></button>}
       </div>
-      <button className="primary-button composer-desktop-save" type="button" disabled={!canSave} onClick={onSubmit}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : editing ? "保存修改" : "保存"}</span></button>
+      <button className="primary-button composer-desktop-save" type="button" disabled={!canSave} onClick={submitIfReady}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : editing ? "保存修改" : "保存"}</span></button>
     </div>
   </section>;
 }

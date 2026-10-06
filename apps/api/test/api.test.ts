@@ -17,8 +17,9 @@ import { SqliteRecordRepository } from "../src/repository.js";
 import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
 import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
 import { OBSERVATION_KEEP_LIMIT, selectDayObservations } from "../src/weather-selection.js";
-import { SUMMARY_SYSTEM_PROMPT, createInstant, type Asset } from "@lifeos/core";
+import { SUMMARY_SYSTEM_PROMPT, assertValidAsset, createInstant, type Asset } from "@lifeos/core";
 import sharp from "sharp";
+import { cameraEvidenceFromExif, readPhotoMetadata } from "../src/photo-metadata.js";
 
 // WHATWG fetch rejects a small set of historically reserved ports even when
 // Node's HTTP server can bind them.  Windows can hand one of those ports out
@@ -366,6 +367,32 @@ test("notes persist format metadata, search it, patch it, and round-trip through
   equal((titleSearch.body as { items: unknown[] }).items.length, 1);
   const sourceSearch = await request(source.base, "/api/records?kind=note&q=%E6%B5%8B%E8%AF%95%E4%B9%A6");
   equal((sourceSearch.body as { items: unknown[] }).items.length, 1);
+
+  const editedRecord = await create({ kind: "journal", content: "只在原文的搜索词" });
+  const editedRecordResponse = await request(source.base, `/api/records/${editedRecord.id}`, {
+    method: "PATCH",
+    ...json({ revision: editedRecord.revision, content: "只在当前内容的搜索词" }),
+  });
+  equal(editedRecordResponse.response.status, 200);
+  const editedRecordBody = editedRecordResponse.body as { revision: number; body: { original: string; edited?: string } };
+  equal(editedRecordBody.body.original, "只在原文的搜索词");
+  equal(editedRecordBody.body.edited, "只在当前内容的搜索词");
+  const oldBodySearch = await request(source.base, "/api/records?q=%E5%8F%AA%E5%9C%A8%E5%8E%9F%E6%96%87%E7%9A%84%E6%90%9C%E7%B4%A2%E8%AF%8D");
+  equal((oldBodySearch.body as { items: unknown[] }).items.length, 0);
+  const currentBodySearch = await request(source.base, "/api/records?q=%E5%8F%AA%E5%9C%A8%E5%BD%93%E5%89%8D%E5%86%85%E5%AE%B9%E7%9A%84%E6%90%9C%E7%B4%A2%E8%AF%8D");
+  const currentBodyItems = (currentBodySearch.body as { items: Array<{ id: string }> }).items;
+  equal(currentBodyItems.length, 1);
+  equal(currentBodyItems[0]?.id, editedRecord.id);
+
+  const emptyEditResponse = await request(source.base, `/api/records/${editedRecord.id}`, {
+    method: "PATCH",
+    ...json({ revision: editedRecordBody.revision, content: "" }),
+  });
+  equal(emptyEditResponse.response.status, 200);
+  const emptyEditSearch = await request(source.base, "/api/records?q=%E5%8F%AA%E5%9C%A8%E5%8E%9F%E6%96%87%E7%9A%84%E6%90%9C%E7%B4%A2%E8%AF%8D");
+  equal((emptyEditSearch.body as { items: unknown[] }).items.length, 0);
+  const emptyEditBodySearch = await request(source.base, "/api/records?q=%E5%8F%AA%E5%9C%A8%E5%BD%93%E5%89%8D%E5%86%85%E5%AE%B9%E7%9A%84%E6%90%9C%E7%B4%A2%E8%AF%8D");
+  equal((emptyEditBodySearch.body as { items: unknown[] }).items.length, 0);
 
   const patched = await request(source.base, `/api/records/${article.id}`, {
     method: "PATCH",
@@ -2853,7 +2880,9 @@ test("cycle intimacy module persists private calendar facts and travels in JSON 
   const imported = await request(restored.base, "/api/import", { method: "POST", ...json({ bundle: exported }) });
   equal(imported.response.status, 201);
   const restoredModule = await request(restored.base, "/api/modules/cycle-intimacy");
-  deepEqual((restoredModule.body as { config: unknown; events: unknown[] }), exported.modules?.cycleIntimacy);
+  const restoredBody = restoredModule.body as { config: unknown; events: unknown[]; eventRevision: string };
+  deepEqual({ config: restoredBody.config, events: restoredBody.events }, exported.modules?.cycleIntimacy);
+  match(restoredBody.eventRevision, /^[a-f0-9]{64}$/);
 
   const eventId = exported.modules?.cycleIntimacy?.events[1]?.id;
   ok(eventId);
@@ -2894,6 +2923,96 @@ test("a period ends once: recording an end on another day moves it instead of st
   // row keyed to one day, which is the limit this rule deliberately stops at.
   const sameDay = await request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date: "2026-09-23", kind: "period_end" }) });
   equal(sameDay.response.status, 409);
+});
+
+test("mobile cycle day edits are atomic, revision-checked, and undo the full event mutation once", async (t) => {
+  const harness = await startHarness();
+  const otherTenant = await startHarness();
+  const sameDayEndpoints = await startHarness();
+  t.after(async () => harness.stop());
+  t.after(async () => otherTenant.stop());
+  t.after(async () => sameDayEndpoints.stop());
+
+  const seed = async (date: string, kind: string) => request(harness.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date, kind }) });
+  await seed("2026-09-20", "period_start");
+  await seed("2026-09-21", "fitness");
+  await seed("2026-09-25", "period_end");
+  const initial = await request(harness.base, "/api/modules/cycle-intimacy");
+  const revision = (initial.body as { eventRevision: string }).eventRevision;
+  match(revision, /^[a-f0-9]{64}$/);
+
+  const saved = await request(harness.base, "/api/modules/cycle-intimacy/day-edit", {
+    method: "POST",
+    ...json({ date: "2026-09-24", kinds: ["period_end", "intimacy"], revision }),
+  });
+  equal(saved.response.status, 200);
+  const savedBody = saved.body as { module: { config: { enabled: boolean }; events: Array<{ id: string; date: string; kind: string }> }; eventRevision: string; changed: boolean; undoToken: string };
+  equal(savedBody.changed, true);
+  equal(savedBody.module.config.enabled, true);
+  match(savedBody.undoToken, /^[A-Za-z0-9_-]{43}$/);
+  deepEqual(savedBody.module.events.filter((event) => event.kind === "period_end").map((event) => event.date), ["2026-09-24"]);
+  deepEqual(savedBody.module.events.filter((event) => event.kind === "fitness").map((event) => event.date), ["2026-09-21"]);
+  equal(savedBody.module.events.some((event) => event.date === "2026-09-24" && event.kind === "intimacy"), true);
+
+  const noOp = await request(harness.base, "/api/modules/cycle-intimacy/day-edit", {
+    method: "POST",
+    ...json({ date: "2026-09-24", kinds: ["period_end", "intimacy"], revision: savedBody.eventRevision }),
+  });
+  equal(noOp.response.status, 200);
+  equal((noOp.body as { changed: boolean }).changed, false);
+  equal("undoToken" in (noOp.body as object), false);
+
+  const isolatedToken = await request(otherTenant.base, "/api/modules/cycle-intimacy/day-edit/undo", { method: "POST", ...json({ token: savedBody.undoToken }) });
+  equal(isolatedToken.response.status, 409);
+
+  const undone = await request(harness.base, "/api/modules/cycle-intimacy/day-edit/undo", { method: "POST", ...json({ token: savedBody.undoToken }) });
+  equal(undone.response.status, 200);
+  const undoneBody = undone.body as { module: { config: { enabled: boolean }; events: Array<{ id: string; date: string; kind: string }> }; eventRevision: string };
+  equal(undoneBody.module.config.enabled, true);
+  deepEqual(undoneBody.module.events.filter((event) => event.kind === "period_end").map((event) => event.date), ["2026-09-25"]);
+  equal(undoneBody.module.events.some((event) => event.date === "2026-09-24" && event.kind === "intimacy"), false);
+  equal(undoneBody.module.events.some((event) => event.date === "2026-09-21" && event.kind === "fitness"), true);
+  const consumed = await request(harness.base, "/api/modules/cycle-intimacy/day-edit/undo", { method: "POST", ...json({ token: savedBody.undoToken }) });
+  equal(consumed.response.status, 409);
+
+  const currentRevision = undoneBody.eventRevision;
+  const secondSave = await request(harness.base, "/api/modules/cycle-intimacy/day-edit", {
+    method: "POST",
+    ...json({ date: "2026-09-24", kinds: ["period_end"], revision: currentRevision }),
+  });
+  equal(secondSave.response.status, 200);
+  const secondBody = secondSave.body as { eventRevision: string; undoToken: string };
+  await seed("2026-09-22", "intimacy");
+  const staleUndo = await request(harness.base, "/api/modules/cycle-intimacy/day-edit/undo", { method: "POST", ...json({ token: secondBody.undoToken }) });
+  equal(staleUndo.response.status, 409);
+  const afterConflict = await request(harness.base, "/api/modules/cycle-intimacy");
+  equal((afterConflict.body as { events: Array<{ date: string; kind: string }> }).events.some((event) => event.date === "2026-09-22" && event.kind === "intimacy"), true);
+
+  const badRevision = await request(harness.base, "/api/modules/cycle-intimacy/day-edit", {
+    method: "POST",
+    ...json({ date: "2026-09-24", kinds: [], revision: currentRevision }),
+  });
+  equal(badRevision.response.status, 409);
+  const extraKey = await request(harness.base, "/api/modules/cycle-intimacy/day-edit", {
+    method: "POST",
+    ...json({ date: "2026-09-24", kinds: ["fitness"], revision: currentRevision, events: [] }),
+  });
+  equal(extraKey.response.status, 400);
+
+  const sameDaySeed = async (date: string, kind: string) => request(sameDayEndpoints.base, "/api/modules/cycle-intimacy/events", { method: "POST", ...json({ date, kind }) });
+  await sameDaySeed("2026-09-01", "period_start");
+  await sameDaySeed("2026-09-04", "period_end");
+  const beforeSameDay = await request(sameDayEndpoints.base, "/api/modules/cycle-intimacy");
+  const sameDayEdit = await request(sameDayEndpoints.base, "/api/modules/cycle-intimacy/day-edit", {
+    method: "POST",
+    ...json({ date: "2026-09-10", kinds: ["period_start", "period_end"], revision: (beforeSameDay.body as { eventRevision: string }).eventRevision }),
+  });
+  equal(sameDayEdit.response.status, 200);
+  const sameDayBody = sameDayEdit.body as { module: { events: Array<{ date: string; kind: string }> }; eventRevision: string; undoToken: string };
+  deepEqual(sameDayBody.module.events.filter((event) => event.kind === "period_end").map((event) => event.date), ["2026-09-04", "2026-09-10"]);
+  const sameDayUndo = await request(sameDayEndpoints.base, "/api/modules/cycle-intimacy/day-edit/undo", { method: "POST", ...json({ token: sameDayBody.undoToken }) });
+  equal(sameDayUndo.response.status, 200);
+  deepEqual((sameDayUndo.body as { module: { events: Array<{ date: string; kind: string }> } }).module.events.map((event) => `${event.date}:${event.kind}`), ["2026-09-01:period_start", "2026-09-04:period_end"]);
 });
 
 test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and upserts refs", async (t) => {
@@ -3961,4 +4080,54 @@ test("the time machine reads a snapshot without touching it and sorts the drift 
   const absent = await request(harness.base, "/api/backup/snapshot?fileName=lifeos-20200101-000000-deadbeef.sqlite");
   equal(absent.response.status, 404);
   equal((absent.body as { error: string }).error, "snapshot_missing");
+});
+
+test("upload photo headers retain bounded camera evidence, survive reuse and never copy private EXIF", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-photo-evidence-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, undefined, undefined, assetRoot);
+  t.after(() => harness.stop());
+  const original = await sharp({ create: { width: 48, height: 32, channels: 3, background: "orange" } })
+    .withMetadata({ orientation: 6 })
+    .withExifMerge({ IFD0: { Make: "Private camera maker", Model: "Private camera model" }, IFD2: { ExposureTime: "1/125", FNumber: "28/10", ISOSpeedRatings: "100", DateTimeOriginal: "2026:10:06 10:20:30" } })
+    .jpeg().toBuffer();
+  const uploaded = await request(harness.base, "/api/assets/uploads?name=IMG_1234.jpg", { method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original) });
+  equal(uploaded.response.status, 201);
+  const asset = uploaded.body as Asset;
+  deepEqual(asset.photoMetadata, { version: 1, width: 32, height: 48, cameraEvidence: "capture" });
+  ok(!JSON.stringify(asset).includes("Private camera"));
+  ok(!JSON.stringify(asset).includes("2026:10:06"));
+  const stored = harness.app.repository.findAssetById(asset.id)!;
+  deepEqual(stored.photoMetadata, asset.photoMetadata);
+  const reused = await request(harness.base, "/api/assets/uploads?name=again.jpg", { method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original) });
+  equal((reused.body as Asset).id, asset.id);
+  deepEqual((reused.body as Asset).photoMetadata, asset.photoMetadata);
+  const content = await fetch(`${harness.base}/api/assets/${encodeURIComponent(asset.id)}/content`);
+  equal(Buffer.from(await content.arrayBuffer()).equals(original), true, "uploaded originals remain byte-identical");
+  const png = await sharp({ create: { width: 720, height: 1640, channels: 3, background: "white" } }).png().toBuffer();
+  const screenshot = await request(harness.base, "/api/assets/uploads?name=Screenshot.png", { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(png) });
+  deepEqual((screenshot.body as Asset).photoMetadata, { version: 1, width: 720, height: 1640, cameraEvidence: "none" });
+  const device = await sharp({ create: { width: 48, height: 32, channels: 3, background: "green" } }).withExif({ IFD0: { Make: "Device", Model: "Model" } }).jpeg().toBuffer();
+  equal((await readPhotoMetadata(device))?.cameraEvidence, "device");
+  equal(await readPhotoMetadata(Buffer.from("not an image")), undefined);
+  // Re-uploading old metadata-free assets enriches only from received bytes.
+  const { photoMetadata: oldEvidence, ...oldAsset } = asset;
+  void oldEvidence;
+  harness.app.repository.updateAsset(oldAsset);
+  const enriched = await request(harness.base, "/api/assets/uploads", { method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original) });
+  deepEqual((enriched.body as Asset).photoMetadata, asset.photoMetadata);
+  const repointed = await request(harness.base, `/api/assets/${asset.id}`, { method: "PATCH", ...json({ storageRefs: [{ sourceId: "local", sourceRef: "replacement.jpg" }] }) });
+  equal(repointed.response.status, 200);
+  equal((repointed.body as Asset).photoMetadata, undefined, "evidence cannot follow a different original");
+});
+
+test("bad EXIF offsets, cycles, oversized blocks and invalid asset metadata safely reject", () => {
+  for (const exif of [undefined, new Uint8Array(), new Uint8Array(300_000), new Uint8Array([73, 73, 42, 0, 255, 255, 255, 127])]) equal(cameraEvidenceFromExif(exif), "none");
+  const cycle = Buffer.alloc(32);
+  cycle.write("II", 0); cycle.writeUInt16LE(42, 2); cycle.writeUInt32LE(8, 4);
+  cycle.writeUInt16LE(1, 8); cycle.writeUInt16LE(0x8769, 10); cycle.writeUInt16LE(4, 12); cycle.writeUInt32LE(1, 14); cycle.writeUInt32LE(8, 18);
+  equal(cameraEvidenceFromExif(cycle), "none");
+  const base = { id: "old", kind: "photo", storageRefs: [] };
+  assertValidAsset(base);
+  for (const metadata of [{ version: 1, width: 0, height: 100, cameraEvidence: "none" }, { version: 1, width: 100, height: NaN, cameraEvidence: "none" }, { version: 2, width: 100, height: 100, cameraEvidence: "none" }, { version: 1, width: 100, height: 100, cameraEvidence: "invented" }]) throws(() => assertValidAsset({ ...base, photoMetadata: metadata }));
 });

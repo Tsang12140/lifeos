@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import type { WeatherCategory, WeatherPhase } from "./weather";
+import { getCelestialScale, type SolarPosition, type WeatherCategory, type WeatherPhase } from "./weather";
 
 /**
  * The sky is drawn on two axes.
@@ -91,13 +91,40 @@ function Clouds({ specs }: { readonly specs: readonly CloudSpec[] }) {
   ))}</>;
 }
 
-function Luminary({ night }: { readonly night: boolean }) {
-  return <>
-    {/* At night the stars replace the sun's rays, so the element count is the
-        same in both cases. */}
-    {night ? <div className="sky-stars" /> : <div className="sky-rays" />}
+const NEUTRAL_SOLAR_POSITION: SolarPosition = { x: 84, y: 32, opacity: 1 };
+const HIDDEN_MOON_POSITION: SolarPosition = { x: 84, y: 32, opacity: 0 };
+
+function MoonDisc() {
+  return <svg className="sky-moon-disc" viewBox="8 8 104 104" aria-hidden="true" focusable="false">
+    <circle cx="60" cy="60" r="52" fill="#efede6" />
+    <g fill="#dedbd4">
+      <circle cx="37" cy="39" r="6.2" />
+      <ellipse cx="78" cy="48" rx="5.2" ry="4.2" />
+      <circle cx="58" cy="73" r="7.2" />
+      <circle cx="85" cy="82" r="3.8" />
+      <circle cx="31" cy="80" r="2.4" />
+    </g>
+  </svg>;
+}
+
+function Luminary({ night, sunPosition, moonPosition }: { readonly night: boolean; readonly sunPosition: SolarPosition; readonly moonPosition: SolarPosition }) {
+  const positionStyle = (position: SolarPosition) => ({
+    "--solar-x": `${position.x}cqi`,
+    "--solar-y": `${position.y}cqb`,
+    "--solar-opacity": position.opacity,
+    "--celestial-scale": getCelestialScale(position.y),
+  }) as CSSProperties;
+  const sun = <div className="sky-light sky-light--sun" style={positionStyle(sunPosition)}>
     <div className="sky-halo" />
     <div className="sky-disc" />
+  </div>;
+  const moon = <div className="sky-light sky-light--moon" style={positionStyle(moonPosition)}>
+    <div className="sky-halo" />
+    <MoonDisc />
+  </div>;
+  return <>
+    {night ? <div className="sky-stars" /> : null}
+    {night ? <>{moon}{sun}</> : <>{sun}{moon}</>}
   </>;
 }
 
@@ -125,7 +152,7 @@ function Rain({ category }: { readonly category: RainCategory }) {
   </>;
 }
 
-export function WeatherBackground({ category, phase }: { readonly category: WeatherCategory; readonly phase: WeatherPhase }) {
+export function WeatherBackground({ category, phase, solarPosition = NEUTRAL_SOLAR_POSITION, moonPosition = HIDDEN_MOON_POSITION }: { readonly category: WeatherCategory; readonly phase: WeatherPhase; readonly solarPosition?: SolarPosition; readonly moonPosition?: SolarPosition }) {
   const night = phase === "night";
   const lit = category === "sunny" || category === "partly-cloudy";
   const rootClass = `weather-bg weather-bg--${category} weather-bg--${phase}`;
@@ -133,7 +160,7 @@ export function WeatherBackground({ category, phase }: { readonly category: Weat
   if (lit) {
     return <div className={rootClass} aria-hidden="true">
       <div className="sky-horizon" />
-      <Luminary night={night} />
+      <Luminary night={night} sunPosition={solarPosition} moonPosition={moonPosition} />
       {category === "partly-cloudy" ? <Clouds specs={PARTLY_CLOUDS} /> : null}
     </div>;
   }
@@ -197,7 +224,7 @@ interface SkySpec {
  * layer is kept on top and faded away; the incoming sky is already in place
  * underneath, so nothing ever blanks out and no other element has to move.
  */
-export function WeatherSky({ category, phase, animate = true }: { readonly category: WeatherCategory; readonly phase: WeatherPhase; readonly animate?: boolean }) {
+export function WeatherSky({ category, phase, animate = true, solarPosition = NEUTRAL_SOLAR_POSITION, moonPosition = HIDDEN_MOON_POSITION }: { readonly category: WeatherCategory; readonly phase: WeatherPhase; readonly animate?: boolean; readonly solarPosition?: SolarPosition; readonly moonPosition?: SolarPosition }) {
   const key = `${category}|${phase}`;
   const [shown, setShown] = useState<SkySpec>({ key, category, phase });
   const [outgoing, setOutgoing] = useState<SkySpec | null>(null);
@@ -215,9 +242,9 @@ export function WeatherSky({ category, phase, animate = true }: { readonly categ
     return () => window.clearTimeout(timer);
   }, [outgoing]);
 
-  if (!animate) return <div className="weather-bg-layer is-current"><WeatherBackground category={category} phase={phase} /></div>;
+  if (!animate) return <div className="weather-bg-layer is-current"><WeatherBackground category={category} phase={phase} solarPosition={solarPosition} moonPosition={moonPosition} /></div>;
   return <>
-    <div className="weather-bg-layer is-current"><WeatherBackground category={shown.category} phase={shown.phase} /></div>
-    {outgoing === null ? null : <div className="weather-bg-layer is-leaving"><WeatherBackground category={outgoing.category} phase={outgoing.phase} /></div>}
+    <div className="weather-bg-layer is-current"><WeatherBackground category={shown.category} phase={shown.phase} solarPosition={solarPosition} moonPosition={moonPosition} /></div>
+    {outgoing === null ? null : <div className="weather-bg-layer is-leaving"><WeatherBackground category={outgoing.category} phase={outgoing.phase} solarPosition={solarPosition} moonPosition={moonPosition} /></div>}
   </>;
 }

@@ -64,6 +64,7 @@ import {
 import { BackupCalendar } from "./BackupCalendar";
 import { TimeMachine } from "./TimeMachine";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
+import { WeatherSimulator } from "./WeatherSimulator";
 import { PoolStorageSettingsCard } from "./PoolStorageSettingsCard";
 import { locateWeatherDevice, setWeatherFollowEnabled, weatherFollowEnabled } from "./weather-follow";
 import { MovieSettingsCard } from "./movie";
@@ -152,7 +153,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
   return <div className="settings-card settings-ai-card">
     <div className="settings-ai-head">
       <div className="settings-card-icon"><Bot size={18} aria-hidden="true" /></div>
-      <div className="settings-card-copy"><strong>DeepSeek AI</strong><small>API Key：{keyConfigured ? "已配置" : "未配置"}{status?.keyUnreadable ? "（文件里那把现在读不出来，重新填一次即可覆盖）" : ""}，provider：DeepSeek</small></div>
+      <div className="settings-card-copy"><strong>DeepSeek AI</strong>{status?.keyUnreadable ? <small>已保存的密钥无法读取，请重新填写。</small> : null}</div>
       <span className={`settings-status ${statusState.phase === "ready" && status?.enabled && keyConfigured ? "is-ready" : ""}`} data-ai-status-phase={statusState.phase}>{stateLabel}</span>
       <button className="secondary-button settings-action" type="button" onClick={() => setExpanded((current) => !current)}>{expanded ? "收起配置" : "配置 AI"}</button>
     </div>
@@ -165,7 +166,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
     </div>
     {statusState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{statusState.error}</span>{status === null ? null : <small>上次确认：{confirmedLabel}</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
     {status === null ? <p className="settings-config-unavailable">状态确认后，才能调整 AI 服务配置或提交测试。</p> : null}
-    <label className="settings-ai-visibility"><input type="checkbox" checked={assistantVisible} onChange={(event) => onAssistantVisibleChange(event.target.checked)} /><span><strong>显示 AI 助手</strong><small>只控制悬浮 AI 界面；不影响服务启用、API Key 或已保存对话。</small></span></label>
+    <label className="settings-ai-visibility"><input type="checkbox" checked={assistantVisible} onChange={(event) => onAssistantVisibleChange(event.target.checked)} /><span><strong>显示 AI 助手</strong></span></label>
     <div className="settings-ai-presets" aria-label="AI 快捷档位">
       <div className="settings-ai-form-heading"><span>快捷档位</span><strong data-ai-current-preset={`preset-${currentPreset}`}>{aiPresetLabel(currentPreset)}</strong></div>
       <div className="settings-ai-preset-grid">{AI_PRESETS.map((preset) => <button className={`settings-ai-preset ${currentPreset === preset.id ? "is-selected" : ""}`} data-ai-preset={preset.id} aria-pressed={currentPreset === preset.id} type="button" key={preset.id} onClick={() => applyPreset(preset)} disabled={!statusReady}><strong>{preset.label}<em className="settings-ai-preset-id">{preset.id}</em></strong><small>{preset.detail}</small><em>{preset.model}</em></button>)}</div>
@@ -181,7 +182,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
         <label className="is-wide"><span>服务地址</span><input data-ai-field="base-url" value={baseUrl} disabled={!statusReady} onChange={(event) => setBaseUrl(event.target.value)} placeholder={AI_DEFAULT_BASE_URL} /></label>
         <label className="settings-ai-enabled is-wide"><input data-ai-field="enabled" type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} /><span>启用真实 AI；关闭后仍保留本地规则模式</span></label>
       </div>
-      <div className="settings-ai-actions"><button className="secondary-button" type="button" onClick={() => void test()} disabled={!statusReady || busy}>{busy ? "处理中…" : "测试连接"}</button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || !baseUrl.trim() || !model.trim()}>{busy ? "保存中…" : "保存配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}<small className="settings-ai-note">API Key 只写入 API 服务端的加密配置文件，不进入浏览器本地存储或 SQLite 备份。</small>
+      <div className="settings-ai-actions"><button className="secondary-button" type="button" onClick={() => void test()} disabled={!statusReady || busy}>{busy ? "处理中…" : "测试连接"}</button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || !baseUrl.trim() || !model.trim()}>{busy ? "保存中…" : "保存配置"}</button></div>{message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
       </div>
     </details>
   </div>;
@@ -580,7 +581,7 @@ export function AssetTrashSettingsCard({ onAssetsChanged }: { readonly onAssetsC
   return <div className="settings-asset-trash-card" data-asset-trash>
     <div className="settings-asset-trash-overview">
       <div className="settings-card-icon"><Trash2 size={18} aria-hidden="true" /></div>
-      <div className="settings-card-copy"><strong>照片回收站</strong><small>拖进输入框、又没保存的照片，会先在原处留 {view?.graceDays ?? 7} 天；过期后由服务端自动收走，再在回收站放 {view?.trashDays ?? 30} 天可以拿回来。</small></div>
+      <div className="settings-card-copy"><strong>照片回收站</strong><small>未保存的照片会先保留，过期后进入回收站。</small></div>
       <button className="icon-text-button" type="button" onClick={() => setReload((current) => current + 1)} disabled={loading}>{loading ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <RotateCcw size={15} aria-hidden="true" />}<span>{loading ? "读取中" : "刷新"}</span></button>
     </div>
     {unavailable !== null ? <p className="settings-asset-trash-note" data-asset-trash-unavailable>{unavailable}；服务端配置 LIFEOS_ASSET_ROOT 后这里会显示实物。</p> : null}
@@ -652,7 +653,7 @@ export function ThumbnailCacheSettingsCard() {
   return <div className="settings-asset-trash-card" data-thumb-cache>
     <div className="settings-asset-trash-overview">
       <div className="settings-card-icon"><ImageIcon size={18} aria-hidden="true" /></div>
-      <div className="settings-card-copy"><strong>缩略图缓存</strong><small>时间轴、照片底纹和投放区显示的都是 {view === null || view.widths.length === 0 ? "400 / 1200" : view.widths.join(" / ")} px 的派生小图，由服务端从原图生成、按原图内容命名。它只是缓存：删掉不影响任何照片，下次显示会自动重建。</small></div>
+      <div className="settings-card-copy"><strong>缩略图缓存</strong><small>清空缓存不影响原照片。</small></div>
       <button className="icon-text-button" type="button" onClick={() => setReload((current) => current + 1)} disabled={loading}>{loading ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <RotateCcw size={15} aria-hidden="true" />}<span>{loading ? "读取中" : "刷新"}</span></button>
     </div>
     <div className="settings-asset-trash-stats">
@@ -670,7 +671,15 @@ export function ThumbnailCacheSettingsCard() {
 
 export function FontSettingsCard({ value, onChange }: { readonly value: UiFontId; readonly onChange: (value: UiFontId) => void }) {
   const selected = UI_FONT_OPTIONS.find((option) => option.id === value) ?? UI_FONT_OPTIONS[0];
-  return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong><small>目前使用 MiSans；选择框保留供以后增加字体。访问设备未安装 MiSans 时会使用系统字体。</small></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
+  return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
+}
+
+export function WeatherSimulatorCard() {
+  return <section className="settings-card weather-simulator-card" aria-labelledby="weather-simulator-title">
+    <div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div>
+    <div className="settings-card-copy"><strong id="weather-simulator-title">天气模拟器</strong><small>拖动时间，切换天气，预览天气卡一天中的变化。</small></div>
+    <WeatherSimulator />
+  </section>;
 }
 
 export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: CycleIntimacyModuleData | null; readonly onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
@@ -857,12 +866,12 @@ export function SettingsView({ page, mobileEntry, onNavigatePage, onImport, onLo
     : page === "data/backup" ? <BackupSettingsCard backupStatusState={backupStatusState} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} onRetry={onRetryBackupStatus} onReadFailed={onBackupReadFailed} />
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
-    : page === "appearance/interface" ? <FontSettingsCard value={uiFont} onChange={onUiFontChange} />
+    : page === "appearance/interface" ? <><FontSettingsCard value={uiFont} onChange={onUiFontChange} /><WeatherSimulatorCard /></>
     : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? null} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} />
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />
-    : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS，本机优先</strong><small>记录、设置和已保存的服务配置由当前 LifeOS 实例管理。天气、AI 和观影服务只有在你主动启用并配置后才会连接外部服务。</small></div></div>;
+    : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS，本机优先</strong><small>记录与配置由当前 LifeOS 实例管理。</small></div></div>;
   return <section className="settings-page" data-mobile-level={mobileLevel} aria-labelledby="settings-title">
     <header className="settings-page-header"><h1 id="settings-title">设置</h1></header>
     <div className="settings-layout">

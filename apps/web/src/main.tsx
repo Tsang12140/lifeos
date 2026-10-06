@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -46,7 +46,6 @@ import {
   Plus,
   PlugZap,
   RotateCcw,
-  Search,
   Send,
   Settings,
   Sparkles,
@@ -69,16 +68,21 @@ import { installDiagnostics } from "./diagnostics";
 import { sha256Hex } from "./contentHash";
 import type { Asset, AssetKind, AssetLink, AssetRole, CycleIntimacyEventKind, CycleIntimacyModuleConfig, CycleIntimacyModuleData, DaySummary, Entity, EntityKind, EntityRef, NoteDetails, NoteFormat, RecordKind, RelationKind, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import {
+  apiUploadRequest,
   apiRequest,
   type AssetsResponse,
   type AiStatus,
+  type ApiUploadProgress,
   type AiStatusState,
   type AuthState,
   type BackupStatus,
   type BackupStatusState,
   type BackupRetentionPolicy,
   type BackupRetentionView,
+  type CycleDayEditResponse,
+  type CycleDayUndoResponse,
   type CycleModuleResponse,
+  type MobileCycleEventKind,
   type EntitiesResponse,
   type MovieEntity,
   type MovieModuleStatus,
@@ -149,7 +153,7 @@ import "./styles.css";
 import { AI_DEFAULT_BASE_URL } from "./settings-cards";
 import { type CalendarWeather } from "./timeline";
 import { CalendarSettingsPanel, CalendarSummaryMenu, CalendarView, CycleModuleDialog, CycleModulePanel } from "./calendar-view";
-import { NotesLibrary, RelationPanel, type NoteDraft, type NoteSaveHandler, type RecordEditorDraft } from "./record-dialogs";
+import { NoteEditorDialog, NotesLibrary, RelationPanel, type NoteDraft, type NoteSaveHandler, type RecordEditorDraft } from "./record-dialogs";
 import { TaskSummary, taskDueLabel } from "./task-summary";
 import { AssetPreview, CalendarDayMarkers, PrivacyMask, RecordPhotoGrid, Timeline, TimelineEntityChip, TimelineItem, assetContentUrl, assetThumbUrl, dayPhotoCandidates, dayPhotoIds, monthCellPhoto, periodMoonForDate, periodRuns, nextPredictedStart, weatherFromArchiveValue, recordsByDate, groupRecords, type ThumbnailWidth } from "./timeline";
 import { ConfirmDialog, EntitiesView, EntityEditDialog, ImportDialog, LoginGate, MobileMenuDialog, PersonCardDialog, SearchDialog } from "./dialogs";
@@ -240,6 +244,15 @@ function noteUpdatedAt(record: RecordView): string {
 
 const RECORDS_CACHE_LIMIT = 24;
 const DEFAULT_MOVIE_MODULE_STATUS: MovieModuleStatus = { enabled: false, configured: false, keyConfigured: false, connected: false };
+const CALENDAR_MODE_STORAGE_KEY = "lifeos.calendar.mode";
+
+function readCalendarModePreference(): CalendarMode {
+  try {
+    return window.localStorage.getItem(CALENDAR_MODE_STORAGE_KEY) === "month" ? "month" : "week";
+  } catch {
+    return "week";
+  }
+}
 
 function clearTenantSensitiveBrowserStorage(): void {
   try {
@@ -279,8 +292,8 @@ function App() {
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [calendarMode, setCalendarMode] = useState<CalendarMode>("week");
-  const [cycleModule, setCycleModule] = useState<CycleIntimacyModuleData | null>(null);
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>(readCalendarModePreference);
+  const [cycleModule, setCycleModule] = useState<CycleModuleResponse | null>(null);
   const [cycleModuleOpen, setCycleModuleOpen] = useState(false);
   const [cyclePanelOpen, setCyclePanelOpen] = useState(false);
   const [summaries, setSummaries] = useState<readonly DaySummary[]>([]);
@@ -310,6 +323,13 @@ function App() {
   // Photos dropped beside the entry box. They are already uploaded by the time
   // they sit here; saving the entry is what links them to the record.
   const [composerShots, setComposerShots] = useState<readonly AssetLink[]>([]);
+  const composerShotsRef = useRef(composerShots);
+  composerShotsRef.current = composerShots;
+  const setComposerShotsTracked: Dispatch<SetStateAction<readonly AssetLink[]>> = (update) => {
+    const next = typeof update === "function" ? update(composerShotsRef.current) : update;
+    composerShotsRef.current = next;
+    setComposerShots(next);
+  };
   const [composerDraftOwner, setComposerDraftOwner] = useState<string | null>(null);
   const composerDraftWarningShown = useRef(false);
   const shotsDraftChecked = useRef(false);
@@ -348,6 +368,18 @@ function App() {
   const [searchDialogOpen, setSearchDialogOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<RecordView | null>(null);
   const [recordEditDraft, setRecordEditDraft] = useState<RecordEditorDraft | null>(null);
+  const recordEditDraftRef = useRef(recordEditDraft);
+  recordEditDraftRef.current = recordEditDraft;
+  const setRecordEditDraftTracked: Dispatch<SetStateAction<RecordEditorDraft | null>> = (update) => {
+    const next = typeof update === "function" ? update(recordEditDraftRef.current) : update;
+    recordEditDraftRef.current = next;
+    setRecordEditDraft(next);
+  };
+  const shotSubmissionStatesRef = useRef(new Map<string, "active" | "failed">());
+  const reportShotSubmissionState = useCallback((scope: string, state: "active" | "failed" | null) => {
+    if (state === null) shotSubmissionStatesRef.current.delete(scope);
+    else shotSubmissionStatesRef.current.set(scope, state);
+  }, []);
   const [noteEditMeta, setNoteEditMeta] = useState<NoteEditMeta | null>(null);
   const composerOpenBeforeRecordEdit = useRef(false);
   const recordEditView = useRef<AppView | null>(null);
@@ -503,16 +535,18 @@ function App() {
   const queryPath = useMemo(() => {
     const params = new URLSearchParams({ timeZone: USER_TIME_ZONE });
     if (searchQuery) params.set("q", searchQuery);
-    if (activeView === "today") params.set("date", selectedDate);
-    if (activeView === "calendar") {
-      // The month grid is always six weeks, so the cells spilling in from the
-      // neighbouring months are populated by the same request.
-      params.set("from", calendarRange[0] ?? selectedDate);
-      params.set("to", calendarRange[calendarRange.length - 1] ?? selectedDate);
+    if (!searchQuery) {
+      if (activeView === "today") params.set("date", selectedDate);
+      if (activeView === "calendar") {
+        // The month grid is always six weeks, so the cells spilling in from the
+        // neighbouring months are populated by the same request.
+        params.set("from", calendarRange[0] ?? selectedDate);
+        params.set("to", calendarRange[calendarRange.length - 1] ?? selectedDate);
+      }
+      if (activeView === "timeline" && entityFilterId !== null) params.set("entityId", entityFilterId);
+      if (activeView === "tasks") params.set("kind", "task");
+      if (activeView === "notes") params.set("kind", "note");
     }
-    if (activeView === "timeline" && entityFilterId !== null) params.set("entityId", entityFilterId);
-    if (activeView === "tasks") params.set("kind", "task");
-    if (activeView === "notes") params.set("kind", "note");
     return `/api/records?${params.toString()}`;
   }, [activeView, entityFilterId, searchQuery, selectedDate, calendarRange]);
 
@@ -714,7 +748,7 @@ function App() {
       // Daily navigation is the only path where an adjacent day is useful.
       // These requests are local records reads, share the full query (search
       // and entity filters included), and never update the visible list.
-      if (activeView === "today") {
+      if (activeView === "today" && !searchQuery) {
         const baseQuery = queryPath.indexOf("?") >= 0 ? queryPath.slice(queryPath.indexOf("?") + 1) : "";
         const prefetch = (date: string) => {
           const params = new URLSearchParams(baseQuery);
@@ -743,7 +777,7 @@ function App() {
       if (!controller.signal.aborted && requestId === recordsRequestRef.current) setRecordsLoading(false);
     });
     return () => controller.abort();
-  }, [activeView, authState.authenticated, authState.required, handleRequestError, queryPath, recordsReload]);
+  }, [activeView, authState.authenticated, authState.required, handleRequestError, queryPath, recordsReload, searchQuery]);
 
   useEffect(() => {
     recordsRef.current = recordsForQuery ?? [];
@@ -866,7 +900,7 @@ function App() {
   const navigate = (view: AppView) => {
     if (view === "settings") { openSettingsPage(DEFAULT_SETTINGS_PAGE, true); return; }
     if (window.location.hash.startsWith("#settings")) window.history.pushState(null, "", `${window.location.pathname}${window.location.search}`);
-    setActiveView(view); setMobileMenuOpen(false); if (view !== "timeline") setEntityFilterId(null); if (view === "tasks") setComposerKind("task"); if (view === "notes") setComposerKind("note");
+    setActiveView(view); setMobileMenuOpen(false); if (view !== "timeline") setEntityFilterId(null); if (view === "tasks") setComposerKind("task");
   };
   /**
    * A calendar cell is a way back into the day it stands for — except while the
@@ -897,9 +931,11 @@ function App() {
    * The photos are assets on disk, so putting them back is a list operation, not
    * a re-upload — which is exactly why the clear can be this casual.
    */
-  const handleShotsCleared = (cleared: readonly AssetLink[], restore: () => void) => showToast(`已清空 ${cleared.length} 张照片`, "ok", () => { restore(); showToast(`已恢复 ${cleared.length} 张照片`); });
+  const handleShotsCleared = (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => showToast(`已清空 ${cleared.length} 张照片${cancelledPending > 0 ? `，取消待处理${cancelledPending}张` : ""}`, "ok", () => { if (restore()) showToast(`已恢复 ${cleared.length} 张照片`); });
 
   const draftScope = composerDraftScope(authResolved, authState);
+  const createShotScopeKey = `create:${draftScope ?? "unresolved"}:${activeView}:${selectedDate}:${composerKind}`;
+  const editShotScopeKey = `edit:${editingRecord?.id ?? "none"}`;
 
   // Never hydrate a previous account's text or photos into the next account.
   // Legacy installations migrate only their old photo-only draft.
@@ -907,7 +943,7 @@ function App() {
     if (draftScope === null) {
       setComposerDraftOwner(null);
       setComposerContent("");
-      setComposerShots([]);
+      setComposerShotsTracked([]);
       return;
     }
     const saved = readComposerDraft(draftScope);
@@ -915,10 +951,10 @@ function App() {
     setComposerContent(saved?.content ?? "");
     setComposerKind(saved?.kind ?? "journal");
     setComposerPrivate(saved?.isPrivate ?? false);
-    setComposerShots(saved?.shots ?? legacyShots);
+    setComposerShotsTracked(saved?.shots ?? legacyShots);
     shotsDraftChecked.current = false;
     setComposerDraftOwner(draftScope);
-    if (saved?.content) showToast("已恢复上次没发出的正文草稿");
+    if (saved?.content) showToast(saved.kind === "event" || saved.kind === "note" ? `已恢复${saved.kind === "event" ? "事件" : "笔记"}草稿，可继续保存或切换类型` : "已恢复上次没发出的正文草稿");
   }, [draftScope]);
 
   useEffect(() => {
@@ -946,7 +982,7 @@ function App() {
     const kept = composerShots.filter((shot) => live.has(shot.assetId));
     const dropped = composerShots.length - kept.length;
     if (dropped === 0) { showToast(`已恢复上次没发出的 ${kept.length} 张照片`); return; }
-    setComposerShots(kept);
+    setComposerShotsTracked(kept);
     showToast(kept.length === 0 ? `草稿里 ${dropped} 张照片已被清理，已从投放区移除` : `草稿里 ${dropped} 张照片已被清理，保留剩下 ${kept.length} 张`);
   }, [assets, assetsLoaded, composerShots, composerDraftOwner, draftScope, showToast]);
   const rememberMovieEntity = (movie: MovieEntity) => {
@@ -1013,6 +1049,27 @@ function App() {
     setCycleModule(module);
     showToast(config.enabled ? "周期设置已保存" : "周期已关闭，记录仍被保留");
   };
+  const reloadCycleModule = async (): Promise<CycleModuleResponse> => {
+    const module = await apiRequest<CycleModuleResponse>("/api/modules/cycle-intimacy");
+    setCycleModule(module);
+    return module;
+  };
+  const saveMobileCycleDay = async (date: string, kinds: readonly MobileCycleEventKind[], revision: string): Promise<CycleDayEditResponse> => {
+    const result = await apiRequest<CycleDayEditResponse>("/api/modules/cycle-intimacy/day-edit", {
+      method: "POST",
+      body: JSON.stringify({ date, kinds, revision }),
+    });
+    setCycleModule({ ...result.module, eventRevision: result.eventRevision });
+    return result;
+  };
+  const undoMobileCycleDay = async (token: string): Promise<CycleDayUndoResponse> => {
+    const result = await apiRequest<CycleDayUndoResponse>("/api/modules/cycle-intimacy/day-edit/undo", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    setCycleModule({ ...result.module, eventRevision: result.eventRevision });
+    return result;
+  };
   /** How long a run lasts is the one number she tunes from the calendar itself. */
   const saveCyclePeriodLength = async (periodLength: number) => {
     if (!cycleModule) return;
@@ -1037,10 +1094,19 @@ function App() {
    * only then does the mode end. A save that fails keeps the mode — and the drafts —
    * up, so a dead network cannot pass for a clean exit.
    */
-  const changeEditMode = async (value: boolean) => {
-    if (value) { setEditMode(true); return; }
-    if (summaryDrafts.size > 0 && !summarySaving && !(await saveSummaryDrafts())) return;
+  const changeEditMode = async (value: boolean): Promise<boolean> => {
+    if (value) { setEditMode(true); return true; }
+    if (summarySaving) return false;
+    if (summaryDrafts.size > 0 && !(await saveSummaryDrafts())) return false;
     setEditMode(false);
+    return true;
+  };
+  /** On a phone, cycle recording takes over day taps, so finish summary editing first. */
+  const toggleCalendarCyclePanel = async () => {
+    if (!cyclePanelOpen && editMode && window.matchMedia("(max-width: 560px)").matches) {
+      if (!(await changeEditMode(false))) return;
+    }
+    setCyclePanelOpen(!cyclePanelOpen);
   };
   /**
    * Neither of the calendar's two temporary tools is sticky — neither one is
@@ -1068,6 +1134,8 @@ function App() {
   /** A week card has no summary line, so leaving the month grid also leaves edit mode. */
   const switchCalendarMode = (next: CalendarMode) => {
     setCalendarMode(next);
+    try { window.localStorage.setItem(CALENDAR_MODE_STORAGE_KEY, next); } catch { /* Remembering the view is optional. */ }
+    if (window.matchMedia("(max-width: 560px)").matches) setCyclePanelOpen(false);
     if (next !== "month" && editMode) void changeEditMode(false);
   };
   const editSummaryDraft = (date: string, text: string) => {
@@ -1164,8 +1232,6 @@ function App() {
       return null;
     }
   };
-  const submitSearch = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setSearchQuery(searchInput.trim()); };
-
   const toggleDemo = () => {
     setHideDemo((current) => {
       const next = !current;
@@ -1233,46 +1299,49 @@ function App() {
   // real asset the entry will point at; saving only writes the link. When the
   // library already holds the same bytes the upload is skipped entirely: the
   // same photo dropped twice must not become two files on disk.
-  const uploadComposerShot = async (file: File): Promise<ShotUpload | null> => {
-    try {
-      const hash = await sha256Hex(file);
-      if (hash !== null) {
-        const known = await resolveKnownShot(hash);
-        if (known !== null) {
-          setAssets((current) => current.some((asset) => asset.id === known.id) ? current : [...current, known]);
-          return { asset: known, reused: true };
-        }
+  const uploadComposerShot = async (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void): Promise<ShotUpload> => {
+    const throwIfAborted = () => {
+      if (!signal.aborted) return;
+      throw typeof DOMException === "undefined" ? Object.assign(new Error("The operation was aborted"), { name: "AbortError" }) : new DOMException("The operation was aborted", "AbortError");
+    };
+    const hash = await sha256Hex(file);
+    throwIfAborted();
+    if (hash !== null) {
+      const known = await resolveKnownShot(hash, signal);
+      throwIfAborted();
+      if (known !== null) {
+        setAssets((current) => current.some((asset) => asset.id === known.id) ? current : [...current, known]);
+        return { asset: known, reused: true };
       }
-      const asset = await apiRequest<Asset>(`/api/assets/uploads?name=${encodeURIComponent(file.name)}`, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      // The upload route reuses the row the library already holds, so this can
-      // hand back an asset that is already in the list — the resolve above is a
-      // courtesy, not a guarantee. Appending it again would put one id in twice,
-      // which is the same collision the drop zone guards against, one level up.
-      setAssets((current) => current.some((held) => held.id === asset.id) ? current : [...current, asset]);
-      return { asset, reused: false };
-    } catch (error) {
-      showToast(handleRequestError(error, "照片上传失败，请重试"), "warn");
-      return null;
     }
+    const asset = await apiUploadRequest<Asset>(`/api/assets/uploads?name=${encodeURIComponent(file.name)}`, file, {
+      contentType: file.type,
+      signal,
+      onProgress,
+    });
+    throwIfAborted();
+    // Upload may return an existing row if another request stored the same
+    // bytes. Keep the library list unique by asset id.
+    setAssets((current) => current.some((held) => held.id === asset.id) ? current : [...current, asset]);
+    return { asset, reused: false };
   };
 
   const handleCreate = async () => {
     const content = composerContent;
     if (!content.trim() || saving) return;
+    const shotState = shotSubmissionStatesRef.current.get(createShotScopeKey);
+    if (shotState !== undefined) { showToast(shotState === "failed" ? "有照片未上传，请重试或移除后保存" : "照片正在处理，请完成后再保存", "warn"); return; }
     const isTodaySelection = selectedDate === localDateToday();
     // The field already defaults to the current minute, so "now" is the normal
     // path; clearing it means "no explicit time" and falls back to the entry moment.
     const occurred = occurredAt ? instantFromInput(occurredAt) : isTodaySelection ? undefined : dateOnly(selectedDate);
     const due = dueAt ? instantFromInput(dueAt) : undefined;
     if ((occurredAt && !occurred) || (dueAt && !due)) { showToast("请检查时间格式后再保存", "warn"); return; }
-    const payload: RecordWritePayload = { kind: composerKind, content, ...(occurred ? { occurredAt: occurred } : {}), ...(composerKind === "task" && dueAt && due ? { dueAt: due } : {}), ...(composerPrivate ? { isPrivate: true } : {}), ...(composerBackfill && !isTodaySelection ? { isBackfill: true } : {}), ...(composerWeather === null ? {} : { weather: composerWeather }), ...(composerMovieRefs.length === 0 ? {} : { entityRefs: composerMovieRefs }), ...(composerShots.length === 0 ? {} : { assetRefs: composerShots }) };
+    const currentShots = composerShotsRef.current;
+    const payload: RecordWritePayload = { kind: composerKind, content, ...(occurred ? { occurredAt: occurred } : {}), ...(composerKind === "task" && dueAt && due ? { dueAt: due } : {}), ...(composerPrivate ? { isPrivate: true } : {}), ...(composerKind === "journal" && composerBackfill && !isTodaySelection ? { isBackfill: true } : {}), ...(composerWeather === null ? {} : { weather: composerWeather }), ...(composerMovieRefs.length === 0 ? {} : { entityRefs: composerMovieRefs }), ...(currentShots.length === 0 ? {} : { assetRefs: currentShots }) };
     setSaving(true);
     setActionMessage(null);
-    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); if (draftScope !== null) clearComposerDraft(draftScope); setComposerContent(""); setComposerMovieRefs([]); setComposerShots([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { showToast(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
+    try { await apiRequest<RecordView>("/api/records", { method: "POST", body: JSON.stringify(payload) }); if (draftScope !== null) clearComposerDraft(draftScope); setComposerContent(""); setComposerMovieRefs([]); setComposerShotsTracked([]); setComposerPrivate(false); setComposerBackfill(false); setComposerWeather(null); setOccurredAtDirty(false); setDueAt(""); showToast("已保存到时间轴"); refresh(); } catch (error) { showToast(handleRequestError(error, "保存失败，请重试")); } finally { setSaving(false); }
   };
 
   const noteDetailsPayload = (draft: Pick<NoteDraft, "format" | "title" | "source">): NoteDetails => {
@@ -1317,13 +1386,16 @@ function App() {
     setEditingRecord(record);
     recordEditView.current = activeView;
     if (recordEditDraft === null) composerOpenBeforeRecordEdit.current = composerOpen;
-    setRecordEditDraft({ content: recordText(record), occurredAt: lifeTimeToInput(record.occurredAt), dueAt: isTaskRecord(record) ? lifeTimeToInput(record.task.dueAt) : "", occurredDirty: false, dueDirty: false, isPrivate: record.isPrivate === true, isBackfill: record.isBackfill === true, status: isTaskRecord(record) ? record.task.status : "todo", entityRefs: record.entityRefs, relatedRecordIds: record.relatedRecordIds, assetRefs: record.assetRefs });
+    setRecordEditDraftTracked({ content: recordText(record), occurredAt: lifeTimeToInput(record.occurredAt), dueAt: isTaskRecord(record) ? lifeTimeToInput(record.task.dueAt) : "", occurredDirty: false, dueDirty: false, isPrivate: record.isPrivate === true, isBackfill: record.isBackfill === true, status: isTaskRecord(record) ? record.task.status : "todo", entityRefs: record.entityRefs, relatedRecordIds: record.relatedRecordIds, assetRefs: record.assetRefs });
     setNoteEditMeta(record.kind === "note" ? { format: record.note?.format ?? "fragment", title: record.note?.title ?? "", source: record.note?.source ?? "", metadataTouched: false } : null);
     setComposerOpen(true);
-    window.requestAnimationFrame(() => document.querySelector(record.kind === "note" ? ".notes-library .composer" : ".composer")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    if (record.kind !== "note") window.requestAnimationFrame(() => document.querySelector(".composer")?.scrollIntoView({ block: "start", behavior: "smooth" }));
   };
 
   const handleSaveEdit = async (record: RecordView, draft: RecordEditorDraft) => {
+    const shotState = shotSubmissionStatesRef.current.get(`edit:${record.id}`);
+    if (shotState !== undefined) { setEditError(shotState === "failed" ? "有照片未上传，请重试或移除后保存" : "照片正在处理，请完成后再保存"); return; }
+    draft = recordEditDraftRef.current ?? draft;
     if (!draft.content.trim()) { setEditError("请输入内容"); return; }
     if (record.kind === "note" && noteEditMeta?.format === "article" && !noteEditMeta.title.trim()) { setEditError("请填写文章标题"); return; }
     const occurredPatch = draft.occurredDirty ? (draft.occurredAt ? instantFromInput(draft.occurredAt) : null) : undefined;
@@ -1333,7 +1405,7 @@ function App() {
     const payload: RecordWritePayload = { revision: record.revision, entityRefs: draft.entityRefs, relatedRecordIds: draft.relatedRecordIds, assetRefs: draft.assetRefs, ...(draft.content !== recordText(record) ? { content: draft.content } : {}), ...(draft.occurredDirty ? { occurredAt: occurredPatch ?? null } : {}), ...(isTaskRecord(record) && draft.dueDirty ? { dueAt: duePatch ?? null } : {}), ...(isTaskRecord(record) && draft.status !== record.task.status ? { status: draft.status } : {}), ...(draft.isPrivate !== (record.isPrivate === true) ? { isPrivate: draft.isPrivate } : {}), ...(draft.isBackfill !== (record.isBackfill === true) ? { isBackfill: draft.isBackfill } : {}), ...(record.kind === "note" && noteEditMeta?.metadataTouched ? { note: noteDetailsPayload(noteEditMeta) } : {}) };
     setEditSaving(true);
     setEditError(null);
-    try { await apiRequest<RecordView>(`/api/records/${encodeURIComponent(record.id)}`, { method: "PATCH", body: JSON.stringify(payload) }); recordEditView.current = null; setEditingRecord(null); setRecordEditDraft(null); setNoteEditMeta(null); setComposerOpen(composerOpenBeforeRecordEdit.current); showToast("修改已保存"); refresh(); } catch (error) { setEditError(errorStatus(error) === 409 ? "这条记录已在别处更新。读取最新版本后可以继续保存当前草稿。" : handleRequestError(error, "修改保存失败，请重试")); } finally { setEditSaving(false); }
+    try { await apiRequest<RecordView>(`/api/records/${encodeURIComponent(record.id)}`, { method: "PATCH", body: JSON.stringify(payload) }); recordEditView.current = null; setEditingRecord(null); setRecordEditDraftTracked(null); setNoteEditMeta(null); setComposerOpen(composerOpenBeforeRecordEdit.current); showToast("修改已保存"); refresh(); } catch (error) { setEditError(errorStatus(error) === 409 ? "这条记录已在别处更新。读取最新版本后可以继续保存当前草稿。" : handleRequestError(error, "修改保存失败，请重试")); } finally { setEditSaving(false); }
   };
 
   const handleReloadLatest = async () => {
@@ -1411,7 +1483,7 @@ function App() {
     if (recordEditView.current === null || recordEditView.current === activeView) return;
     recordEditView.current = null;
     setEditingRecord(null);
-    setRecordEditDraft(null);
+    setRecordEditDraftTracked(null);
     setNoteEditMeta(null);
     setEditError(null);
     setComposerOpen(composerOpenBeforeRecordEdit.current);
@@ -1427,11 +1499,12 @@ function App() {
   // Calendar owns its compact range navigation and backfill entry. Letting the
   // generic page header render there would leave a wide, almost-empty row whose
   // only job was the old "新建记录" button.
-  const showPageActions = activeView !== "notes" && Boolean(searchQuery || entityFilterId !== null || (!hidesComposer && !isToday && activeView !== "calendar" && !editingComposer));
+  const showPageActions = Boolean(searchQuery) || (activeView !== "notes" && Boolean(entityFilterId !== null || (!hidesComposer && !isToday && activeView !== "calendar" && !editingComposer)));
   const loadedVisibleRecords = hideDemo && recordsForQuery ? recordsForQuery.filter((record) => !isDemoRecord(record)) : recordsForQuery;
   // The notes route owns its own library. Other record surfaces deliberately
-  // receive a note-free view even when an old note carries occurredAt.
-  const visibleRecords = activeView === "notes" ? loadedVisibleRecords : loadedVisibleRecords?.filter((record) => record.kind !== "note") ?? loadedVisibleRecords;
+  // receive a note-free view even when an old note carries occurredAt. Global
+  // search is the exception: matching notes are part of the result set.
+  const visibleRecords = searchQuery || activeView === "notes" ? loadedVisibleRecords : loadedVisibleRecords?.filter((record) => record.kind !== "note") ?? loadedVisibleRecords;
   const visibleTasks = hideDemo && tasks ? tasks.filter((record) => !isDemoRecord(record)) : tasks;
   // Which places were written about most recently, so the mention picker can put
   // them first. Derived from the records rather than tracked separately: the
@@ -1471,7 +1544,9 @@ function App() {
     onPrivateChange: setComposerPrivate,
     onBackfillChange: setComposerBackfill,
     shots: composerShots,
-    onShotsChange: setComposerShots,
+    onShotsChange: setComposerShotsTracked,
+    shotScopeKey: createShotScopeKey,
+    onShotSubmissionState: reportShotSubmissionState,
     onUploadShot: uploadComposerShot,
     onNotify: showToast,
     onSubmit: () => void handleCreate(),
@@ -1479,6 +1554,7 @@ function App() {
   };
   const activeComposerProps: ComposerProps = editingComposer ? {
     ...composerProps,
+    shotScopeKey: editShotScopeKey,
     kind: editingRecord.kind,
     editing: true,
     error: editError,
@@ -1496,24 +1572,24 @@ function App() {
     saving: editSaving,
     dismissible: true,
     movieRefs: recordEditDraft.entityRefs,
-    onMovieRefsChange: (refs) => setRecordEditDraft((current) => current === null ? null : { ...current, entityRefs: refs }),
+    onMovieRefsChange: (refs) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, entityRefs: refs }),
     onKindChange: () => {},
-    onContentChange: (content) => setRecordEditDraft((current) => current === null ? null : { ...current, content }),
-    onOccurredAtChange: (value) => setRecordEditDraft((current) => current === null ? null : { ...current, occurredAt: value, occurredDirty: true }),
-    onDueAtChange: (value) => setRecordEditDraft((current) => current === null ? null : { ...current, dueAt: value, dueDirty: true }),
-    onTaskStatusChange: (status) => setRecordEditDraft((current) => current === null ? null : { ...current, status }),
-    onPrivateChange: (value) => setRecordEditDraft((current) => current === null ? null : { ...current, isPrivate: value }),
-    onBackfillChange: (value) => setRecordEditDraft((current) => current === null ? null : { ...current, isBackfill: value }),
+    onContentChange: (content) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, content }),
+    onOccurredAtChange: (value) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, occurredAt: value, occurredDirty: true }),
+    onDueAtChange: (value) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, dueAt: value, dueDirty: true }),
+    onTaskStatusChange: (status) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, status }),
+    onPrivateChange: (value) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, isPrivate: value }),
+    onBackfillChange: (value) => setRecordEditDraftTracked((current) => current === null ? null : { ...current, isBackfill: value }),
     shots: recordEditDraft.assetRefs.filter((ref) => ref.role === "photo"),
-    onShotsChange: (update) => setRecordEditDraft((current) => {
+    onShotsChange: (update) => setRecordEditDraftTracked((current) => {
       if (current === null) return null;
       const photos = current.assetRefs.filter((ref) => ref.role === "photo");
       const next = typeof update === "function" ? update(photos) : update;
       return { ...current, assetRefs: [...current.assetRefs.filter((ref) => ref.role !== "photo"), ...next] };
     }),
     onShotsCleared: handleShotsCleared,
-    onSubmit: () => void handleSaveEdit(editingRecord, recordEditDraft),
-    onClose: () => { if (!editSaving) { recordEditView.current = null; setEditingRecord(null); setRecordEditDraft(null); setNoteEditMeta(null); setComposerOpen(composerOpenBeforeRecordEdit.current); setEditError(null); } },
+    onSubmit: () => { const currentDraft = recordEditDraftRef.current; if (currentDraft !== null) void handleSaveEdit(editingRecord, currentDraft); },
+    onClose: () => { if (!editSaving) { recordEditView.current = null; setEditingRecord(null); setRecordEditDraftTracked(null); setNoteEditMeta(null); setComposerOpen(composerOpenBeforeRecordEdit.current); setEditError(null); } },
   } : composerProps;
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   if (!authResolved) return <main className="auth-screen"><div className="auth-panel surface" role="status"><LoaderCircle className="spin" size={22} aria-hidden="true" /><p className="auth-description">正在检查账号会话…</p></div></main>;
@@ -1528,24 +1604,22 @@ function App() {
   }
   // In the calendar the arrows page by the unit on screen — a week, or a month.
   const stepCalendar = (direction: number) => setSelectedDate((current) => (calendarMode === "week" ? shiftDate(current, direction * 7) : shiftMonth(current, direction)));
-  const openCalendarBackfill = () => {
-    setComposerKind("journal");
-    setComposerBackfill(selectedDate < localDateToday());
-    setComposerOpen(true);
-  };
   const onNavigate = navigate;
+  const timelineContent = <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={searchQuery ? "timeline" : activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />;
 
-  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation={activeView !== "calendar"} /><div className="topbar-actions"><form className="search-form" onSubmit={submitSearch} role="search"><Search className="search-leading-icon" size={17} strokeWidth={1.8} aria-hidden="true" /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索记录" aria-label="搜索记录" />{searchInput ? <button className="search-clear" type="button" aria-label="清空搜索" onClick={() => { setSearchInput(""); setSearchQuery(""); }}><X size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}<span className="search-divider" aria-hidden="true" /><button className="search-submit" type="submit" aria-label="提交搜索"><Search size={16} strokeWidth={2} aria-hidden="true" /></button></form><button className="icon-button mobile-search-button" type="button" onClick={() => setSearchDialogOpen(true)} aria-label="搜索记录"><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button></div></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" && !editingComposer ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast && !editingComposer ? <ReviewComposer key="create-review" {...activeComposerProps} /> : <Composer key={editingComposer ? editingRecord.id : "create"} {...activeComposerProps} />) : null}{activeView === "settings"
+  return <div className="app-shell"><Sidebar activeView={activeView} onNavigate={navigate} /><main className="main-column"><header className="topbar"><div className="topbar-layout"><WeatherHeader selectedDate={selectedDate} status={weatherStatus} onOpenSettings={() => openSettingsPage("integrations/weather")} onDateChange={setSelectedDate} onDateStep={activeView === "calendar" ? stepCalendar : undefined} onNotice={(message, tone) => showToast(message, tone ?? "warn")} showDateNavigation={activeView !== "calendar"} /></div></header><div className="content-grid"><div className="content-column">{showPageActions ? <div className="page-heading page-heading-actions"><div className="heading-actions">{searchQuery ? <span className="search-context">正在搜索 “{searchQuery}”</span> : null}{entityFilterId !== null ? <button className="entity-filter-chip" type="button" onClick={() => setEntityFilterId(null)} aria-label="清除人物筛选">人物：{entities.find((entity) => entity.id === entityFilterId)?.name ?? entityFilterId}<X size={13} aria-hidden="true" /></button> : null}{activeView !== "settings" && !isToday && activeView !== "calendar" && !editingComposer ? <button className="secondary-button heading-create-button" type="button" onClick={() => { setComposerKind(activeView === "tasks" ? "task" : "journal"); setComposerOpen(true); }}><Plus size={16} aria-hidden="true" /><span>新建{activeView === "tasks" ? "任务" : "记录"}</span></button> : null}</div></div> : null}{showComposer ? (isReviewingPast && !editingComposer ? <ReviewComposer key="create-review" {...activeComposerProps} /> : <Composer key={editingComposer ? editingRecord.id : "create"} {...activeComposerProps} />) : null}{activeView === "settings"
        ? <SettingsView page={settingsPage} mobileEntry={settingsMobileEntry} onNavigatePage={openSettingsPage} onImport={() => fileInputRef.current?.click()} onLogout={() => void handleLogout()} logoutBusy={logoutBusy} authRequired={authState.required} accountMode={authState.accountMode === true} account={authState.account} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} assistantVisible={assistantVisible} onAssistantVisibleChange={setAssistantVisibility} backupStatusState={backupAccountRef.current === (authState.account?.id ?? null) ? backupStatusState : { phase: "loading", status: null }} backupBusy={backupBusy} onBackup={(action) => void handleBackup(action)} onBackupStatusChange={(status) => setBackupStatusState({ phase: "ready", status })} onRetryBackupStatus={retryBackupStatus} onBackupReadFailed={(cause) => { handleRequestError(cause, "备份状态读取失败"); setBackupStatusState((current) => ({ phase: "failed", status: errorStatus(cause) === 401 ? null : current.status, error: errorMessage(cause, "备份状态暂时无法读取，请重试") })); }} weatherProfilesState={weatherProfilesState} onWeatherStatusChange={onWeatherStatusChange} onRetryWeatherProfiles={retryWeatherProfiles} movieStatusState={movieStatusState} onMovieStatusChange={onMovieStatusChange} onRetryMovieStatus={retryMovieStatus} demoCount={demoCount} hideDemo={hideDemo} demoBusy={demoBusy} demoDeleteArmed={demoDeleteArmed} onToggleDemo={toggleDemo} onDeleteDemo={() => void handleDeleteDemo()} uiFont={uiFont} onUiFontChange={setUiFont} onAssetsChanged={refresh} cycleModule={cycleModule} onSaveCycleConfig={saveCycleModuleConfig} />
+      : searchQuery
+        ? timelineContent
       : activeView === "entities"
         ? <EntitiesView entities={entities} records={visibleRecords ?? []} onCreateEntity={handleCreateEntity} onEdit={setEditingEntity} onViewRecords={(entity) => { setEntityFilterId(entity.id); setActiveView("timeline"); }} />
       : activeView === "notes"
-        ? <NotesLibrary records={visibleRecords} loading={recordsLoading} error={recordsError} entities={entities} onRetry={() => setRecordsReload((current) => current + 1)} onCreateEntity={handleCreateEntity} onSave={handleSaveNote} onEdit={handleEdit} editor={editingComposer && editingRecord.kind === "note" ? <Composer key={editingRecord.id} {...activeComposerProps} /> : null} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} />
+        ? <NotesLibrary records={visibleRecords} loading={recordsLoading} error={recordsError} entities={entities} onRetry={() => setRecordsReload((current) => current + 1)} onCreateEntity={handleCreateEntity} onSave={handleSaveNote} onEdit={handleEdit} editor={editingComposer && editingRecord.kind === "note" ? <NoteEditorDialog key={editingRecord.id} record={editingRecord} createOpen={false} entities={entities} onCreateEntity={handleCreateEntity} onClose={activeComposerProps.onClose} onSave={handleSaveNote} /> : null} onDelete={(record) => { setDeleteError(null); setDeleteRecord(record); }} />
       : activeView === "calendar"
-        ? <CalendarView mode={calendarMode} onModeChange={switchCalendarMode} onStep={stepCalendar} onOpenBackfill={openCalendarBackfill} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={() => setCyclePanelOpen((current) => !current)} onOpenCycleSettings={() => openSettingsPage("private/cycle")} onSaveCycleConfig={saveCycleModuleConfig} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onSavePeriodLength={saveCyclePeriodLength} onSaveCycleLength={saveCycleLength} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} settingsOpen={calendarSettingsOpen} onToggleSettings={() => setCalendarSettingsOpen((current) => !current)} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} editMode={editMode} onEditModeChange={changeEditMode} drafts={summaryDrafts} onDraftChange={editSummaryDraft} summarySaving={summarySaving} onSaveDrafts={() => void saveSummaryDrafts()} onDiscardDrafts={discardSummaryDrafts} onRegenerateSummary={regenerateDaySummary} onRevertSummary={revertDaySummary} busyDate={summaryBusyDate} />
+        ? <CalendarView mode={calendarMode} onModeChange={switchCalendarMode} onStep={stepCalendar} anchor={selectedDate} today={localDateToday()} records={visibleRecords} assets={assets} summaries={summaryMap} aiEnabled={aiSummaries} weatherByDate={weatherArchive} loading={recordsLoading} error={recordsError} cycleModule={cycleModule} cyclePanelOpen={cyclePanelOpen} onOpenCycleModule={toggleCalendarCyclePanel} onCloseCycleModule={() => setCyclePanelOpen(false)} onOpenCycleSettings={() => openSettingsPage("private/cycle")} onSaveCycleConfig={saveCycleModuleConfig} onAddCycleModuleEvent={addCycleModuleEvent} onDeleteCycleModuleEvent={deleteCycleModuleEvent} onSaveMobileCycleDay={saveMobileCycleDay} onUndoMobileCycleDay={undoMobileCycleDay} onReloadCycleModule={reloadCycleModule} onSavePeriodLength={saveCyclePeriodLength} onSaveCycleLength={saveCycleLength} onRetry={() => setRecordsReload((current) => current + 1)} onOpenDay={openDay} settingsOpen={calendarSettingsOpen} onToggleSettings={() => setCalendarSettingsOpen((current) => !current)} aiStatusState={aiStatusState} onAiStatusChange={onAiStatusChange} onRetryAiStatus={retryAiStatus} editMode={editMode} onEditModeChange={changeEditMode} drafts={summaryDrafts} onDraftChange={editSummaryDraft} summarySaving={summarySaving} onSaveDrafts={() => void saveSummaryDrafts()} onDiscardDrafts={discardSummaryDrafts} onRegenerateSummary={regenerateDaySummary} onRevertSummary={revertDaySummary} busyDate={summaryBusyDate} />
       : activeView === "timemachine"
         ? <TimeMachine />
-      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />}</div>{activeView !== "settings" ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} onMore={() => setMobileMenuOpen(true)} moreOpen={mobileMenuOpen} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={onNavigate} onOpenSearch={() => setSearchDialogOpen(true)} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) setImportFile(null); }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} visible={assistantVisible} onOpenSettings={() => openSettingsPage("integrations/ai")} /></div>;
+      : <Timeline records={visibleRecords} assets={assets} entities={entities} loading={recordsInitialLoading} refreshing={recordsRefreshing || !recordsAreCurrent} error={recordsErrorForQuery} selectedDate={recordsForQueryDate} activeView={activeView} searchQuery={searchQuery} movieEnabled={movieStatus.enabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={attachMovieToRecord} onMoviePromptSuppress={suppressMoviePrompt} onRetry={reloadRecords} onDemo={() => void handleDemo()} creatingDemo={creatingDemo} onEdit={(record) => { if (recordsInteractionEnabled) handleEdit(record); }} onDelete={(record) => { if (!recordsInteractionEnabled) return; setDeleteError(null); setDeleteRecord(record); }} onTaskStatus={(record, status) => { if (recordsInteractionEnabled) void handleTaskStatus(record, status); }} onPreviewAsset={(assetIds, index) => setPhotoPreview({ assetIds, index })} onOpenEntity={setEntityCard} interactionDisabled={!recordsInteractionEnabled} dataCurrent={recordsAreCurrent} />}</div>{activeView !== "settings" && !searchQuery ? <TaskSummary tasks={visibleTasks} loading={tasksLoading} error={tasksError} onTaskStatus={(record, status) => handleTaskStatus(record, status, { sync: false, feedback: false })} onTaskStateChange={syncTaskRecord} /> : null}</div></main><MobileNav activeView={activeView} onNavigate={navigate} onMore={() => setMobileMenuOpen(true)} moreOpen={mobileMenuOpen} />{actionMessage ? <div className={`action-toast ${actionMessage.tone === "warn" ? "is-warning" : ""}`} role="status">{actionMessage.tone === "warn" ? <AlertCircle size={16} strokeWidth={2} aria-hidden="true" /> : <Check size={16} strokeWidth={2} aria-hidden="true" />}<span className="action-toast-text">{actionMessage.text}</span>{actionMessage.undo ? <button className="action-toast-undo" type="button" onClick={() => { const undo = actionMessage.undo; dismissToast(); undo?.(); }}>撤销</button> : null}</div> : null}<CycleModuleDialog open={cycleModuleOpen} module={cycleModule} selectedDate={selectedDate} onClose={() => setCycleModuleOpen(false)} onSaveConfig={saveCycleModuleConfig} onAddEvent={addCycleModuleEvent} onDeleteEvent={deleteCycleModuleEvent} /><MobileMenuDialog open={mobileMenuOpen} activeView={activeView} onClose={() => setMobileMenuOpen(false)} onNavigate={onNavigate} onOpenSearch={() => setSearchDialogOpen(true)} /><SearchDialog open={searchDialogOpen} initialQuery={searchInput} onClose={() => setSearchDialogOpen(false)} onSearch={(query) => { setSearchInput(query); setSearchQuery(query); }} /><DiagnosticsDrawer /><ConfirmDialog record={deleteRecord} busy={deleteBusy} error={deleteError} onClose={() => { if (!deleteBusy) setDeleteRecord(null); }} onConfirm={() => void handleDelete()} /><ImportDialog file={importFile} busy={importBusy} error={importError} onClose={() => { if (!importBusy) setImportFile(null); }} onConfirm={() => void handleImportConfirm()} /><PersonCardDialog entity={entityCard} entities={entities} onClose={() => setEntityCard(null)} onEdit={(entity) => { setEntityCard(null); setEditingEntity(entity); }} onViewRecords={(entity) => { setEntityCard(null); setEntityFilterId(entity.id); setActiveView("timeline"); }} onMovieSaved={rememberMovieEntity} /><EntityEditDialog entity={editingEntity} onClose={() => setEditingEntity(null)} onSave={handleSaveEntity} /><input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file) { setImportError(null); setImportFile(file); } event.target.value = ""; }} />{photoPreview === null ? null : <AssetPreview assetIds={photoPreview.assetIds} index={photoPreview.index} assets={assets} onClose={() => setPhotoPreview(null)} onIndexChange={(index) => setPhotoPreview((current) => current === null ? null : { ...current, index })} />}<AIAssistant status={aiStatus} visible={assistantVisible} onOpenSettings={() => openSettingsPage("integrations/ai")} /></div>;
 }
 
 export default App;

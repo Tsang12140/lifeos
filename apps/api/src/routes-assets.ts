@@ -62,6 +62,7 @@ import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, parseThumbnailWidth } from "./deriv
 import type { RouteContext, RouteHandler } from "./route-context.js";
 import { POOL_SOURCE_ID, StoragePoolError } from "./storage-pool.js";
 import type { PoolObjectRow } from "./storage-pool-store.js";
+import { readPhotoMetadata } from "./photo-metadata.js";
 
 const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
 const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
@@ -200,12 +201,14 @@ export const handleAssetsRoutes: RouteHandler = async (
       if (existingPoolRef !== undefined) poolObjectFor(ctx, existing, existingPoolRef);
       // Taking the photo back into use moves the collector's anchor forward,
       // so the grace period restarts from now -- the same rule /resolve uses.
-      const reused: Asset = { ...existing, lastUsedAt: nowInstant() };
+      const photoMetadata = existing.photoMetadata ?? await readPhotoMetadata(bytes);
+      const reused: Asset = { ...existing, ...(photoMetadata === undefined ? {} : { photoMetadata }), lastUsedAt: nowInstant() };
       repository.updateAsset(reused);
       setJson(res, 201, reused);
       return true;
     }
     const originalName = uploadOriginalName(url.searchParams.get("name"));
+    const photoMetadata = await readPhotoMetadata(bytes);
     if (ctx.poolBridge.enabled) {
       if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
       const readiness = await ctx.poolPreflight();
@@ -227,11 +230,12 @@ export const handleAssetsRoutes: RouteHandler = async (
           assertValidStorageReference(candidate, "storageRefs[0]");
           return candidate;
         });
-        const asset = buildAsset(
+        const built = buildAsset(
           { kind: "photo", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
           assetId,
           [poolRef],
         );
+        const asset: Asset = { ...built, ...(photoMetadata === undefined ? {} : { photoMetadata }) };
         repository.insertAsset(asset);
         ctx.poolStore.completeUpload(attemptId, returnedKey);
         setJson(res, 201, asset);
@@ -275,11 +279,12 @@ export const handleAssetsRoutes: RouteHandler = async (
     // One dropped photo is one photo asset. The record links to it when the
     // entry is saved; until then it is an unreferenced upload that
     // DELETE /api/assets/:id still accepts.
-    const asset = buildAsset(
+    const built = buildAsset(
       { kind: "photo", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
       `asset_${randomUUID()}`,
       [uploadRef],
     );
+    const asset: Asset = { ...built, ...(photoMetadata === undefined ? {} : { photoMetadata }) };
     repository.insertAsset(asset);
     setJson(res, 201, asset);
     return true;
@@ -434,8 +439,11 @@ export const handleAssetsRoutes: RouteHandler = async (
       }
     }
     // Re-pointing storage is the whole point of an asset: assetId stays stable.
+    const { photoMetadata: previousPhotoMetadata, ...withoutPhotoMetadata } = existing;
+    void previousPhotoMetadata;
     const candidate: unknown = {
-      ...existing,
+      // Header evidence belongs to the bytes; a re-pointed reference must not inherit it.
+      ...(input.storageRefs === undefined ? existing : withoutPhotoMetadata),
       ...(input.storageRefs === undefined ? {} : { storageRefs: storageRefsField(input.storageRefs) }),
       ...(input.originalName === undefined ? {} : { originalName: stringField(input.originalName, "originalName") }),
       ...(input.mediaType === undefined ? {} : { mediaType: stringField(input.mediaType, "mediaType") }),

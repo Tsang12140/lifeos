@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
+import { CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
-import { getWeatherDecision, getWeatherPhase, findWeatherDay, type WeatherCategory, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
+import { categoryFollowsPhase, findWeatherDay, getMoonPosition, getSolarPosition, getSunEventMoment, getWeatherDecision, getWeatherPhase, hasKnownChinaWeatherTimeZone, nextSunEventBoundaryDelay, shouldRefreshSolarPosition, SOLAR_POSITION_INTERVAL_MS, weatherClockAt, type WeatherCategory, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
 import { WeatherSky } from "./WeatherBackground";
+import { SunEventHint } from "./SunEventHint";
 import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
 import { weatherLocationDisplayName } from "./weather-locations";
 
@@ -39,7 +40,22 @@ function WeatherConditionGlyph({ category }: { readonly category: WeatherCategor
   return <svg {...frame}>{cloud}</svg>;
 }
 
-function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void }) {
+const DATE_STEP_PATH = "M627.626667 542.293333l-128 128c-8.533333 8.106667-19.2 12.373333-30.293334 12.373334-11.093333 0-21.76-4.266667-30.293333-12.373334-16.64-16.64-16.64-43.946667 0-60.586666l98.133333-97.706667-98.133333-97.706667c-16.64-16.64-16.64-43.946667 0-60.586666 16.64-16.64 43.946667-16.64 60.586667 0l128 128c16.64 16.64 16.64 43.946667 0 60.586666z";
+
+function DateStepGlyph({ direction }: { readonly direction: "left" | "right" }) {
+  // Keep fourth B's source proportions and mirrored optical correction in
+  // fixed SVG units, independent of the responsive button's frame dimensions.
+  const left = direction === "left";
+  const transform = `translate(${left ? -.7 : .7} 0) scale(${left ? -.0645 : .0645} 0.0645) translate(-533.333333 -512)`;
+  return <>
+    <span className="rect-date-surface" aria-hidden="true" />
+    <svg className="material-date-arrow" viewBox="0 0 38 48" width="38" height="48" aria-hidden="true" focusable="false">
+      <g transform="translate(19 24)"><path fill="currentColor" transform={transform} d={DATE_STEP_PATH} /></g>
+    </svg>
+  </>;
+}
+
+function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void; readonly showSteps?: boolean }) {
   const today = localDateToday();
   const isToday = selectedDate === today;
   const previousDateRef = useRef(selectedDate);
@@ -74,8 +90,8 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
   }, [selectedDate]);
 
   const accessibleDate = `${Number(selectedDate.slice(5, 7))}月${Number(selectedDate.slice(8, 10))}日${weekdayShort(selectedDate)}`;
-  return <div className="weather-date-navigation" aria-label="日期导航">
-    <button className="weather-date-step" type="button" onClick={() => step(-1)} aria-label="前一天"><ArrowLeft size={18} strokeWidth={2} aria-hidden="true" /></button>
+  return <div className={`weather-date-navigation${showSteps ? "" : " weather-date-navigation--date-only"}`} data-date={selectedDate} aria-label={showSteps ? "日期导航" : "当前日期"}>
+    {showSteps ? <button className="weather-date-step" type="button" onClick={() => step(-1)} aria-label="前一天"><DateStepGlyph direction="left" /></button> : null}
     <div className="weather-date-center">
       <label className="weather-date-picker" aria-label={`选择日期，当前${accessibleDate}`}>
         <span className="weather-date-flaps" aria-hidden="true">
@@ -91,7 +107,7 @@ function DateFlipControl({ selectedDate, onChange, onStep }: { readonly selected
           : <button className="weather-date-return is-return" type="button" onClick={() => onChange(today)} aria-label="回到今天" title="回到今天">回今天</button>}
       </div>
     </div>
-    <button className="weather-date-step" type="button" onClick={() => step(1)} aria-label="后一天"><ArrowRight size={18} strokeWidth={2} aria-hidden="true" /></button>
+    {showSteps ? <button className="weather-date-step" type="button" onClick={() => step(1)} aria-label="后一天"><DateStepGlyph direction="right" /></button> : null}
   </div>;
 }
 
@@ -107,6 +123,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   // server to escalate, which is the owner saying they do not care about the
   // quota. Cleared by a successful refresh.
   const [armed, setArmed] = useState(false);
+  const [solarClockInstant, setSolarClockInstant] = useState(() => new Date());
   const today = localDateToday();
   const refresh = useCallback(async (options: { readonly manual?: boolean; readonly escalate?: boolean } = {}) => {
     if (!status?.configured) {
@@ -146,10 +163,74 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
 
   const displayDay = findWeatherDay(payload.weatherSnapshot, selectedDate) ?? payload.weatherSnapshot?.today ?? null;
   const decision = getWeatherDecision(payload.weatherSnapshot, displayDay);
-  // The phase only says what colour the sky is and where the light sits. It
-  // rides on the same 30-minute refresh as the forecast, so a dawn card can
-  // linger a few minutes past sunrise; that is cheaper than a per-minute tick.
-  const phase = getWeatherPhase(displayDay, selectedDate, today, localNowInput().slice(11, 16));
+  const hasKnownTimeZone = hasKnownChinaWeatherTimeZone(payload.location);
+  const weatherClock = weatherClockAt(solarClockInstant, hasKnownTimeZone ? "Asia/Shanghai" : undefined);
+  const weatherToday = hasKnownTimeZone ? weatherClock.date : today;
+  const phaseClock = hasKnownTimeZone ? weatherClock.time : localNowInput().slice(11, 16);
+  // A stale fallback snapshot can be shown while a new forecast loads. Do not
+  // animate its old sunrise/sunset as if they belonged to the selected day.
+  const isCurrentWeatherDay = selectedDate === weatherToday && displayDay?.fxDate === selectedDate;
+  const solarClockEnabled = Boolean(
+    status?.configured
+    && displayDay !== null
+    && decision !== null
+    && isCurrentWeatherDay
+    && hasKnownTimeZone
+    && categoryFollowsPhase(decision.category),
+  );
+
+  useEffect(() => {
+    if (!solarClockEnabled) return;
+    let timer: number | null = null;
+    const syncVisibility = () => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+      if (!shouldRefreshSolarPosition(document.visibilityState, isCurrentWeatherDay, hasKnownTimeZone, decision?.category ?? "cloudy")) return;
+      // Resume from the actual clock immediately; while hidden there is no timer.
+      setSolarClockInstant(new Date());
+      timer = window.setInterval(() => {
+        if (document.visibilityState === "visible") setSolarClockInstant(new Date());
+      }, SOLAR_POSITION_INTERVAL_MS);
+    };
+    syncVisibility();
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", syncVisibility);
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [decision?.category, hasKnownTimeZone, isCurrentWeatherDay, solarClockEnabled]);
+
+  useEffect(() => {
+    if (!status?.configured || !isCurrentWeatherDay || !hasKnownTimeZone || displayDay === null) return;
+    let timer: number | null = null;
+    const schedule = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      if (document.visibilityState !== "visible") return;
+      const delay = nextSunEventBoundaryDelay(displayDay, selectedDate, Date.now());
+      if (delay !== null) timer = window.setTimeout(() => setSolarClockInstant(new Date()), delay);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") setSolarClockInstant(new Date());
+      schedule();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [displayDay, hasKnownTimeZone, isCurrentWeatherDay, selectedDate, solarClockInstant, status?.configured]);
+
+  // Phase still selects the established sky palette and category structure.
+  // Only China locations use the server-aligned Shanghai clock; unknown zones
+  // retain the existing device-local phase and a static noon sun position.
+  const phase = getWeatherPhase(displayDay, selectedDate, weatherToday, phaseClock);
+  // Solar progress is deliberately not part of WeatherSky's crossfade key.
+  // Five-minute updates only move the existing light group a few pixels.
+  const solarPosition = getSolarPosition(displayDay, phaseClock, hasKnownTimeZone && isCurrentWeatherDay);
+  const moonPosition = getMoonPosition(displayDay, phaseClock, isCurrentWeatherDay);
+  const sunEvent = getSunEventMoment(displayDay, phaseClock, Boolean(status?.configured && hasKnownTimeZone && isCurrentWeatherDay));
   // Use the location returned with this day's weather.  A historical response
   // must not inherit the currently configured city merely because its label is
   // missing or encoded as a legacy numeric ID.
@@ -160,14 +241,15 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
 
   const weatherSceneClass = displayDay && decision ? `weather-header--${decision.category} weather-header--${phase}` : "weather-header--empty";
   return <section className={`weather-header ${weatherSceneClass} ${showDateNavigation ? "" : "weather-header--summary-only"}`} aria-label={`${selectedDate} 的天气`}>
-    {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} /></div> : null}
+    {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} solarPosition={solarPosition} moonPosition={moonPosition} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className={`weather-header-content ${showDateNavigation ? "" : "weather-header-content--summary-only"}`}>
-      {showDateNavigation ? <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} /> : null}
+      <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} showSteps={showDateNavigation} />
       <div className="weather-header-summary" role={status?.configured ? "button" : undefined} tabIndex={status?.configured ? 0 : undefined} aria-label={status?.configured ? `刷新${selectedDate}天气` : undefined} aria-busy={manualBusy || loading ? "true" : undefined} onClick={status?.configured ? () => void refresh({ manual: true, escalate: armed }) : undefined} onKeyDown={status?.configured ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } } : undefined}>
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>
           <span className="weather-header-reading"><span className="weather-header-condition"><WeatherConditionGlyph category={decision.category} /><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
+          {sunEvent ? <SunEventHint event={sunEvent} /> : null}
         </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>

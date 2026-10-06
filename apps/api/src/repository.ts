@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, type BackupRetention } from "./backup-retention.js";
 import {
@@ -54,6 +55,26 @@ export interface RecordListQuery {
 export interface EntityListQuery {
   readonly type?: EntityKind;
   readonly q?: string;
+}
+
+export type MobileCycleEventKind = "period_start" | "period_end" | "intimacy";
+
+export interface CycleDayEditResult {
+  readonly module: CycleIntimacyModuleData;
+  readonly eventRevision: string;
+  readonly changed: boolean;
+  readonly undoToken?: string;
+}
+
+function cycleEventRevision(events: readonly CycleIntimacyEvent[]): string {
+  const canonical = [...events]
+    .sort((left, right) => left.date.localeCompare(right.date) || left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id))
+    .map(({ id, date, kind }) => [id, date, kind]);
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+function isMobileCycleEventKind(kind: CycleIntimacyEvent["kind"]): kind is MobileCycleEventKind {
+  return kind === "period_start" || kind === "period_end" || kind === "intimacy";
 }
 
 export interface AssetListQuery {
@@ -450,6 +471,12 @@ export class SqliteRecordRepository {
         UNIQUE (date, kind)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS cycle_intimacy_events_date_idx ON cycle_intimacy_events (date, kind);
+      CREATE TABLE IF NOT EXISTS cycle_intimacy_day_edit_undo (
+        id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+        token_hash TEXT NOT NULL,
+        before_events_json TEXT NOT NULL,
+        after_revision TEXT NOT NULL
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS auth_sessions (
         token_hash TEXT PRIMARY KEY NOT NULL,
         expires_at INTEGER NOT NULL
@@ -800,6 +827,117 @@ export class SqliteRecordRepository {
     return module;
   }
 
+  /** Stable compare-and-swap version for all event rows in this tenant database. */
+  public cycleIntimacyEventRevision(): string {
+    return cycleEventRevision(this.cycleIntimacyModule().events);
+  }
+
+  /** Save the mobile editor's desired set for one date in one SQLite transaction. */
+  public editCycleIntimacyDay(date: string, kinds: readonly MobileCycleEventKind[], expectedRevision: string): CycleDayEditResult {
+    if (new Set(kinds).size !== kinds.length || kinds.some((kind) => !isMobileCycleEventKind(kind))) {
+      throw new Error("Invalid mobile cycle event set");
+    }
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const before = this.cycleIntimacyModule();
+      const beforeRevision = cycleEventRevision(before.events);
+      if (beforeRevision !== expectedRevision) throw new ConflictError("周期记录已在其他位置更改，请重新载入后再保存");
+
+      const desired = new Set(kinds);
+      const currentKinds = new Set(before.events
+        .filter((event) => event.date === date && isMobileCycleEventKind(event.kind))
+        .map((event) => event.kind));
+      let nextEvents = before.events.filter((event) => event.date !== date
+        || !isMobileCycleEventKind(event.kind)
+        || desired.has(event.kind));
+
+      const additions: CycleIntimacyEvent[] = [];
+      for (const kind of ["period_start", "intimacy"] as const) {
+        if (desired.has(kind) && !currentKinds.has(kind)) additions.push({ id: randomUUID(), date, kind });
+      }
+      nextEvents = [...nextEvents, ...additions];
+
+      // Add a same-day start before finding the end's span. If both endpoints
+      // are chosen on one date, that new start begins a new run and must keep
+      // the prior run's end instead of moving it.
+      if (desired.has("period_end") && !currentKinds.has("period_end")) {
+        const span = periodEndSpan(nextEvents, date);
+        if (span !== undefined) {
+          nextEvents = nextEvents.filter((other) => other.kind !== "period_end"
+            || (span.from !== undefined && other.date < span.from)
+            || (span.until !== undefined && other.date >= span.until));
+        }
+        nextEvents.push({ id: randomUUID(), date, kind: "period_end" });
+      }
+      nextEvents = nextEvents.sort((left, right) => left.date.localeCompare(right.date)
+        || left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id));
+      const changed = cycleEventRevision(nextEvents) !== beforeRevision;
+      if (!changed) {
+        this.#db.exec("COMMIT");
+        return { module: before, eventRevision: beforeRevision, changed: false };
+      }
+
+      const config = before.config.enabled ? before.config : { ...before.config, enabled: true };
+      assertValidCycleIntimacyModuleData({ config, events: nextEvents });
+      this.#db.prepare("DELETE FROM cycle_intimacy_events").run();
+      const insert = this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)");
+      for (const event of nextEvents) insert.run(event.id, event.date, event.kind);
+      if (config !== before.config) {
+        this.#db.prepare(`
+          INSERT INTO cycle_intimacy_module (id, config_json) VALUES (1, ?)
+          ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json
+        `).run(JSON.stringify(config));
+      }
+      const eventRevision = cycleEventRevision(nextEvents);
+      const token = randomBytes(32).toString("base64url");
+      const tokenHash = createHash("sha256").update(token).digest("hex");
+      this.#db.prepare(`
+        INSERT INTO cycle_intimacy_day_edit_undo (id, token_hash, before_events_json, after_revision)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET token_hash = excluded.token_hash,
+          before_events_json = excluded.before_events_json, after_revision = excluded.after_revision
+      `).run(tokenHash, JSON.stringify(before.events), eventRevision);
+      this.#db.exec("COMMIT");
+      return {
+        module: this.cycleIntimacyModule(),
+        eventRevision,
+        changed: true,
+        undoToken: token,
+      };
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Restore the server-held before-snapshot only while the event set still matches. */
+  public undoCycleIntimacyDayEdit(token: string): { readonly module: CycleIntimacyModuleData; readonly eventRevision: string } {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const undo = this.#db.prepare("SELECT token_hash, before_events_json, after_revision FROM cycle_intimacy_day_edit_undo WHERE id = 1").get() as Record<string, unknown> | undefined;
+      const suppliedHash = createHash("sha256").update(token).digest("hex");
+      if (undo === undefined || textColumn(undo, "token_hash") !== suppliedHash) {
+        throw new ConflictError("撤销令牌已失效或不可用");
+      }
+      const current = this.cycleIntimacyModule();
+      if (cycleEventRevision(current.events) !== textColumn(undo, "after_revision")) {
+        throw new ConflictError("周期记录已在其他位置更改，不能安全撤销");
+      }
+      const beforeEvents = parseJson<readonly CycleIntimacyEvent[]>(textColumn(undo, "before_events_json"), "cycle_intimacy_day_edit_undo.before_events_json");
+      assertValidCycleIntimacyModuleData({ config: current.config, events: beforeEvents });
+      this.#db.prepare("DELETE FROM cycle_intimacy_events").run();
+      const insert = this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)");
+      for (const event of beforeEvents) insert.run(event.id, event.date, event.kind);
+      this.#db.prepare("DELETE FROM cycle_intimacy_day_edit_undo WHERE id = 1").run();
+      this.#db.exec("COMMIT");
+      const module = this.cycleIntimacyModule();
+      return { module, eventRevision: cycleEventRevision(module.events) };
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   public writeCycleIntimacyConfig(config: CycleIntimacyModuleConfig): CycleIntimacyModuleData {
     const existing = this.cycleIntimacyModule();
     assertValidCycleIntimacyModuleData({ config, events: existing.events });
@@ -1016,7 +1154,7 @@ export class SqliteRecordRepository {
     }
     if (query.q !== undefined && query.q.length > 0) {
       // instr() treats '%' and '_' literally, unlike LIKE, and keeps Chinese text intact.
-      where.push("instr(body_original || char(10) || coalesce(body_edited, '') || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0");
+      where.push("instr(coalesce(body_edited, body_original) || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0");
       params.push(query.q);
     }
     if (query.entityId !== undefined && query.entityId.length > 0) {
