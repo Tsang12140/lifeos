@@ -63,6 +63,9 @@ import type { RouteContext, RouteHandler } from "./route-context.js";
 import { POOL_SOURCE_ID, StoragePoolError } from "./storage-pool.js";
 import type { PoolObjectRow } from "./storage-pool-store.js";
 import { readPhotoMetadata } from "./photo-metadata.js";
+import { MATERIAL_FORMATS } from "./assistant-material.js";
+
+const photoInfoCache = new WeakMap<RouteContext["repository"], Map<string, Promise<Awaited<ReturnType<typeof readPhotoMetadata>>>>>();
 
 const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
 const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
@@ -71,7 +74,7 @@ function isPoolReference(reference: StorageReference): boolean {
   return reference.sourceId === POOL_SOURCE_ID;
 }
 
-function poolObjectFor(ctx: RouteContext, asset: Asset, reference: StorageReference): PoolObjectRow {
+export function poolObjectFor(ctx: RouteContext, asset: Asset, reference: StorageReference): PoolObjectRow {
   if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
   const object = ctx.poolStore.poolObject(ctx.poolAccountId, asset.id, reference.sourceRef);
   if (object === null || object.state !== "ready") throw new HttpError(404, "pool_asset_unavailable", "存储池文件不存在或正在核对");
@@ -87,7 +90,7 @@ interface DownloadedPoolAsset {
   readonly bytes: number;
 }
 
-async function downloadPoolAsset(ctx: RouteContext, asset: Asset, reference: StorageReference): Promise<DownloadedPoolAsset> {
+export async function downloadPoolAsset(ctx: RouteContext, asset: Asset, reference: StorageReference): Promise<DownloadedPoolAsset> {
   if (ctx.poolStore === null || !ctx.poolBridge.enabled) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未启用");
   const readiness = await ctx.poolPreflight();
   const object = poolObjectFor(ctx, asset, reference);
@@ -159,18 +162,20 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (storageRefs.some(isPoolReference)) throw new HttpError(400, "pool_reference_forbidden", "存储池对象只能由受额度校验的上传流程登记");
     const asset = buildAsset(input, id, storageRefs);
     repository.insertAsset(asset);
+    ctx.poolTransition?.wake();
     setJson(res, 201, asset);
     return true;
   }
   // A photo dropped onto the composer arrives as raw bytes, not JSON, so it
   // gets its own route with its own size limit. Everything else about assets
   // stays reference-based: this route is the only place LifeOS writes a file.
-  if (pathname === "/api/assets/uploads" && req.method === "POST") {
+  if ((pathname === "/api/assets/uploads" || pathname === "/api/assets/materials") && req.method === "POST") {
     if (!ctx.poolBridge.enabled && config.assetRoot === undefined) {
       throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to store local originals");
     }
     const mediaType = baseMediaType(req.headers["content-type"]);
-    const format = ASSET_UPLOAD_FORMATS[mediaType];
+    const isPhoto = ASSET_UPLOAD_FORMATS[mediaType] !== undefined;
+    const format = ASSET_UPLOAD_FORMATS[mediaType] ?? (pathname === "/api/assets/materials" ? MATERIAL_FORMATS[mediaType] : undefined);
     if (format === undefined) {
       throw new HttpError(415, "unsupported_media_type", "Only JPEG, PNG, WebP, GIF and AVIF photos can be uploaded");
     }
@@ -201,15 +206,15 @@ export const handleAssetsRoutes: RouteHandler = async (
       if (existingPoolRef !== undefined) poolObjectFor(ctx, existing, existingPoolRef);
       // Taking the photo back into use moves the collector's anchor forward,
       // so the grace period restarts from now -- the same rule /resolve uses.
-      const photoMetadata = existing.photoMetadata ?? await readPhotoMetadata(bytes);
+      const photoMetadata = existing.photoMetadata ?? (isPhoto ? await readPhotoMetadata(bytes) : undefined);
       const reused: Asset = { ...existing, ...(photoMetadata === undefined ? {} : { photoMetadata }), lastUsedAt: nowInstant() };
       repository.updateAsset(reused);
       setJson(res, 201, reused);
       return true;
     }
     const originalName = uploadOriginalName(url.searchParams.get("name"));
-    const photoMetadata = await readPhotoMetadata(bytes);
-    if (ctx.poolBridge.enabled) {
+    const photoMetadata = isPhoto ? await readPhotoMetadata(bytes) : undefined;
+    if (ctx.poolBridge.enabled && !ctx.poolTransition?.localPrimary) {
       if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
       const readiness = await ctx.poolPreflight();
       const assetId = `asset_${randomUUID()}`;
@@ -231,7 +236,7 @@ export const handleAssetsRoutes: RouteHandler = async (
           return candidate;
         });
         const built = buildAsset(
-          { kind: "photo", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
+          { kind: isPhoto ? "photo" : "file", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
           assetId,
           [poolRef],
         );
@@ -280,12 +285,13 @@ export const handleAssetsRoutes: RouteHandler = async (
     // entry is saved; until then it is an unreferenced upload that
     // DELETE /api/assets/:id still accepts.
     const built = buildAsset(
-      { kind: "photo", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
+      { kind: isPhoto ? "photo" : "file", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
       `asset_${randomUUID()}`,
       [uploadRef],
     );
     const asset: Asset = { ...built, ...(photoMetadata === undefined ? {} : { photoMetadata }) };
     repository.insertAsset(asset);
+    ctx.poolTransition?.wake();
     setJson(res, 201, asset);
     return true;
   }
@@ -389,6 +395,11 @@ export const handleAssetsRoutes: RouteHandler = async (
     }
   }
   const assetMatch = /^\/api\/assets\/([^/]+)$/.exec(pathname);
+  if (assetMatch !== null && req.method === "GET") {
+    const asset = repository.findAssetById(decodeSegment(assetMatch[1]!));
+    if (!asset) throw new HttpError(404, "not_found", "附件不存在");
+    setJson(res, 200, asset); return true;
+  }
   if (assetMatch !== null && (req.method === "PATCH" || req.method === "DELETE")) {
     const id = decodeSegment(assetMatch[1]!);
     const existing = repository.findAssetById(id);
@@ -509,7 +520,7 @@ export const handleAssetsRoutes: RouteHandler = async (
           "content-type": mediaType,
           "content-length": String(downloaded.bytes),
           "cache-control": "private, max-age=300",
-          "content-disposition": "inline",
+          "content-disposition": asset.kind === "file" ? "attachment" : "inline",
         });
         res.end(readFileSync(downloaded.file));
       } finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
@@ -520,7 +531,7 @@ export const handleAssetsRoutes: RouteHandler = async (
       "content-type": resolved.mediaType,
       "content-length": String(statSync(resolved.file).size),
       "cache-control": "private, max-age=300",
-      "content-disposition": "inline",
+      "content-disposition": asset.kind === "file" ? "attachment" : "inline",
     });
     res.end(readFileSync(resolved.file));
     return true;
@@ -529,6 +540,36 @@ export const handleAssetsRoutes: RouteHandler = async (
   // backgrounds were all pulling whole originals for a few hundred pixels of paint.
   // Same URL shape as the original so the client has one helper with one optional
   // width, and the same short private lifetime — the file on disk is the cache.
+  const photoInfoMatch = /^\/api\/assets\/([^/]+)\/photo-info$/.exec(pathname);
+  if (photoInfoMatch !== null && req.method === "GET") {
+    const id = decodeSegment(photoInfoMatch[1]!);
+    const asset = repository.findAssetById(id);
+    if (asset === null || asset.kind !== "photo") throw new HttpError(404, "not_found", "照片不存在");
+    let metadata = asset.photoMetadata;
+    if (metadata?.detailsVersion !== 1) {
+      let cache = photoInfoCache.get(repository);
+      if (!cache) { cache = new Map(); photoInfoCache.set(repository, cache); }
+      const key = `${id}:${JSON.stringify(asset.storageRefs)}`;
+      let pending = cache.get(key);
+      if (!pending) {
+        pending = (async () => {
+          const poolReference = asset.storageRefs.find(isPoolReference);
+          if (poolReference) {
+            const downloaded = await downloadPoolAsset(ctx, asset, poolReference);
+            try { return await readPhotoMetadata(downloaded.file); }
+            finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
+          }
+          return readPhotoMetadata(resolveAssetOriginal(config, repository, id).file);
+        })();
+        cache.set(key, pending);
+        if (cache.size > 256) cache.delete(cache.keys().next().value!);
+        pending.catch(() => cache!.delete(key));
+      }
+      metadata = await pending;
+    }
+    setJson(res, 200, { ...(metadata === undefined ? {} : { photoMetadata: metadata }), ...(asset.originalName === undefined ? {} : { originalName: asset.originalName }), ...(asset.mediaType === undefined ? {} : { mediaType: asset.mediaType }), ...(asset.sizeBytes === undefined ? {} : { sizeBytes: asset.sizeBytes }) });
+    return true;
+  }
   const assetThumbnailMatch = /^\/api\/assets\/([^/]+)\/thumbnail$/.exec(pathname);
   if (assetThumbnailMatch !== null && req.method === "GET") {
     const width = parseThumbnailWidth(url.searchParams.get("w"));

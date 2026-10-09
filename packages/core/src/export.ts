@@ -202,6 +202,7 @@ export function exportRecordMarkdown(record: TimelineRecord, options: MarkdownEx
     `weather: ${yamlValue(record.weather ?? null)}`,
     `task: ${yamlValue(record.kind === "task" ? record.task : null)}`,
     `entityRefs: ${yamlValue(record.entityRefs)}`,
+    ...(record.body.entityMentions === undefined ? [] : [`entityMentions: ${yamlValue(record.body.entityMentions)}`]),
     `relatedRecordIds: ${yamlValue(record.relatedRecordIds)}`,
     `assetRefs: ${yamlValue(record.assetRefs)}`,
     `assetStorageRefs: ${yamlValue(assetStorageMetadata(record.assetRefs, assets))}`,

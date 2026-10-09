@@ -1,3 +1,5 @@
+import { isAiAssisted, isBackfilled } from "@lifeos/core";
+import { PhotoInformation, photoSummary, usePhotoInfo } from "./photo-info";
 import {
   useCallback,
   useEffect,
@@ -15,6 +17,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Info,
   CircleHelp,
   CloudSun,
   Dumbbell,
@@ -158,14 +161,13 @@ export function recordsByDate(dates: readonly string[], records: readonly Record
   return buckets;
 }
 
-/** The original bytes. Only the zoom viewer wants these now. */
+/** The original bytes, requested explicitly from the photo viewer. */
 export function assetContentUrl(assetId: string): string {
   return `/api/assets/${encodeURIComponent(assetId)}/content`;
 }
 
-/** The two derived widths the API keeps: enough for a grid square on a 3x screen, and
- *  enough for a full-card background. Mirrors THUMBNAIL_WIDTHS on the server. */
-export type ThumbnailWidth = 400 | 1200;
+/** The API's grid/card sizes and its 2048px long-edge photo preview. */
+export type ThumbnailWidth = 400 | 1200 | 2048;
 
 /**
  * The derived thumbnail covering `width` px of paint. The API builds it from the
@@ -364,37 +366,112 @@ export function weatherFromArchiveValue(value: unknown, date: string): CalendarW
  * the one knob that changes what every cell says, and hiding it behind a rebuild
  * would make tuning it a code change.
  */
-export function AssetPreview({ assetIds, index, assets, onClose, onIndexChange }: { assetIds: readonly string[]; index: number; assets: readonly Asset[]; onClose: () => void; onIndexChange: (index: number) => void }) {
+export interface PreviewImage { readonly id: string; readonly url: string; readonly name?: string; readonly localInfo?: import("./photo-info").PhotoInfo; }
+export function AssetPreview({ assetIds, index, assets, images, onClose, onIndexChange }: { assetIds: readonly string[]; index: number; assets: readonly Asset[]; images?: readonly PreviewImage[]; onClose: () => void; onIndexChange: (index: number) => void }) {
   const assetId = assetIds[index] ?? assetIds[0] ?? "";
   const asset = assets.find((candidate) => candidate.id === assetId);
+  const image = images?.find(candidate => candidate.id === assetId);
+  const [previewMode, setPreviewMode] = useState({ assetId, original: false });
+  // Reset before rendering a different photo, including returning to an earlier
+  // one. An effect would briefly start that photo's old original request first.
+  if (previewMode.assetId !== assetId) setPreviewMode({ assetId, original: false });
+  const hasDerivedPreview = image === undefined && (asset === undefined || asset.kind === "photo" || asset.mediaType?.startsWith("image/"));
+  const showOriginal = previewMode.assetId === assetId && previewMode.original;
+  const previewUrl = image?.url ?? (hasDerivedPreview && !showOriginal ? assetThumbUrl(assetId, 2048) : assetContentUrl(assetId));
+  const previewImageRef = useRef<HTMLImageElement>(null);
+  const [imageAttempt, setImageAttempt] = useState(0);
+  const [imageState, setImageState] = useState<{ url: string; status: "loading" | "loaded" | "error" }>({ url: previewUrl, status: "loading" });
+  const imageStatus = imageState.url === previewUrl ? imageState.status : "loading";
+  const imageFailed = useCallback(() => {
+    if (hasDerivedPreview && !showOriginal) setPreviewMode(current => current.assetId === assetId ? { assetId, original: true } : current);
+    else setImageState({ url: previewUrl, status: "error" });
+  }, [assetId, hasDerivedPreview, previewUrl, showOriginal]);
+  useEffect(() => {
+    // A cached image may already be complete when the preview mounts. Check the
+    // actual element as well as its events; complete also includes failed loads.
+    const element = previewImageRef.current;
+    if (!element?.complete) return;
+    if (element.naturalWidth > 0) setImageState({ url: previewUrl, status: "loaded" });
+    else imageFailed();
+  }, [previewUrl, imageAttempt, imageFailed]);
+  const name = image?.name ?? asset?.originalName;
   const many = assetIds.length > 1;
+  const [infoOpen, setInfoOpen] = useState(true);
+  const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  const [mobileInfoOpen, setMobileInfoOpen] = useState(false);
+  const showInfo = mobile ? mobileInfoOpen : infoOpen;
+  const photoInfo = usePhotoInfo({ asset, assetId, localInfo: image?.localInfo });
+  const summary = photoSummary(photoInfo.value);
+  const summaryStatus = photoInfo.loading ? "正在读取照片信息…" : photoInfo.error ? "照片信息读取失败" : undefined;
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 760px)");
+    const update = () => setMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  useEffect(() => { setMobileInfoOpen(false); }, [assetId]);
+  const previewDialogRef = useRef<HTMLDialogElement>(null);
+  const backdropGesture = useRef<{ x: number; y: number; blank: boolean; moved: boolean } | null>(null);
+  const isPreviewContent = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".asset-preview img, .asset-preview figcaption, .asset-preview-status, .photo-information, .asset-preview button"));
   const step = useCallback((delta: number) => { onIndexChange(Math.min(assetIds.length - 1, Math.max(0, index + delta))); }, [assetIds.length, index, onIndexChange]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-      else if (event.key === "ArrowLeft") step(-1);
+      if (event.key === "ArrowLeft") step(-1);
       else if (event.key === "ArrowRight") step(1);
     };
     window.addEventListener("keydown", onKeyDown);
+    document.documentElement.classList.add("has-asset-preview");
+    if (previewDialogRef.current && !previewDialogRef.current.open) previewDialogRef.current.showModal();
     // A background page must not scroll behind the photo.
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
+      document.documentElement.classList.remove("has-asset-preview");
     };
   }, [onClose, step]);
-  return <div className="asset-preview" role="dialog" aria-modal="true" aria-label={asset?.originalName ?? "照片预览"} onClick={onClose}>
-    <button className="asset-preview-close" type="button" onClick={onClose} aria-label="关闭预览"><X size={20} strokeWidth={1.9} aria-hidden="true" /></button>
+  return <dialog ref={previewDialogRef} onCancel={event => { event.preventDefault(); event.stopPropagation(); onClose(); }} className={`asset-preview ${!mobile && infoOpen ? "has-photo-information" : ""} ${mobile && mobileInfoOpen ? "has-mobile-photo-information" : ""}`} aria-modal="true" aria-label={name ?? "照片预览"}
+    onPointerDown={event => { backdropGesture.current = event.isPrimary && event.button === 0 ? { x: event.clientX, y: event.clientY, blank: !isPreviewContent(event.target), moved: false } : null; }}
+    onPointerMove={event => { const gesture = backdropGesture.current; if (gesture && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 6) gesture.moved = true; }}
+    onPointerCancel={() => { backdropGesture.current = null; }}
+    onWheel={() => { backdropGesture.current = null; }}
+    onClick={event => {
+      const gesture = backdropGesture.current;
+      backdropGesture.current = null;
+      // The figure and scrolling host include empty space. Protect the content,
+      // and require a stationary blank-to-blank gesture so selecting text or
+      // dragging/scrolling across its edge cannot dismiss the photo.
+      if (gesture?.blank && !gesture.moved && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) <= 6 && !isPreviewContent(event.target)) {
+        if (mobile && mobileInfoOpen) setMobileInfoOpen(false);
+        else onClose();
+      }
+    }}>
+    <span className="asset-preview-backdrop" aria-hidden="true" style={{ "--preview-photo": imageStatus === "loaded" ? `url(${JSON.stringify(previewUrl)})` : "none" } as CSSProperties} />
+    <div className="asset-preview-top-actions">
+      {hasDerivedPreview ? <button className="asset-preview-original-toggle" type="button" onClick={event => { event.stopPropagation(); setPreviewMode({ assetId, original: !showOriginal }); }}>{showOriginal ? "返回预览" : "查看原图"}</button> : null}
+      <button className="asset-preview-close" type="button" onClick={onClose} aria-label="关闭预览"><X size={20} strokeWidth={1.9} aria-hidden="true" /></button>
+    </div>
     {many && index > 0 ? <button className="asset-preview-nav asset-preview-nav-prev" type="button" onClick={(event) => { event.stopPropagation(); step(-1); }} aria-label="上一张"><ChevronLeft size={22} strokeWidth={1.8} aria-hidden="true" /></button> : null}
     {many && index < assetIds.length - 1 ? <button className="asset-preview-nav asset-preview-nav-next" type="button" onClick={(event) => { event.stopPropagation(); step(1); }} aria-label="下一张"><ChevronRight size={22} strokeWidth={1.8} aria-hidden="true" /></button> : null}
-    <figure className="asset-preview-figure" onClick={(event) => event.stopPropagation()}>
-      {/* Deliberately the original, not a thumbnail: this is the one place the owner
-          asked to see the picture, and it is opened one photo at a time. */}
-      <img src={assetContentUrl(assetId)} alt={asset?.originalName ?? "照片"} />
-      {asset?.originalName === undefined && !many ? null : <figcaption>{many ? `${index + 1} / ${assetIds.length}${asset?.originalName === undefined ? "" : "，"}` : ""}{asset?.originalName}</figcaption>}
+    <button className={`asset-preview-info-toggle ${mobile ? "is-mobile" : ""}`} type="button" data-summary-count={summary.length} data-has-capture-time={summary.some(item => item.kind === "time")} aria-expanded={showInfo} aria-controls={showInfo ? "photo-information-panel" : undefined} aria-label={mobile ? `${showInfo ? "收起" : "查看"}照片信息${summary.length ? `，${summary.map(item => `${item.label} ${item.text}`).join("，")}` : summaryStatus ? `，${summaryStatus}` : ""}` : undefined} onClick={event => { event.stopPropagation(); if (mobile) setMobileInfoOpen(v => !v); else setInfoOpen(v => !v); }}>
+      {mobile ? <>{summary.map(item => <span key={item.kind} className={`photo-summary-item photo-summary-${item.kind}`} title={`${item.label} ${item.text}`}>{item.text}</span>)}{!summary.length && summaryStatus ? <span className="photo-summary-status">{summaryStatus}</span> : null}<Info size={18} strokeWidth={1.6} aria-hidden="true" /></> : infoOpen ? "隐藏信息" : "照片信息"}
+    </button>
+    <figure className="asset-preview-figure" data-load-state={imageStatus} aria-busy={imageStatus === "loading"}>
+      {/* Upload previews retain their existing Blob URL. Stored photos default to
+          a regenerable preview; only an explicit request loads the original. */}
+      <img ref={previewImageRef} key={`${previewUrl}:${imageAttempt}`} src={previewUrl} alt={name ?? "照片"}
+        onLoad={event => { if (previewImageRef.current === event.currentTarget) setImageState({ url: previewUrl, status: "loaded" }); }}
+        onError={event => { if (previewImageRef.current === event.currentTarget) imageFailed(); }} />
+      {name === undefined && !many ? null : <figcaption>{many ? `${index + 1} / ${assetIds.length}${name === undefined ? "" : "，"}` : ""}{name}</figcaption>}
     </figure>
-  </div>;
+    {imageStatus !== "loaded" ? <div className="asset-preview-status" role="status" aria-live="polite">
+      <span>{imageStatus === "error" ? "照片未能加载，请重试" : "正在加载照片…"}</span>
+      {imageStatus === "error" ? <button className="secondary-button" type="button" onClick={event => { event.stopPropagation(); setImageState({ url: previewUrl, status: "loading" }); setImageAttempt(attempt => attempt + 1); }}>重试</button> : null}
+    </div> : null}
+    {showInfo ? <div id="photo-information-panel" className="photo-information-host"><PhotoInformation key={assetId} info={photoInfo} mobile={mobile} /></div> : null}
+  </dialog>;
 }
 
 export function PrivacyMask({ onReveal, className = "" }: { onReveal: () => void; className?: string }) {
@@ -439,6 +516,7 @@ export function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: rea
 
 export function TimelineItem({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled }: { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: (assetIds: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean }) {
   const Icon = COMPOSER_META[record.kind].icon;
+  const movies = record.entityRefs.flatMap((ref) => { const e = entities.find((entity) => entity.id === ref.entityId); return e?.type === "movie" ? [e] : []; });
   const task = isTaskRecord(record) ? record : undefined;
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
   const masked = record.isPrivate === true && !revealed;
@@ -460,5 +538,5 @@ export function TimelineItem({ record, assets, entities, movieEnabled, movieProm
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{record.entityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={ref.entityType === "person" ? relationKindFor(ref.entityId, entities) : undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"}，{record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{weatherLocationDisplayName({ id: record.weather.locationId, name: record.weather.city })}</small></span></div>;
-  return <article className={`timeline-item ${interactionDisabled ? "is-stale" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{record.isBackfill === true ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} />}</div>{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className={`record-action task-action ${task.task.status === "done" ? "" : "task-action-complete"}`} type="button" onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
+  return <article className={`timeline-item ${interactionDisabled ? "is-stale" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content"><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} />}</div>{!masked && movies.length ? <div className="timeline-movie-cards">{movies.map((movie) => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}{record.assetRefs.some((ref) => ref.role === "attachment") && !masked ? <div className="record-attachments">{record.assetRefs.filter((ref) => ref.role === "attachment").map((ref) => <a key={ref.assetId} href={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} download>{assets.find((a) => a.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}{photoLine}{weatherLine}{task ? (masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{statusLabel(task.task.status)}</span>) : null}<div className="timeline-footer">{relationLine}<div className="timeline-actions" aria-label="记录操作">{task ? <><button className={`record-action task-action ${task.task.status === "done" ? "" : "task-action-complete"}`} type="button" onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{task.task.status === "done" ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}{task.task.status === "done" ? "恢复待办" : "完成"}</button>{task.task.status !== "cancelled" && task.task.status !== "done" ? <button className="record-action" type="button" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" />取消</button> : null}</> : null}<button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div></article>;
 }

@@ -28,6 +28,7 @@ export const handleModulesRoutes: RouteHandler = async (
   url: URL,
 ): Promise<boolean> => {
   const { config, repository, weatherArchiveScheduler, loginFailures, authenticated } = ctx;
+  if (await handleHabitRoutes(ctx, req, res, pathname, url)) return true;
   if (pathname === "/api/modules/cycle-intimacy" && req.method === "GET") {
     setJson(res, 200, cycleModuleResponse(repository));
     return true;
@@ -35,7 +36,9 @@ export const handleModulesRoutes: RouteHandler = async (
   if (pathname === "/api/modules/cycle-intimacy/config" && req.method === "PUT") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    repository.writeCycleIntimacyConfig(cycleIntimacyConfig(input));
+    // Habit edits have their own revision-checked routes. Old settings clients
+    // must not erase habits or overwrite marks from a stale config snapshot.
+    repository.writeCycleIntimacyConfig({ ...cycleIntimacyConfig(input), ...(repository.cycleIntimacyModule().config.habits ? { habits: repository.cycleIntimacyModule().config.habits } : {}) });
     setJson(res, 200, cycleModuleResponse(repository));
     return true;
   }
@@ -95,3 +98,4 @@ export const handleModulesRoutes: RouteHandler = async (
 
   return false;
 };
+import { handleHabitRoutes } from "./routes-habits.js";

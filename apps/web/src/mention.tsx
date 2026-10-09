@@ -3,7 +3,7 @@ import { BriefcaseBusiness, House, MapPin } from "lucide-react";
 import {
   MENTION_MARKERS,
   entitySearchTerms,
-  findEntityMentions,
+  resolveTextEntityMentions,
   normalizeEntitySearchTerm,
   PLACE_ROLES,
 } from "@lifeos/core";
@@ -157,8 +157,8 @@ export function slashSuggestions(commands: readonly ModuleCommand[], query: stri
 }
 
 /** Record text where `@person` and `#place` render as capsules, markers hidden. */
-export function RecordText({ text, entities }: { readonly text: string; readonly entities: readonly Entity[] }) {
-  const mentions = useMemo(() => findEntityMentions(text, entities), [text, entities]);
+export function RecordText({ text, entities, decisions }: { readonly text: string; readonly entities: readonly Entity[]; readonly decisions?: readonly import("@lifeos/core").TextEntityDecision[] }) {
+  const mentions = useMemo(() => resolveTextEntityMentions(text, entities, decisions), [text, entities, decisions]);
   if (mentions.length === 0) return <>{text}</>;
   const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
   const parts: ReactNode[] = [];
@@ -168,7 +168,7 @@ export function RecordText({ text, entities }: { readonly text: string; readonly
     const entity = entitiesById.get(mention.entityId);
     const PlaceIcon = entity?.type === "place" && entity.role === "home" ? House : entity?.type === "place" && entity.role === "work" ? BriefcaseBusiness : MapPin;
     parts.push(<span className={`mention-chip ${mention.entityType === "place" ? "is-place" : ""}`} key={`${mention.entityId}-${mention.start}-${index}`}>
-      {mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : null}{entity?.name ?? mention.matched}
+      {mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : null}{mention.matched}
     </span>);
     cursor = mention.end;
   });

@@ -1,0 +1,19 @@
+.archive-transfer-card { align-items: start; }
+.archive-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.archive-transfer-card > .archive-actions { grid-column: 1 / -1; }
+.archive-transfer-card .archive-actions > :is(button,a), .archive-dialog .archive-actions > :is(button,a) { height: 40px; min-height: 40px; padding: 0 14px; font-size: 13px; line-height: 20px; border-radius: 12px; margin: 0; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.archive-dialog { width: min(600px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; }
+.archive-dialog .dialog-header { padding: 18px; margin: 0; gap: 12px; }
+.archive-dialog h2 { margin: 0; font-size: 18px; }
+.archive-dialog-body { overflow: auto; max-height: calc(100dvh - 190px); padding: 0 18px 18px; display: flex; flex-direction: column; gap: 14px; }
+.archive-dialog-body p { margin: 0; font-size: 13px; line-height: 1.7; }
+.archive-size { padding: 14px; background: var(--surface-soft, #f5f5f2); border-radius: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.archive-field { display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.archive-field input { width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface, #fff); }
+.archive-field input[type=file] { font-size: 12px; }
+.archive-replace { display: flex; align-items: start; gap: 8px; }
+.archive-replace input { flex: 0 0 auto; margin-top: 5px; }
+.archive-working { display: flex; align-items: center; gap: 8px; }
+.archive-dialog .dialog-footer { border-top: 1px solid var(--line); padding: 14px 18px; margin: 0; }
+.archive-message { grid-column: 1 / -1; margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+@media(max-width: 430px) { .archive-dialog .archive-actions > :is(button,a) { flex: 1 1 auto; } }

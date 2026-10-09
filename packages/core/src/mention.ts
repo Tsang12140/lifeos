@@ -120,7 +120,7 @@ export function findEntityMentions(
     const previous = text[at - 1];
     const blocked = isLatinWordChar(previous) || MENTION_MARKERS.some((entry) => entry.marker === previous) || at < handledUntil;
     if (blocked) continue;
-    const hit = candidates.find((candidate) => {
+    const hits = candidates.filter((candidate) => {
       if (candidate.marker !== marker) return false;
       const end = candidateEndAt(text, at + 1, candidate);
       if (end === null) return false;
@@ -128,6 +128,9 @@ export function findEntityMentions(
       const after = text[end];
       return !isLatinWordChar(candidate.folded[candidate.folded.length - 1]) || !isLatinWordChar(after);
     });
+    const longest = hits[0]?.folded.length;
+    const best = hits.filter((candidate) => candidate.folded.length === longest);
+    const hit = new Set(best.map((candidate) => candidate.entity.id)).size === 1 ? best[0] : undefined;
     if (hit !== undefined) {
       const end = candidateEndAt(text, at + 1, hit);
       if (end === null) continue;

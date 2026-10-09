@@ -1,4 +1,4 @@
-import type { AssetLink } from "@lifeos/core";
+import { assertValidTextEntityDecisions, type AssetLink, type TextEntityDecision } from "@lifeos/core";
 import type { ComposerKind } from "./app-types";
 import type { AuthState } from "./api";
 
@@ -13,6 +13,7 @@ export interface ComposerDraft {
   readonly kind: ComposerKind;
   readonly isPrivate: boolean;
   readonly shots: readonly AssetLink[];
+  readonly entityMentions?: readonly TextEntityDecision[];
 }
 
 export function composerDraftScope(authResolved: boolean, auth: AuthState): string | null {
@@ -51,7 +52,9 @@ export function readComposerDraft(scope: string, storage: Pick<Storage, "getItem
     if (draft.version !== 1 || draft.scope !== scope || typeof draft.content !== "string"
       || draft.content.length > MAX_CONTENT || !KINDS.includes(draft.kind as ComposerKind)
       || typeof draft.isPrivate !== "boolean") return null;
-    return { content: draft.content, kind: draft.kind as ComposerKind, isPrivate: draft.isPrivate, shots: shotsOf(draft.shots) };
+    let mentions = (value as { entityMentions?: unknown }).entityMentions;
+    if (mentions !== undefined) { try { assertValidTextEntityDecisions(mentions, draft.content); } catch { mentions = undefined; } }
+    return { content: draft.content, kind: draft.kind as ComposerKind, isPrivate: draft.isPrivate, shots: shotsOf(draft.shots), ...(mentions === undefined ? {} : { entityMentions: mentions as readonly TextEntityDecision[] }) };
   } catch { return null; }
 }
 
@@ -60,6 +63,7 @@ export function writeComposerDraft(scope: string, draft: ComposerDraft, storage:
     const storageKey = key(scope);
     if (!draft.content && draft.shots.length === 0) { storage.removeItem(storageKey); return true; }
     if (draft.content.length > MAX_CONTENT || draft.shots.length > MAX_SHOTS) return false;
+    if (draft.entityMentions !== undefined) assertValidTextEntityDecisions(draft.entityMentions, draft.content);
     storage.setItem(storageKey, JSON.stringify({ version: 1, scope, ...draft, savedAt: new Date().toISOString() }));
     return true;
   } catch { return false; }

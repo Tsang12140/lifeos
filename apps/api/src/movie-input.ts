@@ -21,6 +21,7 @@ import { HttpError } from "./http-kit.js";
 import {
   type JsonObject,
   boundedIntegerField,
+  booleanField,
   coreValidated,
   enumField,
   hasOnlyKeys,
@@ -44,6 +45,7 @@ export const MOVIE_FIELD_NAMES = [
   "personalRating",
   "personalReview",
   "watchedAt",
+  "watched",
 ] as const;
 
 export function movieScoreField(value: unknown, name: string, halfStep: boolean): number {
@@ -114,6 +116,8 @@ export function movieFieldsField(input: JsonObject, allowNull: boolean): JsonObj
       output[field] = movieScoreField(value, field, true);
     } else if (field === "watchedAt") {
       output[field] = movieWatchedAtField(value);
+    } else if (field === "watched") {
+      output[field] = booleanField(value, "watched");
     }
   }
   return output;
@@ -270,6 +274,7 @@ export const MOVIE_INPUT_KEYS = [
   "personalRating",
   "personalReview",
   "watchedAt",
+  "watched",
 ] as const;
 
 export function moviePayload(input: JsonObject): JsonObject {
@@ -418,4 +423,3 @@ export function withoutRelation(entity: Entity, targetId: string): Entity {
   assertValidEntity(candidate);
   return candidate;
 }
-

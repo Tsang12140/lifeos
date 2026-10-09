@@ -1,4 +1,6 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { createPortal } from "react-dom";
+import { AssetPreview, assetContentUrl, type PreviewImage } from "./timeline";
 import { Eraser, LoaderCircle, Plus, RotateCw, X } from "lucide-react";
 import type { Asset, AssetLink } from "@lifeos/core";
 import { apiRequest } from "./api";
@@ -23,6 +25,7 @@ function assetThumbUrl(assetId: string, width: number): string {
  * show, so the badge never becomes a surprise.
  */
 export const SHOT_LIMIT = 9;
+export const SHOT_REORDER_TYPE = "application/x-lifeos-shot-order";
 
 /**
  * Uploading a photo ends either in newly stored bytes or in a reuse of bytes
@@ -49,6 +52,9 @@ export async function resolveKnownShot(hash: string, signal?: AbortSignal): Prom
 
 interface ShotDropZoneProps {
   readonly scopeKey: string;
+  readonly numbered?: boolean;
+  /** Keeps the add-photo control visible beside a horizontally scrolling strip. */
+  readonly addOutsideStrip?: boolean;
   readonly disabled?: boolean;
   readonly shots: readonly AssetLink[];
   readonly onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>;
@@ -85,7 +91,7 @@ interface ShotBatchProgress {
   readonly total: number;
 }
 
-export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ scopeKey, disabled = false, shots, onShotsChange, onUpload, onNotify, onCleared, onBusyChange, onSubmissionState }, ref) {
+export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ scopeKey, numbered = false, addOutsideStrip = false, disabled = false, shots, onShotsChange, onUpload, onNotify, onCleared, onBusyChange, onSubmissionState }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<readonly PendingShot[]>([]);
   const pendingRef = useRef<readonly PendingShot[]>([]);
@@ -103,6 +109,157 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
   const scopeRef = useRef(scopeKey);
   scopeRef.current = scopeKey;
   const idCounterRef = useRef(0);
+  const stripRef = useRef<HTMLUListElement>(null);
+  const draggingShotRef = useRef<string | null>(null);
+  const [draggingShot, setDraggingShot] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ key: string; after: boolean } | null>(null);
+  const dropTargetRef = useRef<{ key: string; after: boolean } | null>(null);
+  const [insertMarker, setInsertMarker] = useState<{ left: number; top: number; height: number } | null>(null);
+  const dragPointRef = useRef<{ x: number; y: number } | null>(null);
+  const scrollFrameRef = useRef(0);
+  const suppressPreviewUntilRef = useRef(0);
+  const [preview, setPreview] = useState<{ images: readonly PreviewImage[]; ownedUrls: readonly string[]; index: number } | null>(null);
+  const [previewAssets, setPreviewAssets] = useState<readonly Asset[]>([]);
+  const closePreview = useCallback(() => setPreview(null), []);
+  const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { if (!preview) return; const urls = preview.ownedUrls; return () => { for (const url of urls) URL.revokeObjectURL(url); }; }, [preview?.ownedUrls]);
+  const previewAssetId = preview?.images[preview.index]?.id;
+  useEffect(() => {
+    if (!previewAssetId || previewAssetId.startsWith("pending:")) return;
+    const controller = new AbortController();
+    void apiRequest<Asset>(`/api/assets/${encodeURIComponent(previewAssetId)}`, { signal: controller.signal }).then(asset => { if (!controller.signal.aborted) setPreviewAssets(current => [...current.filter(a => a.id !== asset.id), asset]); }).catch(() => { /* Original preview remains usable without metadata. */ });
+    return () => controller.abort();
+  }, [previewAssetId]);
+
+  const orderedKeys = () => [
+    ...shotsRef.current.map((shot) => ({ key: `asset:${shot.assetId}`, order: orderForAsset(shot.assetId) })),
+    ...pendingRef.current.map((shot) => ({ key: `pending:${shot.id}`, order: shot.order })),
+  ].sort((a, b) => a.order - b.order).map((item) => item.key);
+  const moveShot = (from: string, target: string, after: boolean) => {
+    if (disabled || from === target) return;
+    const keys = orderedKeys();
+    if (!keys.includes(from) || !keys.includes(target)) return;
+    const next = keys.filter((key) => key !== from);
+    next.splice(next.indexOf(target) + (after ? 1 : 0), 0, from);
+    const ranks = new Map(next.map((key, index) => [key, index + 1]));
+    for (const shot of shotsRef.current) orderByAssetRef.current.set(shot.assetId, ranks.get(`asset:${shot.assetId}`)!);
+    nextOrderRef.current = next.length;
+    publishPending(pendingRef.current.map((shot) => ({ ...shot, order: ranks.get(`pending:${shot.id}`)! })));
+    setShotsTracked([...shotsRef.current].sort((a, b) => orderForAsset(a.assetId) - orderForAsset(b.assetId)));
+  };
+  const stopDragging = () => {
+    if (touchTimerRef.current) clearTimeout(touchTimerRef.current);
+    touchTimerRef.current = null;
+    cancelAnimationFrame(scrollFrameRef.current);
+    dragPointRef.current = null;
+    draggingShotRef.current = null; setDraggingShot(null); dropTargetRef.current = null; setDropTarget(null); setInsertMarker(null);
+  };
+  const targetAt = (x: number, y: number) => {
+    const strip = stripRef.current;
+    if (!strip) return null;
+    const bounds = strip.getBoundingClientRect();
+    if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) return null;
+    const tiles = [...strip.querySelectorAll<HTMLElement>("[data-shot-key]")].map(tile => ({ key: tile.dataset.shotKey!, rect: tile.getBoundingClientRect() }));
+    if (!tiles.length) return null;
+    const distance = (rect: DOMRect) => Math.max(rect.top - y, y - rect.bottom, 0);
+    // Use row geometry so gaps and the leading/trailing slots are drop targets too.
+    const nearest = tiles.reduce((a, b) => distance(b.rect) < distance(a.rect) ? b : a);
+    const row = tiles.filter(tile => Math.abs(tile.rect.top - nearest.rect.top) < 2);
+    const before = row.find(tile => x < tile.rect.left + tile.rect.width / 2);
+    return before ? { key: before.key, after: false } : { key: row[row.length - 1]!.key, after: true };
+  };
+  const showTarget = (target: { key: string; after: boolean } | null) => {
+    dropTargetRef.current = target; setDropTarget(target);
+    const strip = stripRef.current, tile = strip && target ? [...strip.querySelectorAll<HTMLElement>("[data-shot-key]")].find(tile => tile.dataset.shotKey === target.key) : null;
+    if (!strip || !tile || !target) { setInsertMarker(null); return; }
+    const bounds = strip.getBoundingClientRect(), rect = tile.getBoundingClientRect();
+    const gap = Number.parseFloat(getComputedStyle(strip).columnGap) || 6;
+    const edge = target.after ? rect.right + gap / 2 : rect.left - gap / 2;
+    setInsertMarker({ left: Math.max(2, Math.min(strip.scrollWidth - 2, edge - bounds.left + strip.scrollLeft)), top: rect.top - bounds.top + strip.scrollTop, height: rect.height });
+  };
+  const updateDragPoint = (x: number, y: number) => { dragPointRef.current = { x, y }; showTarget(targetAt(x, y)); };
+  const beginDragging = (key: string) => {
+    draggingShotRef.current = key; setDraggingShot(key); suppressPreviewUntilRef.current = Date.now() + 500;
+    const autoScroll = () => {
+      const strip = stripRef.current, point = dragPointRef.current;
+      if (!draggingShotRef.current || !strip) return;
+      if (point && strip.scrollWidth > strip.clientWidth) {
+        const bounds = strip.getBoundingClientRect();
+        if (point.y >= bounds.top && point.y <= bounds.bottom && point.x >= bounds.left && point.x <= bounds.right) {
+          const direction = point.x < bounds.left + 20 ? -1 : point.x > bounds.right - 20 ? 1 : 0;
+          if (direction) { strip.scrollLeft += direction * 4; showTarget(targetAt(point.x, point.y)); }
+        }
+      }
+      scrollFrameRef.current = requestAnimationFrame(autoScroll);
+    };
+    cancelAnimationFrame(scrollFrameRef.current); scrollFrameRef.current = requestAnimationFrame(autoScroll);
+  };
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    let startX = 0, startY = 0;
+    const start = (event: TouchEvent) => {
+      // Chrome may adjust a finger's target to the nearby remove button on a
+      // small tile. A short tap still clicks it; a held gesture belongs to sorting.
+      if (disabled || event.touches.length !== 1) return;
+      const tile = (event.target as HTMLElement).closest<HTMLElement>("[data-shot-key]");
+      if (!tile) return;
+      startX = event.touches[0]!.clientX; startY = event.touches[0]!.clientY;
+      const key = tile.dataset.shotKey!;
+      touchTimerRef.current = setTimeout(() => { touchTimerRef.current = null; beginDragging(key); navigator.vibrate?.(15); }, 350);
+    };
+    const move = (event: TouchEvent) => {
+      const touch = event.touches[0]; if (!touch) return;
+      if (touchTimerRef.current && Math.hypot(touch.clientX - startX, touch.clientY - startY) > 8) { clearTimeout(touchTimerRef.current); touchTimerRef.current = null; }
+      if (draggingShotRef.current) { event.preventDefault(); updateDragPoint(touch.clientX, touch.clientY); }
+    };
+    const end = (event: TouchEvent) => {
+      const touch = event.changedTouches[0];
+      const target = touch ? targetAt(touch.clientX, touch.clientY) : null;
+      if (draggingShotRef.current) { event.preventDefault(); if (target) moveShot(draggingShotRef.current, target.key, target.after); }
+      if (draggingShotRef.current) suppressPreviewUntilRef.current = Date.now() + 500;
+      stopDragging();
+    };
+    const cancel = () => { if (draggingShotRef.current) suppressPreviewUntilRef.current = Date.now() + 500; stopDragging(); };
+    strip.addEventListener("touchstart", start, { passive: true });
+    strip.addEventListener("touchmove", move, { passive: false });
+    strip.addEventListener("touchend", end, { passive: false });
+    strip.addEventListener("touchcancel", cancel);
+    return () => { strip.removeEventListener("touchstart", start); strip.removeEventListener("touchmove", move); strip.removeEventListener("touchend", end); strip.removeEventListener("touchcancel", cancel); stopDragging(); };
+  }, [scopeKey, disabled]);
+  const dropShot = (event: import("react").DragEvent<HTMLElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes(SHOT_REORDER_TYPE)) return;
+    event.preventDefault(); event.stopPropagation();
+    const target = targetAt(event.clientX, event.clientY) ?? (event.clientX === 0 && event.clientY === 0 ? dropTargetRef.current : null);
+    if (!disabled && event.dataTransfer.getData(SHOT_REORDER_TYPE) === scopeKey && draggingShotRef.current && target) moveShot(draggingShotRef.current, target.key, target.after);
+    suppressPreviewUntilRef.current = Date.now() + 500;
+    stopDragging();
+  };
+  const reorderHandlers = (key: string) => ({
+    draggable: !disabled,
+    tabIndex: 0,
+    "data-shot-key": key,
+    "aria-label": "照片，拖动调整顺序，或按 Alt 加方向键移动",
+    onKeyDown: (event: import("react").KeyboardEvent<HTMLLIElement>) => {
+      if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault(); const keys = orderedKeys(), index = keys.indexOf(key), forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+      const target = keys[index + (forward ? 1 : -1)]; if (target) moveShot(key, target, forward);
+    },
+    onDragStart: (event: import("react").DragEvent<HTMLLIElement>) => {
+      if (disabled) { event.preventDefault(); return; }
+      event.stopPropagation(); event.dataTransfer.setData(SHOT_REORDER_TYPE, scopeKey); event.dataTransfer.effectAllowed = "move"; beginDragging(key);
+    },
+    onDragOver: (event: import("react").DragEvent<HTMLLIElement>) => {
+      if (!draggingShotRef.current || disabled || !Array.from(event.dataTransfer.types).includes(SHOT_REORDER_TYPE)) return;
+      event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move";
+      updateDragPoint(event.clientX, event.clientY);
+    },
+    onDrop: dropShot,
+    onDragEnd: () => { suppressPreviewUntilRef.current = Date.now() + 500; stopDragging(); },
+    onContextMenu: (event: import("react").MouseEvent<HTMLLIElement>) => { if (draggingShotRef.current) event.preventDefault(); },
+  });
+  const reorderClass = (key: string) => draggingShot === key ? " is-reordering" : "";
 
   const publishPending = (next: readonly PendingShot[], publishScope = scopeKey) => {
     pendingRef.current = next;
@@ -150,6 +307,7 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
   };
 
   useLayoutEffect(() => {
+    closePreview(); setPreviewAssets([]);
     const thisScope = scopeKey;
     scopeGenerationRef.current += 1;
     orderByAssetRef.current.clear();
@@ -228,8 +386,9 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
             ...(uploaded.asset.originalName === undefined ? {} : { label: uploaded.asset.originalName }),
           };
           const alreadyAttached = shotsRef.current.some((shot) => shot.assetId === uploaded.asset.id);
+          setPreview(current => current ? { ...current, images: current.images.map(image => image.id === `pending:${job.id}` ? { ...image, id: uploaded.asset.id } : image) } : current);
           if (!alreadyAttached) {
-            orderByAssetRef.current.set(uploaded.asset.id, job.order);
+            orderByAssetRef.current.set(uploaded.asset.id, pendingRef.current.find((shot) => shot.id === job.id)?.order ?? job.order);
             setShotsTracked((current) => [...current, assetLink].sort((left, right) => orderForAsset(left.assetId) - orderForAsset(right.assetId)));
             setCommittedPreviewsTracked((current) => new Map(current).set(uploaded.asset.id, job.previewUrl));
           } else {
@@ -363,6 +522,22 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
     ...shots.map((shot) => ({ type: "complete" as const, shot, order: orderForAsset(shot.assetId) })),
     ...pending.map((shot) => ({ type: "pending" as const, shot, order: shot.order })),
   ].sort((left, right) => left.order - right.order);
+  const openPreview = (key: string) => {
+    if (draggingShotRef.current || Date.now() < suppressPreviewUntilRef.current) return;
+    const ownedUrls: string[] = [];
+    try {
+      const images = strip.map((entry): PreviewImage => {
+        if (entry.type === "complete") return { id: entry.shot.assetId, url: assetContentUrl(entry.shot.assetId), ...(entry.shot.label ? { name: entry.shot.label } : {}) };
+        // Upload completion releases the thumbnail URL; an open viewer owns its own.
+        const url = URL.createObjectURL(entry.shot.file); ownedUrls.push(url);
+        return { id: `pending:${entry.shot.id}`, url, name: entry.shot.file.name, localInfo: { originalName: entry.shot.file.name, mediaType: entry.shot.file.type, sizeBytes: entry.shot.file.size } };
+      });
+      const id = key.startsWith("asset:") ? key.slice(6) : key;
+      const index = images.findIndex(image => image.id === id);
+      if (index < 0) { for (const url of ownedUrls) URL.revokeObjectURL(url); return; }
+      setPreview({ images, ownedUrls, index });
+    } catch { for (const url of ownedUrls) URL.revokeObjectURL(url); onNotify("无法预览这张照片，请重新选择", "warn"); }
+  };
 
   // The parent composer accepts dropped files across the whole input frame;
   // this strip owns uploads, thumbnails and the file-picker button.
@@ -385,26 +560,34 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
    */
   return <div className={zoneClass}>
     <div className="shot-row">
-      <ul className="shot-strip" data-count={shots.length + pending.length} aria-busy={busy ? "true" : undefined}>
-        {strip.map((entry) => entry.type === "complete" ? <li className="shot-tile" key={entry.shot.assetId} data-shot-state="complete" data-asset-id={entry.shot.assetId}>
-          <img src={assetThumbUrl(entry.shot.assetId, 400)} alt={entry.shot.label ?? "已添加的照片"} loading="lazy" decoding="async" onLoad={() => releaseCommittedPreview(entry.shot.assetId)} />
-          {committedPreviews.get(entry.shot.assetId) ? <img className="shot-tile-local-preview" src={committedPreviews.get(entry.shot.assetId)} alt="" aria-hidden="true" /> : null}
+      <ul ref={stripRef} className="shot-strip" data-count={shots.length + pending.length} aria-busy={busy ? "true" : undefined} onDragOver={(event) => { if (draggingShotRef.current && !disabled && Array.from(event.dataTransfer.types).includes(SHOT_REORDER_TYPE)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move"; updateDragPoint(event.clientX, event.clientY); } }} onDragLeave={event => { const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) updateDragPoint(event.clientX, event.clientY); }} onDrop={dropShot}>
+        {strip.map((entry, index) => entry.type === "complete" ? <li className={`shot-tile${reorderClass(`asset:${entry.shot.assetId}`)}`} {...reorderHandlers(`asset:${entry.shot.assetId}`)} key={entry.shot.assetId} data-shot-state="complete" data-asset-id={entry.shot.assetId}>
+          {numbered ? <span className="shot-number">{index + 1}</span> : null}
+          <button type="button" draggable={!disabled} className="shot-preview-button" aria-label={`放大查看 ${entry.shot.label ?? "照片"}`} onClick={() => openPreview(`asset:${entry.shot.assetId}`)}><img draggable={!disabled} src={assetThumbUrl(entry.shot.assetId, 400)} alt={entry.shot.label ?? "已添加的照片"} loading="lazy" decoding="async" onLoad={() => releaseCommittedPreview(entry.shot.assetId)} />
+          {committedPreviews.get(entry.shot.assetId) ? <img draggable={!disabled} className="shot-tile-local-preview" src={committedPreviews.get(entry.shot.assetId)} alt="" aria-hidden="true" /> : null}</button>
           <button className="shot-tile-remove" type="button" disabled={disabled} onClick={() => removeAsset(entry.shot.assetId)} aria-label={`移除 ${entry.shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
-        </li> : <li className="shot-tile shot-tile-pending" key={entry.shot.id} data-shot-state={entry.shot.state} data-upload-id={entry.shot.id} data-file-name={entry.shot.file.name} title={entry.shot.error}>
-          <img src={entry.shot.previewUrl} alt={entry.shot.file.name || "正在添加的照片"} loading="eager" decoding="async" />
+        </li> : <li className={`shot-tile shot-tile-pending${reorderClass(`pending:${entry.shot.id}`)}`} {...reorderHandlers(`pending:${entry.shot.id}`)} key={entry.shot.id} data-shot-state={entry.shot.state} data-upload-id={entry.shot.id} data-file-name={entry.shot.file.name} title={entry.shot.error}>
+          {numbered ? <span className="shot-number">{index + 1}</span> : null}
+          <button type="button" draggable={!disabled} className="shot-preview-button" aria-label={`放大查看 ${entry.shot.file.name || "照片"}`} onClick={() => openPreview(`pending:${entry.shot.id}`)}><img draggable={!disabled} src={entry.shot.previewUrl} alt={entry.shot.file.name || "照片"} loading="eager" decoding="async" /></button>
           {entry.shot.state === "uploading" || entry.shot.state === "processing" ? <div className="shot-upload-progress" role="progressbar" aria-label={`照片上传进度 ${entry.shot.progress}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={entry.shot.progress}><span style={{ width: `${entry.shot.progress}%` }} /></div> : null}
           <span className="shot-upload-state" role="status">{entry.shot.state === "queued" ? "等待" : entry.shot.state === "preparing" ? "准备中" : entry.shot.state === "uploading" ? `${entry.shot.progress}%` : entry.shot.state === "processing" ? "处理中" : "失败"}</span>
           {entry.shot.state === "failed" ? <button className="shot-tile-retry" type="button" disabled={disabled} onClick={() => retry(entry.shot.id)} aria-label={`重试上传 ${entry.shot.file.name || "照片"}`} title="重试上传"><RotateCw size={12} aria-hidden="true" /></button> : null}
           <button className="shot-tile-remove" type="button" disabled={disabled} onClick={() => removePending(entry.shot.id)} aria-label={`移除 ${entry.shot.file.name || "待处理照片"}`} title="移除照片"><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
         </li>)}
+        {insertMarker && dropTarget ? <li className="shot-insert-marker" aria-hidden="true" data-insert-key={dropTarget.key} data-insert-after={dropTarget.after} style={{ left: insertMarker.left, top: insertMarker.top, height: insertMarker.height }} /> : null}
         {/* The same dashed square is the only photo slot when empty and stays
             at the end of the row after photos are added. */}
-        <li className="shot-tile shot-tile-add">
+        {!addOutsideStrip ? <li className="shot-tile shot-tile-add">
           <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled || remaining === 0} aria-label="添加照片">
             <Plus size={18} strokeWidth={2} aria-hidden="true" />
           </button>
-        </li>
+        </li> : null}
       </ul>
+      {addOutsideStrip ? <div className="shot-tile shot-tile-add shot-tile-add-outside">
+        <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled || remaining === 0} aria-label="添加照片">
+          <Plus size={18} strokeWidth={2} aria-hidden="true" />
+        </button>
+      </div> : null}
       {/* The two things that are about the strip rather than in it. They ride
           the end of the same row, so they cost no height of their own: on a
           line underneath they would add a full caption line of blank below
@@ -421,5 +604,6 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
           </div> : null}
     </div>
     {fileInput}
+    {preview ? createPortal(<AssetPreview assetIds={preview.images.map(image => image.id)} images={preview.images} index={preview.index} assets={previewAssets} onClose={closePreview} onIndexChange={index => setPreview(current => current ? { ...current, index } : null)} />, document.body) : null}
   </div>;
 });

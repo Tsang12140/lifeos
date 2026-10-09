@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { LoaderCircle, MapPin, Plus, User, X } from "lucide-react";
 import { PLACE_MARKER, PLACE_ROLES, entitySearchTerms, normalizeEntitySearchTerm, type PlacePeriod, type PlaceRole } from "@lifeos/core";
-import type { Entity } from "@lifeos/core";
+import type { Entity, EntityCandidate, TextEntityDecision } from "@lifeos/core";
 import type { CreateEntity, EntityCreateRequest } from "./app-types";
 import type { ModuleCommand } from "./movie";
 import {
@@ -41,7 +41,7 @@ export interface ContextAction {
 
 export interface MentionBoxProps {
   readonly value: string;
-  readonly onChange: (value: string) => void;
+  readonly onChange: (value: string, editRange?: { start: number; end: number }) => void;
   readonly entities: readonly Entity[];
   readonly recentPlaceIds?: readonly string[];
   readonly onCreateEntity: CreateEntity;
@@ -62,6 +62,11 @@ export interface MentionBoxProps {
    * decide what the entries say.
    */
   readonly contextActions?: (text: string) => readonly ContextAction[];
+  readonly candidates?: readonly EntityCandidate[];
+  readonly decisions?: readonly TextEntityDecision[];
+  readonly onPickEntity?: (entity: Entity, text: string) => void;
+  readonly onInspectCandidate?: (candidate: EntityCandidate) => void;
+  readonly disabled?: boolean;
 }
 
 /**
@@ -70,44 +75,22 @@ export interface MentionBoxProps {
  * again. Marker characters are stripped from the name: an entity literally
  * named "@老王" would be unmentionable forever.
  */
-/**
- * One alias field, split on `/`.
- *
- * The separator used to be a comma, and that was a coin flip: half the world
- * types `,` and half types `，`, and whichever one you did not handle silently
- * welded two aliases into one. A slash has no such twin — there is one slash on
- * a keyboard — so it is the one delimiter that cannot be typed "wrong".
- *
- * The split is shown as it happens. Every segment that has been closed off by a
- * slash lights up as its own chip, so the field answers "did that register?"
- * while it is being typed rather than at save time. A run with no separator in
- * it stays unlit as one long block, which is exactly what it is — and seeing
- * "王后广场皇后广场天后广场" sitting there as a single slab is the tell that the
- * slashes are missing, without anything having to say so in words.
- */
-export function AliasField({ value, onChange, label, placeholder, compact = false }: { value: string; onChange: (value: string) => void; label: string; placeholder?: string; compact?: boolean }) {
-  const segments = parseAliasSegments(value);
-  const chips = segments.filter((segment) => segment.complete);
-  // A segment can be "complete" by the slash rule and still be obviously wrong:
-  // two aliases glued together is a longer run than any alias should be, and a
-  // comma inside one means somebody used the separator this field no longer
-  // takes. Both are flagged rather than quietly accepted, because the whole
-  // point of showing the split is to catch it now instead of at save time.
-  const suspect = chips.some(isSuspectAlias);
+/** Each alias has its own editable row. JSON is only the internal form value;
+ * legacy slash-separated values remain readable. Delimiters split pasted batches,
+ * never a name the owner is typing into a single row. */
+export function AliasField({ value, onChange, label, placeholder, compact = false, disabled = false }: { value: string; onChange: (value: string) => void; label: string; placeholder?: string; compact?: boolean; disabled?: boolean }) {
+  const rows: string[] = value.startsWith("[") ? (() => { try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") && parsed.length > 0 ? parsed : [""]; } catch { return [value]; } })() : value.split("/");
+  const update = (next: readonly string[]) => onChange(JSON.stringify(next.length > 0 ? next : [""]));
   return <div className={`alias-field ${compact ? "is-compact" : ""}`}>
-    <input
-      className={compact ? "alias-input" : "entity-create-input alias-input"}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      placeholder={placeholder ?? "可选，用 / 分隔，例如：家 / 老宅"}
-      aria-label={label}
-    />
-    {/* Only rendered once there is something to confirm -- an empty ruler under
-        an empty field would be noise. */}
-    {chips.length > 0 ? <div className="alias-chips" data-alias-count={chips.length} data-alias-suspect={suspect ? "true" : "false"} aria-live="polite">
-      {chips.map((segment) => <span className={`alias-chip ${isSuspectAlias(segment) ? "is-suspect" : ""}`} key={segment.start} title={isSuspectAlias(segment) ? "这一段看起来像两个别名粘在一起了，用 / 分开试试" : undefined}>{segment.text}</span>)}
-      <span className="alias-chip-note">{suspect ? "是不是漏了 / ？" : `${chips.length} 个别名`}</span>
-    </div> : null}
+    {rows.map((row, index) => <div className="alias-entry" key={index}><input className={compact ? "alias-input" : "entity-create-input alias-input"} value={row} disabled={disabled} onChange={(event) => update(rows.map((item, i) => i === index ? event.target.value : item))} onPaste={(event) => {
+      const input = event.currentTarget;
+      const pasted = event.clipboardData.getData("text");
+      const parts = pasted.split(/[、,，/\r\n]+/u).map((part) => part.trim()).filter(Boolean);
+      if (parts.length < 2 || (row && (input.selectionStart !== 0 || input.selectionEnd !== row.length))) return;
+      event.preventDefault(); update([...rows.slice(0, index), ...parts, ...rows.slice(index + 1)]);
+    }} placeholder="输入一个别名（可选）" aria-label={`${label.replace(/，用斜杠分隔/u, "")} ${index + 1}`} /><button className="icon-button compact-icon-button" type="button" disabled={disabled} aria-label={`删除别名 ${index + 1}`} onClick={() => update(rows.filter((_, i) => i !== index))}><X size={14} aria-hidden="true" /></button></div>)}
+    <button className="text-button alias-add" type="button" disabled={disabled} onClick={() => update([...rows, ""])}><Plus size={14} aria-hidden="true" />添加别名</button>
+    <small className="alias-paste-hint">可粘贴多个别名，用顿号、逗号或换行分隔</small>
   </div>;
 }
 
@@ -165,7 +148,9 @@ export function parseAliasSegments(raw: string): readonly AliasSegment[] {
 export function aliasListFrom(raw: string): readonly string[] {
   const seen = new Set<string>();
   const list: string[] = [];
-  for (const segment of parseAliasSegments(raw)) {
+  const segments = raw.startsWith("[") ? (() => { try { const parsed: unknown = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").map((text) => ({ text: text.trim() })) : []; } catch { return []; } })() : parseAliasSegments(raw);
+  for (const segment of segments) {
+    if (!segment.text) continue;
     if (seen.has(segment.text)) continue;
     seen.add(segment.text);
     list.push(segment.text);
@@ -213,7 +198,7 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
     </div>
     <div className="entity-create-row">
       <span className="entity-create-label">别名</span>
-      <AliasField value={aliases} onChange={setAliases} label="别名，用斜杠分隔" />
+      <AliasField disabled={busy} value={aliases} onChange={setAliases} label="别名，用斜杠分隔" />
     </div>
     {type === "place" ? <>
       <div className="entity-create-row">
@@ -255,9 +240,29 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
  * Unknown names are never rewritten, which is what keeps e-mail addresses,
  * passwords, and hex colours safe.
  */
-export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand, contextActions }: MentionBoxProps) {
+export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand, contextActions, candidates = [], decisions = [], onPickEntity, onInspectCandidate, disabled = false }: MentionBoxProps) {
   const localRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? localRef;
+  const inputRangeRef = useRef<{ start: number; end: number } | undefined>(undefined);
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  const mirrorTextRef = useRef<HTMLDivElement>(null);
+  const syncMirror = () => {
+    const element = ref.current, mirror = mirrorRef.current, copy = mirrorTextRef.current;
+    if (!element || !mirror || !copy) return;
+    const style = getComputedStyle(element);
+    for (const key of ["font", "letterSpacing", "lineHeight", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderStyle", "boxSizing", "textAlign", "wordBreak", "overflowWrap", "tabSize"] as const) copy.style[key] = style[key];
+    copy.style.borderColor = "transparent";
+    copy.style.width = `${element.clientWidth + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth)}px`;
+    mirror.style.height = `${element.offsetHeight}px`;
+    copy.style.transform = `translate(${-element.scrollLeft}px, ${-element.scrollTop}px)`;
+  };
+  useLayoutEffect(() => {
+    syncMirror();
+    const observer = new ResizeObserver(syncMirror);
+    if (ref.current) observer.observe(ref.current);
+    document.fonts?.ready.then(syncMirror);
+    return () => observer.disconnect();
+  }, [value, candidates, decisions]);
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [createFormOpen, setCreateFormOpen] = useState(false);
@@ -348,14 +353,16 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     return true;
   };
 
-  const insert = (name: string, markerOverride?: string) => {
+  const insert = (name: string, markerOverride?: string, entity?: Entity) => {
     if (mention === null) return;
-    const inserted = `${markerOverride ?? mention.marker}${name}`;
+    const chosenName = entity && entitySearchTerms(entity).some((term) => normalizeEntitySearchTerm(term) === normalizeEntitySearchTerm(mention.query)) ? mention.query : name;
+    const inserted = `${onPickEntity && entity ? "" : markerOverride ?? mention.marker}${chosenName}`;
     const nextValue = `${value.slice(0, mention.start)}${inserted}${value.slice(mention.end)}`;
     const caret = mention.start + inserted.length;
-    onChange(nextValue);
+    onChange(nextValue, { start: mention.start, end: mention.end });
     setMention(null);
     setCreateFormOpen(false);
+    if (onPickEntity && entity) onPickEntity(entity, nextValue);
     window.requestAnimationFrame(() => {
       const element = ref.current;
       if (!element) return;
@@ -375,7 +382,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     if (entity === null) return false;
     // The form decides the kind last — a ## trigger that was switched to a
     // person must still insert as @.
-    insert(entity.name, request.type === "place" ? PLACE_MARKER : "@");
+    insert(entity.name, request.type === "place" ? PLACE_MARKER : "@", entity);
     return true;
   };
 
@@ -421,7 +428,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
       event.preventDefault();
       if (createFormOpen || mention.forceNew === true) { setCreateFormOpen(true); return; }
       const target = suggestions[safeIndex];
-      if (target) insert(target.name);
+      if (target) insert(target.name, undefined, target);
       else setCreateFormOpen(true);
     }
   };
@@ -470,12 +477,22 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
   }, [autoGrow, value, ref]);
 
   return <div className="mention-box">
-    <textarea ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onChange={(event) => { onChange(event.target.value); syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
+    {candidates.length > 0 ? <div ref={mirrorRef} className="mention-candidate-mirror" aria-hidden="true"><div ref={mirrorTextRef}>{(() => {
+      const parts = []; let cursor = 0;
+      for (const candidate of candidates) {
+        if (candidate.start > cursor) parts.push(value.slice(cursor, candidate.start));
+        const decision = decisions.find((item) => item.start === candidate.start && item.end === candidate.end);
+        parts.push(<span className={decision ? decision.entityId ? "candidate-confirmed" : "candidate-dismissed" : "candidate-pending"} key={candidate.start}>{candidate.text}</span>);
+        cursor = candidate.end;
+      }
+      parts.push(value.slice(cursor), "\n"); return parts;
+    })()}</div></div> : null}
+    <textarea disabled={disabled} ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onScroll={syncMirror} onDoubleClick={(event) => { const at = event.currentTarget.selectionStart; const candidate = candidates.find((item) => item.start <= at && at <= item.end); if (candidate) onInspectCandidate?.(candidate); }} onBeforeInput={(event) => { const el = event.currentTarget; let start = el.selectionStart, end = el.selectionEnd; const type = (event.nativeEvent as InputEvent).inputType; if (start === end && type === "deleteContentBackward") start = Math.max(0, start - (Array.from(el.value.slice(0, start)).at(-1)?.length ?? 1)); if (start === end && type === "deleteContentForward") end = Math.min(el.value.length, end + (Array.from(el.value.slice(end))[0]?.length ?? 1)); inputRangeRef.current = { start, end }; }} onChange={(event) => { onChange(event.target.value, inputRangeRef.current); inputRangeRef.current = undefined; syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
     {contextMenu !== null ? <div ref={contextMenuRef} className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextPosition.x, top: contextPosition.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text; setContextMenu(null); if (action.disabled !== true) action.onSelect(text); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")}，` : ""}{command.description}</small></button>)}</div> : null}
-    {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={`创建并插入 ${mention.marker}`} /> : null}
+    {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={onPickEntity ? "创建并核对标记" : `创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">
-      {suggestions.map((entity, index) => <button className={`mention-option ${index === safeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === safeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name)}>{(() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
+      {suggestions.map((entity, index) => <button className={`mention-option ${index === safeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === safeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name, undefined, entity)}>{(() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
       {wantsNew ? <button className="mention-option mention-option-create" type="button" role="option" aria-selected={safeIndex === suggestions.length} onMouseEnter={() => setActiveIndex(suggestions.length)} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateFormOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{kindLabel}「{trimmedQuery}」…</span></button> : null}
     </div> : null}
   </div>;

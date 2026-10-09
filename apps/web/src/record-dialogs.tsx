@@ -55,7 +55,7 @@ function noteUpdatedAt(record: RecordView): string {
   return shortDate(lifeTimeDate(record.updatedAt ?? record.createdAt) ?? "");
 }
 
-export interface RecordEditorDraft { content: string; occurredAt: string; dueAt: string; occurredDirty: boolean; dueDirty: boolean; isPrivate: boolean; isBackfill: boolean; status: TaskStatus; entityRefs: readonly EntityRef[]; relatedRecordIds: readonly string[]; assetRefs: readonly AssetLink[]; }
+export interface RecordEditorDraft { entityMentions?: readonly import("@lifeos/core").TextEntityDecision[]; content: string; occurredAt: string; dueAt: string; occurredDirty: boolean; dueDirty: boolean; isPrivate: boolean; isBackfill: boolean; status: TaskStatus; entityRefs: readonly EntityRef[]; relatedRecordIds: readonly string[]; assetRefs: readonly AssetLink[]; }
 
 export type RelationDraftPatch = Partial<Pick<RecordEditorDraft, "entityRefs" | "relatedRecordIds" | "assetRefs">>;
 

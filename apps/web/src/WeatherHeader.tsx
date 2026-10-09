@@ -55,7 +55,7 @@ function DateStepGlyph({ direction }: { readonly direction: "left" | "right" }) 
   </>;
 }
 
-function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void; readonly showSteps?: boolean }) {
+function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, maxDate }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void; readonly showSteps?: boolean; readonly maxDate?: string }) {
   const today = localDateToday();
   const isToday = selectedDate === today;
   const previousDateRef = useRef(selectedDate);
@@ -98,7 +98,7 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true }: {
           <span className="weather-date-flap-pair weather-date-month-pair">{digits.slice(0, 2).map((digit, index) => renderDigit(digit, index))}</span>
           <span className="weather-date-flap-pair weather-date-day-pair">{digits.slice(2).map((digit, offset) => renderDigit(digit, offset + 2))}</span>
         </span>
-        <input type="date" value={selectedDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
+        <input type="date" value={selectedDate} max={maxDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
       </label>
       <div className="weather-date-meta" aria-label={`${weekdayShort(selectedDate)}${isToday ? "，今天" : "，回今天"}`}>
         <strong className="weather-date-weekday">{weekdayShort(selectedDate)}</strong>
@@ -107,11 +107,11 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true }: {
           : <button className="weather-date-return is-return" type="button" onClick={() => onChange(today)} aria-label="回到今天" title="回到今天">回今天</button>}
       </div>
     </div>
-    {showSteps ? <button className="weather-date-step" type="button" onClick={() => step(1)} aria-label="后一天"><DateStepGlyph direction="right" /></button> : null}
+    {showSteps ? <button className="weather-date-step" type="button" disabled={maxDate !== undefined && selectedDate >= maxDate} onClick={() => step(1)} aria-label="后一天"><DateStepGlyph direction="right" /></button> : null}
   </div>;
 }
 
-export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice, showDateNavigation = true }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void; readonly showDateNavigation?: boolean }) {
+export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice, showDateNavigation = true, maxDate }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void; readonly showDateNavigation?: boolean; readonly maxDate?: string }) {
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
   // Only a manual press spins the refresh button. Stepping through dates also
@@ -244,7 +244,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
     {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} solarPosition={solarPosition} moonPosition={moonPosition} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className={`weather-header-content ${showDateNavigation ? "" : "weather-header-content--summary-only"}`}>
-      <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} showSteps={showDateNavigation} />
+      <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} showSteps={showDateNavigation} maxDate={maxDate} />
       <div className="weather-header-summary" role={status?.configured ? "button" : undefined} tabIndex={status?.configured ? 0 : undefined} aria-label={status?.configured ? `刷新${selectedDate}天气` : undefined} aria-busy={manualBusy || loading ? "true" : undefined} onClick={status?.configured ? () => void refresh({ manual: true, escalate: armed }) : undefined} onKeyDown={status?.configured ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } } : undefined}>
         {status?.configured && displayDay && decision ? <>
           <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>

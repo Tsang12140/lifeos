@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 
 const npmCli = process.env.npm_execpath ?? (process.platform === "win32" ? resolve(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js") : "npm");
 function runNpm(args) {
-  return spawnSync(process.execPath, [npmCli, ...args], { stdio: "inherit", shell: false });
+  return spawnSync(process.execPath, [npmCli, ...args], { stdio: "inherit", shell: false, windowsHide: true });
 }
 
 const build = runNpm(["run", "build", "--workspace", "@lifeos/core"]);
@@ -21,7 +21,7 @@ const children = [
   // NODE_USE_ENV_PROXY *variable* during bootstrap, which happens before --env-file
   // is applied, so putting it in .env does nothing; the CLI flag is the only way in.
   // Without any proxy variable set the flag is a no-op.
-  spawn(process.execPath, ["--use-env-proxy", `--env-file-if-exists=${envFile}`, "apps/api/dist/src/main.js"], { stdio: "inherit", env: process.env }),
+  spawn(process.execPath, ["--use-env-proxy", `--env-file-if-exists=${envFile}`, "apps/api/dist/src/main.js"], { stdio: "inherit", windowsHide: true, env: process.env }),
   spawn(process.execPath, [
     resolve("node_modules/vite/bin/vite.js"),
     "--host",
@@ -29,6 +29,7 @@ const children = [
     ...(process.env.LIFEOS_WEB_PORT === undefined ? [] : ["--port", process.env.LIFEOS_WEB_PORT]),
   ], {
     cwd: resolve("apps/web"),
+    windowsHide: true,
     stdio: "inherit",
     shell: false,
     env: process.env,

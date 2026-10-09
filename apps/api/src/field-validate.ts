@@ -65,7 +65,7 @@ export function boundedIntegerField(value: unknown, name: string, minimum: numbe
 }
 
 export function cycleIntimacyConfig(input: JsonObject): CycleIntimacyModuleConfig {
-  hasOnlyKeys(input, ["enabled", "cycleLength", "periodLength", "anchorStart"]);
+  hasOnlyKeys(input, ["enabled", "cycleLength", "periodLength", "anchorStart", "habits"]);
   const anchorRaw = input.anchorStart;
   const anchorStart = anchorRaw === undefined || anchorRaw === null
     ? undefined
@@ -145,4 +145,3 @@ export function parseNoteDetails(value: unknown): NoteDetails {
 }
 
 /** Every calendar day in an inclusive range, so a month grid can ask for a range once. */
-

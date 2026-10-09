@@ -1,3 +1,4 @@
+import { photoDetailsFromExif } from "./photo-details.js";
 import sharp from "sharp";
 import type { PhotoMetadata } from "@lifeos/core";
 
@@ -51,14 +52,15 @@ export function cameraEvidenceFromExif(exif: Uint8Array | undefined): PhotoMetad
 }
 
 /** Reads headers from bytes already uploaded; no decode, extra request or upload failure. */
-export async function readPhotoMetadata(bytes: Buffer): Promise<PhotoMetadata | undefined> {
+export async function readPhotoMetadata(bytes: Buffer | string): Promise<PhotoMetadata | undefined> {
   try {
     const metadata = await sharp(bytes, { limitInputPixels: 80_000_000 }).metadata();
     const rotated = metadata.orientation !== undefined && metadata.orientation >= 5 && metadata.orientation <= 8;
     const width = rotated ? metadata.height : metadata.width;
     const height = rotated ? metadata.width : metadata.height;
     if (width === undefined || height === undefined || width < 1 || height < 1 || width > 100_000 || height > 100_000) return undefined;
-    return { version: 1, width, height, cameraEvidence: cameraEvidenceFromExif(metadata.exif) };
+    const details = photoDetailsFromExif(metadata.exif);
+    return { version: 1, width, height, cameraEvidence: cameraEvidenceFromExif(metadata.exif), detailsVersion: 1, ...(details === undefined ? {} : { details }) };
   } catch {
     return undefined;
   }

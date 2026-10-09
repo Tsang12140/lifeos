@@ -39,8 +39,34 @@ export interface RecordBody {
   readonly original: string;
   /** User-maintained content derived from, but separate from, original. */
   readonly edited?: string;
+  /** Decisions refer to the current text, including explicit exclusions. */
+  readonly entityMentions?: readonly TextEntityDecision[];
   /** Raw transcripts are tied to their source audio and provider. */
   readonly transcriptRaw?: readonly RawTranscript[];
+}
+
+export interface TextEntityDecision {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+  /** null means the owner deliberately left this occurrence as ordinary text. */
+  readonly entityId: EntityId | null;
+  readonly entityType: "person" | "place";
+}
+
+export function assertValidTextEntityDecisions(value: unknown, text: string): asserts value is readonly TextEntityDecision[] {
+  if (!Array.isArray(value) || value.length > 10_000) throw new Error("entityMentions must be an array of at most 10000 decisions");
+  let previousEnd = 0;
+  for (const item of value) {
+    const decision = objectValue(item, "entityMentions item");
+    if (!Number.isInteger(decision.start) || !Number.isInteger(decision.end)
+      || (decision.start as number) < previousEnd || (decision.end as number) <= (decision.start as number)
+      || (decision.end as number) > text.length) throw new Error("entityMentions ranges must be ordered, disjoint and inside the text");
+    if (typeof decision.text !== "string" || text.slice(decision.start as number, decision.end as number) !== decision.text) throw new Error("entityMentions text does not match its range");
+    if (decision.entityId !== null) nonEmptyStringValue(decision.entityId, "entityMentions.entityId");
+    enumValue(decision.entityType, ["person", "place"], "entityMentions.entityType");
+    previousEnd = decision.end as number;
+  }
 }
 
 export interface RawTranscript {
@@ -148,6 +174,8 @@ export interface Movie extends EntityBase {
   readonly personalReview?: string;
   /** Calendar date on which the owner watched the movie. */
   readonly watchedAt?: string;
+  /** Watched even when its calendar date is unknown. */
+  readonly watched?: boolean;
 }
 
 export type Entity = Person | Project | Place | Topic | Movie;
@@ -178,12 +206,23 @@ export interface StorageReference {
   readonly mediaType?: string;
 }
 
-/** Header-only upload evidence. Never retains EXIF names, dates or GPS. */
+/** Optional original-file metadata, displayed only in the photo information panel. */
+export interface PhotoDetails {
+  readonly make?: string; readonly model?: string; readonly lens?: string;
+  readonly capturedAt?: string; readonly timeZoneOffset?: string;
+  readonly software?: string; readonly artist?: string; readonly copyright?: string; readonly description?: string;
+  readonly exposureSeconds?: number; readonly aperture?: number; readonly focalLength?: number; readonly iso?: number;
+  readonly exposureBias?: number; readonly flash?: number; readonly whiteBalance?: number;
+  readonly latitude?: number; readonly longitude?: number; readonly altitude?: number;
+}
+/** Header information; EXIF fields remain optional for older assets. */
 export interface PhotoMetadata {
   readonly version: 1;
   readonly width: number;
   readonly height: number;
   readonly cameraEvidence: "none" | "device" | "capture";
+  readonly detailsVersion?: 1;
+  readonly details?: PhotoDetails;
 }
 
 export interface Asset {
@@ -246,6 +285,7 @@ export type CycleIntimacyEventKind = "intimacy" | "fitness" | "period_start" | "
 export const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "fitness", "period_start", "period_end"];
 
 export interface CycleIntimacyModuleConfig {
+  readonly habits?: readonly CustomHabit[];
   readonly enabled: boolean;
   /** Days from one confirmed period start to the next estimated start. */
   readonly cycleLength: number;
@@ -671,6 +711,7 @@ export function assertValidTimelineRecord(value: unknown): asserts value is Time
   const body = objectValue(record.body, "record.body");
   stringValue(body.original, "record.body.original");
   optionalStringValue(body.edited, "record.body.edited");
+  if (body.entityMentions !== undefined) assertValidTextEntityDecisions(body.entityMentions, (body.edited ?? body.original) as string);
   if (record.isPrivate !== undefined && typeof record.isPrivate !== "boolean") {
     throw new Error("record.isPrivate must be a boolean");
   }
@@ -755,6 +796,7 @@ function validateMovieExternalIds(value: unknown, name: string): void {
 }
 
 function validateMovieFields(entity: UnknownRecord): void {
+  if (entity.watched !== undefined && typeof entity.watched !== "boolean") throw new Error("entity.watched must be a boolean");
   if (entity.mediaType !== undefined) enumValue(entity.mediaType, ["movie", "tv"], "entity.mediaType");
   optionalStringValue(entity.originalTitle, "entity.originalTitle");
   if (entity.releaseYear !== undefined && (!Number.isSafeInteger(entity.releaseYear) || (entity.releaseYear as number) < 1 || (entity.releaseYear as number) > 9999)) {
@@ -827,7 +869,7 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
     }
     optionalStringValue(entity.address, "entity.address");
   }
-  const movieFieldNames = ["mediaType", "originalTitle", "releaseYear", "posterUrl", "overview", "externalIds", "doubanRating", "personalRating", "personalReview", "watchedAt"];
+  const movieFieldNames = ["mediaType", "originalTitle", "releaseYear", "posterUrl", "overview", "externalIds", "doubanRating", "personalRating", "personalReview", "watchedAt", "watched"];
   const carriesMovieFields = movieFieldNames.some((field) => entity[field] !== undefined);
   if (entity.type !== "movie" && carriesMovieFields) {
     throw new Error("movie fields are only allowed on a movie");
@@ -888,6 +930,18 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
       }
     }
     enumValue(metadata.cameraEvidence, ["none", "device", "capture"], "asset.photoMetadata.cameraEvidence");
+    if (metadata.detailsVersion !== undefined && metadata.detailsVersion !== 1) throw new Error("asset.photoMetadata.detailsVersion must be 1");
+    if (metadata.details !== undefined) {
+      const details = objectValue(metadata.details, "asset.photoMetadata.details");
+      for (const key of ["make", "model", "lens", "capturedAt", "timeZoneOffset", "software", "artist", "copyright", "description"]) {
+        if (details[key] !== undefined && (typeof details[key] !== "string" || (details[key] as string).length > 1024)) throw new Error("Invalid photo detail: " + key);
+      }
+      for (const key of ["exposureSeconds", "aperture", "focalLength", "iso", "exposureBias", "flash", "whiteBalance", "latitude", "longitude", "altitude"]) {
+        if (details[key] !== undefined && (typeof details[key] !== "number" || !Number.isFinite(details[key]))) throw new Error("Invalid photo detail: " + key);
+      }
+      if (typeof details.latitude === "number" && Math.abs(details.latitude) > 90) throw new Error("Invalid photo latitude");
+      if (typeof details.longitude === "number" && Math.abs(details.longitude) > 180) throw new Error("Invalid photo longitude");
+    }
   }
   if (asset.sizeBytes !== undefined && (typeof asset.sizeBytes !== "number" || !Number.isFinite(asset.sizeBytes) || asset.sizeBytes < 0)) {
     throw new Error("asset.sizeBytes must be a non-negative number");
@@ -906,6 +960,7 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
 /** Validation shared by the API, export format, and any future calendar clients. */
 export function assertValidCycleIntimacyModuleConfig(value: unknown, name = "cycleIntimacy.config"): asserts value is CycleIntimacyModuleConfig {
   const config = objectValue(value, name);
+  if (config.habits !== undefined) assertValidHabits(config.habits);
   if (typeof config.enabled !== "boolean") throw new Error(`${name}.enabled must be a boolean`);
   for (const key of ["cycleLength", "periodLength"] as const) {
     const number = config[key];
@@ -988,3 +1043,4 @@ function validateStorageReference(value: unknown, name: string): void {
   }
   optionalStringValue(storageRef.mediaType, `${name}.mediaType`);
 }
+import { assertValidHabits, type CustomHabit } from "./habits.js";

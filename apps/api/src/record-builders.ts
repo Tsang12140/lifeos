@@ -6,7 +6,9 @@ import {
   assertValidNoteDetails,
   assertValidStorageReference,
   assertValidWeatherAttachment,
-  findEntityMentions,
+  assertValidTextEntityDecisions,
+  rebaseEntityDecisions,
+  resolveTextEntityMentions,
   type Asset,
   type AssetLink,
   type AssetRole,
@@ -17,6 +19,7 @@ import {
   type TaskStatus,
   type TimelineRecord,
   type WeatherAttachment,
+  type TextEntityDecision,
 } from "@lifeos/core";
 import type { ApiConfig } from "./config.js";
 import type { RecordView, SqliteRecordRepository } from "./repository.js";
@@ -38,9 +41,9 @@ const RECORD_KINDS: readonly string[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
 const ASSET_KINDS: readonly string[] = ["photo", "audio", "file"];
 
-function withMentionRefs(text: string, refs: readonly EntityRef[], repository: SqliteRecordRepository): readonly EntityRef[] {
+function withMentionRefs(text: string, refs: readonly EntityRef[], repository: SqliteRecordRepository, decisions: readonly TextEntityDecision[] = []): readonly EntityRef[] {
   const entities = repository.listEntities();
-  const found = findEntityMentions(text, entities);
+  const found = resolveTextEntityMentions(text, entities, decisions);
   const seen = new Set(refs.map((ref) => ref.entityType + ":" + ref.entityId));
   const merged = [...refs];
   for (const mention of found) {
@@ -55,10 +58,23 @@ function withMentionRefs(text: string, refs: readonly EntityRef[], repository: S
 
 export { withMentionRefs };
 
+function entityDecisionsField(value: unknown, text: string, repository: SqliteRecordRepository): readonly TextEntityDecision[] {
+  return coreValidated("entityMentions", () => {
+    assertValidTextEntityDecisions(value, text);
+    for (const decision of value) {
+      if (decision.entityId === null) continue;
+      const entity = repository.findEntityById(decision.entityId);
+      if (entity === null || entity.type !== decision.entityType) throw new HttpError(400, "unknown_entity", "标记关联的对象不存在或类型不符");
+    }
+    return value;
+  });
+}
+
 export function buildRecord(input: JsonObject, repository: SqliteRecordRepository): TimelineRecord {
-  hasOnlyKeys(input, ["kind", "content", "occurredAt", "dueAt", "isPrivate", "isDemo", "isBackfill", "weather", "note", "entityRefs", "relatedRecordIds", "assetRefs"]);
+  hasOnlyKeys(input, ["kind", "content", "entityMentions", "occurredAt", "dueAt", "isPrivate", "isDemo", "isBackfill", "weather", "note", "entityRefs", "relatedRecordIds", "assetRefs"]);
   const kind = enumField(input.kind, RECORD_KINDS, "kind");
   const content = stringField(input.content, "content");
+  const decisions = input.entityMentions === undefined ? undefined : entityDecisionsField(input.entityMentions, content, repository);
   if (input.occurredAt !== undefined && input.occurredAt === null) throw new HttpError(400, "invalid_time", "occurredAt cannot be null on create");
   if (input.dueAt !== undefined && kind !== "task") throw new HttpError(400, "invalid_field", "dueAt is only valid for task records");
   const occurredAt = input.occurredAt === undefined ? undefined : parseLifeTime(input.occurredAt, "occurredAt");
@@ -79,14 +95,14 @@ export function buildRecord(input: JsonObject, repository: SqliteRecordRepositor
   const common = {
     id,
     createdAt: nowInstant(),
-    body: { original: content },
+    body: { original: content, ...(decisions === undefined ? {} : { entityMentions: decisions }) },
     ...(occurredAt === undefined ? {} : { occurredAt }),
     ...(isPrivate === undefined ? {} : { isPrivate }),
     ...(isDemo === undefined ? {} : { isDemo }),
     ...(isBackfill === undefined ? {} : { isBackfill }),
     ...(weather === undefined ? {} : { weather }),
     ...(note === undefined ? {} : { note }),
-    entityRefs: withMentionRefs(content, explicitRefs, repository),
+    entityRefs: withMentionRefs(content, explicitRefs, repository, decisions),
     relatedRecordIds:
       input.relatedRecordIds === undefined ? ([] as const) : relatedRecordIdsField(input.relatedRecordIds, id, repository),
     assetRefs: input.assetRefs === undefined ? ([] as const) : assetRefsField(input.assetRefs, repository),
@@ -94,7 +110,9 @@ export function buildRecord(input: JsonObject, repository: SqliteRecordRepositor
   };
   if (kind === "task") return { ...common, kind: "task", task: { status: "todo", ...(dueAt === undefined ? {} : { dueAt }) } };
   if (dueAt !== undefined) throw new HttpError(400, "invalid_field", "dueAt is only valid for task records");
-  return { ...common, kind } as TimelineRecord;
+  const record = { ...common, kind } as TimelineRecord;
+  assertJournalDate(record);
+  return record;
 }
 
 export function patchRecord(
@@ -102,7 +120,7 @@ export function patchRecord(
   input: JsonObject,
   repository: SqliteRecordRepository,
 ): { expectedRevision: number; record: TimelineRecord } {
-  hasOnlyKeys(input, ["revision", "content", "occurredAt", "dueAt", "isPrivate", "isBackfill", "weather", "note", "status", "entityRefs", "relatedRecordIds", "assetRefs"]);
+  hasOnlyKeys(input, ["revision", "content", "entityMentions", "occurredAt", "dueAt", "isPrivate", "isBackfill", "weather", "note", "status", "entityRefs", "relatedRecordIds", "assetRefs"]);
   const expectedRevision = revisionField(input.revision);
   const { revision: _revision, ...base } = current;
   let record: TimelineRecord = base;
@@ -135,7 +153,11 @@ export function patchRecord(
   }
   if (input.content !== undefined) {
     const content = stringField(input.content, "content");
-    record = { ...record, body: { ...record.body, edited: content } };
+    record = { ...record, body: { ...record.body, edited: content, ...(record.body.entityMentions === undefined ? {} : { entityMentions: rebaseEntityDecisions(record.body.edited ?? record.body.original, content, record.body.entityMentions) }) } };
+  }
+  if (input.entityMentions !== undefined) {
+    const decisions = entityDecisionsField(input.entityMentions, record.body.edited ?? record.body.original, repository);
+    record = { ...record, body: { ...record.body, entityMentions: decisions } };
   }
   if (Object.hasOwn(input, "occurredAt")) {
     if (input.occurredAt === null) {
@@ -166,8 +188,11 @@ export function patchRecord(
   }
   // Only a write that carries text re-reads the mentions in it, so removing a
   // chip by hand is not undone by an unrelated status change.
-  if (input.content !== undefined) {
-    record = { ...record, entityRefs: withMentionRefs(record.body.edited ?? record.body.original, record.entityRefs, repository) };
+  if (input.content !== undefined || input.entityMentions !== undefined) {
+    const previousMentions = resolveTextEntityMentions(current.body.edited ?? current.body.original, repository.listEntities(), current.body.entityMentions);
+    const managedIds = new Set(previousMentions.map((mention) => mention.entityId));
+    const refs = input.entityMentions === undefined && current.body.entityMentions === undefined ? record.entityRefs : record.entityRefs.filter((ref) => !managedIds.has(ref.entityId));
+    record = { ...record, entityRefs: withMentionRefs(record.body.edited ?? record.body.original, refs, repository, record.body.entityMentions) };
   }
   if (input.relatedRecordIds !== undefined) {
     record = { ...record, relatedRecordIds: relatedRecordIdsField(input.relatedRecordIds, record.id, repository) };
@@ -176,6 +201,7 @@ export function patchRecord(
     record = { ...record, assetRefs: assetRefsField(input.assetRefs, repository) };
   }
   record = { ...record, updatedAt: nowInstant() };
+  assertJournalDate(record);
   return { expectedRevision, record };
 }
 
@@ -310,6 +336,12 @@ export function assertImportReferences(bundle: ExportBundleV1, repository: Sqlit
   }
 
   for (const record of bundle.records) {
+    for (const decision of record.body.entityMentions ?? []) {
+      if (decision.entityId === null) continue;
+      const type = incomingEntityTypes.get(decision.entityId) ?? repository.findEntityById(decision.entityId)?.type;
+      if (type !== decision.entityType) throw new HttpError(400, "unknown_entity", "导入的正文标记关联对象不存在或类型不符");
+      if (!record.entityRefs.some((ref) => ref.entityId === decision.entityId && ref.entityType === decision.entityType)) throw new HttpError(400, "invalid_reference", "导入的正文标记缺少对应关联");
+    }
     const seenEntities = new Set<string>();
     for (const ref of record.entityRefs) {
       if (seenEntities.has(ref.entityId)) throw new HttpError(400, "duplicate_reference", `entityRefs repeats ${ref.entityId}`);
@@ -376,4 +408,11 @@ export function aliasesField(value: unknown): readonly string[] {
   return unique;
 }
 
+import { calendarToday } from "@lifeos/core";
+import { dateForTime } from "./timeline-query.js";
 
+function assertJournalDate(record: Pick<TimelineRecord, "kind" | "occurredAt" | "createdAt">): void {
+  if (record.kind === "journal" && dateForTime(record.occurredAt ?? record.createdAt, "Asia/Shanghai") > calendarToday()) {
+    throw new HttpError(400, "future_journal", "未来日期不能写日记，请选择今天或之前的日期");
+  }
+}

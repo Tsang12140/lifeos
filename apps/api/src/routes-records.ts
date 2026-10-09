@@ -1,5 +1,6 @@
+import { dateForTime } from "./timeline-query.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { RecordKind, TaskStatus } from "@lifeos/core";
+import { calendarToday, canEditDaySummary, isAiAssisted, isBackfilled, type RecordKind, type TaskStatus } from "@lifeos/core";
 import { ConflictError } from "./repository.js";
 import { HttpError, setJson, setEmpty } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
@@ -17,7 +18,7 @@ import {
 import { assertImportReferences, buildRecord, contentDisposition, patchRecord, safeId } from "./record-builders.js";
 import { nowInstant } from "./field-validate.js";
 import { assertTimeZone, datesBetween, filterDate, filterDateRange, sortTimeline } from "./timeline-query.js";
-import { buildManualDaySummary, createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
+import { buildManualDaySummary, buildOfflineDaySummary, createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
 import {
   createExportBundle,
   exportRecordMarkdown,
@@ -69,13 +70,51 @@ export const handleRecordsRoutes: RouteHandler = async (
     if (status !== undefined) query.status = status;
     if (entityId !== undefined) query.entityId = entityId;
     if (assetId !== undefined) query.assetId = assetId;
+    const many = <T extends string>(key: string, choices: readonly T[]): readonly T[] => {
+      const raw = url.searchParams.get(key);
+      return raw ? [...new Set(raw.split(",").map((value) => enumField(value, choices, key)))] : [];
+    };
+    const kinds = many("kinds", RECORD_KINDS), statuses = many("statuses", TASK_STATUSES);
+    const entityTypes = many("entityTypes", ["person", "place", "movie", "project"] as const);
+    const attachments = many("attachments", ["photo", "file"] as const);
+    const marker = url.searchParams.get("backfill");
+    const assisted = url.searchParams.get("assisted");
+    if (assisted !== null && assisted !== "true" && assisted !== "false") throw new HttpError(400, "invalid_query", "assisted筛选格式不正确");
+    const backfill = marker ? enumField(marker, ["all", "ai"] as const, "backfill") : undefined;
     // Date/range reads feed Today and Calendar. Notes are a separate content
     // library and must not leak into those time-oriented surfaces.
     const timeScoped = date !== undefined || from !== undefined || to !== undefined;
-    const sourceRecords = repository.list(query).filter((record) => !(timeScoped && record.kind === "note"));
+    const sourceRecords = repository.list(query).filter((record) => {
+      if (timeScoped && record.kind === "note" && url.searchParams.get("search") !== "1") return false;
+      if (kinds.length && !kinds.includes(record.kind)) return false;
+      if (statuses.length && (record.kind !== "task" || !statuses.includes(record.task.status))) return false;
+      if (backfill === "all" && !isBackfilled(record)) return false;
+      if ((backfill === "ai" || assisted === "true") && !isAiAssisted(record)) return false;
+      if (entityTypes.length && !record.entityRefs.some((ref) => entityTypes.includes(ref.entityType as typeof entityTypes[number]))) return false;
+      if (attachments.length && !record.assetRefs.some((ref) => attachments.some((kind) => kind === "photo" ? repository.findAssetById(ref.assetId)?.kind === "photo" : ref.role === "attachment" || repository.findAssetById(ref.assetId)?.kind === "file"))) return false;
+      return true;
+    });
     const scoped = filterDate(sourceRecords, date, timeZone);
     const items = sortTimeline(filterDateRange(scoped, from, to, timeZone), timeZone);
     setJson(res, 200, { items });
+    return true;
+  }
+  if (pathname === "/api/calendar/tasks/labels" && req.method === "POST") {
+    requireJsonContentType(req);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["from", "to", "timeZone"]);
+    const from = parseDateQuery(stringField(input.from, "from"), "from")!;
+    const to = parseDateQuery(stringField(input.to, "to"), "to")!;
+    const timeZone = input.timeZone === undefined ? "Asia/Shanghai" : stringField(input.timeZone, "timeZone");
+    assertTimeZone(timeZone);
+    if (!from || !to || from > to || datesBetween(from, to).length > 42) throw new HttpError(400, "invalid_range", "待办简写范围不能超过42天");
+    const tasks = repository.list({ kind: "task" }).filter(record => record.kind === "task" && record.isPrivate !== true && record.task.status !== "cancelled" && record.task.dueAt !== undefined && (() => { const date = dateForTime(record.task.dueAt, timeZone); return date >= from && date <= to; })());
+    tasks.sort((a, b) => Number(a.kind === "task" && a.task.status === "done") - Number(b.kind === "task" && b.task.status === "done") || a.createdAt.value.localeCompare(b.createdAt.value) || a.id.localeCompare(b.id));
+    const counts = new Map<string, number>();
+    const shown = tasks.filter(record => { const date = dateForTime(record.kind === "task" ? record.task.dueAt! : record.createdAt, timeZone); const count = counts.get(date) ?? 0; counts.set(date, count + 1); return count < 2; });
+    const items = await ctx.calendarTaskLabels.resolve(config, ctx.poolAccountId, shown);
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+    setJson(res, 200, { items, usage: ctx.calendarTaskLabels.usage(ctx.poolAccountId, day) });
     return true;
   }
   if (pathname === "/api/summaries" && req.method === "GET") {
@@ -98,6 +137,7 @@ export const handleRecordsRoutes: RouteHandler = async (
       cache: repository,
       provider: daySummaryProvider,
       force: url.searchParams.get("force") === "1",
+      today: new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date()),
     });
     setJson(res, 200, summaryPayload(items, daySummaryProvider));
     return true;
@@ -112,25 +152,32 @@ export const handleRecordsRoutes: RouteHandler = async (
     const timeZone = typeof input.timeZone === "string" ? input.timeZone : "UTC";
     assertTimeZone(timeZone);
     const byDate = collectSummarisableRecords(repository, timeZone);
-    const saved: DaySummary[] = [];
-    const cleared: string[] = [];
-    for (const entry of entries) {
+    const checked = entries.map(entry => {
       const item = jsonObject(entry, "entries[]");
       hasOnlyKeys(item, ["date", "text"]);
-      const date = stringField(item.date, "date", { nonEmpty: true });
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "invalid_date", `entries[].date must be YYYY-MM-DD, received ${date}`);
+      const date = parseDateQuery(stringField(item.date, "date", { nonEmpty: true }), "date")!;
       const text = stringField(item.text, "text");
+      if (!canEditDaySummary(date, calendarToday(), byDate.get(date) ?? [])) {
+        throw new HttpError(400, "summary_not_editable", date > calendarToday() ? "未来日期不能写小结" : "当天没有可用于小结的日记，不能修改小结");
+      }
+      return { date, text };
+    });
+    if (new Set(checked.map(entry => entry.date)).size !== checked.length) throw new HttpError(400, "invalid_entries", "同一天的小结不能重复提交");
+    const saved: DaySummary[] = [];
+    const cleared: string[] = [];
+    repository.atomic(() => { for (const { date, text } of checked) {
       // An emptied field is a revert, not a blank summary: the row is dropped so
       // the next read recomputes it from the records.
       if (text.trim() === "") {
         repository.deleteDaySummary(date);
         cleared.push(date);
+        saved.push(buildOfflineDaySummary(date, byDate.get(date) ?? []));
         continue;
       }
       const summary = buildManualDaySummary(date, text, byDate.get(date) ?? []);
       repository.writeDaySummary(summary);
       saved.push(summary);
-    }
+    } });
     setJson(res, 200, { items: saved, cleared });
     return true;
   }
@@ -153,6 +200,9 @@ export const handleRecordsRoutes: RouteHandler = async (
     const dates = datesBetween(from, to);
     if (dates.length > 400) throw new HttpError(400, "invalid_range", "range must not exceed 400 days");
     const byDate = collectSummarisableRecords(repository, timeZone);
+    if (dates.some(date => !canEditDaySummary(date, calendarToday(), byDate.get(date) ?? []))) {
+      throw new HttpError(400, "summary_not_editable", "只能重新生成今天或之前有日记的日期的小结");
+    }
     const daySummaryProvider = createDaySummaryProvider(config);
     // Forcing is what makes this a regenerate rather than a read: it steps over
     // the cached row — including one the owner typed — and writes a fresh one.
@@ -177,6 +227,13 @@ export const handleRecordsRoutes: RouteHandler = async (
     return true;
   }
   const recordMatch = /^\/api\/records\/([^/]+)$/.exec(pathname);
+  if (recordMatch !== null && req.method === "GET") {
+    let id: string;
+    try { id = safeId(decodeURIComponent(recordMatch[1]!)); } catch { throw new HttpError(400, "invalid_id", "记录编号不正确"); }
+    const record = repository.findById(id);
+    if (!record) throw new HttpError(404, "not_found", "记录不存在");
+    setJson(res, 200, record); return true;
+  }
   if (recordMatch !== null && (req.method === "PATCH" || req.method === "DELETE")) {
     let decodedId: string;
     try {

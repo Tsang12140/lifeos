@@ -1,6 +1,7 @@
 import test from "node:test";
 import { deepStrictEqual, equal, match, ok, throws } from "node:assert/strict";
 import {
+  backfillEntryTime,
   assertValidEntity,
   assertValidCycleIntimacyModuleData,
   assertValidTimelineRecord,
@@ -14,6 +15,10 @@ import {
   escapeMarkdownPath,
   exportRecordMarkdown,
   findEntityMentions,
+  findEntityCandidates,
+  rebaseEntityDecisions,
+  resolveTextEntityMentions,
+  assertValidTextEntityDecisions,
   normalizeEntitySearchTerm,
   clampSummaryText,
   isNoteOnlyDay,
@@ -28,6 +33,40 @@ import {
   type Entity,
   type TaskRecord,
 } from "../src/index.js";
+
+test("candidate review preserves spaced aliases, longest names and ambiguous identity", () => {
+  const entities: Entity[] = [
+    { id: "shop", type: "place", name: "A 咖啡店", aliases: ["B 咖啡店"] },
+    { id: "li", type: "person", name: "小李", aliases: ["阿李"] },
+    { id: "other", type: "person", name: "小李" },
+    { id: "long", type: "person", name: "小李老师" },
+  ];
+  const text = "去了B咖啡店和 B  咖啡店，小李、小李老师、阿李。";
+  const candidates = findEntityCandidates(text, entities);
+  deepStrictEqual(candidates.map((item) => item.text), ["B咖啡店", "B  咖啡店", "小李", "小李老师", "阿李"]);
+  equal(candidates[2]!.entities.length, 2);
+  equal(findEntityMentions("@小李", entities).length, 0);
+  deepStrictEqual(findEntityCandidates("barbecue bar b a r", [{ id: "bar", type: "place", name: "bar" }]).map((item) => item.text), ["bar", "b a r"]);
+  equal(findEntityCandidates("B\n咖啡店", entities).length, 0);
+});
+
+test("confirmed and dismissed occurrences survive surrounding edits without rewriting text", () => {
+  const entities: Entity[] = [{ id: "li", type: "person", name: "小李" }];
+  const text = "小李来了，小李走了。";
+  const decisions = findEntityCandidates(text, entities).map((candidate, index) => ({ start: candidate.start, end: candidate.end, text: candidate.text, entityId: index === 0 ? "li" : null, entityType: "person" as const }));
+  assertValidTextEntityDecisions(decisions, text);
+  equal(resolveTextEntityMentions(text, entities, decisions).length, 1);
+  const moved = rebaseEntityDecisions(text, "今天" + text, decisions);
+  equal(moved[1]!.start, decisions[1]!.start + 2);
+  equal(moved[1]!.entityId, null);
+  const repeated = [{ start: 0, end: 2, text: "小李", entityId: null, entityType: "person" as const }];
+  equal(rebaseEntityDecisions("小李小李", "小李小李小李", repeated, { start: 0, end: 0 })[0]!.start, 2);
+  equal(rebaseEntityDecisions(text, text.replace("小李来了", "小王来了"), decisions).length, 1);
+  throws(() => assertValidTextEntityDecisions([{ ...decisions[0]!, text: "小王" }], text));
+  throws(() => assertValidTextEntityDecisions([decisions[0]!, decisions[0]!], text));
+  const marked = "@小李来了";
+  equal(resolveTextEntityMentions(marked, entities, [{ start: 0, end: 3, text: "@小李", entityId: null, entityType: "person" }]).length, 0);
+});
 
 test("cycle module accepts the independent fitness habit while preserving period markers", () => {
   assertValidCycleIntimacyModuleData({
@@ -666,4 +705,13 @@ test("cleanMovieQuery 洗掉动作词、书名号与季标记，但不动片名�
   // 洗不出东西就给空串，让调用方把菜单项变灰 —— 而不是送半个片名去搜。
   equal(cleanMovieQuery("   "), "");
   equal(cleanMovieQuery("《》"), "");
+});
+
+test("assistant time uses Shanghai midnight and never invents a clock for historical date-only entries",()=>{
+  const entry={key:"time",selected:true,kind:"journal" as const,content:"夜间记录",date:"2026-10-08",evidence:"原话",questions:"",entityKeys:[],assetIds:[]};
+  equal(backfillEntryTime(entry,"2026-10-07T16:00:10.000Z"),"00:00");
+  equal(backfillEntryTime(entry,"2026-10-07T15:59:59.000Z"),"");
+  equal(backfillEntryTime({...entry,isBackfill:true},"2026-10-08T04:00:00Z"),"");
+  equal(backfillEntryTime({...entry,time:"12:00"},"2026-10-09T04:00:00Z"),"12:00");
+  equal(backfillEntryTime({...entry,time:""},"2026-10-08T04:00:00Z"),"");
 });

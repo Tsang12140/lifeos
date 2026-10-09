@@ -3,6 +3,7 @@ import { HardDrive, LoaderCircle, RefreshCw, Save } from "lucide-react";
 import { apiRequest } from "./api";
 import { errorMessage } from "./app-meta";
 import "./pool-storage.css";
+import { PoolTransitionCard } from "./PoolTransitionCard";
 
 const GIB = 1024 ** 3;
 
@@ -179,6 +180,7 @@ export function PoolStorageSettingsCard() {
       </button>
     </div>
 
+    <PoolTransitionCard />
     {state === "loading" ? <p className="pool-usage-state" role="status">正在读取弹指项目用量…</p> : null}
     {state === "unavailable" ? <div className="pool-usage-state is-unavailable" role="status"><strong>存储池不可用，额度编辑已停用</strong><span>{error || "接入层尚未启用或暂时无法读取用量。"}</span></div> : null}
     {state === "failed" ? <div className="pool-usage-state is-unavailable" role="alert"><strong>无法读取存储池用量，额度编辑已停用</strong><span>{error}</span></div> : null}

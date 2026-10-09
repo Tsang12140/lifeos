@@ -23,6 +23,8 @@ export interface ApiConfig {
   readonly ownerUsername?: string;
   /** Set only by the trusted in-process account gateway, never from request data. */
   readonly gatewayAuthenticated?: boolean;
+  /** In-process account gateway hook. Never supplied by request data or persisted. */
+  readonly archivePasswordVerifier?: (password: string) => Promise<boolean>;
   readonly dataDirectory: string;
   readonly webDirectory: string;
   /**

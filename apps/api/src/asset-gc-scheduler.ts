@@ -39,6 +39,7 @@ export interface AssetGcSchedulerOptions {
   readonly clearTimeout?: (timer: ReturnType<typeof globalThis.setTimeout>) => void;
   readonly onError?: (error: unknown) => void;
   readonly onReport?: (report: AssetGcReport) => void;
+  readonly canRun?: () => boolean;
 }
 
 /**
@@ -58,6 +59,7 @@ export class AssetGcScheduler {
   readonly #clearTimeout: (timer: ReturnType<typeof globalThis.setTimeout>) => void;
   readonly #onError: (error: unknown) => void;
   readonly #onReport: (report: AssetGcReport) => void;
+  readonly #canRun: () => boolean;
   #timer: ReturnType<typeof globalThis.setTimeout> | undefined;
   #running = false;
   #inFlight = false;
@@ -70,6 +72,7 @@ export class AssetGcScheduler {
     this.#clearTimeout = options.clearTimeout ?? ((timer) => globalThis.clearTimeout(timer));
     this.#onError = options.onError ?? (() => {});
     this.#onReport = options.onReport ?? (() => {});
+    this.#canRun = options.canRun ?? (() => true);
   }
 
   public start(): void {
@@ -91,7 +94,7 @@ export class AssetGcScheduler {
 
   /** Explicit test/operator hook. Re-entrant calls are ignored, not queued. */
   public runOnce(now: Date = this.#now()): AssetGcReport | null {
-    if (this.#inFlight) return null;
+    if (this.#inFlight || !this.#canRun()) return null;
     this.#inFlight = true;
     try {
       const report = runAssetGc(this.#config, this.#repository, now);

@@ -1,4 +1,158 @@
+test("assistant partial confirmation keeps deferred items, immutable written entries and independent markers", async t => {
+  const h=await startHarness();t.after(()=>h.stop());
+  const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai"}).format(new Date());
+  let batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"分条",text:today+" 此刻很开心\n2026-09-20 昨天公园玩了\n2026-09-21 暂时留着"}]})})).body as BackfillBatch;
+  const path="/api/ai/backfill/"+batch.id;
+  const first=batch.plan.entries[0]!.key,second=batch.plan.entries[1]!.key,third=batch.plan.entries[2]!.key;
+  batch=(await request(h.base,path,{method:"PATCH",...json({revision:batch.revision,plan:{...batch.plan,objects:[{key:"person",type:"person",selected:true,name:"已审核人物",aliases:[],description:"",address:"",evidence:"用户资料",questions:""}],entries:batch.plan.entries.map(e=>({...e,entityKeys:e.key===third?[]:["person"]}))}})})).body as BackfillBatch;
+  const commit=(keys?:string[],revision=batch.revision)=>request(h.base,path+"/commit",{method:"POST",...json({revision,...(keys?{keys}:{})})});
+  const update=(plan:BackfillBatch["plan"])=>request(h.base,path,{method:"PATCH",...json({revision:batch.revision,plan})});
+  const a=await commit([first]);equal(a.response.status,200,JSON.stringify(a.body));batch=a.body as BackfillBatch;
+  equal(batch.status,"draft");deepEqual(batch.committedKeys,[first]);
+  const current=(await request(h.base,"/api/records/"+batch.recordIds![0])).body as RecordView;
+  equal(current.isBackfill ?? false,false);equal(current.occurredAt?.kind,"instant");
+  const skipped=await request(h.base,path+"/review",{method:"POST",...json({revision:batch.revision,key:third,deferred:true})});equal(skipped.response.status,200);batch=skipped.body as BackfillBatch;
+  equal((await commit([second],1)).response.status,409);
+  const saved=await update({...batch.plan,objects:batch.plan.objects.map(o=>({...o,name:"不能篡改已确认人物",selected:false})),entries:batch.plan.entries.map(e=>({...e,content:e.key===first?"不能篡改已经记录的内容":e.content}))});equal(saved.response.status,200);batch=saved.body as BackfillBatch;
+  equal(batch.plan.entries.find(e=>e.key===first)!.content.includes("此刻很开心"),true);equal(batch.plan.objects[0]!.name,"已审核人物");equal(batch.plan.objects[0]!.selected,true);
+  const both=await commit();equal(both.response.status,200,JSON.stringify(both.body));batch=both.body as BackfillBatch;
+  equal(batch.recordIds!.length,2);equal(batch.status,"draft");deepEqual(batch.deferredKeys,[third]);
+  equal((await commit([first],1)).response.status,200);equal(backfillItems((await request(h.base,"/api/records")).body).length,2);
+  await request(h.base,"/api/records",{method:"POST",...json({kind:"journal",content:"自己记今天",occurredAt:{kind:"date",value:today}})});
+  await request(h.base,"/api/records",{method:"POST",...json({kind:"journal",content:"自己补过去",occurredAt:{kind:"date",value:"2026-09-19"},isBackfill:true})});
+  equal(backfillItems((await request(h.base,"/api/records?assisted=true")).body).length,2);
+  equal(backfillItems((await request(h.base,"/api/records?backfill=all")).body).length,2);
+  equal(backfillItems((await request(h.base,"/api/records?assisted=true&backfill=all")).body).length,1);
+  const restored=await request(h.base,path+"/review",{method:"POST",...json({revision:batch.revision,key:third,deferred:false})});batch=restored.body as BackfillBatch;
+  const done=await commit();equal(done.response.status,200);batch=done.body as BackfillBatch;equal(batch.status,"committed");equal(batch.recordIds!.length,3);
+  const undo=await request(h.base,path+"/undo",{method:"POST",...json({})});equal(undo.response.status,200,JSON.stringify(undo.body));equal(backfillItems((await request(h.base,"/api/records")).body).length,2);
+});
+
+test("assistant cycle and habit proposals are actual markers, atomic, guarded and reversible", async t=>{
+  const h=await startHarness();t.after(()=>h.stop());
+  let batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"请求",text:"2026-09-20 标记周期开始和读书"}]})})).body as BackfillBatch;
+  const path="/api/ai/backfill/"+batch.id;
+  const action={key:"cycle",type:"cycle" as const,date:"2026-09-20",selected:true,marked:true,cycleKind:"period_start" as const,evidence:"聊天明确要求",questions:""};
+  const habit={key:"read",type:"habit" as const,date:"2026-09-20",selected:true,marked:true,name:"读书",icon:"BookOpen",evidence:"聊天明确要求",questions:""};
+  const saved=await request(h.base,path,{method:"PATCH",...json({revision:batch.revision,plan:{entries:[],objects:[],actions:[action,habit],explanation:"独立标记"}})});equal(saved.response.status,200);batch=saved.body as BackfillBatch;
+  equal(backfillItems((await request(h.base,"/api/records")).body).length,0);
+  const before=(await request(h.base,"/api/modules/cycle-intimacy")).body as {config:{enabled:boolean};events:unknown[]};equal(before.events.length,0);
+  const marked=await request(h.base,path+"/commit",{method:"POST",...json({revision:batch.revision})});equal(marked.response.status,200,JSON.stringify(marked.body));batch=marked.body as BackfillBatch;
+  const module=(await request(h.base,"/api/modules/cycle-intimacy")).body as {config:{enabled:boolean;habits:CustomHabit[]};events:{kind:string}[]};
+  equal(module.config.enabled,true);equal(module.events[0]!.kind,"period_start");equal(module.config.habits[0]!.name,"读书");deepEqual(module.config.habits[0]!.dates,["2026-09-20"]);equal(backfillItems((await request(h.base,"/api/records")).body).length,0);
+  equal((await request(h.base,path+"/undo",{method:"POST",...json({})})).response.status,200);
+  deepEqual((await request(h.base,"/api/modules/cycle-intimacy")).body,before);
+  batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"另一批",text:"2026-09-21 新标记"}]})})).body as BackfillBatch;
+  const p="/api/ai/backfill/"+batch.id;
+  const future={...batch.plan.entries[0]!,date:"2999-01-01"};
+  batch=(await request(h.base,p,{method:"PATCH",...json({revision:batch.revision,plan:{entries:[future],objects:[],actions:[action],explanation:"拒绝未来整批"}})})).body as BackfillBatch;
+  equal((await request(h.base,p+"/commit",{method:"POST",...json({revision:batch.revision})})).response.status,400);
+  deepEqual((await request(h.base,"/api/modules/cycle-intimacy")).body,before);
+  equal(backfillItems((await request(h.base,"/api/records")).body).length,0);
+  const other=await startHarness();t.after(()=>other.stop());equal((await request(other.base,p+"/commit",{method:"POST",...json({revision:batch.revision})})).response.status,404);
+});
+
+test("assistant forwards nine ordered photos and protects partial content from later model edits",async t=>{
+  const photosRoot=mkdtempSync(join(tmpdir(),"lifeos-assistant-photos-"));const h=await startHarness(undefined,1024*1024,undefined,photosRoot);t.after(async()=>{await h.stop();rmSync(photosRoot,{recursive:true,force:true});});
+  await request(h.base,"/api/ai/config",{method:"POST",...json({enabled:true,baseUrl:"https://ordered-ai.invalid/v1",model:"vision",thinking:false,apiKey:"sk-isolated"})});
+  const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai"}).format(new Date());
+  const materials=[];
+  for(let i=0;i<9;i++){const result=await request(h.base,"/api/assets/uploads?name=photo"+i+".png",{method:"POST",headers:{"content-type":"image/png"},body:new Uint8Array(Buffer.concat([TINY_PNG,Buffer.from(String(i))]))});equal(result.response.status,201);materials.push({name:"照片"+(i+1),text:"照片序号"+(i+1),assetId:(result.body as Asset).id,imageData:"data:image/png;base64,"+TINY_PNG.toString("base64")});}
+  let plan={explanation:"按照片分组",objects:[],entries:[{key:"today",kind:"journal",date:today,selected:true,isBackfill:false,content:"很开心",evidence:"原话",questions:"",entityKeys:[],assetIds:materials.slice(0,3).map(m=>m.assetId)},{key:"past",kind:"journal",date:"2026-09-20",selected:true,isBackfill:true,content:"今天去公园玩了",evidence:"原话",questions:"",entityKeys:[],assetIds:materials.slice(3).map(m=>m.assetId)}]};
+  let captured="";const realFetch=globalThis.fetch;
+  globalThis.fetch=async(input,init)=>{if(String(input).startsWith("https://ordered-ai.invalid/")){captured=String(init?.body);return Response.json({choices:[{message:{content:JSON.stringify({action:"new_draft",reply:"分别列出了今天三张和过去六张",plan})}}]})}return realFetch(input,init)};t.after(()=>{globalThis.fetch=realFetch});
+  const result=await request(h.base,"/api/ai/backfill/chat",{method:"POST",...json({message:"前三张今天很开心，后六张昨天今天去公园玩了",materials})});equal(result.response.status,200,JSON.stringify(result.body));let batch=(result.body as BackfillChatAnswer).batch!;
+  const payload=JSON.parse(captured),content=payload.messages.at(-1).content;equal(content.filter((c:{type:string})=>c.type==="image_url").length,9);deepEqual(JSON.parse(content[0].text).photoOrder.map((m:{assetId:string})=>m.assetId),materials.map(m=>m.assetId));
+  batch=(await request(h.base,"/api/ai/backfill/"+batch.id+"/commit",{method:"POST",...json({revision:batch.revision,keys:["today"]})})).body as BackfillBatch;
+  plan={...plan,entries:plan.entries.map(e=>({...e,content:e.key==="today"?"模型试图篡改": "修改未确认条目"}))};
+  const revised=await request(h.base,"/api/ai/backfill/chat",{method:"POST",...json({message:"只改昨天那条",batchId:batch.id,revision:batch.revision})});equal(revised.response.status,200);batch=(revised.body as BackfillChatAnswer).batch!;
+  equal(batch.plan.entries.find(e=>e.key==="today")!.content,"很开心");equal(batch.plan.entries.find(e=>e.key==="past")!.content,"修改未确认条目");equal(batch.recordIds!.length,1);
+  const written=(await request(h.base,"/api/records/"+batch.recordIds![0])).body as RecordView;equal(written.assetRefs.length,3);equal(written.isBackfill ?? false,false);
+});
+
 import test from "node:test";
+
+test("calendar editing rejects future journals and summaries without a public journal atomically", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const journal = await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "读了一本书", occurredAt: { kind: "date", value: "2026-09-08" } }) });
+  equal(journal.response.status, 201);
+  const future = { kind: "date", value: "2999-01-01" };
+  equal((await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "未来日记", occurredAt: future }) })).response.status, 400);
+  const r = journal.body as RecordView;
+  equal((await request(h.base, "/api/records/" + r.id, { method: "PATCH", ...json({ revision: r.revision, occurredAt: future }) })).response.status, 400);
+  equal((await request(h.base, "/api/records", { method: "POST", ...json({ kind: "task", content: "未来计划", dueAt: future }) })).response.status, 201);
+  await request(h.base, "/api/records", { method: "POST", ...json({ kind: "event", content: "只有事件", occurredAt: { kind: "date", value: "2026-09-09" } }) });
+  await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "隐私日记", isPrivate: true, occurredAt: { kind: "date", value: "2026-09-10" } }) });
+  const manual = (entries: object[]) => request(h.base, "/api/summaries/manual", { method: "POST", ...json({ timeZone: "Asia/Shanghai", entries }) });
+  for (const date of ["2999-01-01", "2026-09-09", "2026-09-10", "2026-09-11"]) equal((await manual([{ date, text: "不可编辑" }])).response.status, 400);
+  equal((await manual([{ date: "2026-09-08", text: "不能部分写入" }, { date: "2999-01-01", text: "未来" }])).response.status, 400);
+  const before = await request(h.base, "/api/summaries?from=2026-09-08&to=2026-09-08&timeZone=Asia%2FShanghai");
+  ok((before.body as { items: DaySummary[] }).items[0]?.status !== "manual");
+  const saved = await manual([{ date: "2026-09-08", text: "阅读愉快" }]);
+  equal(saved.response.status, 200); equal((saved.body as { items: DaySummary[] }).items[0]?.text, "阅读愉快");
+  const cleared = await manual([{ date: "2026-09-08", text: "" }]);
+  equal(cleared.response.status, 200);
+  equal((cleared.body as { items: DaySummary[] }).items[0]?.text, "读了一本书");
+  equal((cleared.body as { items: DaySummary[] }).items[0]?.status, "fallback");
+  equal((await request(h.base, "/api/summaries/regenerate", { method: "POST", ...json({ date: "2999-01-01" }) })).response.status, 400);
+});
+
+test("a slow summary provider cannot replace a newer manual write", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const made = await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "原日记", occurredAt: { kind: "date", value: "2026-09-08" } }) });
+  const record = made.body as RecordView;
+  for (const force of [false, true]) {
+    let cached: DaySummary | null = force ? buildManualDaySummary("2026-09-08", "旧手写", [record]) : null;
+    let release!: () => void, started!: () => void;
+    const begun = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = resolveDaySummaries({
+      dates: ["2026-09-08"], recordsForDate: () => [record],
+      cache: { readDaySummary: () => cached, writeDaySummary: value => { cached = value; } },
+      provider: { providerId: "slow-test", kind: "ai", summarizeDays: async () => { started(); await gate; return [{ date: "2026-09-08", text: "迟到的AI" }]; } },
+      force, today: calendarToday(),
+    });
+    await begun;
+    const edited = buildManualDaySummary("2026-09-08", "刚刚保存的手写", [record]);
+    cached = edited; release();
+    deepEqual(await pending, [edited]);
+    equal(cached.text, "刚刚保存的手写");
+  }
+});
+
+test("custom habits support icons, dates, revision guards and export without losing existing cycle data", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const base = "/api/modules/cycle-intimacy";
+  const create = (name: string, icon: string) => request(h.base, base + "/habits", { method: "POST", ...json({ name, icon }) });
+  equal((await create("读书", "BookOpen")).response.status, 201);
+  const made = await create("吃素", "Carrot"); equal(made.response.status, 201);
+  let module = made.body as { config: { enabled: boolean; cycleLength: number; periodLength: number; habits: CustomHabit[] }; events: unknown[] };
+  let habit = module.config.habits.find(item => item.name === "吃素")!;
+  const markDay = (date: string, marked: boolean, revision = habit.revision) => request(h.base, base + "/habits/" + habit.id + "/days", { method: "PUT", ...json({ date, marked, revision }) });
+  equal((await markDay("2999-01-01", true)).response.status, 400);
+  const marked = await markDay("2026-09-08", true); equal(marked.response.status, 200);
+  const oldRevision = habit.revision;
+  module = marked.body as typeof module; habit = module.config.habits.find(item => item.id === habit.id)!;
+  deepEqual(habit.dates, ["2026-09-08"]);
+  equal((await markDay("2026-09-09", true, oldRevision)).response.status, 409);
+  const renamed = await request(h.base, base + "/habits/" + habit.id, { method: "PATCH", ...json({ revision: habit.revision, name: "素食", icon: "Salad" }) });
+  equal(renamed.response.status, 200); module = renamed.body as typeof module; habit = module.config.habits.find(item => item.id === habit.id)!;
+  deepEqual(habit.dates, ["2026-09-08"]); equal(habit.name, "素食"); equal(habit.icon, "Salad");
+  equal((await create("读书", "Book")).response.status, 409); equal((await create("坏图标", "RemoteSvg")).response.status, 400);
+  const staleConfig = { enabled: true, cycleLength: 30, periodLength: 5, habits: [] };
+  const config = await request(h.base, base + "/config", { method: "PUT", ...json(staleConfig) });
+  equal(config.response.status, 200); equal((config.body as typeof module).config.habits.length, 2);
+  const exported = await request(h.base, "/api/export"); equal(exported.response.status, 200);
+  const h2 = await startHarness(); t.after(() => h2.stop());
+  equal((await request(h2.base, "/api/modules/cycle-intimacy/habits/" + habit.id, { method: "PATCH", ...json({ revision: habit.revision, name: "不属于本空间", icon: "Book" }) })).response.status, 404);
+  const imported = await request(h2.base, "/api/import", { method: "POST", ...json({ bundle: exported.body }) }); equal(imported.response.status, 201);
+  const restored = await request(h2.base, base);
+  const restoredHabit = (restored.body as typeof module).config.habits.find(item => item.id === habit.id)!;
+  deepEqual(restoredHabit.dates, ["2026-09-08"]); equal(restoredHabit.icon, "Salad");
+  const unmarked = await markDay("2026-09-08", false);
+  equal(unmarked.response.status, 200); deepEqual((unmarked.body as typeof module).config.habits.find(item => item.id === habit.id)!.dates, []);
+});
+
 import { deepEqual, equal, match, ok, throws } from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +173,248 @@ import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
 import { OBSERVATION_KEEP_LIMIT, selectDayObservations } from "../src/weather-selection.js";
 import { SUMMARY_SYSTEM_PROMPT, assertValidAsset, createInstant, type Asset } from "@lifeos/core";
 import sharp from "sharp";
+import JSZip from "jszip";
+import type { BackfillBatch, BackfillChatAnswer, Entity, Movie } from "@lifeos/core";
+import { isAiBackfill } from "@lifeos/core";
 import { cameraEvidenceFromExif, readPhotoMetadata } from "../src/photo-metadata.js";
+import { CalendarTaskLabels } from "../src/calendar-task-labels.js";
+import { buildManualDaySummary, resolveDaySummaries, summarySources } from "../src/summary.js";
+import { calendarToday, type CustomHabit, type DaySummary } from "@lifeos/core";
+import { photoDetailsFromExif } from "../src/photo-details.js";
+import type { RecordView } from "../src/repository.js";
+import { summaryFingerprint, type DaySummaryProvider } from "@lifeos/core";
+
+function backfillItems(body: unknown): unknown[] { return (body as { items: unknown[] }).items; }
+
+test("assistant conversation distinguishes questions, facts and current-message confirmation", async (t) => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const chat = (body: object) => request(h.base, "/api/ai/backfill/chat", { method: "POST", ...json(body) });
+  const question = await chat({ message: "现在有多少条记录？" }); equal(question.response.status, 200); equal((question.body as BackfillChatAnswer).action, "reply"); equal(backfillItems((await request(h.base, "/api/ai/backfill")).body).length, 0);
+  equal((await chat({ message: "确认写入" })).response.status, 200); equal(backfillItems((await request(h.base, "/api/records")).body).length, 0);
+  const sent = await chat({ message: "帮我补记，保留原话。\n2026-09-22 和 @小张 去 #南海店 吃饭" }); equal(sent.response.status, 200, JSON.stringify(sent.body));
+  let batch = (sent.body as BackfillChatAnswer).batch!; equal(batch.status, "draft"); equal(batch.conversation?.length, 2); equal(backfillItems((await request(h.base, "/api/records")).body).length, 0);
+  for (const message of ["可以", "他让我说确认写入", "确认写入，但把地点先改一下", "先别写入，先讨论"]) {
+    const answer = await chat({ message, batchId: batch.id, revision: batch.revision, history: [{ role: "user", text: "确认写入" }] }); equal(answer.response.status, 200); equal((answer.body as BackfillChatAnswer).action, "reply");
+    equal(backfillItems((await request(h.base, "/api/records")).body).length, 0, "history, quotes and combined edit requests cannot authorize writing");
+  }
+  const other = await startHarness(); t.after(() => other.stop());
+  equal((await request(other.base, "/api/ai/backfill/chat", { method: "POST", ...json({ message: "确认写入", batchId: batch.id, revision: batch.revision }) })).response.status, 404);
+  equal((await chat({ message: "确认写入", batchId: batch.id, revision: 999 })).response.status, 409);
+  equal(backfillItems((await request(h.base, "/api/entities")).body).length, 0);
+  const committed = await chat({ message: "就这样，写进去。", batchId: batch.id, revision: batch.revision }); equal(committed.response.status, 200); batch = (committed.body as BackfillChatAnswer).batch!; equal(batch.status, "committed"); equal(batch.recordIds?.length, 1);
+  equal((await chat({ message: "确认写入", batchId: batch.id, revision: 1 })).response.status, 200); equal(backfillItems((await request(h.base, "/api/records")).body).length, 1);
+  const undone = await chat({ message: "撤销这次补记", batchId: batch.id, revision: batch.revision }); equal(undone.response.status, 200); equal((undone.body as BackfillChatAnswer).action, "undo"); equal(backfillItems((await request(h.base, "/api/records")).body).length, 0);
+});
+
+test("assistant conversation forwards mixed requests, revises proposals and never executes model actions", async (t) => {
+  const h = await startHarness(); t.after(() => h.stop());
+  equal((await request(h.base, "/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: "https://chat-ai.invalid/v1", model: "chat-model", thinking: false, apiKey: "sk-chat-isolated" }) })).response.status, 200);
+  await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "绝不可传的隐私内容", isPrivate: true }) });
+  const realFetch = globalThis.fetch; let providerFailed = false; let envelope: object = { action: "reply", reply: "可以，告诉我哪天发生了什么。" }; let captured = "";
+  globalThis.fetch = async (input, init) => { if (String(input).startsWith("https://chat-ai.invalid/")) { captured = String(init?.body); return providerFailed ? new Response("offline", { status: 503 }) : Response.json({ choices: [{ message: { content: JSON.stringify(envelope) } }] }); } return realFetch(input, init); }; t.after(() => { globalThis.fetch = realFetch; });
+  const chat = (body: object) => request(h.base, "/api/ai/backfill/chat", { method: "POST", ...json(body) });
+  equal((await chat({ message: "先讨论怎么补记" })).response.status, 200); equal(backfillItems((await request(h.base, "/api/ai/backfill")).body).length, 0);
+  const plan = { explanation: "保留要求", entries: [{ key: "r1", kind: "journal", selected: true, date: "2026-09-22", content: "和小张去南海店吃饭。", evidence: "聊天原话", questions: "", entityKeys: ["p1", "l1"], assetIds: [] }], objects: [{ key: "p1", type: "person", name: "小张", selected: true }, { key: "l1", type: "place", name: "南海店", selected: true }] };
+  envelope = { action: "new_draft", reply: "先列出这次经历，人物和地点会一并关联。", plan };
+  const mixed = "帮我补记2026-09-22和小张去南海店吃饭，要标人物和地点，先别写入。";
+  let result = await chat({ message: mixed, materials: [{ name: "照片", text: "待识读", imageData: "data:image/png;base64,aGVsbG8=" }] }); equal(result.response.status, 200, JSON.stringify(result.body)); let batch = (result.body as BackfillChatAnswer).batch!;
+  const payload = JSON.parse(captured) as { messages: { content: unknown }[] }; const contents = payload.messages.at(-1)!.content as { type: string; text?: string }[]; equal(contents[1]!.type, "image_url"); equal(JSON.parse(contents[0]!.text!).message, mixed); equal(captured.includes("绝不可传的隐私内容"), false);
+  envelope = { action: "update_draft", reply: "日期改到9月23日，人物和地点保留。", plan: { ...plan, entries: plan.entries.map((e) => ({ ...e, date: "2026-09-23" })) } };
+  result = await chat({ message: "日期改到2026-09-23，别的别动", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200); const changed = (result.body as BackfillChatAnswer).batch!; equal(changed.id, batch.id); equal(changed.revision, batch.revision + 1); equal(changed.plan.entries[0]!.date, "2026-09-23"); equal(changed.plan.objects.length, 2); batch = changed;
+  const saved = batch.plan;
+  providerFailed = true; result = await chat({ message: "把地点改成新店", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200); equal((result.body as BackfillChatAnswer).action, "reply"); deepEqual((result.body as BackfillChatAnswer).batch!.plan, saved); providerFailed = false;
+  envelope = { action: "commit", reply: "模型试图声称已经写入", plan };
+  equal((await chat({ message: "看看这个方案", batchId: batch.id, revision: batch.revision })).response.status, 400);
+  equal(backfillItems((await request(h.base, "/api/records?backfill=ai")).body).length, 0);
+  result = await chat({ message: "确认写入", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200); batch = (result.body as BackfillChatAnswer).batch!; equal(batch.status, "committed");
+  const written = (await request(h.base, `/api/records/${batch.recordIds![0]}`)).body as RecordView; equal(written.occurredAt?.value, "2026-09-23"); equal(written.entityRefs.length, 2);
+});
+
+test("assistant backfill previews first, preserves uncertain dates, commits atomically and retries once", async (t) => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const materials = [{ name: "观影表", text: "| 观看时间 | 电影 | 评价 |\n|---|---|---|\n| 2026-09-15 | 《定时拍摄》Time Lapse | 超级精彩 |\n| 2026-09-15～16 | 《鬼打墙》Enter Nowhere | 不错的 |\n| | 《幻影凶间》1408 | 非常喜欢 |" }];
+  const prepared = await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials }) });
+  equal(prepared.response.status, 200, JSON.stringify(prepared.body));
+  let batch = prepared.body as BackfillBatch;
+  equal(batch.mode, "rules"); equal(batch.plan.objects.length, 3); equal(batch.plan.entries.length, 2);
+  equal(batch.plan.entries[1]!.date, ""); equal(batch.plan.entries[1]!.selected, false);
+  equal(batch.plan.objects[2]!.movie!.watchedAt, undefined); equal(batch.plan.objects[2]!.movie!.watched, true);
+  equal(backfillItems((await request(h.base, "/api/records")).body).length, 0);
+  equal(backfillItems((await request(h.base, "/api/entities")).body).length, 0);
+  const duplicate = await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials }) }); equal((duplicate.body as BackfillBatch).id, batch.id);
+  const other = await startHarness(); t.after(() => other.stop());
+  equal((await request(other.base, `/api/ai/backfill/${batch.id}`)).response.status, 404);
+  const saved = await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: batch.revision, plan: batch.plan }) }); equal(saved.response.status, 200); batch = saved.body as BackfillBatch;
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: 1, plan: batch.plan }) })).response.status, 409);
+  const committed = await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: batch.revision }) }); equal(committed.response.status, 200, JSON.stringify(committed.body)); batch = committed.body as BackfillBatch;
+  equal(batch.recordIds!.length, 1); equal(batch.entityIds!.length, 3);
+  const record = (await request(h.base, `/api/records/${batch.recordIds![0]}`)).body as RecordView;
+  equal(record.occurredAt!.kind, "date"); equal(record.occurredAt!.value, "2026-09-15"); equal(record.isBackfill, true); equal(isAiBackfill(record), true);
+  equal(record.body.original, "看了《定时拍摄》。超级精彩"); equal(record.entityRefs[0]!.entityType, "movie");
+  const movies = backfillItems((await request(h.base, "/api/entities?type=movie")).body) as Movie[];
+  equal(movies.find((m) => m.name === "幻影凶间")!.watchedAt, undefined); equal(movies.find((m) => m.name === "幻影凶间")!.personalReview, "非常喜欢");
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: 1 }) })).response.status, 200);
+  equal(backfillItems((await request(h.base, "/api/records")).body).length, 1);
+  const exported = (await request(h.base, "/api/export?format=json")).body as { records: RecordView[] };
+  equal(isAiBackfill(exported.records[0]!), true);
+  equal((await request(other.base, "/api/import", { method: "POST", ...json({ bundle: exported }) })).response.status, 201);
+  equal(backfillItems((await request(other.base, "/api/records?backfill=ai")).body).length, 1);
+  const undone = await request(h.base, `/api/ai/backfill/${batch.id}/undo`, { method: "POST", ...json({}) }); equal(undone.response.status, 200, JSON.stringify(undone.body));
+  equal(backfillItems((await request(h.base, "/api/records")).body).length, 0);
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}/undo`, { method: "POST", ...json({}) })).response.status, 200);
+});
+
+test("assistant backfill rolls back all effects, guards unreviewed references and edited undo", async (t) => {
+  const h = await startHarness(); t.after(() => h.stop());
+  let batch = (await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials: [{ name: "经历", text: "2026-09-20 和 @阿杰 去 #南海咖啡店 喝咖啡" }] }) })).body as BackfillBatch;
+  equal(batch.plan.objects.length, 2);
+  const plan = { ...batch.plan, entries: [...batch.plan.entries, { ...batch.plan.entries[0]!, key: "second", content: "另一件事", entityKeys: ["missing"] }] };
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: batch.revision, plan }) })).response.status, 400);
+  const missingSelected = { ...batch.plan, objects: batch.plan.objects.map((o, i) => ({ ...o, selected: i !== 1 })) };
+  batch = (await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: batch.revision, plan: missingSelected }) })).body as BackfillBatch;
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: batch.revision }) })).response.status, 400);
+  equal(backfillItems((await request(h.base, "/api/records")).body).length, 0); equal(backfillItems((await request(h.base, "/api/entities")).body).length, 0);
+  batch = (await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: batch.revision, plan: { ...batch.plan, objects: batch.plan.objects.map((o) => ({ ...o, selected: true })) } }) })).body as BackfillBatch;
+  batch = (await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: batch.revision }) })).body as BackfillBatch;
+  equal(batch.status, "committed"); equal(batch.entityIds!.length, 2);
+  const record = (await request(h.base, `/api/records/${batch.recordIds![0]}`)).body as RecordView;
+  const changed = await request(h.base, `/api/records/${record.id}`, { method: "PATCH", ...json({ revision: record.revision, content: "主人后来修改", isBackfill: false }) });
+  equal(changed.response.status, 200, JSON.stringify(changed.body));
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}/undo`, { method: "POST", ...json({}) })).response.status, 409);
+  const current = (await request(h.base, `/api/records/${record.id}`)).body as RecordView;
+  equal(current.body.edited, "主人后来修改"); equal(isAiBackfill(current), true);
+  equal(backfillItems((await request(h.base, "/api/records?backfill=ai&entityTypes=person,place&kinds=journal,event")).body).length, 1);
+  equal(backfillItems((await request(h.base, "/api/records?backfill=all")).body).length, 0);
+  equal((await request(h.base, "/api/records?backfill=bad")).response.status, 400);
+  equal(backfillItems((await request(h.base, "/api/records?entityTypes=movie")).body).length, 0);
+  equal(backfillItems((await request(h.base, "/api/records?statuses=cancelled")).body).length, 0);
+});
+
+test("assistant materials read text, PDF and Word, attach originals and expose real file filters", async (t) => {
+  const assets = mkdtempSync(join(tmpdir(), "lifeos-material-assets-"));
+  const h = await startHarness(undefined, undefined, undefined, assets); t.after(async () => { await h.stop(); rmSync(assets, { recursive: true, force: true }); });
+  const content = "2026-09-22 去 #新地点 整理日记";
+  const parsed = await request(h.base, "/api/ai/backfill/material-text", { method: "POST", headers: { "content-type": "text/plain" }, body: content }); equal(parsed.response.status, 200); equal((parsed.body as { text: string }).text, content);
+  const file = await request(h.base, "/api/assets/materials?name=diary.txt", { method: "POST", headers: { "content-type": "text/plain" }, body: content }); equal(file.response.status, 201); equal((file.body as Asset).kind, "file");
+  const read = await fetch(`${h.base}/api/assets/${(file.body as Asset).id}/content`); equal(await read.text(), content); equal(read.headers.get("content-disposition"), "attachment");
+  const fail = await request(h.base, "/api/ai/backfill/material-text", { method: "POST", headers: { "content-type": "application/pdf" }, body: "not a PDF" }); equal(fail.response.status, 415);
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file("word/document.xml", '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>2026-09-22 原日记文字</w:t></w:r></w:p></w:body></w:document>');
+  const docx = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  const word = await request(h.base, "/api/ai/backfill/material-text", { method: "POST", headers: { "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, body: new Uint8Array(docx) }); equal(word.response.status, 200, JSON.stringify(word.body)); equal((word.body as { text: string }).text, "2026-09-22 原日记文字");
+  const stream = "BT /F1 12 Tf 30 100 Td (2026-09-23 diary) Tj ET";
+  const pdfObjects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`];
+  let pdfSource = "%PDF-1.4\n"; const offsets = [0];
+  for (const [i, object] of pdfObjects.entries()) { offsets.push(pdfSource.length); pdfSource += `${i + 1} 0 obj\n${object}\nendobj\n`; }
+  const xref = pdfSource.length;
+  pdfSource += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map((offset) => String(offset).padStart(10, "0") + " 00000 n ").join("\n")}\ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  const pdf = await request(h.base, "/api/ai/backfill/material-text", { method: "POST", headers: { "content-type": "application/pdf" }, body: new Uint8Array(Buffer.from(pdfSource)) }); equal(pdf.response.status, 200, JSON.stringify(pdf.body)); equal((pdf.body as { text: string }).text, "2026-09-23 diary");
+  let batch = (await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials: [{ name: "日记", text: (parsed.body as { text: string }).text, assetId: (file.body as Asset).id }] }) })).body as BackfillBatch;
+  equal(h.app.repository.referencedAssetIds().has((file.body as Asset).id), true, "草稿原材料受孤儿回收保护");
+  batch = (await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: batch.revision }) })).body as BackfillBatch;
+  equal(batch.status, "committed");
+  equal(backfillItems((await request(h.base, "/api/records?attachments=file&backfill=ai")).body).length, 1);
+  equal(backfillItems((await request(h.base, "/api/records?attachments=photo")).body).length, 0);
+  equal(backfillItems((await request(h.base, "/api/records?from=2026-09-22&to=2026-09-22&search=1")).body).length, 1);
+});
+
+test("assistant AI prepares structured plans, resolves posters, excludes privacy and preserves drafts on provider failure", async (t) => {
+  const h = await startHarness(); t.after(() => h.stop());
+  await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "私人秘密不可发送", isPrivate: true }) });
+  const aiConfig = await request(h.base, "/api/ai/config", { method: "POST", ...json({ enabled: true, baseUrl: "https://backfill-ai.invalid/v1", model: "test-vision", thinking: false, apiKey: "sk-isolated-assistant-fake" }) }); equal(aiConfig.response.status, 200, JSON.stringify(aiConfig.body));
+  const movieConfig = await request(h.base, "/api/movie/config", { method: "POST", ...json({ enabled: true, apiKey: "isolated-tmdb-fake" }) }); equal(movieConfig.response.status, 200);
+  const realFetch = globalThis.fetch; let captured = "", providerFailed = false, movieQueries = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("https://backfill-ai.invalid/")) {
+      captured = String(init?.body);
+      if (providerFailed) return new Response("unavailable", { status: 503 });
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ explanation: "保留评价原话", objects: [{ key: "movie1", selected: true, type: "movie", name: "定时拍摄", aliases: [], movie: { originalTitle: "Time Lapse", personalReview: "超级精彩", watched: true, watchedAt: "2026-09-15" } }, { key: "person1", selected: true, type: "person", name: "小张", aliases: ["阿张"] }, { key: "place1", selected: true, type: "place", name: "南海咖啡店", address: "" }], entries: [{ key: "r1", selected: true, kind: "journal", content: "和小张在南海咖啡店看了《定时拍摄》，超级精彩。", date: "2026-09-15", evidence: "原材料", entityKeys: ["movie1", "person1", "place1"], assetIds: [] }] }) } }] });
+    }
+    if (url.startsWith("https://api.themoviedb.org/")) {
+      movieQueries++;
+      return Response.json({ results: [{ media_type: "movie", id: 1234, title: "定时拍摄", original_title: "Time Lapse", release_date: "2014-01-01", poster_path: "/controlled-poster.jpg" }, { media_type: "person", id: 999, name: "演员" }] });
+    }
+    return realFetch(input, init);
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const materials = [{ name: "经历", text: "2026-09-15 和小张在南海咖啡店看了《定时拍摄》Time Lapse，超级精彩。", imageData: "data:image/png;base64,aGVsbG8=" }];
+  const simultaneous = await Promise.all([1, 2].map(() => request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials }) })));
+  equal(simultaneous[0]!.response.status, 200, JSON.stringify(simultaneous[0]!.body));
+  let batch = simultaneous[0]!.body as BackfillBatch;
+  equal((simultaneous[1]!.body as BackfillBatch).id, batch.id); equal(batch.mode, "ai");
+  equal(batch.plan.objects[0]!.movie!.posterUrl, "https://image.tmdb.org/t/p/w500/controlled-poster.jpg"); ok(movieQueries >= 1 && movieQueries <= 2);
+  equal(captured.includes("私人秘密不可发送"), false); equal(captured.includes("image_url"), true); equal(batch.materials[0]!.imageData, undefined);
+  providerFailed = true;
+  const refined = await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ batchId: batch.id, revision: batch.revision, instruction: "改成别的正文" }) }); equal(refined.response.status, 200, JSON.stringify(refined.body));
+  const kept = refined.body as BackfillBatch; equal(kept.plan.entries[0]!.content, batch.plan.entries[0]!.content); equal(kept.mode, "rules");
+  batch = (await request(h.base, `/api/ai/backfill/${kept.id}/commit`, { method: "POST", ...json({ revision: kept.revision }) })).body as BackfillBatch; equal(batch.status, "committed");
+  const record = (await request(h.base, `/api/records/${batch.recordIds![0]}`)).body as RecordView;
+  equal(record.entityRefs.length, 3); equal(record.entityRefs.filter((r) => r.entityType === "person").length, 1);
+  const movie = (await request(h.base, `/api/entities/${batch.plan.objects[0]!.existingId}`)).body as Movie; equal(movie.personalReview, "超级精彩"); equal(movie.releaseYear, 2014); equal(movie.watched, true);
+});
+
+test("assistant supplements Shanghai-day records with conflict checks, restores prior text and coalesces repeated movies", async (t) => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const person = (await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "小张", aliases: ["阿张"], description: "原有资料" }) })).body as Entity;
+  const original = (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "原有日记", occurredAt: { kind: "instant", value: "2026-09-21T16:30:00Z" } }) })).body as RecordView;
+  let batch = (await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials: [{ name: "补充材料", text: "2026-09-22 和阿张吃饭" }] }) })).body as BackfillBatch;
+  equal(batch.plan.objects[0]!.existingId, person.id);
+  equal(batch.plan.entries[0]!.targetCandidates![0]!.id, original.id, "UTC前一晚属于上海当天");
+  batch = (await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: batch.revision, plan: { ...batch.plan, entries: batch.plan.entries.map((e) => ({ ...e, targetId: original.id, targetRevision: original.revision })) } }) })).body as BackfillBatch;
+  const edited = (await request(h.base, `/api/records/${original.id}`, { method: "PATCH", ...json({ revision: original.revision, content: "主人刚刚编辑" }) })).body as RecordView;
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: batch.revision }) })).response.status, 409);
+  equal(backfillItems((await request(h.base, "/api/records")).body).length, 1);
+  batch = (await request(h.base, `/api/ai/backfill/${batch.id}`, { method: "PATCH", ...json({ revision: batch.revision, plan: { ...batch.plan, entries: batch.plan.entries.map((e) => ({ ...e, targetRevision: edited.revision })) } }) })).body as BackfillBatch;
+  const committed = await request(h.base, `/api/ai/backfill/${batch.id}/commit`, { method: "POST", ...json({ revision: batch.revision }) }); equal(committed.response.status, 200, JSON.stringify(committed.body)); batch = committed.body as BackfillBatch;
+  const supplemented = (await request(h.base, `/api/records/${original.id}`)).body as RecordView;
+  equal(supplemented.body.original, "原有日记"); equal(supplemented.body.edited, "主人刚刚编辑\n\n2026-09-22 和阿张吃饭"); equal(supplemented.entityRefs[0]!.entityId, person.id);
+  equal(((await request(h.base, `/api/entities/${person.id}`)).body as Entity).description, "原有资料");
+  equal((await request(h.base, `/api/ai/backfill/${batch.id}/undo`, { method: "POST", ...json({}) })).response.status, 200);
+  const restored = (await request(h.base, `/api/records/${original.id}`)).body as RecordView; equal(restored.body.edited, "主人刚刚编辑"); equal(isAiBackfill(restored), false);
+  const repeat = await request(h.base, "/api/ai/backfill/prepare", { method: "POST", ...json({ materials: [{ name: "重复观看", text: "| 2026-09-15 | 《重复影片》Repeat | 第一次不错 |\n| 2026-09-16 | 《重复影片》Repeat | 二刷也不错 |" }] }) }); equal(repeat.response.status, 200);
+  const repeatedBatch = repeat.body as BackfillBatch; equal(repeatedBatch.plan.objects.length, 1); equal(repeatedBatch.plan.entries.length, 2);
+  equal((await request(h.base, `/api/ai/backfill/${repeatedBatch.id}/commit`, { method: "POST", ...json({ revision: repeatedBatch.revision }) })).response.status, 200);
+  equal(backfillItems((await request(h.base, "/api/records?q=Repeat")).body).length, 2, "关联影片英文名参与关键词搜索");
+});
+
+test("per-occurrence marking preserves aliases, exclusions, references and export round trips", async (t) => {
+  const harness = await startHarness();
+  t.after(() => harness.stop());
+  const entity = (await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "A 咖啡店", aliases: ["B 咖啡店"] }) })).body as { id: string };
+  const content = "B咖啡店，B 咖啡店。";
+  const decisions = [
+    { start: 0, end: 4, text: "B咖啡店", entityId: entity.id, entityType: "place" },
+    { start: 5, end: 10, text: "B 咖啡店", entityId: null, entityType: "place" },
+  ];
+  const created = await request(harness.base, "/api/records", { method: "POST", ...json({ kind: "journal", content, entityMentions: decisions }) });
+  equal(created.response.status, 201);
+  const record = created.body as { id: string; revision: number; body: { original: string; entityMentions: unknown }; entityRefs: { entityId: string }[] };
+  equal(record.body.original, content);
+  deepEqual(record.body.entityMentions, decisions);
+  equal(record.entityRefs.length, 1);
+  equal(record.entityRefs[0]!.entityId, entity.id);
+  const wrong = await request(harness.base, `/api/records/${record.id}`, { method: "PATCH", ...json({ revision: record.revision, entityMentions: [{ ...decisions[0], text: "wrong" }] }) });
+  equal(wrong.response.status, 400);
+  const shifted = await request(harness.base, `/api/records/${record.id}`, { method: "PATCH", ...json({ revision: record.revision, content: "今天" + content }) });
+  equal(shifted.response.status, 200);
+  const next = shifted.body as typeof record;
+  deepEqual(next.body.entityMentions, decisions.map((decision) => ({ ...decision, start: decision.start + 2, end: decision.end + 2 })));
+  const removed = await request(harness.base, `/api/records/${record.id}`, { method: "PATCH", ...json({ revision: next.revision, entityMentions: decisions.map((decision) => ({ ...decision, start: decision.start + 2, end: decision.end + 2, entityId: null })) }) });
+  equal(removed.response.status, 200);
+  equal((removed.body as typeof record).entityRefs.length, 0);
+  equal((removed.body as typeof record).body.original, content);
+  const exported = await request(harness.base, "/api/export?format=json");
+  const bundle = exported.body as { records: (typeof record)[] };
+  deepEqual(bundle.records[0]!.body.entityMentions, (removed.body as typeof record).body.entityMentions);
+  const target = await startHarness(); t.after(() => target.stop());
+  const imported = await request(target.base, "/api/import", { method: "POST", ...json({ bundle }) });
+  equal(imported.response.status, 201);
+  const read = await request(target.base, "/api/records");
+  deepEqual((read.body as { items: (typeof record)[] }).items[0]!.body.entityMentions, bundle.records[0]!.body.entityMentions);
+});
 
 // WHATWG fetch rejects a small set of historically reserved ports even when
 // Node's HTTP server can bind them.  Windows can hand one of those ports out
@@ -2137,8 +2532,7 @@ test("owner-written summaries outlive their records and can be regenerated or cl
 
   // A day with nothing at all has no summary to regenerate.
   const empty = await request(harness.base, "/api/summaries/regenerate", { method: "POST", ...json({ date: "2026-09-30" }) });
-  equal(empty.response.status, 200);
-  deepEqual((empty.body as { items: unknown[] }).items, []);
+  equal(empty.response.status, 400);
   // The range form is accepted too, and rejects a malformed request.
   const badRange = await request(harness.base, "/api/summaries/regenerate", { method: "POST", ...json({ from: "2026-09-30" }) });
   equal(badRange.response.status, 400);
@@ -3905,7 +4299,7 @@ test("a thumbnail is derived once, filed under the data directory, and rebuilt a
   equal(stats.response.status, 200);
   const statsBody = stats.body as { count: number; bytes: number; widths: number[]; directory: string };
   equal(statsBody.count, 2);
-  equal(statsBody.widths.join(","), "400,1200");
+  equal(statsBody.widths.join(","), "400,1200,2048");
   equal(statsBody.directory, thumbsDirectory);
   ok(statsBody.bytes > 0, "the reported size must come from the files, not from a guess");
 
@@ -3924,6 +4318,40 @@ test("a thumbnail is derived once, filed under the data directory, and rebuilt a
   equal((await sizeOf(Buffer.from(await rebuilt.arrayBuffer()))).width, 400);
   const afterRebuild = await request(harness.base, "/api/assets/thumbnails");
   equal((afterRebuild.body as { count: number }).count, 1, "only the width that was actually asked for came back");
+});
+
+test("opened photo previews bound both dimensions, retain orientation and leave originals unchanged", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-photo-preview-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+  const original = await sharp({ create: { width: 4200, height: 2800, channels: 3, background: { r: 47, g: 111, b: 143 } } })
+    .withMetadata({ orientation: 6 }).jpeg({ quality: 92 }).toBuffer();
+  const upload = await request(harness.base, "/api/assets/uploads?name=portrait-preview.jpg", {
+    method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original),
+  });
+  equal(upload.response.status, 201);
+  const id = (upload.body as { id: string }).id;
+  const path = `${harness.base}/api/assets/${encodeURIComponent(id)}/thumbnail?w=2048`;
+  const response = await fetch(path);
+  equal(response.status, 200);
+  equal(response.headers.get("cache-control"), "private, max-age=300");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const size = await sizeOf(bytes);
+  equal(size.format, "webp");
+  equal(size.height, 2048, "portrait height must also fit the long-edge bound");
+  equal(size.width, 1365, "EXIF orientation and portrait aspect ratio survive");
+  ok(bytes.length < original.length / 2, "the preview materially reduces the transfer rather than returning the original");
+  ok(Buffer.from(await (await fetch(path)).arrayBuffer()).equals(bytes), "cached preview is stable");
+  ok(Buffer.from(await (await fetch(`${harness.base}/api/assets/${encodeURIComponent(id)}/content`)).arrayBuffer()).equals(original), "original bytes including EXIF remain unchanged");
+  const small = await photoJpeg(6);
+  const second = await request(harness.base, "/api/assets/uploads?name=small-preview.jpg", {
+    method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(small),
+  });
+  const smallId = (second.body as { id: string }).id;
+  const smallSize = await sizeOf(Buffer.from(await (await fetch(`${harness.base}/api/assets/${encodeURIComponent(smallId)}/thumbnail?w=2048`)).arrayBuffer()));
+  equal(smallSize.width, 1200);
+  equal(smallSize.height, 1600, "small originals must never be enlarged");
 });
 
 test("a thumbnail is rotated upright from EXIF, and an audio original is refused", async (t) => {
@@ -4082,7 +4510,7 @@ test("the time machine reads a snapshot without touching it and sorts the drift 
   equal((absent.body as { error: string }).error, "snapshot_missing");
 });
 
-test("upload photo headers retain bounded camera evidence, survive reuse and never copy private EXIF", async (t) => {
+test("upload photo headers retain bounded recorded metadata, survive reuse and preserve originals", async (t) => {
   const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-photo-evidence-"));
   t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
   const harness = await startHarness(undefined, undefined, undefined, assetRoot);
@@ -4094,9 +4522,15 @@ test("upload photo headers retain bounded camera evidence, survive reuse and nev
   const uploaded = await request(harness.base, "/api/assets/uploads?name=IMG_1234.jpg", { method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original) });
   equal(uploaded.response.status, 201);
   const asset = uploaded.body as Asset;
-  deepEqual(asset.photoMetadata, { version: 1, width: 32, height: 48, cameraEvidence: "capture" });
-  ok(!JSON.stringify(asset).includes("Private camera"));
-  ok(!JSON.stringify(asset).includes("2026:10:06"));
+  equal(asset.photoMetadata?.width, 32);
+  equal(asset.photoMetadata?.height, 48);
+  equal(asset.photoMetadata?.cameraEvidence, "capture");
+  equal(asset.photoMetadata?.details?.make, "Private camera maker");
+  equal(asset.photoMetadata?.details?.model, "Private camera model");
+  equal(asset.photoMetadata?.details?.capturedAt, "2026:10:06 10:20:30");
+  const info = await request(harness.base, `/api/assets/${asset.id}/photo-info`);
+  equal(info.response.status, 200);
+  deepEqual((info.body as { photoMetadata: unknown }).photoMetadata, asset.photoMetadata);
   const stored = harness.app.repository.findAssetById(asset.id)!;
   deepEqual(stored.photoMetadata, asset.photoMetadata);
   const reused = await request(harness.base, "/api/assets/uploads?name=again.jpg", { method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original) });
@@ -4106,7 +4540,7 @@ test("upload photo headers retain bounded camera evidence, survive reuse and nev
   equal(Buffer.from(await content.arrayBuffer()).equals(original), true, "uploaded originals remain byte-identical");
   const png = await sharp({ create: { width: 720, height: 1640, channels: 3, background: "white" } }).png().toBuffer();
   const screenshot = await request(harness.base, "/api/assets/uploads?name=Screenshot.png", { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(png) });
-  deepEqual((screenshot.body as Asset).photoMetadata, { version: 1, width: 720, height: 1640, cameraEvidence: "none" });
+  deepEqual((screenshot.body as Asset).photoMetadata, { version: 1, width: 720, height: 1640, cameraEvidence: "none", detailsVersion: 1 });
   const device = await sharp({ create: { width: 48, height: 32, channels: 3, background: "green" } }).withExif({ IFD0: { Make: "Device", Model: "Model" } }).jpeg().toBuffer();
   equal((await readPhotoMetadata(device))?.cameraEvidence, "device");
   equal(await readPhotoMetadata(Buffer.from("not an image")), undefined);
@@ -4114,6 +4548,9 @@ test("upload photo headers retain bounded camera evidence, survive reuse and nev
   const { photoMetadata: oldEvidence, ...oldAsset } = asset;
   void oldEvidence;
   harness.app.repository.updateAsset(oldAsset);
+  const lazy = await request(harness.base, `/api/assets/${asset.id}/photo-info`);
+  deepEqual((lazy.body as { photoMetadata: unknown }).photoMetadata, asset.photoMetadata);
+  equal(harness.app.repository.findAssetById(asset.id)?.photoMetadata, undefined, "reading old original metadata never updates its asset row");
   const enriched = await request(harness.base, "/api/assets/uploads", { method: "POST", headers: { "content-type": "image/jpeg" }, body: new Uint8Array(original) });
   deepEqual((enriched.body as Asset).photoMetadata, asset.photoMetadata);
   const repointed = await request(harness.base, `/api/assets/${asset.id}`, { method: "PATCH", ...json({ storageRefs: [{ sourceId: "local", sourceRef: "replacement.jpg" }] }) });
@@ -4130,4 +4567,163 @@ test("bad EXIF offsets, cycles, oversized blocks and invalid asset metadata safe
   const base = { id: "old", kind: "photo", storageRefs: [] };
   assertValidAsset(base);
   for (const metadata of [{ version: 1, width: 0, height: 100, cameraEvidence: "none" }, { version: 1, width: 100, height: NaN, cameraEvidence: "none" }, { version: 2, width: 100, height: 100, cameraEvidence: "none" }, { version: 1, width: 100, height: 100, cameraEvidence: "invented" }]) throws(() => assertValidAsset({ ...base, photoMetadata: metadata }));
+});
+
+
+test("calendar task AI reserves per-account 20 new / 10 edit attempts durably before network", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-task-quota-"));
+  const received: string[][] = [];
+  let failing = false;
+  const server = createServer((req, res) => {
+    let body = ""; req.setEncoding("utf8"); req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const payload = JSON.parse(body) as { messages: Array<{ role: string; content: string }> };
+      const tasks = JSON.parse(payload.messages.find(m => m.role === "user")!.content) as Record<string, string>;
+      received.push(Object.keys(tasks));
+      if (failing) { res.writeHead(503); res.end(); return; }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(Object.fromEntries(Object.keys(tasks).map(id => [id, "去机场"]))) } }] }));
+    });
+  });
+  const port = await listenOnFetchablePort(server, "127.0.0.1");
+  const config = readConfig({ LIFEOS_DATA_DIR: root, LIFEOS_DEEPSEEK_API_KEY: "sk-isolated-fake", LIFEOS_DEEPSEEK_BASE_URL: "http://127.0.0.1:" + port });
+  let labels = new CalendarTaskLabels(config.databasePath);
+  t.after(async () => { labels.close(); server.close(); await once(server, "close"); rmSync(root, { recursive: true, force: true }); });
+  const tasks = Array.from({ length: 21 }, (_, i) => ({ id: "quota-" + i, body: { original: "五天后去机场接家人" } } as RecordView));
+  const day = new Date("2026-10-07T15:59:00Z");
+  const [a, b] = await Promise.all([labels.resolve(config, "owner", tasks, day), labels.resolve(config, "owner", tasks, day)]);
+  equal(a.filter(x => x.status === "ai").length, 20); equal(a[20]?.status, "quota"); deepEqual(a, b);
+  equal(received.length, 1); equal(received[0]?.length, 20);
+  deepEqual(labels.usage("owner", "2026-10-07"), { new: 20, edit: 0, newLimit: 20, editLimit: 10 });
+  labels.close(); labels = new CalendarTaskLabels(config.databasePath);
+  await labels.resolve(config, "owner", tasks, day); equal(received.length, 1, "restart reuses persisted attempts");
+  const edits = tasks.slice(0, 11).map(x => ({ ...x, body: { original: "去机场接另一位朋友" } } as RecordView));
+  const changed = await labels.resolve(config, "owner", edits, day);
+  equal(changed.filter(x => x.status === "ai").length, 10); equal(changed[10]?.status, "quota");
+  equal(labels.usage("owner", "2026-10-07").edit, 10);
+  await labels.resolve(config, "owner", tasks, day); equal(received.length, 2, "content revert never pays again");
+  await labels.resolve(config, "other-user", tasks.slice(0, 1), day); equal(received.length, 3, "separate user owns a separate budget");
+  const next = new Date("2026-10-07T16:01:00Z");
+  failing = true;
+  const extra = [{ id: "after-midnight", body: { original: "写作文" } } as RecordView];
+  equal((await labels.resolve(config, "owner", extra, next))[0]?.status, "failed");
+  equal(labels.usage("owner", "2026-10-08").new, 1, "daily reset uses Shanghai, not UTC");
+  labels.close(); labels = new CalendarTaskLabels(config.databasePath);
+  await labels.resolve(config, "owner", extra, next); equal(received.length, 4, "failed attempts do not retry on refresh or restart");
+  const { deepseekApiKey: ignoredKey, ...noKey } = config; void ignoredKey;
+  const offline = [{ id: "offline", body: { original: "不依赖密钥也要保留整条原文提醒和必要的行动对象".repeat(4) } } as RecordView];
+  const offlineResult = (await labels.resolve(noKey, "owner", offline, next))[0];
+  equal(offlineResult?.status, "unconfigured");
+  equal(offlineResult?.text, offline[0]!.body.original, "fallback keeps full original; CSS supplies visible ellipsis");
+  equal(labels.usage("owner", "2026-10-08").new, 1);
+  failing = false;
+  equal((await labels.resolve(config, "owner", offline, next))[0]?.status, "ai");
+  equal(labels.usage("owner", "2026-10-08").new, 2);
+});
+
+test("calendar label endpoint spends only on two visible due-date tasks and ignores private/cancelled/undated records", async (t) => {
+  const harness = await startHarness(); t.after(() => harness.stop());
+  for (const [content, task, isPrivate] of [
+    ["提醒一", { status: "todo", dueAt: { kind: "date", value: "2026-10-12" } }, false],
+    ["提醒二", { status: "todo", dueAt: { kind: "date", value: "2026-10-12" } }, false],
+    ["多出的提醒", { status: "todo", dueAt: { kind: "date", value: "2026-10-12" } }, false],
+    ["私人提醒", { status: "todo", dueAt: { kind: "date", value: "2026-10-13" } }, true],
+    ["撤销提醒", { status: "cancelled", dueAt: { kind: "date", value: "2026-10-13" } }, false],
+    ["没有日期", { status: "todo" }, false],
+  ] as const) { const { status, ...dates } = task; const result = await request(harness.base, "/api/records", { method: "POST", ...json({ kind: "task", content, ...dates, isPrivate }) }); equal(result.response.status, 201, JSON.stringify(result.body)); if (status === "cancelled") { const row = result.body as RecordView; equal((await request(harness.base, `/api/records/${row.id}`, { method: "PATCH", ...json({ revision: row.revision, status }) })).response.status, 200); } }
+  const reply = await request(harness.base, "/api/calendar/tasks/labels", { method: "POST", ...json({ from: "2026-10-12", to: "2026-10-13" }) });
+  equal(reply.response.status, 200);
+  const payload = reply.body as { items: Array<{ text: string }>; usage: { new: number; edit: number } };
+  deepEqual(payload.items.map(x => x.text).sort(), ["提醒一", "提醒二"]); equal(payload.usage.new, 0); equal(payload.usage.edit, 0);
+  equal((await request(harness.base, "/api/calendar/tasks/labels", { method: "POST", ...json({ from: "2026-10-01", to: "2026-12-31" }) })).response.status, 400);
+});
+
+test("calendar summaries defer today, reuse meaningful content, coalesce force and retain failure backoff across restart", async (t) => {
+  const harness = await startHarness(); t.after(() => harness.stop());
+  const created = await request(harness.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "江边散步", occurredAt: { kind: "date", value: "2026-10-06" } }) });
+  const record = created.body as RecordView;
+  let calls = 0, fail = false;
+  const provider: DaySummaryProvider = { providerId: "fake", kind: "ai", contextKey: "fake-A", summarizeDays: async days => {
+    calls++; await new Promise(r => setTimeout(r, 15)); if (fail) throw Error("isolated failure");
+    return days.map(d => ({ date: d.date, text: "江边散步" }));
+  } };
+  const cache = harness.app.repository;
+  const base = { dates: ["2026-10-06"], recordsForDate: () => [record], cache, provider };
+  await resolveDaySummaries({ ...base, today: "2026-10-06" }); equal(calls, 0); equal(cache.readDaySummary("2026-10-06"), null);
+  equal((await resolveDaySummaries({ ...base, today: "2026-10-05" })).length, 0); equal(calls, 0);
+  await Promise.all([resolveDaySummaries({ ...base, today: "2026-10-07" }), resolveDaySummaries({ ...base, today: "2026-10-07" })]); equal(calls, 1);
+  const prior = cache.readDaySummary("2026-10-06")!;
+  cache.writeDaySummary({ ...prior, sourceRevision: summaryFingerprint(summarySources([record])) });
+  await resolveDaySummaries(base); equal(calls, 1, "unchanged legacy cache upgrades without an AI call");
+  equal(cache.readDaySummary("2026-10-06")?.generatedAt.value, prior.generatedAt.value);
+  await resolveDaySummaries({ ...base, recordsForDate: () => [{ ...record, revision: record.revision + 1, assetIds: ["photo-order-only"] }] }); equal(calls, 1, "photo edits alone do not rewrite text");
+  await resolveDaySummaries({ ...base, provider: { ...provider, contextKey: "fake-B" } }); equal(calls, 1, "prompt/model changes leave generated history intact");
+  await Promise.all([resolveDaySummaries({ ...base, force: true }), resolveDaySummaries({ ...base, force: true })]); equal(calls, 2, "simultaneous explicit regenerate shares one request");
+  fail = true;
+  const changed = { ...record, body: { ...record.body, edited: "内容已修改" } };
+  const failed = await resolveDaySummaries({ ...base, recordsForDate: () => [changed] }); equal(calls, 3); ok(failed[0]?.retryAfter);
+  const reopened = new SqliteRecordRepository(join(harness.root, "lifeos.sqlite"));
+  try { await resolveDaySummaries({ ...base, cache: reopened, recordsForDate: () => [changed] }); equal(calls, 3, "failure backoff persists in SQLite"); } finally { reopened.close(); }
+  cache.writeDaySummary({ ...failed[0]!, retryAfter: new Date(Date.now() - 1000).toISOString() });
+  await resolveDaySummaries({ ...base, recordsForDate: () => [changed] }); equal(calls, 4, "expired backoff permits the next requested attempt");
+});
+
+test("photo details ignore absent metadata and safely bound corrupt TIFF pointers", async () => {
+  for (const exif of [undefined, new Uint8Array(), new Uint8Array(300_000), new Uint8Array([73, 73, 42, 0, 255, 255, 255, 127])]) equal(photoDetailsFromExif(exif), undefined);
+  const photo = await sharp({ create: { width: 16, height: 12, channels: 3, background: "orange" } })
+    .withExif({ IFD0: { Make: "Camera", Model: "Test" }, IFD2: { DateTimeOriginal: "2026:10:07 10:20:30", OffsetTimeOriginal: "+08:00", ExposureTime: "1/125", FNumber: "28/10", ISOSpeedRatings: "100", LensModel: "Test lens" }, IFD3: { GPSLatitudeRef: "N", GPSLatitude: "23/1 6/1 30/1", GPSLongitudeRef: "E", GPSLongitude: "113/1 12/1 0/1" } }).jpeg().toBuffer();
+  const metadata = await readPhotoMetadata(photo);
+  equal(metadata?.details?.make, "Camera"); equal(metadata?.details?.timeZoneOffset, "+08:00");
+  equal(metadata?.details?.lens, "Test lens"); equal(metadata?.details?.iso, 100);
+  ok(metadata?.details?.latitude); ok(Math.abs(metadata.details.latitude - 23.108333333) < 0.000001); equal(metadata.details.longitude, 113.2);
+});
+
+test("local marker chat proposes a real habit and protects concurrent cycle changes and partial undo",async t=>{
+  const h=await startHarness();t.after(()=>h.stop());
+  const today=calendarToday();
+  let response=await request(h.base,"/api/ai/backfill/chat",{method:"POST",...json({message:"今天标记读书"})});equal(response.response.status,200);let batch=(response.body as BackfillChatAnswer).batch!;
+  equal(batch.plan.entries.length,0);equal(batch.plan.actions![0]!.type,"habit");equal(batch.plan.actions![0]!.date,today);
+  const base="/api/ai/backfill/"+batch.id;
+  await request(h.base,"/api/modules/cycle-intimacy/habits",{method:"POST",...json({name:"吃素",icon:"Carrot"})});
+  equal((await request(h.base,base+"/commit",{method:"POST",...json({revision:batch.revision})})).response.status,409);
+  batch=(await request(h.base,base,{method:"PATCH",...json({revision:batch.revision,plan:batch.plan})})).body as BackfillBatch;
+  equal((await request(h.base,base+"/commit",{method:"POST",...json({revision:batch.revision})})).response.status,200);
+  equal(((await request(h.base,"/api/modules/cycle-intimacy")).body as {config:{habits:CustomHabit[]}}).config.habits.length,2);
+  batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"两条",text:"2026-09-15 第一条\n2026-09-16 第二条"}]})})).body as BackfillBatch;
+  const path="/api/ai/backfill/"+batch.id;
+  batch=(await request(h.base,path+"/commit",{method:"POST",...json({revision:batch.revision,keys:[batch.plan.entries[0]!.key]})})).body as BackfillBatch;
+  const r=(await request(h.base,"/api/records/"+batch.recordIds![0])).body as RecordView;
+  await request(h.base,"/api/records/"+r.id,{method:"PATCH",...json({revision:r.revision,content:"主人改写第一条"})});
+  batch=(await request(h.base,path+"/commit",{method:"POST",...json({revision:batch.revision})})).body as BackfillBatch;
+  equal(batch.undoBlocked,true);equal((await request(h.base,path+"/undo",{method:"POST",...json({})})).response.status,409);
+  equal(((await request(h.base,"/api/records/"+r.id)).body as RecordView).body.edited,"主人改写第一条");
+});
+
+test("assistant occurrence time is frozen at proposal, survives updates and supports reviewed clock edits", async t => {
+  const h=await startHarness();t.after(()=>h.stop());const today=calendarToday();
+  let batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"时间",text:today+" 原始草稿\n2026-09-17 日期不记得几点"}]})})).body as BackfillBatch;
+  const path="/api/ai/backfill/"+batch.id, first=batch.plan.entries[0]!;
+  ok(/^\d{2}:\d{2}$/.test(first.time!));equal(batch.plan.entries[1]!.time,"");
+  const patch=async (entries:BackfillBatch["plan"]["entries"])=>request(h.base,path,{method:"PATCH",...json({revision:batch.revision,plan:{...batch.plan,entries}})});
+  const updated=await patch(batch.plan.entries.map(({time:_,...e})=>({...e,content:e.content+"已修改"})));equal(updated.response.status,200);batch=updated.body as BackfillBatch;equal(batch.plan.entries[0]!.time,first.time);
+  equal((await patch(batch.plan.entries.map(e=>({...e,time:"25:10"})))).response.status,400);
+  let result=await patch(batch.plan.entries.map(({questionKind:_,...e})=>e.key===first.key?{...e,time:"00:01",questions:"是否只保留“原始草稿已修改”，不写经期相关内容？"}:e));equal(result.response.status,200);batch=result.body as BackfillBatch;
+  equal(batch.plan.entries[0]!.questionKind,"confirmation");
+  result=await request(h.base,path+"/commit",{method:"POST",...json({revision:batch.revision,keys:[first.key]})});equal(result.response.status,200,JSON.stringify(result.body));batch=result.body as BackfillBatch;
+  const row=(await request(h.base,"/api/records/"+batch.recordIds![0])).body as RecordView;
+  equal(Date.parse(row.occurredAt!.value),Date.parse(today+"T00:01:00+08:00"));ok(Date.parse(row.createdAt.value)>Date.parse(row.occurredAt!.value));
+  result=await request(h.base,path+"/commit",{method:"POST",...json({revision:batch.revision})});equal(result.response.status,200);batch=result.body as BackfillBatch;
+  const old=(await request(h.base,"/api/records/"+batch.recordIds![1])).body as RecordView;equal(old.occurredAt!.kind,"date");equal(old.occurredAt!.value,"2026-09-17");
+});
+
+test("assistant missing facts remain blocking and future clocks cannot create journals",async t=>{
+  const h=await startHarness();t.after(()=>h.stop());
+  let batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"事实",text:"2026-09-18 等待核对"}]})})).body as BackfillBatch;
+  const path="/api/ai/backfill/"+batch.id;
+  const update=async(patch:Partial<BackfillBatch["plan"]["entries"][number]>)=>{const r=await request(h.base,path,{method:"PATCH",...json({revision:batch.revision,plan:{...batch.plan,entries:batch.plan.entries.map(e=>({...e,...patch}))}})});equal(r.response.status,200);batch=r.body as BackfillBatch;};
+  const commit=()=>request(h.base,path+"/commit",{method:"POST",...json({revision:batch.revision})});
+  await update({questions:"同行的人是哪位？",questionKind:"missing"});equal((await commit()).response.status,400);
+  await update({date:"",questions:"接受这个方案吗？",questionKind:"confirmation"});equal((await commit()).response.status,400);
+  await update({date:"2099-01-01",time:"12:00",questions:""});equal((await commit()).response.status,400);
+  equal(((await request(h.base,"/api/records")).body as {items:RecordView[]}).items.length,0);
 });

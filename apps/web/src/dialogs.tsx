@@ -35,6 +35,7 @@ import {
   relationLabelFor,
 } from "./app-meta";
 import { PLACE_ROLE_LABELS, RecordText, entityHint, mentionVocabulary } from "./mention";
+import { SearchFilterFields, EMPTY_SEARCH_FILTERS, type SearchFilters } from "./search-filters";
 import { MovieCardDialog } from "./movie";
 import { lifeTimeDate, shortDate } from "./time";
 
@@ -80,7 +81,7 @@ export function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity |
   // as one unseparated run the moment anything was edited.
   useEffect(() => { if (entity) {
     setName(entity.name);
-    setAliases(entity.aliases?.join(" / ") ?? "");
+    setAliases(JSON.stringify(entity.aliases?.length ? entity.aliases : [""]));
     setDescription(entity.description ?? "");
     setRole(entity.type === "place" ? entity.role ?? "" : "");
     setHasPeriod(entity.type === "place" && entity.period !== undefined);
@@ -112,7 +113,7 @@ export function EntityEditDialog({ entity, onClose, onSave }: { entity: Entity |
     <div className="dialog-header"><div><p className="eyebrow">{entity.type === "place" ? "地点资料" : "联系人资料"}</p><h2 id="entity-edit-title">编辑 {entity.name}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭编辑"><X size={17} aria-hidden="true" /></button></div>
     <div className="entity-edit-body">
       <label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-      <label className="dialog-field"><span>别名</span><AliasField value={aliases} onChange={setAliases} label="别名，用斜杠分隔" placeholder="多个别名用 / 分隔" /></label>
+      <label className="dialog-field"><span>别名</span><AliasField disabled={saving} value={aliases} onChange={setAliases} label="别名，用斜杠分隔" placeholder="多个别名用 / 分隔" /></label>
       {entity.type === "place" ? <>
         <div className="dialog-field"><span>角色</span><div className="entity-create-types entity-edit-roles"><button type="button" className={`entity-type-option ${role === "" ? "is-active" : ""}`} aria-pressed={role === ""} onClick={() => setRole("")}>未指定</button>{PLACE_ROLES.map((option) => <button key={option} type="button" className={`entity-type-option ${role === option ? "is-active" : ""}`} aria-pressed={role === option} onClick={() => setRole(option)}>{PLACE_ROLE_LABELS[option]}</button>)}</div></div>
         <div className="entity-create-optional-row"><label className="entity-optional-toggle"><input type="checkbox" checked={hasPeriod} onChange={(event) => setHasPeriod(event.target.checked)} />添加时期</label><label className="entity-optional-toggle"><input type="checkbox" checked={hasAddress} onChange={(event) => setHasAddress(event.target.checked)} />添加详细地址</label></div>
@@ -178,13 +179,15 @@ export function EntitiesView({ entities, records, onCreateEntity, onEdit, onView
   </section>;
 }
 
-export function SearchDialog({ open, initialQuery, onClose, onSearch }: { open: boolean; initialQuery: string; onClose: () => void; onSearch: (query: string) => void }) {
+export function SearchDialog({ open, initialQuery, initialFilters, onClose, onSearch }: { open: boolean; initialQuery: string; initialFilters: SearchFilters; onClose: () => void; onSearch: (query: string, filters: SearchFilters) => void }) {
+  const [filters, setFilters] = useState(initialFilters);
+  useEffect(() => { if (open) setFilters(initialFilters); }, [open, initialFilters]);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState(initialQuery);
   useEffect(() => setQuery(initialQuery), [initialQuery]);
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (open && !dialog.open) { dialog.showModal(); window.requestAnimationFrame(() => searchInputRef.current?.focus()); } if (!open && dialog.open) dialog.close(); }, [open]);
-  return <dialog ref={dialogRef} className="modal-dialog search-dialog" aria-labelledby="search-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><h2 id="search-title">搜索记录</h2><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭搜索"><X size={17} aria-hidden="true" /></button></div><form onSubmit={(event) => { event.preventDefault(); onSearch(query.trim()); onClose(); }}><p className="search-dialog-description">可搜所有日期的日记、任务、事件和笔记，包括笔记标题与出处。</p><label className="search-dialog-input"><Search size={17} aria-hidden="true" /><input ref={searchInputRef} autoFocus aria-label="搜索关键词" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入关键词" /></label><div className="dialog-footer"><button className="secondary-button" type="button" onClick={() => { setQuery(""); onSearch(""); onClose(); }}>清空</button><button className="primary-button" type="submit">搜索</button></div></form></dialog>;
+  return <dialog ref={dialogRef} className="modal-dialog search-dialog" aria-labelledby="search-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><h2 id="search-title">搜索记录</h2><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭搜索"><X size={17} aria-hidden="true" /></button></div><form onSubmit={(event) => { event.preventDefault(); onSearch(query.trim(), filters); onClose(); }}><p className="search-dialog-description">可搜所有日期的日记、任务、事件和笔记，包括笔记标题与出处。</p><label className="search-dialog-input"><Search size={17} aria-hidden="true" /><input ref={searchInputRef} autoFocus aria-label="搜索关键词" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="关键词可留空，只按条件筛选" /></label><SearchFilterFields value={filters} onChange={(value) => setFilters({ ...value, statuses: value.kinds.includes("task") ? value.statuses : [] })} /><div className="dialog-footer"><button className="secondary-button" type="button" onClick={() => { setQuery(""); onSearch("", EMPTY_SEARCH_FILTERS); onClose(); }}>清空</button><button className="primary-button" type="submit">搜索</button></div></form></dialog>;
 }
 
 export function MobileMenuDialog({ open, activeView, onClose, onNavigate, onOpenSearch }: { open: boolean; activeView: AppView; onClose: () => void; onNavigate: (view: AppView) => void; onOpenSearch: () => void }) {

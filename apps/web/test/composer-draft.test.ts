@@ -15,6 +15,18 @@ function storage() {
 const draft = { content: "还没发出的正文", kind: "journal" as const, isPrivate: true,
   shots: [{ assetId: "asset-1", role: "photo" as const }] };
 
+test("draft exclusions round trip and invalid marker metadata never discards prose", () => {
+  const store = storage();
+  const current = { ...draft, entityMentions: [{ start: 0, end: 2, text: "还没", entityId: null, entityType: "person" as const }] };
+  assert.equal(writeComposerDraft("legacy", current, store), true);
+  assert.deepEqual(readComposerDraft("legacy", store), current);
+  const storedKey = [...store.data.keys()][0]!;
+  const raw = JSON.parse(store.data.get(storedKey)!);
+  raw.entityMentions[0].text = "不匹配";
+  store.data.set(storedKey, JSON.stringify(raw));
+  assert.deepEqual(readComposerDraft("legacy", store), draft);
+});
+
 test("logged-out or unresolved sessions cannot hydrate another account's draft", () => {
   const member = { required: true, authenticated: true, accountMode: true,
     account: { id: "member-2", username: "member", displayName: "member", spaceName: "member", tenantId: "tenant-2", role: "member" as const } };

@@ -252,6 +252,11 @@ export class StoragePoolStore {
     this.#db.prepare(`DELETE FROM storage_pool_objects WHERE attempt_id = ? AND state = 'uploading'`).run(attemptId);
   }
 
+  /** Archive compensation only, after the bridge has confirmed deletion of this exact new object. */
+  public discardConfirmedArchiveUpload(attemptId: string, objectKey: string): void {
+    this.#db.prepare("DELETE FROM storage_pool_objects WHERE attempt_id = ? AND object_key = ? AND state IN ('pending', 'ready')").run(attemptId, objectKey);
+  }
+
   public poolObject(accountId: string, assetId: string, objectKey: string): PoolObjectRow | null {
     const row = this.#db.prepare(`SELECT attempt_id, object_key, account_id, asset_id, bytes, state FROM storage_pool_objects WHERE account_id = ? AND asset_id = ? AND object_key = ?`)
       .get(accountId, assetId, objectKey) as Record<string, unknown> | undefined;

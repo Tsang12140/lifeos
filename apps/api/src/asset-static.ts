@@ -13,6 +13,7 @@ export function shanghaiDateKey(date: Date): string {
 
 
 export const SERVABLE_ASSET_EXTENSIONS = new Set([
+  ".pdf", ".docx", ".txt", ".md", ".csv", ".json",
   ".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".heic",
   ".mp3", ".m4a", ".aac", ".ogg", ".wav",
   ".mp4", ".webm",
@@ -60,6 +61,12 @@ export const requestLog = (() => {
 })();
 
 export const ASSET_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".json": "application/json",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".png": "image/png",
@@ -185,5 +192,8 @@ export function resolveAssetOriginal(config: ApiConfig, repository: SqliteRecord
   }
   const reference = asset.storageRefs.find((ref) => ref.sourceId === "local");
   if (reference === undefined) throw new HttpError(404, "not_a_local_asset", "Asset has no local reference");
+  if ([".pdf", ".docx", ".txt", ".md", ".csv", ".json"].includes(extname(reference.sourceRef).toLowerCase()) && (asset.kind !== "file" || !reference.contentHash || !reference.sourceRef.startsWith("uploads/"))) {
+    throw new HttpError(415, "unsupported_asset_type", "文档只能读取已校验并上传的附件");
+  }
   return { reference, ...resolveLocalAsset(config.assetRoot, reference.sourceRef) };
 }

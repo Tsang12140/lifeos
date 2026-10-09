@@ -6,12 +6,17 @@
   "description": "LifeOS self-hosted Node API",
   "dependencies": {
     "@lifeos/core": "0.1.0",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.4.299",
     "sharp": "^0.35.4"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --pretty false",
     "start": "node --use-env-proxy --env-file-if-exists=../../.env dist/src/main.js",
-    "test": "npm run build && node --test --test-isolation=none dist/test/api.test.js dist/test/storage-pool.test.js"
+    "test": "npm run build && node --test --test-isolation=none dist/test/api.test.js dist/test/storage-pool.test.js dist/test/archive.test.js dist/test/pool-transition.test.js"
   }
 }

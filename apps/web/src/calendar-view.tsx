@@ -1,3 +1,8 @@
+import { CustomHabitPanel, type HabitActions } from "./habit-panel";
+import { HabitIcon } from "./habit-icon";
+import type { CustomHabit } from "@lifeos/core";
+import { canEditDaySummary } from "@lifeos/core";
+import { calendarTasksForDate, calendarTaskStatus, calendarTaskText, useCalendarTaskLabels } from "./calendar-tasks";
 import {
   useCallback,
   useEffect,
@@ -106,6 +111,7 @@ type CalendarDateArtPreferences = {
   readonly scheme: CalendarDateArtPaletteKey;
   readonly desktopLayout: CalendarDateArtLayout;
   readonly mobileLayout: CalendarDateArtLayout;
+  readonly dateNumberScale: number;
 };
 
 const CALENDAR_DATE_ART_STORAGE_KEY = "lifeos.calendar.dateArt.v1";
@@ -114,6 +120,7 @@ const DEFAULT_CALENDAR_DATE_ART_PREFERENCES: CalendarDateArtPreferences = {
   scheme: "morandi",
   desktopLayout: "big",
   mobileLayout: "horizontal",
+  dateNumberScale: 1.2,
 };
 const CALENDAR_DATE_ART_PALETTES: readonly {
   readonly key: CalendarDateArtPaletteKey;
@@ -147,6 +154,7 @@ function readCalendarDateArtPreferences(): CalendarDateArtPreferences {
     if (candidate.version !== 1) return DEFAULT_CALENDAR_DATE_ART_PREFERENCES;
     return {
       version: 1,
+      dateNumberScale: typeof candidate.dateNumberScale === "number" && Number.isFinite(candidate.dateNumberScale) ? Math.min(1.8, Math.max(1, candidate.dateNumberScale)) : 1.2,
       scheme: isCalendarDateArtPalette(candidate.scheme) ? candidate.scheme : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.scheme,
       desktopLayout: isCalendarDateArtLayout(candidate.desktopLayout) ? candidate.desktopLayout : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.desktopLayout,
       mobileLayout: isCalendarDateArtLayout(candidate.mobileLayout) ? candidate.mobileLayout : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.mobileLayout,
@@ -211,8 +219,8 @@ function CalendarDateArtSettings({ preferences, onChange }: { preferences: Calen
 function cycleMarkerLabelsForDate(date: string, today: string, module: CycleIntimacyModuleData | null): string[] {
   if (!module?.config.enabled) return [];
   const period = periodMoonForDate(date, today, module);
-  const hasPeriodStart = module.events.some((event) => event.date === date && event.kind === "period_start");
-  const hasPeriodEnd = module.events.some((event) => event.date === date && event.kind === "period_end");
+  const hasPeriodStart = module.config.enabled && module.events.some((event) => event.date === date && event.kind === "period_start");
+  const hasPeriodEnd = module.config.enabled && module.events.some((event) => event.date === date && event.kind === "period_end");
   const labels: string[] = [];
   if (period !== undefined || hasPeriodStart || hasPeriodEnd) {
     labels.push(hasPeriodStart && hasPeriodEnd ? "已记录经期开始和经期结束" : hasPeriodStart ? "已记录经期开始" : hasPeriodEnd ? "已记录经期结束" : period?.forecast ? "预测经期" : "已记录经期");
@@ -223,12 +231,12 @@ function cycleMarkerLabelsForDate(date: string, today: string, module: CycleInti
 }
 
 function CalendarDayMarkers({ date, today, module }: { readonly date: string; readonly today: string; readonly module: CycleIntimacyModuleData | null }) {
-  if (!module?.config.enabled) return null;
-  const period = periodMoonForDate(date, today, module);
+  if (!module) return null;
+  const period = module.config.enabled ? periodMoonForDate(date, today, module) : undefined;
   const hasPeriodStart = module.events.some((event) => event.date === date && event.kind === "period_start");
   const hasPeriodEnd = module.events.some((event) => event.date === date && event.kind === "period_end");
-  const intimate = module.events.some((event) => event.date === date && event.kind === "intimacy");
-  const fitness = module.events.some((event) => event.date === date && event.kind === "fitness");
+  const intimate = module.config.enabled && module.events.some((event) => event.date === date && event.kind === "intimacy");
+  const fitness = module.config.enabled && module.events.some((event) => event.date === date && event.kind === "fitness");
   const markers: CalendarMarker[] = [];
   if (period !== undefined || hasPeriodStart || hasPeriodEnd) {
     // Keep the calendar's established future-period ghosting even when an
@@ -248,6 +256,7 @@ function CalendarDayMarkers({ date, today, module }: { readonly date: string; re
   }
   if (intimate) markers.push({ id: `intimacy-${date}`, label: "已记录亲密", content: <Heart className="calendar-heart" size={13} strokeWidth={1.9} aria-hidden="true" /> });
   if (fitness) markers.push({ id: `fitness-${date}`, label: "已记录健身", content: <Dumbbell className="calendar-fitness" size={13} strokeWidth={1.9} aria-hidden="true" /> });
+  for (const habit of module.config.habits ?? []) if (habit.dates.includes(date)) markers.push({ id: habit.id, label: habit.name, content: <span data-habit-marker={habit.id} title={habit.name} aria-label={habit.name}><HabitIcon name={habit.icon} size={13} /></span> });
   const visible = markers.length > 4 ? [...markers.slice(0, 3), { id: `more-${date}`, label: `还有 ${markers.length - 3} 个日历事件`, content: <span className="calendar-marker-more" aria-hidden="true">+{markers.length - 3}</span> }] : markers;
   if (visible.length === 0) return null;
   return <span className="calendar-day-markers" aria-label={visible.map((marker) => marker.label).join("，")}>{visible.map((marker, index) => <span className="calendar-day-marker" key={marker.id} style={{ gridColumnStart: 5 - visible.length + index }}>{marker.content}</span>)}</span>;
@@ -388,10 +397,13 @@ export function CalendarSettingsPanel({ statusState, onStatusChange, onRetry, on
     </div>
     <div className="dialog-body calendar-settings-dialog-body">
       <div id="calendar-settings-appearance" hidden={section !== "appearance"}>
+      <label className="calendar-date-size-setting"><span>日期数字大小 <output>{Math.round(dateArtPreferences.dateNumberScale * 100)}%</output></span><input type="range" min="100" max="180" step="1" value={Math.round(dateArtPreferences.dateNumberScale * 100)} onChange={event => onDateArtChange({ dateNumberScale: Number(event.target.value) / 100 })} aria-label="日期数字大小" /></label>
       <CalendarDateArtSettings preferences={dateArtPreferences} onChange={onDateArtChange} />
       </div>
       <div id="calendar-settings-summary" className="calendar-settings-block" hidden={section !== "summary"}>
       <div className="calendar-settings-switch"><span>用 AI 生成小结<small>{statusReady ? keyConfigured ? "已配置密钥" : "还没有密钥，暂时用离线规则" : "状态确认后才能修改"}</small></span><button className={"toggle-button" + (enabled ? " is-on" : "")} type="button" role="switch" aria-checked={enabled} disabled={!statusReady} onClick={() => setEnabled(!enabled)} aria-label="用 AI 生成小结"><span className="toggle-knob" /></button></div>
+      <p className="settings-ai-note">当天先显示离线小结，次日首次查看时生成 AI 小结。修改模型或提示词后，已生成的小结仍保留；可在日期菜单中主动重新生成。</p>
+      <p className="settings-ai-note">待办简写按用户每天最多处理 20 条新增、10 次内容修改。超出额度或生成失败时仍显示原文提醒，重复查看不会重新消耗额度。</p>
       {statusState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{statusState.error}</span><button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
       {status === null ? <p className="settings-config-unavailable">状态暂时不可读取；保存、测试和提示词调整已锁定。</p> : null}
       <div className="calendar-settings-grid">
@@ -462,7 +474,7 @@ function MobileCycleEntryPanel({ date, draft, busy, pendingKind, error, conflict
  * grid itself. Summaries only exist in the month grid, so the three summary items
  * are month-only; the cycle shortcuts are there in either view.
  */
-export function CalendarSummaryMenu({ x, y, monthMode, busy, cycleReady, cycleEnabled, recordedKinds, onEdit, onRegenerate, onRevert, onToggleCycle, onPickCycle, onClose }: { x: number; y: number; monthMode: boolean; busy: boolean; cycleReady: boolean; cycleEnabled: boolean; recordedKinds: ReadonlySet<CycleIntimacyEventKind>; onEdit: () => void; onRegenerate: () => void; onRevert: () => void; onToggleCycle: (kind: CycleIntimacyEventKind) => void; onPickCycle: (kind: CycleIntimacyEventKind) => void; onClose: () => void }) {
+export function CalendarSummaryMenu({ x, y, monthMode, summaryEditable, habits, date, onToggleHabit, busy, cycleReady, cycleEnabled, recordedKinds, onEdit, onRegenerate, onRevert, onToggleCycle, onPickCycle, onClose }: { x: number; y: number; habits: readonly CustomHabit[]; date: string; onToggleHabit: (habit: CustomHabit) => void; monthMode: boolean; summaryEditable: boolean; busy: boolean; cycleReady: boolean; cycleEnabled: boolean; recordedKinds: ReadonlySet<CycleIntimacyEventKind>; onEdit: () => void; onRegenerate: () => void; onRevert: () => void; onToggleCycle: (kind: CycleIntimacyEventKind) => void; onPickCycle: (kind: CycleIntimacyEventKind) => void; onClose: () => void }) {
   const [cycleOpen, setCycleOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x, y });
@@ -493,9 +505,9 @@ export function CalendarSummaryMenu({ x, y, monthMode, busy, cycleReady, cycleEn
         a click inside the panel stops its `pointerdown` from reaching the window.
         The cycle items are the exception — the menu stays up, so two things can be
         marked on the same day without right-clicking again. */}
-    {monthMode ? <button role="menuitem" type="button" onClick={() => { onClose(); onEdit(); }}><Pencil size={14} strokeWidth={1.9} aria-hidden="true" /><span>编辑小结</span></button> : null}
-    {monthMode ? <button role="menuitem" type="button" disabled={busy} onClick={() => { onClose(); onRegenerate(); }}><RotateCcw size={14} strokeWidth={1.9} aria-hidden="true" /><span>AI 重新生成小结</span></button> : null}
-    {monthMode ? <button role="menuitem" type="button" disabled={busy} onClick={() => { onClose(); onRevert(); }}><Eraser size={14} strokeWidth={1.9} aria-hidden="true" /><span>恢复原样</span></button> : null}
+    {monthMode ? <button role="menuitem" type="button" disabled={busy || !summaryEditable} onClick={() => { onClose(); onEdit(); }}><Pencil size={14} strokeWidth={1.9} aria-hidden="true" /><span>编辑小结</span></button> : null}
+    {monthMode ? <button role="menuitem" type="button" disabled={busy || !summaryEditable} onClick={() => { onClose(); onRegenerate(); }}><RotateCcw size={14} strokeWidth={1.9} aria-hidden="true" /><span>AI 重新生成小结</span></button> : null}
+    {monthMode ? <button role="menuitem" type="button" disabled={busy || !summaryEditable} onClick={() => { onClose(); onRevert(); }}><Eraser size={14} strokeWidth={1.9} aria-hidden="true" /><span>恢复原样</span></button> : null}
     <div className="calendar-summary-submenu-host" onMouseEnter={() => setCycleOpen(true)} onMouseLeave={() => setCycleOpen(false)}>
       <button role="menuitem" type="button" aria-haspopup="menu" aria-expanded={cycleOpen} className={cycleOpen ? "is-open" : ""} onClick={() => setCycleOpen(true)}><CalendarDays size={14} strokeWidth={1.9} aria-hidden="true" /><span>周期</span><ChevronRight className="calendar-summary-caret" size={14} strokeWidth={1.9} aria-hidden="true" /></button>
       {cycleOpen ? <div className={`calendar-summary-submenu ${flip ? "is-flipped" : ""}`} role="menu" aria-label="周期">
@@ -512,13 +524,17 @@ export function CalendarSummaryMenu({ x, y, monthMode, busy, cycleReady, cycleEn
             <button className="calendar-summary-cycle-label" type="button" role="menuitem" disabled={off} aria-label={`${on ? "移除" : "记录"}${item.label}，并关闭菜单`} onClick={() => onPickCycle(item.kind)}>{item.label}</button>
           </div>;
         })}
+        {habits.map(habit => { const on = habit.dates.includes(date); return <div className="calendar-summary-cycle-row" role="none" key={habit.id}>
+          <button className={"calendar-summary-checkbox " + (on ? "is-checked" : "")} type="button" role="menuitemcheckbox" aria-checked={on} disabled={busy || date > new Intl.DateTimeFormat("en-CA", { timeZone: USER_TIME_ZONE }).format(new Date())} aria-label={"多选：" + (on ? "移除" : "记录") + habit.name} onClick={() => onToggleHabit(habit)}>{on ? <Check size={11} /> : null}</button>
+          <button className="calendar-summary-cycle-label" type="button" disabled={busy || date > new Intl.DateTimeFormat("en-CA", { timeZone: USER_TIME_ZONE }).format(new Date())} onClick={() => { onClose(); onToggleHabit(habit); }}><HabitIcon name={habit.icon} size={14} />{habit.name}</button>
+        </div>; })}
       </div> : null}
     </div>
     <button role="menuitem" type="button" onClick={onClose}><X size={14} strokeWidth={1.9} aria-hidden="true" /><span>取消</span></button>
   </div>;
 }
 
-export function CalendarView({ mode, onModeChange, onStep, anchor, today, records, assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onCloseCycleModule, onOpenCycleSettings, onSaveCycleConfig, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSaveMobileCycleDay, onReloadCycleModule, onSavePeriodLength, onSaveCycleLength, onRetry, onOpenDay, settingsOpen, onToggleSettings, aiStatusState, onAiStatusChange, onRetryAiStatus, editMode, onEditModeChange, drafts, onDraftChange, summarySaving, onSaveDrafts, onDiscardDrafts, onRegenerateSummary, onRevertSummary, busyDate }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; onStep: (direction: number) => void; anchor: string; today: string; records: readonly RecordView[] | null; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleModuleResponse | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void | Promise<void>; onCloseCycleModule: () => void; onOpenCycleSettings: () => void; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSaveMobileCycleDay: (date: string, kinds: readonly MobileCycleKind[], revision: string) => Promise<CycleDayEditResponse>; onUndoMobileCycleDay: (token: string) => Promise<CycleDayUndoResponse>; onReloadCycleModule: () => Promise<CycleModuleResponse>; onSavePeriodLength: (days: number) => Promise<void>; onSaveCycleLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void; settingsOpen: boolean; onToggleSettings: () => void; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; editMode: boolean; onEditModeChange: (value: boolean) => void | Promise<boolean>; drafts: ReadonlyMap<string, string>; onDraftChange: (date: string, text: string) => void; summarySaving: boolean; onSaveDrafts: () => void; onDiscardDrafts: () => void; onRegenerateSummary: (date: string) => Promise<void>; onRevertSummary: (date: string) => Promise<void>; busyDate: string | null }) {
+export function CalendarView({ mode, onModeChange, onStep, anchor, today, habitActions, records, tasks = [], assets, summaries, aiEnabled, weatherByDate, loading, error, cycleModule, cyclePanelOpen, onOpenCycleModule, onCloseCycleModule, onOpenCycleSettings, onSaveCycleConfig, onAddCycleModuleEvent, onDeleteCycleModuleEvent, onSaveMobileCycleDay, onReloadCycleModule, onSavePeriodLength, onSaveCycleLength, onRetry, onOpenDay, settingsOpen, onToggleSettings, aiStatusState, onAiStatusChange, onRetryAiStatus, editMode, onEditModeChange, drafts, onDraftChange, summarySaving, onSaveDrafts, onDiscardDrafts, onRegenerateSummary, onRevertSummary, busyDate }: { mode: CalendarMode; onModeChange: (mode: CalendarMode) => void; onStep: (direction: number) => void; anchor: string; today: string; habitActions: HabitActions; records: readonly RecordView[] | null; tasks?: readonly RecordView[]; assets: readonly Asset[]; summaries: ReadonlyMap<string, DaySummary>; aiEnabled: boolean; weatherByDate: ReadonlyMap<string, CalendarWeather>; loading: boolean; error: string | null; cycleModule: CycleModuleResponse | null; cyclePanelOpen: boolean; onOpenCycleModule: () => void | Promise<void>; onCloseCycleModule: () => void; onOpenCycleSettings: () => void; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; onAddCycleModuleEvent: (date: string, kind: CycleIntimacyEventKind) => Promise<void>; onDeleteCycleModuleEvent: (id: string) => Promise<void>; onSaveMobileCycleDay: (date: string, kinds: readonly MobileCycleKind[], revision: string) => Promise<CycleDayEditResponse>; onUndoMobileCycleDay: (token: string) => Promise<CycleDayUndoResponse>; onReloadCycleModule: () => Promise<CycleModuleResponse>; onSavePeriodLength: (days: number) => Promise<void>; onSaveCycleLength: (days: number) => Promise<void>; onRetry: () => void; onOpenDay: (date: string) => void; settingsOpen: boolean; onToggleSettings: () => void; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; editMode: boolean; onEditModeChange: (value: boolean) => void | Promise<boolean>; drafts: ReadonlyMap<string, string>; onDraftChange: (date: string, text: string) => void; summarySaving: boolean; onSaveDrafts: () => void; onDiscardDrafts: () => void; onRegenerateSummary: (date: string) => Promise<void>; onRevertSummary: (date: string) => Promise<void>; busyDate: string | null }) {
   const dates = useMemo(() => (mode === "week" ? datesOfWeek(anchor) : monthGridDates(anchor)), [mode, anchor]);
   /** PC 周历下方的「上一周」预览（弱化可读；手机不显示）。 */
   const prevDates = useMemo(
@@ -529,6 +545,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
   // the month grid. Deriving it once keeps every cell honest even if the two ever
   // disagree for a frame.
   const editable = editMode && mode === "month";
+  const taskLabels = useCalendarTaskLabels(tasks, dates[0] ?? anchor, dates[dates.length - 1] ?? anchor, USER_TIME_ZONE, mode === "month" && !editable && !loading && !error);
   const mobileCyclePanelVisible = typeof window !== "undefined" && cyclePanelOpen && window.matchMedia("(max-width: 560px)").matches;
   // Editing lives in the calendar, so the only state it needs of its own is where
   // the right-click menu sits and which day asked for the caret; the drafts are
@@ -558,6 +575,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
   }, []);
   const selectedDateArtPalette = CALENDAR_DATE_ART_PALETTES.find((palette) => palette.key === dateArtPreferences.scheme) ?? CALENDAR_DATE_ART_PALETTES[0]!;
   const dateArtStyle = useMemo(() => ({
+    "--calendar-date-number-scale": dateArtPreferences.dateNumberScale,
     "--calendar-date-art-foreground": selectedDateArtPalette.foreground,
     "--calendar-date-art-tone-1": selectedDateArtPalette.colors[0],
     "--calendar-date-art-tone-2": selectedDateArtPalette.colors[1],
@@ -565,7 +583,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
     "--calendar-date-art-tone-4": selectedDateArtPalette.colors[3],
     "--calendar-date-art-tone-5": selectedDateArtPalette.colors[4],
     "--calendar-date-art-tone-6": selectedDateArtPalette.colors[5],
-  } as CSSProperties), [selectedDateArtPalette]);
+  } as CSSProperties), [selectedDateArtPalette, dateArtPreferences.dateNumberScale]);
   const mobileCycleBusyRef = useRef(false);
   const mobileCycleDraftRef = useRef<MobileCycleDraft | null>(null);
   const mobileCycleOpenRef = useRef(false);
@@ -697,7 +715,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
     setSummaryMenu({ date, x: event.clientX, y: event.clientY });
   };
   /** 「编辑小结」does not hunt for the day: it opens edit mode already on that one. */
-  const editDaySummary = (date: string) => { setFocusDate(date); onEditModeChange(true); };
+  const editDaySummary = (date: string) => { if (!canEditDaySummary(date, today, buckets.get(date) ?? [])) return; setFocusDate(date); onEditModeChange(true); };
   // The field appears in the render that follows edit mode turning on, so the
   // caret is placed by an effect instead of by the click handler.
   useEffect(() => {
@@ -708,6 +726,13 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
     field.focus();
     field.setSelectionRange(field.value.length, field.value.length);
   }, [focusDate, editable, dates]);
+  const toggleHabitOn = async (date: string, habit: CustomHabit) => {
+    if (cycleBusyRef.current !== null || date > today) return;
+    cycleBusyRef.current = date; setCycleBusyDate(date); setCycleShortcutError(null);
+    try { await habitActions.mark(habit, date, !habit.dates.includes(date)); }
+    catch (error) { setCycleShortcutError(error instanceof Error ? error.message : "习惯标记失败，请重试"); }
+    finally { cycleBusyRef.current = null; setCycleBusyDate(null); }
+  };
   /** The cycle submenu marks the day it was opened on, exactly like the panel's buttons. */
   const toggleCycleOn = async (date: string, kind: CycleIntimacyEventKind, onStarted?: () => void): Promise<boolean> => {
     if (cycleModule === null || cycleBusyRef.current !== null) return false;
@@ -824,7 +849,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
   /** What a field shows: the unsaved draft if there is one, otherwise the stored text. */
   const summaryValue = (date: string, summary: DaySummary | undefined): string =>
     drafts.get(date) ?? (summary === undefined ? "" : summaryDisplay(summary));
-  const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true), [records]);
+  const publicRecords = useMemo(() => (records ?? []).filter((record) => record.isPrivate !== true && (mode !== "month" || record.kind !== "task")), [records, mode]);
   // Include prev-week dates so the quiet row below is not an empty shell.
   const buckets = useMemo(
     () => recordsByDate(prevDates.length > 0 ? [...dates, ...prevDates] : dates, publicRecords),
@@ -909,6 +934,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
     {cyclePanelOpen ? <div id="cycle-entry-panel" className="cycle-entry-panel-host">
       <div className="cycle-entry-desktop"><CycleModulePanel module={cycleModule} selectedDate={anchor} today={today} onOpenSettings={onOpenCycleSettings} onAddEvent={onAddCycleModuleEvent} onDeleteEvent={onDeleteCycleModuleEvent} onSavePeriodLength={onSavePeriodLength} onSaveCycleLength={onSaveCycleLength} /></div>
       <div className="cycle-entry-mobile"><MobileCycleEntryPanel date={mobileCycleDate} draft={mobileCycleDraft} busy={mobileCycleBusy} pendingKind={mobileCyclePendingKind} error={mobileCyclePanelVisible ? mobileCycleError?.message ?? null : null} conflict={mobileCycleError?.conflict === true} onSelect={toggleMobileCycleKind} onReload={() => { void reloadMobileCycleDay(); }} onOpenSettings={openMobileCycleSettings} /></div>
+      <CustomHabitPanel habits={cycleModule?.config.habits ?? []} date={mobileCyclePanelVisible ? mobileCycleDate : anchor} today={today} actions={habitActions} />
     </div> : null}
     {settingsOpen ? <CalendarSettingsPanel statusState={aiStatusState} onStatusChange={onAiStatusChange} onRetry={onRetryAiStatus} onClose={onToggleSettings} dateArtPreferences={dateArtPreferences} onDateArtChange={updateDateArtPreferences} /> : null}
     {editable ? <div className="calendar-edit-bar" role="status">
@@ -931,7 +957,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
         const picked = cyclePanelOpen && date === (mobileCyclePanelVisible ? mobileCycleDate : anchor);
         // No summary line on a week card at all: the day grid is where text lives.
         // Right-click still works here, but it only offers the cycle shortcuts.
-        const markerLabels = cycleMarkerLabelsForDate(date, today, cycleModule);
+        const markerLabels = [...cycleMarkerLabelsForDate(date, today, cycleModule), ...(cycleModule?.config.habits ?? []).filter(habit => habit.dates.includes(date)).map(habit => habit.name)];
         return <CellTag className={`week-card ${date === today ? "is-today" : ""} ${picked ? "is-picked" : ""} ${weatherBadge === null ? "" : "has-weather-icons"}`} data-date={date} key={date} type="button" onClick={() => onCalendarDayClick(date)} onContextMenu={(event: ReactMouseEvent) => openSummaryMenu(date, event)} aria-label={`${displayDate(date)}，${items.length} 条记录${picked ? "，已选为周期记录日期" : ""}${markerLabels.length > 0 ? `，${markerLabels.join("，")}` : ""}`}>
           <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
           {weatherBadge}
@@ -977,6 +1003,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
       {WEEKDAY_LABELS.map((label) => <span className="month-weekday" key={label}>{label}</span>)}
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];
+        const reminders = calendarTasksForDate(tasks, date);
         const summary = summaries.get(date);
         const weather = weatherByDate.get(date);
         const dayInfo = calendarDayInfo(date);
@@ -992,19 +1019,17 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
         const summaryText = summary === undefined ? "" : summaryDisplay(summary);
         const holidayLabel = dayInfo.holiday === undefined ? "" : `${dayInfo.holiday.name}，${dayInfo.holiday.kind === "holiday" ? "休息日" : "调休上班"}`;
         const weatherLabel = weather === undefined ? "" : `天气：${weather.text}，${weather.tempMin}~${weather.tempMax}°C`;
-        const markerLabels = cycleMarkerLabelsForDate(date, today, cycleModule);
+        const markerLabels = [...cycleMarkerLabelsForDate(date, today, cycleModule), ...(cycleModule?.config.habits ?? []).filter(habit => habit.dates.includes(date)).map(habit => habit.name)];
         const titleParts = [holidayLabel, dayInfo.solarTerm ? `节气：${dayInfo.solarTerm}` : "", weatherLabel, summaryText === "" ? "" : `${summaryText}（${summary?.status === "generated" ? `AI，${summary?.provider}` : summary?.status === "manual" ? "手写" : "规则生成"}）`].filter(Boolean);
         const weatherBadge = weatherIconsEnabled && weather !== undefined ? <span className="calendar-day-weather-icon" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null;
         const picked = cyclePanelOpen && date === (mobileCyclePanelVisible ? mobileCycleDate : anchor);
-        return <CellTag className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${picked ? "is-picked" : ""} ${items.length === 0 ? "is-empty" : ""} ${editable ? "is-editing" : ""} ${weatherBadge === null ? "" : "has-weather-icons"} ${hasDateArt ? "has-date-art" : ""} ${hasDateArt && dayInfo.holiday ? "has-date-art-status" : ""} ${hasDateArt && dayInfo.solarTerm ? "has-date-art-solar" : ""} ${hasDateArt && markerLabels.length > 0 ? "has-date-art-markers" : ""}`} data-date={date} data-date-art-tone={hasDateArt ? dateArtTone : undefined} data-date-art-glyph-count={hasDateArt ? dateArtNames.length : undefined} key={date} type={editable ? undefined : "button"} onClick={editable ? undefined : () => onCalendarDayClick(date)} onContextMenu={inMonth ? (event: ReactMouseEvent) => openSummaryMenu(date, event) : undefined} aria-label={`${displayDate(date)}，${items.length} 条记录${picked ? "，已选为周期记录日期" : ""}${markerLabels.length > 0 ? `，${markerLabels.join("，")}` : ""}${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`}>
+        return <CellTag className={`month-cell ${inMonth ? "" : "is-outside"} ${date === today ? "is-today" : ""} ${picked ? "is-picked" : ""} ${items.length === 0 ? "is-empty" : ""} ${reminders.length > 0 ? "has-calendar-tasks" : ""} ${editable ? "is-editing" : ""} ${weatherBadge === null ? "" : "has-weather-icons"} ${hasDateArt ? "has-date-art" : ""} ${hasDateArt && dayInfo.holiday ? "has-date-art-status" : ""} ${hasDateArt && dayInfo.solarTerm ? "has-date-art-solar" : ""} ${hasDateArt && markerLabels.length > 0 ? "has-date-art-markers" : ""}`} data-date={date} data-date-art-tone={hasDateArt ? dateArtTone : undefined} data-date-art-glyph-count={hasDateArt ? dateArtNames.length : undefined} key={date} type={editable ? undefined : "button"} onClick={editable ? undefined : () => onCalendarDayClick(date)} onContextMenu={inMonth ? (event: ReactMouseEvent) => openSummaryMenu(date, event) : undefined} aria-label={`${displayDate(date)}，${items.length} 条记录，${reminders.length} 项待办${picked ? "，已选为周期记录日期" : ""}${markerLabels.length > 0 ? `，${markerLabels.join("，")}` : ""}${titleParts.length > 0 ? `，${titleParts.join("，")}` : ""}`}>
           {cellPhoto !== undefined ? <span className="month-cell-art" aria-hidden="true"><img src={assetThumbUrl(cellPhoto, 1200)} alt="" loading="lazy" decoding="async" style={cover === undefined ? undefined : { objectPosition: cover.position }} data-cover-aspect={aspect} data-cover-score={cover?.score} data-cover-text-penalty={cover?.textPenalty} /><span className="month-cell-veil" /></span> : hasDateArt ? <span className="month-cell-art month-cell-date-art" data-date-art-background data-date-art-tone={dateArtTone} aria-hidden="true"><span className="calendar-date-art-safe-area"><CalendarDateGlyph day={dateDay} /></span><span className="month-cell-veil" data-date-art-veil /></span> : null}
-          <span className="month-cell-head"><span className="month-day-number">{dateDay}</span><span className="month-day-meta">{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{weatherBadge}</span></span>
-          {/* While editing, every in-month day gets a field — even an empty one. The
-              menu's「编辑小结」promises to open the day that was right-clicked, and a
-              day with nothing on it still has a summary slot to write into. */}
-          {editable && inMonth
+          <span className="month-cell-head"><span className="month-day-number">{dateDay}</span><span className="month-day-meta">{reminders.length > 2 ? <span className="month-task-overflow" aria-label={`还有${reminders.length - 2}项待办`}>+{reminders.length - 2}</span> : null}{dayInfo.holiday ? <span className={`month-day-status is-${dayInfo.holiday.kind}`} aria-label={holidayLabel}>{dayInfo.holiday.kind === "holiday" ? "休" : "班"}</span> : null}{weatherBadge}</span></span>
+          {/* Only existing public journals on today or earlier can be edited. */}
+          {editable && inMonth && canEditDaySummary(date, today, items)
             ? <textarea className="summary-field month-day-summary-field" data-summary-date={date} value={summaryValue(date, summary)} maxLength={SUMMARY_MAX_LENGTH} rows={2} placeholder="写一句小结" onChange={(event) => onDraftChange(date, event.target.value)} onContextMenu={(event) => openSummaryMenu(date, event)} aria-label={`${displayDate(date)} 的小结`} />
-            : summaryText !== "" ? <span className={`month-day-summary ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}
+            : <span className="month-cell-copy">{reminders.slice(0, 2).map(task => <span className="month-task-line" key={task.id} title={`${calendarTaskStatus(task)}：${recordText(task)}`} aria-label={`${calendarTaskStatus(task)}：${recordText(task)}`}><span className={`calendar-task-circle ${task.kind === "task" && task.task.status === "done" ? "is-done" : ""} ${task.kind === "task" && task.task.status === "in_progress" ? "is-progress" : ""}`} aria-hidden="true" /><span className="month-task-label">{calendarTaskText(task, taskLabels)}</span></span>)}{reminders.length < 2 && summaryText !== "" ? <span className={`month-day-summary ${reminders.length === 1 ? "has-task-sibling" : ""} ${summary?.status === "fallback" ? "is-fallback" : ""}`}>{summaryText}</span> : null}</span>}
           {dayInfo.solarTerm || markerLabels.length > 0 ? <span className="month-cell-footer">
             {dayInfo.solarTerm ? <span className="month-day-solar" aria-label={`节气：${dayInfo.solarTerm}`}>{dayInfo.solarTerm}</span> : null}
             {markerLabels.length > 0 ? <CalendarDayMarkers date={date} today={today} module={cycleModule} /> : null}
@@ -1013,7 +1038,7 @@ export function CalendarView({ mode, onModeChange, onStep, anchor, today, record
       })}
     </div>) : null}
     {cycleShortcutError !== null && !mobileCyclePanelVisible ? <p className="cycle-inline-error calendar-cycle-error" role="alert">{cycleShortcutError}</p> : null}
-    {summaryMenu !== null ? <CalendarSummaryMenu x={summaryMenu.x} y={summaryMenu.y} monthMode={mode === "month"} busy={busyDate === summaryMenu.date || cycleBusyDate === summaryMenu.date} cycleReady={cycleModule !== null} cycleEnabled={cycleModule?.config.enabled === true} recordedKinds={new Set((cycleModule?.events ?? []).filter((event) => event.date === summaryMenu.date).map((event) => event.kind))} onEdit={() => editDaySummary(summaryMenu.date)} onRegenerate={() => { void onRegenerateSummary(summaryMenu.date); }} onRevert={() => { void onRevertSummary(summaryMenu.date); }} onToggleCycle={(kind) => { void toggleCycleOn(summaryMenu.date, kind); }} onPickCycle={(kind) => { closeSummaryMenu(); void toggleCycleOn(summaryMenu.date, kind); }} onClose={closeSummaryMenu} /> : null}
+    {summaryMenu !== null ? <CalendarSummaryMenu x={summaryMenu.x} y={summaryMenu.y} monthMode={mode === "month"} summaryEditable={canEditDaySummary(summaryMenu.date, today, buckets.get(summaryMenu.date) ?? [])} habits={cycleModule?.config.habits ?? []} date={summaryMenu.date} onToggleHabit={habit => { void toggleHabitOn(summaryMenu.date, habit); }} busy={busyDate === summaryMenu.date || cycleBusyDate === summaryMenu.date} cycleReady={cycleModule !== null} cycleEnabled={cycleModule?.config.enabled === true} recordedKinds={new Set((cycleModule?.events ?? []).filter((event) => event.date === summaryMenu.date).map((event) => event.kind))} onEdit={() => editDaySummary(summaryMenu.date)} onRegenerate={() => { void onRegenerateSummary(summaryMenu.date); }} onRevert={() => { void onRevertSummary(summaryMenu.date); }} onToggleCycle={(kind) => { void toggleCycleOn(summaryMenu.date, kind); }} onPickCycle={(kind) => { closeSummaryMenu(); void toggleCycleOn(summaryMenu.date, kind); }} onClose={closeSummaryMenu} /> : null}
   </section>;
 }
 

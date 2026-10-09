@@ -308,6 +308,7 @@ export interface MovieEntity {
   readonly personalRating?: number;
   readonly personalReview?: string;
   readonly watchedAt?: string;
+  readonly watched?: boolean;
 }
 
 export interface MovieEntityRef {
@@ -379,6 +380,7 @@ export interface WeatherArchiveResponse {
 }
 
 export interface RecordWritePayload {
+  readonly entityMentions?: readonly import("@lifeos/core").TextEntityDecision[];
   readonly kind?: RecordKind;
   readonly content?: string;
   readonly occurredAt?: LifeTime | null;

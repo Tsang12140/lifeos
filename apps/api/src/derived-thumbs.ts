@@ -24,12 +24,12 @@ import sharp from "sharp";
  */
 
 /**
- * The two widths the client actually asks for: 400 covers the timeline grid and the
- * composer tray even on a 3x screen, 1200 covers a week-card or calendar background.
+ * 400 covers the timeline grid and composer tray, 1200 covers card backgrounds,
+ * and 2048 bounds both dimensions of the opened photo preview.
  * A `?w=` that is neither is refused rather than rounded down, so a stray value cannot
  * quietly fill the cache with a size nothing will ever request again.
  */
-export const THUMBNAIL_WIDTHS = [400, 1200] as const;
+export const THUMBNAIL_WIDTHS = [400, 1200, 2048] as const;
 export type ThumbnailWidth = (typeof THUMBNAIL_WIDTHS)[number];
 export const DEFAULT_THUMBNAIL_WIDTH: ThumbnailWidth = 400;
 export const THUMBNAIL_FORMAT = "webp";
@@ -153,7 +153,9 @@ async function derive(sourceFile: string, target: string, width: ThumbnailWidth)
     // thumbnail that skipped this would show up sideways next to a straight original.
     .rotate()
     // Never enlarge: a 200px photo blown up to 400 is softness with nothing gained.
-    .resize({ width, withoutEnlargement: true })
+    .resize(width === 2048
+      ? { width, height: width, fit: "inside", withoutEnlargement: true }
+      : { width, withoutEnlargement: true })
     .webp({ quality: THUMBNAIL_QUALITY })
     .toBuffer();
   const temporary = `${target}.${randomUUID()}.part`;

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
+import { readSpaceTables, replaceSpaceTables, type SpaceTables } from "./portable-space.js";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, type BackupRetention } from "./backup-retention.js";
 import {
   assertValidAsset,
@@ -400,6 +401,9 @@ function ensureUniqueIds<T extends { id: string }>(values: readonly T[], name: s
 export class SqliteRecordRepository {
   readonly #db: DatabaseSync;
 
+  public portableSpace(): SpaceTables { return readSpaceTables(this.#db); }
+  public restorePortableSpace(tables: SpaceTables, expected: string): void { replaceSpaceTables(this.#db, tables, expected); }
+
   public constructor(databasePath: string) {
     if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
     this.#db = new DatabaseSync(databasePath, {
@@ -434,6 +438,7 @@ export class SqliteRecordRepository {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS records_timeline_idx ON records (deleted_at_json, timeline_sort DESC, created_at_json DESC, id DESC);
       CREATE INDEX IF NOT EXISTS records_kind_idx ON records (deleted_at_json, kind);
+      CREATE TABLE IF NOT EXISTS assistant_batches (id TEXT PRIMARY KEY NOT NULL, updated_at TEXT NOT NULL, value_json TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY NOT NULL,
         value_json TEXT NOT NULL,
@@ -769,6 +774,13 @@ export class SqliteRecordRepository {
     return this.#backupRuns(`SELECT * FROM backup_runs ORDER BY started_at DESC, id DESC LIMIT ${safeLimit}`);
   }
 
+  /** Query the requested Shanghai days before limiting, so old months cannot become false blanks. */
+  public backupRunsInRange(from: string, to: string): readonly BackupRun[] {
+    const start = new Date(`${from}T00:00:00+08:00`).toISOString();
+    const end = new Date(Date.parse(`${to}T00:00:00+08:00`) + 86_400_000).toISOString();
+    return this.#backupRunsByRows(this.#db.prepare("SELECT * FROM backup_runs WHERE started_at >= ? AND started_at < ? ORDER BY started_at DESC, id DESC").all(start, end));
+  }
+
   /**
    * Retention has to see the whole history: a truncated list would silently stop
    * older snapshots from ever being planned (and therefore never cleaned).
@@ -779,7 +791,11 @@ export class SqliteRecordRepository {
   }
 
   #backupRuns(sql: string): readonly BackupRun[] {
-    return this.#db.prepare(sql).all().map((row) => {
+    return this.#backupRunsByRows(this.#db.prepare(sql).all());
+  }
+
+  #backupRunsByRows(rows: readonly unknown[]): readonly BackupRun[] {
+    return rows.map((row) => {
       const value = row as Record<string, unknown>;
       const provider = textColumn(value, "provider");
       const kind = textColumn(value, "kind");
@@ -946,6 +962,15 @@ export class SqliteRecordRepository {
       ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json
     `).run(JSON.stringify(config));
     return this.cycleIntimacyModule();
+  }
+
+  /** The caller owns the transaction; used by reviewed assistant actions and guarded undo. */
+  public replaceCycleIntimacyModule(module: CycleIntimacyModuleData): void {
+    assertValidCycleIntimacyModuleData(module);
+    this.writeCycleIntimacyConfig(module.config);
+    this.#db.prepare("DELETE FROM cycle_intimacy_events").run();
+    const insert = this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)");
+    for (const event of module.events) insert.run(event.id, event.date, event.kind);
   }
 
   /**
@@ -1141,6 +1166,24 @@ export class SqliteRecordRepository {
     };
   }
 
+  /** The synchronous callback must never yield while this connection owns a write lock. */
+  public atomic<T>(run: () => T): T {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try { const value = run(); this.#db.exec("COMMIT"); return value; }
+    catch (error) { this.#db.exec("ROLLBACK"); throw error; }
+  }
+
+  public assistantBatches(): readonly import("@lifeos/core").BackfillBatch[] {
+    return this.#db.prepare("SELECT value_json FROM assistant_batches ORDER BY updated_at DESC").all().map((row) => JSON.parse(String(row.value_json)) as import("@lifeos/core").BackfillBatch);
+  }
+  public assistantBatch(id: string): import("@lifeos/core").BackfillBatch | null {
+    const row = this.#db.prepare("SELECT value_json FROM assistant_batches WHERE id = ?").get(id);
+    return row === undefined ? null : JSON.parse(String(row.value_json)) as import("@lifeos/core").BackfillBatch;
+  }
+  public saveAssistantBatch(batch: import("@lifeos/core").BackfillBatch): void {
+    this.#db.prepare("INSERT INTO assistant_batches(id, updated_at, value_json) VALUES(?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, value_json=excluded.value_json").run(batch.id, batch.updatedAt, JSON.stringify(batch));
+  }
+
   public list(query: RecordListQuery = {}): readonly RecordView[] {
     const where = ["deleted_at_json IS NULL"];
     const params: (string | number)[] = [];
@@ -1154,8 +1197,8 @@ export class SqliteRecordRepository {
     }
     if (query.q !== undefined && query.q.length > 0) {
       // instr() treats '%' and '_' literally, unlike LIKE, and keeps Chinese text intact.
-      where.push("instr(coalesce(body_edited, body_original) || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0");
-      params.push(query.q);
+      where.push("(instr(coalesce(body_edited, body_original) || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0 OR EXISTS (SELECT 1 FROM json_each(entity_refs_json) ref JOIN entities entity ON entity.id = json_extract(ref.value, '$.entityId') WHERE instr(entity.value_json, ?) > 0))");
+      params.push(query.q, query.q);
     }
     if (query.entityId !== undefined && query.entityId.length > 0) {
       // json_each keeps the match exact; a substring test would confuse person_1 with person_10.
@@ -1524,6 +1567,11 @@ export class SqliteRecordRepository {
         const assetId = ref["assetId"];
         if (typeof assetId === "string" && assetId !== "") ids.add(assetId);
       }
+    }
+    for (const batch of this.assistantBatches()) {
+      if (batch.status === "undone") continue;
+      for (const material of batch.materials) if (material.assetId) ids.add(material.assetId);
+      for (const entry of batch.plan.entries) for (const id of entry.assetIds) ids.add(id);
     }
     return ids;
   }

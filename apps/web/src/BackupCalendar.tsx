@@ -30,7 +30,7 @@ function formatBytes(size: number | undefined): string {
 type ProviderState = "success" | "failed" | "skipped" | "empty";
 
 function providerState(runs: readonly BackupRun[], provider: BackupRun["provider"]): ProviderState {
-  const latest = runs.find((run) => run.provider === provider);
+  const latest = runs.find((run) => run.provider === provider && run.kind !== "test");
   if (latest === undefined) return "empty";
   return latest.status;
 }
@@ -55,8 +55,8 @@ export function BackupCalendar({ initialRuns = [] }: { readonly initialRuns?: re
     setLoading(true);
     setError(null);
     apiRequest<{ readonly items: readonly BackupRun[] }>(`/api/backup/runs?from=${encodeURIComponent(grid[0]!)}&to=${encodeURIComponent(grid[grid.length - 1]!)}`, { signal: controller.signal })
-      .then((payload) => { if (!controller.signal.aborted) setRuns(payload.items); })
-      .catch(() => { if (!controller.signal.aborted) setError("备份记录暂时无法读取"); })
+      .then((payload) => { if (!controller.signal.aborted) setRuns(payload.items.filter((run) => run.kind !== "test")); })
+      .catch(() => { if (!controller.signal.aborted) { setRuns([]); setError("备份记录暂时无法读取"); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [grid]);
@@ -64,6 +64,7 @@ export function BackupCalendar({ initialRuns = [] }: { readonly initialRuns?: re
   const dayMap = useMemo(() => {
     const map = new Map<string, BackupRun[]>();
     for (const run of runs) {
+      if (run.kind === "test") continue;
       const key = shanghaiDateKey(run.startedAt);
       if (!key) continue;
       const list = map.get(key) ?? [];
@@ -107,7 +108,9 @@ export function BackupCalendar({ initialRuns = [] }: { readonly initialRuns?: re
         const s3 = providerState(dayRuns, "s3");
         const isToday = day === shanghaiTodayKey();
         const isSelected = day === selectedDay;
-        const title = `${day}：本地 ${local === "empty" ? "无记录" : local === "success" ? "成功" : "失败"}；对象存储 ${s3 === "empty" ? "无记录" : s3 === "success" ? "成功" : s3 === "skipped" ? "跳过" : "失败"}`;
+        const future = day > shanghaiTodayKey();
+        const unavailable = loading || error !== null;
+        const title = unavailable ? `${day}：${loading ? "读取中" : "记录无法读取"}` : future ? `${day}：尚未到这一天` : `${day}：本地 ${local === "empty" ? "无记录" : local === "success" ? "成功" : local === "skipped" ? "跳过" : "失败"}；对象存储 ${s3 === "empty" ? "无记录" : s3 === "success" ? "成功" : s3 === "skipped" ? "跳过" : "失败"}`;
         return <button
           key={day}
           type="button"
@@ -115,10 +118,11 @@ export function BackupCalendar({ initialRuns = [] }: { readonly initialRuns?: re
           data-backup-day={day}
           aria-label={title}
           title={title}
+          disabled={future || unavailable}
           onClick={() => setSelectedDay(isSelected ? null : day)}
         >
           <span className="backup-calendar-day-number">{Number(day.slice(8, 10))}</span>
-          <span className="backup-calendar-markers" aria-hidden="true">
+          <span className="backup-calendar-markers" aria-hidden="true" style={future || unavailable ? { visibility: "hidden" } : undefined}>
             <span className={`backup-calendar-marker is-local is-${local}`} />
             <span className={`backup-calendar-marker is-s3 is-${s3}`} />
           </span>
@@ -130,8 +134,9 @@ export function BackupCalendar({ initialRuns = [] }: { readonly initialRuns?: re
       <span><i className="is-s3 is-success" />对象成功</span>
       <span><i className="is-failed" />失败</span>
       <span><i className="is-skipped" />跳过</span>
+      <span><i className="is-empty" />无记录</span>
     </div>
-    {selectedDay !== null ? <div className="backup-calendar-detail" data-backup-detail>
+    {selectedDay !== null && !loading && error === null ? <div className="backup-calendar-detail" data-backup-detail>
       <div className="backup-calendar-detail-heading"><strong>{selectedDay}</strong><span>{selectedRuns.length ? `${selectedRuns.length} 条记录` : "当天无备份记录"}</span></div>
       {selectedRuns.length === 0 ? <p className="backup-calendar-empty">尚未记录本地或对象存储结果。</p> : <div className="backup-calendar-runs">
         {selectedRuns.map((run) => <div className="backup-calendar-run" key={run.id}>

@@ -181,13 +181,9 @@ export const handleBackupRoutes: RouteHandler = async (
         throw new HttpError(400, "invalid_range", "备份日历最多查询 400 天");
       }
     }
-    const allRuns = repository.listBackupRuns(1000);
     const items = from === undefined || to === undefined
-      ? allRuns
-      : allRuns.filter((run) => {
-          const day = backupRunDate(run);
-          return day >= from && day <= to;
-        });
+      ? repository.listBackupRuns(100)
+      : repository.backupRunsInRange(from, to);
     setJson(res, 200, { items });
     return true;
   }

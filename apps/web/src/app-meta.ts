@@ -13,7 +13,6 @@ import {
   MapPin,
   NotebookPen,
   Settings,
-  Sun,
   Tag,
   User,
   History,
@@ -74,7 +73,11 @@ export function settingsHash(page: SettingsPageId): string {
 
 export function readAssistantVisibility(): boolean {
   try {
-    return window.localStorage.getItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY) === "1";
+    if (window.localStorage.getItem("lifeos.ai.backfill-introduced") !== "1") {
+      window.localStorage.setItem("lifeos.ai.backfill-introduced", "1");
+      window.localStorage.setItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY, "1");
+    }
+    return window.localStorage.getItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY) !== "0";
   } catch {
     return false;
   }
@@ -223,8 +226,7 @@ export function mentionVocabulary(record: RecordView, entities: readonly Entity[
 }
 
 export const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
-  { id: "today", label: "今天", icon: Sun },
-  { id: "timeline", label: "时间轴", icon: CalendarDays },
+  { id: "today", label: "记录", icon: NotebookPen },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "tasks", label: "任务", icon: ListChecks },
   { id: "notes", label: "笔记", icon: NotebookPen },
@@ -235,14 +237,13 @@ export const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon 
 export const SETTINGS_NAV_ITEM: { id: AppView; label: string; icon: LucideIcon } = { id: "settings", label: "设置", icon: Settings };
 
 export const MOBILE_NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
-  { id: "today", label: "今天", icon: Sun },
+  { id: "today", label: "记录", icon: NotebookPen },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "notes", label: "笔记", icon: NotebookPen },
   { id: "entities", label: "联系人", icon: ContactRound },
 ];
 
 export const MOBILE_MORE_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
-  { id: "timeline", label: "时间轴", icon: CalendarDays },
   { id: "tasks", label: "任务", icon: ListChecks },
   { id: "timemachine", label: "时光机", icon: History },
   SETTINGS_NAV_ITEM,

@@ -104,6 +104,11 @@ export const handleEntitiesRoutes: RouteHandler = async (
     return true;
   }
   const entityMatch = /^\/api\/entities\/([^/]+)$/.exec(pathname);
+  if (entityMatch !== null && req.method === "GET") {
+    const entity = repository.findEntityById(decodeSegment(entityMatch[1]!));
+    if (!entity) throw new HttpError(404, "not_found", "关联对象不存在");
+    setJson(res, 200, entity); return true;
+  }
   if (entityMatch !== null && (req.method === "PATCH" || req.method === "DELETE")) {
     const id = decodeSegment(entityMatch[1]!);
     const existing = repository.findEntityById(id);

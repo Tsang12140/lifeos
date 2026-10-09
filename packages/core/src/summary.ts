@@ -73,6 +73,8 @@ export interface DaySummary {
    * rows are recomputed exactly once.
    */
   readonly contextRevision?: string;
+  /** Failed automatic AI calls wait until this instant before another attempt. */
+  readonly retryAfter?: string;
 }
 
 /**
@@ -146,6 +148,7 @@ export const SUMMARY_SYSTEM_PROMPT = [
   "你是一个生活记录的时间轴摘要器。",
   `用户会给你若干天的记录，请你为每一天写一个不超过 ${SUMMARY_MAX_LENGTH} 个 Unicode 字符的短标签，说明那天最主要的一件事或状态。超长内容由系统截断并追加两个英文句点，不要自行添加省略号。`,
   "只用一个短语，不要标点，不要解释，不要复述具体时间。",
+  "只概括明确已经发生的事情或状态，不把计划、愿望、提醒或待办说成已完成，不猜地点、情绪和原因。",
   "如果某天只标注了[笔记]，说明那天没有留下活动记录，那只是一段摘抄或剪藏。不要把它说成那天发生的事，写一个中性提示即可，例如「只留下一段笔记」。",
   '只输出 JSON，形如 {"2026-09-01":"江边散步"}，键必须是给出的日期。',
 ].join("\n");

@@ -1,3 +1,4 @@
+import { CalendarTaskLabels } from "./calendar-task-labels.js";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -148,10 +149,12 @@ import { publicMovieConfig, readRuntimeMovieConfig, saveRuntimeMovieConfig } fro
 import { MovieModuleError, resolveMovies, testMovieConfig, type MovieCandidate } from "./movie.js";
 import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, createThumbnailCache, parseThumbnailWidth } from "./derived-thumbs.js";
 import { handleBackupRoutes } from "./routes-backup.js";
+import { handleArchiveRoutes, closeArchiveService } from "./routes-archive.js";
 import { handleRecordsRoutes } from "./routes-records.js";
 import { handleAssetsRoutes } from "./routes-assets.js";
 import { handleEntitiesRoutes } from "./routes-entities.js";
 import { handleAiMovieRoutes } from "./routes-ai-movie.js";
+import { handleAssistantBackfillRoutes } from "./routes-assistant-backfill.js";
 import { handleWeatherRoutes } from "./routes-weather.js";
 import { handleModulesRoutes } from "./routes-modules.js";
 import { summaryPayload, collectSummarisableRecords } from "./summary-routes.js";
@@ -160,6 +163,7 @@ import type { PoolPreflight, RouteContext } from "./route-context.js";
 import { readBody, requireJsonContentType, readRawBody } from "./http-body.js";
 import { PoolConsumerBridge, StoragePoolError } from "./storage-pool.js";
 import { StoragePoolStore } from "./storage-pool-store.js";
+import { PoolTransition } from "./pool-transition.js";
 
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
@@ -338,6 +342,7 @@ interface PoolServices {
   readonly accountId: string;
   readonly admin: boolean;
   readonly preflight: () => Promise<PoolPreflight>;
+  readonly transition?: PoolTransition | null;
 }
 
 function createApp(config: ApiConfig, repository = new SqliteRecordRepository(config.databasePath), poolServices?: PoolServices): LifeosApp {
@@ -347,6 +352,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     : poolServices.store;
   const ownsPoolStore = poolServices === undefined && poolStore !== null;
   const poolAccountId = poolServices?.accountId ?? "local-owner";
+  const calendarTaskLabels = new CalendarTaskLabels(config.databasePath);
   const poolAdmin = poolServices?.admin ?? true;
   const poolPreflight = poolServices?.preflight ?? (async () => { throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪"); });
   const loginFailures = new Map<string, LoginFailureBucket>();
@@ -366,6 +372,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   const assetGcScheduler = new AssetGcScheduler({
     repository,
     config,
+    canRun: () => !poolServices?.transition?.localPrimary,
     onError: (error) => console.error("[asset-gc] collection pass failed:", error),
     onReport: (report) => {
       // Silence is the normal outcome: most passes find nothing to do. The one thing
@@ -415,6 +422,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     const ctx: RouteContext = {
       config,
       repository,
+      calendarTaskLabels,
       backupScheduler,
       weatherArchiveScheduler,
       thumbnails,
@@ -423,6 +431,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       poolAccountId,
       poolAdmin,
       poolPreflight,
+      poolTransition: poolServices?.transition ?? null,
       loginFailures,
       authenticated,
       requireAuth,
@@ -478,7 +487,9 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     }
 
     requireAuth(req);
+    if (await handleArchiveRoutes(ctx, req, res, pathname, url)) return;
     if (await handleBackupRoutes(ctx, req, res, pathname, url)) return;
+    if (await handleAssistantBackfillRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAiMovieRoutes(ctx, req, res, pathname, url)) return;
     if (await handleWeatherRoutes(ctx, req, res, pathname, url)) return;
     if (await handleModulesRoutes(ctx, req, res, pathname, url)) return;
@@ -573,8 +584,10 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       if (closed) return;
       closed = true;
       backupScheduler.stop();
+      closeArchiveService(repository);
       weatherArchiveScheduler.stop();
       assetGcScheduler.stop();
+      calendarTaskLabels.close();
       repository.close();
       if (ownsPoolStore) poolStore?.close();
     },
@@ -744,6 +757,12 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
   const ownerConfig = accountOwnerConfig(config);
   const poolBridge = new PoolConsumerBridge();
   const poolStore = poolBridge.enabled ? new StoragePoolStore(ownerConfig.databasePath) : null;
+  const poolTransition = poolStore === null ? null : new PoolTransition(config.dataDirectory, poolBridge, poolStore,
+    () => identity.listAccounts().map(account => ({ accountId: account.id,
+      databasePath: account.role === "owner" ? ownerConfig.databasePath : join(tenantDirectoryFor(config, account.tenantId), "lifeos.sqlite"),
+      ...(account.role === "owner" ? (ownerConfig.assetRoot === undefined ? {} : { assetRoot: ownerConfig.assetRoot })
+        : { assetRoot: join(tenantDirectoryFor(config, account.tenantId), "assets") }),
+    })), identity.configMasterSecret, /^(1|true)$/i.test(process.env.LIFEOS_POOL_LOCAL_PRIMARY?.trim() ?? ""));
   /**
    * What a member space is allowed to borrow. Read at the moment the space is
    * created so a key the owner saved in settings is picked up, and read from
@@ -770,12 +789,13 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       return existing.app;
     }
     const tenantConfig = account.role === "owner" ? ownerConfig : tenantConfigFor(config, account, identity.configMasterSecret, sharedIntegrationsForMembers());
-    const app = createApp(tenantConfig, undefined, {
+    const app = createApp({ ...tenantConfig, archivePasswordVerifier: async (password) => (await identity.authenticate(account.username, password))?.id === account.id }, undefined, {
       bridge: poolBridge,
       store: poolStore,
       accountId: account.id,
       admin: account.role === "owner",
       preflight: () => poolReadiness(),
+      transition: poolTransition,
     });
     apps.set(key, { app, lastUsedAt: Date.now() });
     return app;
@@ -870,6 +890,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     // first interactive request. A newly created account is also started below.
     for (const account of identity.listAccounts()) if (!account.disabled) appFor(account);
     const ownerApp = appFor(owner);
+    poolTransition?.wake();
     const loginFailures = new Map<string, LoginFailureBucket>();
     const peerLoginFailures = new Map<string, LoginFailureBucket>();
     const inFlightByPeer = new Map<string, number>();
@@ -1079,6 +1100,41 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
 
           const session = sessionFor(req);
           if (session === null) throw new HttpError(401, "authentication_required", "Authentication required");
+          if (path === "/api/admin/storage-pool/transition") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理存储过渡");
+            if (poolTransition === null) throw new HttpError(503, "storage_pool_disabled", "存储池接入尚未启用");
+            if (req.method === "GET") { setJson(res, 200, poolTransition.snapshot()); return; }
+            if (req.method !== "POST") throw new HttpError(405, "method_not_allowed", "Method not allowed");
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+            hasOnlyKeys(input, ["action", "accountIds"]);
+            const action = enumField(input.action, ["start", "pause", "retry", "scan"] as const, "action");
+            let accountIds: readonly string[] | null | undefined;
+            if (input.accountIds !== undefined) {
+              if (action !== "start") throw new HttpError(400, "invalid_transition_scope", "只能在开始复制时指定账号范围");
+              if (input.accountIds === null) accountIds = null;
+              else {
+                const known = new Set(identity.listAccounts().map(account => account.id));
+                if (!Array.isArray(input.accountIds) || input.accountIds.length === 0 || input.accountIds.length > 1000
+                  || input.accountIds.some(id => typeof id !== "string" || !known.has(id)) || new Set(input.accountIds).size !== input.accountIds.length) {
+                  throw new HttpError(400, "invalid_transition_scope", "请选择已登记的独立测试账号");
+                }
+                accountIds = input.accountIds as string[];
+              }
+            }
+            if (action === "start") {
+              // Probe first. Copy mode is never silently enabled against a disconnected pool.
+              try { await poolBridge.usage(); }
+              catch (error) {
+                throw new HttpError(error instanceof StoragePoolError ? error.status : 503,
+                  "pool_transition_unavailable", "存储池暂时无法核实，后台复制未开启");
+              }
+              poolTransition.setEnabled(true,accountIds);
+            } else if (action === "pause") poolTransition.setEnabled(false);
+            else if (action === "retry") poolTransition.retry();
+            else poolTransition.wake();
+            setJson(res, 200, poolTransition.snapshot()); return;
+          }
           if (path === "/api/admin/storage-pool") {
             if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可查看存储池用量");
             if (req.method !== "GET") throw new HttpError(405, "method_not_allowed", "Method not allowed");
@@ -1244,6 +1300,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       close: () => {
         if (closed) return;
         closed = true;
+        poolTransition?.close();
         for (const entry of apps.values()) entry.app.close();
         apps.clear();
         poolStore?.close();
@@ -1252,6 +1309,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     };
     return app;
   } catch (error) {
+    poolTransition?.close();
     for (const entry of apps.values()) entry.app.close();
     poolStore?.close();
     identity.close();

@@ -27,7 +27,7 @@ export interface DaySummaryCache {
 
 /** The visible text of a record, and the names it is linked to. */
 export function summarySources(records: readonly RecordView[]): readonly SummarySourceRecord[] {
-  return records.map((record) => ({
+  return records.filter(record => record.kind !== "task").map((record) => ({
     id: record.id,
     revision: record.revision,
     text: record.body.edited ?? record.body.original,
@@ -96,7 +96,7 @@ export class DeepSeekDaySummaryProvider implements DaySummaryProvider {
   public readonly providerId = "deepseek";
   public readonly kind = "ai" as const;
   public readonly model: string;
-  /** Provider, model, and prompt, so a change to any of them rewrites the text. */
+  /** Provider, model, and prompt identify an explicit regeneration or failed attempt. */
   public readonly contextKey: string;
   readonly #apiKey: string;
   readonly #baseUrl: string;
@@ -175,6 +175,10 @@ export function buildManualDaySummary(date: string, text: string, records: reado
   };
 }
 
+export function buildOfflineDaySummary(date: string, records: readonly RecordView[]): DaySummary {
+  return { ...buildManualDaySummary(date, ruleSummaryText(summarySources(records)), records), provider: "rule", status: "fallback", contextRevision: "rule:v1" };
+}
+
 export interface DaySummaryRequest {
   /** Dates to answer for, oldest first. A day with no records is skipped. */
   readonly dates: readonly string[];
@@ -183,6 +187,8 @@ export interface DaySummaryRequest {
   readonly provider: DaySummaryProvider;
   /** Recompute even when the cached summary still matches the records. */
   readonly force?: boolean;
+  /** Automatic month reads wait until the following day; manual regenerate bypasses this. */
+  readonly today?: string;
 }
 
 /**
@@ -194,14 +200,37 @@ export interface DaySummaryRequest {
  * back to the offline rule and is labelled `fallback` rather than passed off as
  * a reading of the day.
  */
+const summaryQueues = new WeakMap<DaySummaryCache, Promise<unknown>>();
+const summaryFlights = new WeakMap<DaySummaryCache, Map<string, Promise<readonly DaySummary[]>>>();
 export async function resolveDaySummaries(request: DaySummaryRequest): Promise<readonly DaySummary[]> {
+  const key = JSON.stringify([request.force === true, request.today, request.provider.contextKey ?? request.provider.providerId, request.dates.map(date => [date, effectiveFingerprint(summarySources(request.recordsForDate(date)))])]);
+  const flights = summaryFlights.get(request.cache) ?? new Map<string, Promise<readonly DaySummary[]>>();
+  summaryFlights.set(request.cache, flights);
+  const active = flights.get(key);
+  if (active !== undefined) return active;
+  const previous = summaryQueues.get(request.cache) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => resolveDaySummariesOnce(request));
+  summaryQueues.set(request.cache, next);
+  flights.set(key, next);
+  try { return await next; } finally {
+    if (summaryQueues.get(request.cache) === next) summaryQueues.delete(request.cache);
+    if (flights.get(key) === next) flights.delete(key);
+  }
+}
+function effectiveFingerprint(sources: readonly SummarySourceRecord[]): string {
+  return "content:v1:" + createHash("sha256").update(JSON.stringify(summaryUsableSources(sources).map(s => [s.id, s.kind, s.text.replace(/\s+/gu, " ").trim(), s.labels]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))).digest("hex");
+}
+async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<readonly DaySummary[]> {
   const settled: DaySummary[] = [];
   const stale: DaySummaryInput[] = [];
+  const cacheBefore = new Map<string, string>();
   const context = request.provider.contextKey ?? request.provider.providerId;
 
   for (const date of request.dates) {
+    if (request.today !== undefined && date > request.today) continue;
     const records = request.recordsForDate(date);
-    const cached = request.force === true ? null : request.cache.readDaySummary(date);
+    cacheBefore.set(date, JSON.stringify(request.cache.readDaySummary(date)));
+    let cached = request.force === true ? null : request.cache.readDaySummary(date);
     // Owner-written text outranks everything and outlives the records beside it:
     // it is the only summary nobody derived, so nothing recomputes over it. Only
     // an explicit regenerate (which forces) or an explicit clear removes it.
@@ -211,8 +240,20 @@ export async function resolveDaySummaries(request: DaySummaryRequest): Promise<r
     }
     if (records.length === 0) continue;
     const sources = summarySources(records);
-    const fingerprint = summaryFingerprint(sources);
-    if (cached !== null && cached.sourceRevision === fingerprint && cached.contextRevision === context) {
+    const fingerprint = effectiveFingerprint(sources);
+    // Upgrade an unchanged legacy cache without paying to regenerate its text.
+    if (cached?.status === "generated" && cached.sourceRevision === summaryFingerprint(sources)) {
+      cached = { ...cached, sourceRevision: fingerprint };
+      request.cache.writeDaySummary(cached);
+    }
+    if (request.force !== true && request.today !== undefined && date > request.today) continue;
+    if (request.force !== true && request.today !== undefined && date === request.today) {
+      settled.push({ date, text: ruleSummaryText(sources), provider: "rule", status: "fallback", sourceRevision: fingerprint, contextRevision: "rule:v1", generatedAt: createInstant(new Date().toISOString()) });
+      continue;
+    }
+    // Changing providers/prompts does not silently rewrite already generated history.
+    const reusable = cached !== null && cached.sourceRevision === fingerprint && (cached.status === "generated" || (cached.contextRevision === context && (cached.retryAfter === undefined || Date.parse(cached.retryAfter) > Date.now())));
+    if (reusable && cached !== null) {
       settled.push(cached);
       continue;
     }
@@ -234,6 +275,13 @@ export async function resolveDaySummaries(request: DaySummaryRequest): Promise<r
   }
 
   for (const day of stale) {
+    // Manual writes do not wait behind AI generation. A late reply must respect
+    // edits made while this provider request was in flight, even during regenerate.
+    const current = request.cache.readDaySummary(day.date);
+    if (current?.status === "manual" && JSON.stringify(current) !== cacheBefore.get(day.date)) {
+      settled.push(current);
+      continue;
+    }
     const draft = drafts.get(day.date);
     const fromProvider = draft !== undefined;
     const provider: DaySummaryProvider = fromProvider ? request.provider : new RuleDaySummaryProvider();
@@ -244,11 +292,10 @@ export async function resolveDaySummaries(request: DaySummaryRequest): Promise<r
       ...(provider.model === undefined ? {} : { model: provider.model }),
       generatedAt: createInstant(new Date().toISOString()),
       status: provider.kind === "ai" ? "generated" : "fallback",
-      sourceRevision: summaryFingerprint(day.records),
-      // Stamped from the provider that actually produced the text, not the one that
-      // was asked: a fallback recorded as "ai" would be reused forever after one
-      // network blip, and a fallback recorded as "rule" is retried until it works.
-      contextRevision: provider.contextKey ?? provider.providerId,
+      sourceRevision: effectiveFingerprint(day.records),
+      // Remember the attempted provider and a durable backoff after failures.
+      contextRevision: request.provider.kind === "ai" ? context : provider.contextKey ?? provider.providerId,
+      ...(!fromProvider && request.provider.kind === "ai" ? { retryAfter: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } : {}),
     };
     request.cache.writeDaySummary(summary);
     settled.push(summary);
