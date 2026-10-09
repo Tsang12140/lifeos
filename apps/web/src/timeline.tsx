@@ -378,6 +378,9 @@ export function AssetPreview({ assetIds, index, assets, images, onClose, onIndex
   const hasDerivedPreview = image === undefined && (asset === undefined || asset.kind === "photo" || asset.mediaType?.startsWith("image/"));
   const showOriginal = previewMode.assetId === assetId && previewMode.original;
   const previewUrl = image?.url ?? (hasDerivedPreview && !showOriginal ? assetThumbUrl(assetId, 2048) : assetContentUrl(assetId));
+  // Reuse the grid's cached thumbnail. Both layers use contain, so switching
+  // resolution never crops or stretches a portrait into the landscape frame.
+  const placeholderUrl = image?.url ?? (hasDerivedPreview ? assetThumbUrl(assetId, 400) : previewUrl);
   const previewImageRef = useRef<HTMLImageElement>(null);
   const [imageAttempt, setImageAttempt] = useState(0);
   const [imageState, setImageState] = useState<{ url: string; status: "loading" | "loaded" | "error" }>({ url: previewUrl, status: "loading" });
@@ -413,6 +416,7 @@ export function AssetPreview({ assetIds, index, assets, images, onClose, onIndex
   useEffect(() => { setMobileInfoOpen(false); }, [assetId]);
   const previewDialogRef = useRef<HTMLDialogElement>(null);
   const backdropGesture = useRef<{ x: number; y: number; blank: boolean; moved: boolean } | null>(null);
+  const swipeGesture = useRef<{ pointerId: number; x: number; y: number; assetId: string } | null>(null);
   const isPreviewContent = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(".asset-preview img, .asset-preview figcaption, .asset-preview-status, .photo-information, .asset-preview button"));
   const step = useCallback((delta: number) => { onIndexChange(Math.min(assetIds.length - 1, Math.max(0, index + delta))); }, [assetIds.length, index, onIndexChange]);
   useEffect(() => {
@@ -433,9 +437,27 @@ export function AssetPreview({ assetIds, index, assets, images, onClose, onIndex
     };
   }, [onClose, step]);
   return <dialog ref={previewDialogRef} onCancel={event => { event.preventDefault(); event.stopPropagation(); onClose(); }} className={`asset-preview ${!mobile && infoOpen ? "has-photo-information" : ""} ${mobile && mobileInfoOpen ? "has-mobile-photo-information" : ""}`} aria-modal="true" aria-label={name ?? "照片预览"}
-    onPointerDown={event => { backdropGesture.current = event.isPrimary && event.button === 0 ? { x: event.clientX, y: event.clientY, blank: !isPreviewContent(event.target), moved: false } : null; }}
+    onPointerDown={event => {
+      backdropGesture.current = event.isPrimary && event.button === 0 ? { x: event.clientX, y: event.clientY, blank: !isPreviewContent(event.target), moved: false } : null;
+      // A second finger cancels navigation; let Safari handle pinch zoom.
+      if (!event.isPrimary) { swipeGesture.current = null; return; }
+      const surface = event.target instanceof Element && event.target.closest(".asset-preview-figure");
+      swipeGesture.current = mobile && many && !mobileInfoOpen && surface && event.pointerType === "touch"
+        && (window.visualViewport?.scale ?? 1) <= 1.01
+        ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY, assetId } : null;
+    }}
     onPointerMove={event => { const gesture = backdropGesture.current; if (gesture && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 6) gesture.moved = true; }}
-    onPointerCancel={() => { backdropGesture.current = null; }}
+    onPointerUp={event => {
+      const gesture = swipeGesture.current;
+      swipeGesture.current = null;
+      if (!gesture || gesture.pointerId !== event.pointerId || gesture.assetId !== assetId) return;
+      const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
+      if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5 && (window.visualViewport?.scale ?? 1) <= 1.01) {
+        backdropGesture.current = null;
+        step(dx < 0 ? 1 : -1);
+      }
+    }}
+    onPointerCancel={() => { backdropGesture.current = null; swipeGesture.current = null; }}
     onWheel={() => { backdropGesture.current = null; }}
     onClick={event => {
       const gesture = backdropGesture.current;
@@ -458,16 +480,20 @@ export function AssetPreview({ assetIds, index, assets, images, onClose, onIndex
     <button className={`asset-preview-info-toggle ${mobile ? "is-mobile" : ""}`} type="button" data-summary-count={summary.length} data-has-capture-time={summary.some(item => item.kind === "time")} aria-expanded={showInfo} aria-controls={showInfo ? "photo-information-panel" : undefined} aria-label={mobile ? `${showInfo ? "收起" : "查看"}照片信息${summary.length ? `，${summary.map(item => `${item.label} ${item.text}`).join("，")}` : summaryStatus ? `，${summaryStatus}` : ""}` : undefined} onClick={event => { event.stopPropagation(); if (mobile) setMobileInfoOpen(v => !v); else setInfoOpen(v => !v); }}>
       {mobile ? <>{summary.map(item => <span key={item.kind} className={`photo-summary-item photo-summary-${item.kind}`} title={`${item.label} ${item.text}`}>{item.text}</span>)}{!summary.length && summaryStatus ? <span className="photo-summary-status">{summaryStatus}</span> : null}<Info size={18} strokeWidth={1.6} aria-hidden="true" /></> : infoOpen ? "隐藏信息" : "照片信息"}
     </button>
-    <figure className="asset-preview-figure" data-load-state={imageStatus} aria-busy={imageStatus === "loading"}>
+    <figure className="asset-preview-figure" data-load-state={imageStatus} aria-label={name ?? "照片"} aria-busy={imageStatus === "loading"}>
       {/* Upload previews retain their existing Blob URL. Stored photos default to
           a regenerable preview; only an explicit request loads the original. */}
-      <img ref={previewImageRef} key={`${previewUrl}:${imageAttempt}`} src={previewUrl} alt={name ?? "照片"}
+      <div className="asset-preview-image-stage">
+      <img className="asset-preview-placeholder" key={placeholderUrl} src={placeholderUrl} alt="" aria-hidden="true" draggable={false} onError={event => { event.currentTarget.style.visibility = "hidden"; }} />
+      <img className="asset-preview-full" ref={previewImageRef} key={`${previewUrl}:${imageAttempt}`} src={previewUrl} alt={name ?? "照片"} draggable={false}
         onLoad={event => { if (previewImageRef.current === event.currentTarget) setImageState({ url: previewUrl, status: "loaded" }); }}
         onError={event => { if (previewImageRef.current === event.currentTarget) imageFailed(); }} />
-      {name === undefined && !many ? null : <figcaption>{many ? `${index + 1} / ${assetIds.length}${name === undefined ? "" : "，"}` : ""}{name}</figcaption>}
+      </div>
+      {many ? <figcaption aria-label={`第 ${index + 1} 张，共 ${assetIds.length} 张`}>{index + 1} / {assetIds.length}</figcaption> : null}
+      {imageStatus === "loading" ? <span className="asset-preview-loading" role="status" aria-label="正在加载照片"><LoaderCircle className="spin" size={18} aria-hidden="true" /></span> : null}
     </figure>
-    {imageStatus !== "loaded" ? <div className="asset-preview-status" role="status" aria-live="polite">
-      <span>{imageStatus === "error" ? "照片未能加载，请重试" : "正在加载照片…"}</span>
+    {imageStatus === "error" ? <div className="asset-preview-status" role="status" aria-live="polite">
+      <span>照片未能加载，请重试</span>
       {imageStatus === "error" ? <button className="secondary-button" type="button" onClick={event => { event.stopPropagation(); setImageState({ url: previewUrl, status: "loading" }); setImageAttempt(attempt => attempt + 1); }}>重试</button> : null}
     </div> : null}
     {showInfo ? <div id="photo-information-panel" className="photo-information-host"><PhotoInformation key={assetId} info={photoInfo} mobile={mobile} /></div> : null}

@@ -53,6 +53,9 @@
 .pool-legacy-notice small { color: var(--muted); font-size: 0.66rem; }
 
 .pool-user-list { display: grid; gap: 10px; }
+.pool-user-tools { display: flex; flex-wrap: wrap; gap: 12px; }
+.pool-user-tools label { display: grid; flex: 1 1 180px; gap: 5px; min-width: 0; color: var(--muted); font-size: .72rem; }
+.pool-user-tools input, .pool-user-tools select { width: 100%; min-width: 0; height: 40px; padding: 0 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); color: var(--ink); font: inherit; }
 .pool-user-card { display: grid; gap: 11px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .pool-user-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .pool-user-heading > div { display: grid; gap: 3px; min-width: 0; }

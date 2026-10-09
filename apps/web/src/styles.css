@@ -12073,7 +12073,20 @@ dialog.asset-preview::after { content: ""; position: absolute; inset: 0; z-index
 .asset-preview-info-toggle { position: absolute; z-index: 3; top: 20px; left: 20px; min-height: 40px; padding: 0 12px; border: 1px solid rgb(255 255 255 / .3); border-radius: 9px; color: #fff; background: rgb(0 0 0 / .35); font: inherit; font-size: .8rem; cursor: pointer; }
 .asset-preview-top-actions { position: absolute; z-index: 3; top: 20px; right: 20px; display: flex; align-items: center; gap: 8px; }
 .asset-preview-top-actions .asset-preview-close { position: static; flex-shrink: 0; }
-.asset-preview-status { position: absolute; z-index: 2; top: 50%; left: 50%; transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 12px; max-width: calc(100% - 48px); color: #e0e5ed; font-size: .85rem; text-align: center; cursor: default; }
+.asset-preview .asset-preview-nav, .asset-preview .asset-preview-close, .asset-preview .asset-preview-original-toggle { z-index: 4; border-color: rgb(255 255 255 / .4); background: rgb(18 22 30 / .88); box-shadow: 0 2px 12px rgb(0 0 0 / .3); }
+.asset-preview .asset-preview-nav:hover, .asset-preview .asset-preview-close:hover, .asset-preview .asset-preview-original-toggle:hover { background: #303846; }
+.asset-preview .asset-preview-nav:focus-visible, .asset-preview .asset-preview-close:focus-visible, .asset-preview .asset-preview-original-toggle:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+.asset-preview-figure { position: relative; width: 100%; touch-action: pan-y pinch-zoom; }
+.asset-preview-image-stage { position: relative; width: 100%; max-width: 1180px; height: min(80dvh, calc(100dvh - 180px)); min-height: 0; }
+.asset-preview .asset-preview-image-stage img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; background: transparent; box-shadow: none; border-radius: 0; color: transparent; font-size: 0; }
+.asset-preview .asset-preview-full { opacity: 0; transition: opacity 160ms ease; }
+.asset-preview .asset-preview-placeholder { filter: blur(2px); pointer-events: none; }
+.asset-preview-figure[data-load-state="loaded"] .asset-preview-full { opacity: 1; }
+.asset-preview-figure[data-load-state="loaded"] .asset-preview-placeholder { opacity: 0; transition: opacity 160ms ease 120ms; }
+.asset-preview .asset-preview-figure[data-load-state="error"] .asset-preview-placeholder { visibility: visible; }
+.asset-preview-loading { position: absolute; bottom: 3px; left: 12px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: white; background: rgb(18 22 30 / .88); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .asset-preview .asset-preview-full, .asset-preview .asset-preview-placeholder { transition: none; } .asset-preview-loading .spin { animation: none; } }
+.asset-preview-status { position: absolute; z-index: 2; top: 50%; left: 50%; transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 12px; max-width: calc(100% - 48px); padding: 16px; border-radius: 12px; background: rgb(18 22 30 / .92); color: #e0e5ed; font-size: .85rem; text-align: center; cursor: default; }
 .asset-preview-status .secondary-button { height: 40px; min-height: 40px; margin: 0; padding: 0 12px; border: 1px solid rgb(255 255 255 / .3); border-radius: 9px; color: #fff; background: rgb(0 0 0 / .35); font-size: .8rem; }
 .asset-preview-figure[data-load-state="error"] img { visibility: hidden; }
 .asset-preview-original-toggle { height: 40px; margin: 0; padding: 0 12px; border: 1px solid rgb(255 255 255 / .3); border-radius: 9px; color: #fff; background: rgb(0 0 0 / .35); font: inherit; font-size: .8rem; cursor: pointer; white-space: nowrap; }
@@ -12130,7 +12143,10 @@ dialog.asset-preview.has-photo-information { grid-template-columns: minmax(0, 1f
   .asset-preview .photo-information-identity { gap: 12px; margin-bottom: 16px; }
   .asset-preview .photo-information-capture > span:first-child { font-size: 1.1rem; }
   .asset-preview.has-mobile-photo-information .asset-preview-nav { visibility: hidden; }
-  .asset-preview-close { top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; width: 40px; height: 40px; }
+  .asset-preview-close { top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; width: 44px; height: 44px; }
+  .asset-preview-original-toggle { height: 44px; }
+  .asset-preview .asset-preview-nav { width: 44px; height: 44px; margin-top: -22px; }
+  .asset-preview-image-stage { height: min(80dvh, calc(100dvh - 180px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))); }
   .asset-preview-top-actions { top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; }
 }
 @media (max-width: 380px) {

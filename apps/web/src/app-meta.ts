@@ -50,7 +50,7 @@ export const SETTINGS_PAGE_GROUPS: readonly {
   readonly label: string;
   readonly pages: readonly { readonly id: SettingsPageId; readonly label: string }[];
 }[] = [
-  { id: "account", label: "账户", pages: [{ id: "account/session", label: "账户与会话" }] },
+  { id: "account", label: "账户", pages: [{ id: "account/session", label: "账户与会话" }, { id: "account/storage", label: "存储与额度" }] },
   { id: "data", label: "数据", pages: [{ id: "data/import-export", label: "导入与导出" }, { id: "data/backup", label: "备份与恢复" }, { id: "data/demo", label: "演示数据" }, { id: "data/photos", label: "照片存储" }] },
   { id: "appearance", label: "外观", pages: [{ id: "appearance/interface", label: "界面" }] },
   { id: "integrations", label: "服务集成", pages: [{ id: "integrations/weather", label: "天气" }, { id: "integrations/ai", label: "AI 助手" }, { id: "integrations/movie", label: "观影" }] },

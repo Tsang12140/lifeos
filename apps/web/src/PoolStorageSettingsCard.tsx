@@ -44,12 +44,13 @@ type PoolOverview = {
   legacyInventoryComplete: boolean;
   accountingMismatch?: { storageBytes: number; trafficBytes: number };
   poolObjectIssues?: readonly { accountId: string; assetId: string; bytes: number; state: string }[];
+  poolDownloadIssues?: readonly unknown[];
 };
 
 function quotaWriteBlocked(overview: PoolOverview | null): boolean {
   return overview === null || !overview.legacyInventoryComplete || overview.accountingMismatch !== undefined
     || (overview.unassigned.storageBytes ?? 0) > 0 || (overview.unassigned.trafficBytes ?? 0) > 0
-    || (overview.poolObjectIssues?.length ?? 0) > 0;
+    || (overview.poolObjectIssues?.length ?? 0) > 0 || (overview.poolDownloadIssues?.length ?? 0) > 0;
 }
 
 type Draft = { storage: string; traffic: string };
@@ -112,6 +113,10 @@ export function PoolStorageSettingsCard() {
   const [savingIds, setSavingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [order, setOrder] = useState("owner");
+  const users = [...(overview?.users ?? [])].filter(user => `${user.username} ${user.displayName} ${user.spaceName}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .sort((a, b) => (order === "storage" ? b.storageUsedBytes - a.storageUsedBytes : order === "traffic" ? b.trafficUsedBytes - a.trafficUsedBytes : order === "local" ? (b.legacyBytes ?? -1) - (a.legacyBytes ?? -1) : Number(b.role === "owner") - Number(a.role === "owner")) || a.username.localeCompare(b.username));
 
   const reload = useCallback(async (preserveDrafts = false) => {
     setState("loading");
@@ -174,7 +179,7 @@ export function PoolStorageSettingsCard() {
   return <section className="pool-usage-card" aria-labelledby="pool-usage-title" data-pool-state={state}>
     <div className="pool-usage-card-heading">
       <div className="settings-card-icon"><HardDrive size={18} aria-hidden="true" /></div>
-      <div className="settings-card-copy"><strong id="pool-usage-title">弹指存储池</strong><small>项目用量来自 PoolConsumer；用户流量按经接入层下载到 LifeOS 服务器的字节统计。</small></div>
+      <div className="settings-card-copy"><strong id="pool-usage-title">用户存储与额度</strong><small>在这里查看每个人的用量、调整存储和每月流量额度。GiB 为 1024³ 字节，月流量每个 UTC 月重新统计。</small></div>
       <button className="secondary-button pool-usage-refresh" type="button" onClick={() => void reload(true)} disabled={state === "loading" || savingIds.size > 0} aria-label="刷新存储池用量">
         {state === "loading" ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}<span>刷新</span>
       </button>
@@ -219,9 +224,16 @@ export function PoolStorageSettingsCard() {
         <strong>有待核对的存储池操作</strong>
         <span>{overview.poolObjectIssues!.length.toLocaleString("zh-CN")} 个对象处于未决状态，额度编辑及新的上传和下载已暂停。</span>
       </div> : null}
+      {(overview.poolDownloadIssues?.length ?? 0) > 0 ? <div className="pool-legacy-notice is-mismatch" role="alert"><strong>有待核对的下载</strong><span>请先核对未决下载，额度编辑已暂停。</span></div> : null}
+
+      <div className="pool-user-tools">
+        <label><span>查找用户</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="账号、姓名或空间名" /></label>
+        <label><span>排列方式</span><select value={order} onChange={event => setOrder(event.target.value)}><option value="owner">管理员优先</option><option value="storage">存储池用量从大到小</option><option value="traffic">月流量用量从大到小</option><option value="local">历史本地文件从大到小</option></select></label>
+      </div>
+      <small className="pool-usage-state">显示 {users.length} / {overview.users.length} 个账号。项目额度包含所有账号的分配；历史本地文件单独显示。</small>
 
       <div className="pool-user-list" aria-label="用户存储池额度">
-        {overview.users.map((user) => {
+        {users.map((user) => {
           const draft = drafts[user.accountId] ?? { storage: quotaDraft(user.storageLimitBytes), traffic: quotaDraft(user.trafficLimitBytes) };
           const storageBytes = quotaBytes(draft.storage);
           const trafficBytes = quotaBytes(draft.traffic);
@@ -233,8 +245,8 @@ export function PoolStorageSettingsCard() {
           return <article className="pool-user-card" key={user.accountId} data-pool-user={user.accountId}>
             <div className="pool-user-heading"><div><strong>{user.spaceName || user.displayName}</strong><span>{user.displayName}，{user.username}{user.disabled ? "，已停用" : ""}</span></div><span className="pool-user-role">{user.role === "owner" ? "所有者" : "成员"}</span></div>
             <div className="pool-user-meters">
-              <UsageMeter label="存储" used={user.storageUsedBytes} limit={user.storageLimitBytes} />
-              <UsageMeter label={`月流量（UTC ${overview.month}）`} used={user.trafficUsedBytes} limit={user.trafficLimitBytes} />
+              <UsageMeter label="存储" used={user.storageUsedBytes} limit={user.storageLimitBytes} remaining={user.storageLimitBytes - user.storageUsedBytes - user.storageReservedBytes} />
+              <UsageMeter label={`月流量（UTC ${overview.month}）`} used={user.trafficUsedBytes} limit={user.trafficLimitBytes} remaining={user.trafficLimitBytes - user.trafficUsedBytes - user.trafficReservedBytes} />
             </div>
             {(user.storageReservedBytes > 0 || user.trafficReservedBytes > 0) ? <small className="pool-user-reserved">正在处理的预占额度：存储 {formatBytes(user.storageReservedBytes)}，月流量 {formatBytes(user.trafficReservedBytes)}</small> : null}
             {(user.legacyAssetCount === null || user.legacyAssetCount > 0 || user.legacyUnknownAssetCount === null || user.legacyUnknownAssetCount > 0 || (user.legacyBytes !== null && user.legacyBytes > 0) || user.unassignedLegacyBytes === null || user.unassignedLegacyBytes > 0) ? <div className="pool-user-legacy"><strong>历史本地文件（不计入存储池）</strong><span>{user.legacyAssetCount === null ? "文件数待核对" : `${user.legacyAssetCount.toLocaleString("zh-CN")} 个文件`}，大小 {user.legacyBytes === null ? "待核对" : formatBytes(user.legacyBytes)}</span>{user.legacyUnknownAssetCount === null ? <span>无法确认文件数量及大小</span> : user.legacyUnknownAssetCount > 0 ? <span>{user.legacyUnknownAssetCount.toLocaleString("zh-CN")} 个文件大小待核对</span> : null}{user.unassignedLegacyBytes === null ? <span>其中无法归属的大小待核对</span> : user.unassignedLegacyBytes > 0 ? <span>其中无法归属 {formatBytes(user.unassignedLegacyBytes)}</span> : null}</div> : null}

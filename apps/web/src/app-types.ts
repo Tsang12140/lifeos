@@ -1,7 +1,7 @@
 import type { Entity, EntityKind, PlacePeriod, PlaceRole, RecordKind } from "@lifeos/core";
 
 export type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "entities" | "timemachine" | "settings";
-export type SettingsPageId = "account/session" | "data/import-export" | "data/backup" | "data/demo" | "data/photos" | "appearance/interface" | "integrations/weather" | "integrations/ai" | "integrations/movie" | "private/cycle" | "about";
+export type SettingsPageId = "account/session" | "account/storage" | "data/import-export" | "data/backup" | "data/demo" | "data/photos" | "appearance/interface" | "integrations/weather" | "integrations/ai" | "integrations/movie" | "private/cycle" | "about";
 export type CalendarMode = "week" | "month";
 export type ComposerKind = Extract<RecordKind, "journal" | "task" | "event" | "note">;
 export type UiFontId = "misans";
