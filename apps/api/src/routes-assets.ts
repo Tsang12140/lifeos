@@ -74,9 +74,21 @@ function isPoolReference(reference: StorageReference): boolean {
   return reference.sourceId === POOL_SOURCE_ID;
 }
 
-export function poolObjectFor(ctx: RouteContext, asset: Asset, reference: StorageReference): PoolObjectRow {
+function assetPoolRead(ctx: RouteContext, asset: Asset) {
+  try {
+    const selected = ctx.poolTransition?.selectedRead(ctx.poolAccountId,asset);
+    if (selected) return { ...selected, canary: true };
+  } catch (error) {
+    if (error instanceof StoragePoolError) throw new HttpError(error.status,error.code,error.message);
+    throw error;
+  }
+  const reference = asset.storageRefs.find(isPoolReference);
+  return reference === undefined ? undefined : { reference, ledgerAssetId: asset.id, canary: false };
+}
+
+export function poolObjectFor(ctx: RouteContext, asset: Asset, reference: StorageReference, ledgerAssetId = asset.id): PoolObjectRow {
   if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
-  const object = ctx.poolStore.poolObject(ctx.poolAccountId, asset.id, reference.sourceRef);
+  const object = ctx.poolStore.poolObject(ctx.poolAccountId, ledgerAssetId, reference.sourceRef);
   if (object === null || object.state !== "ready") throw new HttpError(404, "pool_asset_unavailable", "存储池文件不存在或正在核对");
   if (asset.sizeBytes !== undefined && asset.sizeBytes !== object.bytes) {
     throw new HttpError(409, "pool_asset_accounting_mismatch", "文件大小与存储池账目不一致");
@@ -90,10 +102,13 @@ interface DownloadedPoolAsset {
   readonly bytes: number;
 }
 
-export async function downloadPoolAsset(ctx: RouteContext, asset: Asset, reference: StorageReference): Promise<DownloadedPoolAsset> {
+export async function downloadPoolAsset(ctx: RouteContext, asset: Asset, reference: StorageReference, ledgerAssetId = asset.id): Promise<DownloadedPoolAsset> {
   if (ctx.poolStore === null || !ctx.poolBridge.enabled) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未启用");
-  const readiness = await ctx.poolPreflight();
-  const object = poolObjectFor(ctx, asset, reference);
+  const readiness = await ctx.poolPreflight().catch(error => {
+    if (error instanceof HttpError) throw error;
+    throw poolOperationHttpError(error,"download");
+  });
+  const object = poolObjectFor(ctx, asset, reference, ledgerAssetId);
   let directory: string;
   try { directory = mkdtempSync(join(tmpdir(), "lifeos-pool-download-")); }
   catch { throw new HttpError(500, "pool_temp_unavailable", "无法准备临时下载文件"); }
@@ -101,7 +116,7 @@ export async function downloadPoolAsset(ctx: RouteContext, asset: Asset, referen
   let reservation: { readonly id: string; readonly bytes: number } | undefined;
   let settled = false;
   try {
-    reservation = ctx.poolStore.reserveDownload(ctx.poolAccountId, asset.id, reference.sourceRef, readiness.month, readiness.trafficFreeBytes);
+    reservation = ctx.poolStore.reserveDownload(ctx.poolAccountId, ledgerAssetId, reference.sourceRef, readiness.month, readiness.trafficFreeBytes);
     const result = await ctx.poolBridge.downloadToFile(reference.sourceRef, file);
     if (result.bytes !== object.bytes) {
       ctx.poolStore.markDownloadUncertain(reservation.id);
@@ -110,6 +125,12 @@ export async function downloadPoolAsset(ctx: RouteContext, asset: Asset, referen
     }
     ctx.poolStore.finishDownload(reservation.id, result.month, result.bytes);
     settled = true;
+    // A canary uses the copy job's ledger identity, while retaining the business asset ID.
+    // A failed hash check still consumed real upstream traffic and must remain charged.
+    if (ledgerAssetId !== asset.id && reference.contentHash?.algorithm === "sha256"
+      && createHash("sha256").update(readFileSync(file)).digest("hex") !== reference.contentHash.value) {
+      throw new HttpError(502, "pool_download_hash_mismatch", "池中照片与已验证原件不符，请切回本地并核对");
+    }
     return { directory, file, bytes: result.bytes };
   } catch (error) {
     if (reservation !== undefined && !settled) {
@@ -511,15 +532,17 @@ export const handleAssetsRoutes: RouteHandler = async (
     const id = decodeSegment(assetContentMatch[1]!);
     const asset = repository.findAssetById(id);
     if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
-    const poolReference = asset.storageRefs.find(isPoolReference);
-    if (poolReference !== undefined) {
-      const downloaded = await downloadPoolAsset(ctx, asset, poolReference);
+    const poolRead = assetPoolRead(ctx,asset);
+    if (poolRead !== undefined) {
+      const poolReference = poolRead.reference;
+      const downloaded = await downloadPoolAsset(ctx, asset, poolReference, poolRead.ledgerAssetId);
       try {
         const mediaType = asset.mediaType ?? poolReference.mediaType ?? "application/octet-stream";
         res.writeHead(200, {
           "content-type": mediaType,
           "content-length": String(downloaded.bytes),
-          "cache-control": "private, max-age=300",
+          "cache-control": poolRead.canary ? "no-store" : "private, max-age=300",
+          "x-lifeos-asset-source": "pool",
           "content-disposition": asset.kind === "file" ? "attachment" : "inline",
         });
         res.end(readFileSync(downloaded.file));
@@ -531,6 +554,7 @@ export const handleAssetsRoutes: RouteHandler = async (
       "content-type": resolved.mediaType,
       "content-length": String(statSync(resolved.file).size),
       "cache-control": "private, max-age=300",
+      "x-lifeos-asset-source": "local",
       "content-disposition": asset.kind === "file" ? "attachment" : "inline",
     });
     res.end(readFileSync(resolved.file));
@@ -545,6 +569,7 @@ export const handleAssetsRoutes: RouteHandler = async (
     const id = decodeSegment(photoInfoMatch[1]!);
     const asset = repository.findAssetById(id);
     if (asset === null || asset.kind !== "photo") throw new HttpError(404, "not_found", "照片不存在");
+    const poolRead = assetPoolRead(ctx,asset);
     let metadata = asset.photoMetadata;
     if (metadata?.detailsVersion !== 1) {
       let cache = photoInfoCache.get(repository);
@@ -553,9 +578,8 @@ export const handleAssetsRoutes: RouteHandler = async (
       let pending = cache.get(key);
       if (!pending) {
         pending = (async () => {
-          const poolReference = asset.storageRefs.find(isPoolReference);
-          if (poolReference) {
-            const downloaded = await downloadPoolAsset(ctx, asset, poolReference);
+          if (poolRead) {
+            const downloaded = await downloadPoolAsset(ctx, asset, poolRead.reference, poolRead.ledgerAssetId);
             try { return await readPhotoMetadata(downloaded.file); }
             finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
           }
@@ -579,21 +603,24 @@ export const handleAssetsRoutes: RouteHandler = async (
     const id = decodeSegment(assetThumbnailMatch[1]!);
     const asset = repository.findAssetById(id);
     if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
-    const poolReference = asset.storageRefs.find(isPoolReference);
+    const poolRead = assetPoolRead(ctx,asset);
+    const poolReference = poolRead?.reference;
     let file: string;
+    let source = "local-derived";
     if (poolReference !== undefined) {
-      poolObjectFor(ctx, asset, poolReference);
+      poolObjectFor(ctx, asset, poolReference, poolRead!.ledgerAssetId);
       const cached = thumbnails.cached(poolReference, width);
-      if (cached !== null) file = cached;
+      if (cached !== null) { file = cached; source = "derived-cache"; }
       else {
         const mime = asset.mediaType ?? poolReference.mediaType ?? "";
         const extension = Object.entries(ASSET_MEDIA_TYPES).find(([, value]) => value === mime)?.[0];
         if (extension === undefined || !THUMBNAILABLE_ASSET_EXTENSIONS.has(extension)) {
           throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
         }
-        const downloaded = await downloadPoolAsset(ctx, asset, poolReference);
+        const downloaded = await downloadPoolAsset(ctx, asset, poolReference, poolRead!.ledgerAssetId);
         try {
           file = await thumbnails.ensure(poolReference, downloaded.file, width);
+          source = "pool-derived";
         } catch {
           throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original");
         } finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
@@ -609,7 +636,8 @@ export const handleAssetsRoutes: RouteHandler = async (
     res.writeHead(200, {
       "content-type": `image/${THUMBNAIL_FORMAT}`,
       "content-length": String(statSync(file).size),
-      "cache-control": "private, max-age=300",
+      "cache-control": poolRead?.canary ? "no-store" : "private, max-age=300",
+      "x-lifeos-asset-source": source,
       "content-disposition": "inline",
     });
     res.end(readFileSync(file));

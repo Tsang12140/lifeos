@@ -116,3 +116,45 @@ test("missing originals and insufficient quota remain visible, GC is held during
   const scheduler=new AssetGcScheduler({repository:f.repository,config:readConfig({LIFEOS_DATA_DIR:f.root,LIFEOS_ASSET_ROOT:f.assets}),canRun:()=>!f.service.localPrimary});
   equal(scheduler.runOnce(new Date(Date.now()+400*86400000)),null);ok(existsSync(join(f.assets,"old.jpg")));
 });
+
+test("single-photo read canary preserves references, copy accounting and local writes across restart",async t=>{
+  const f=fixture();t.after(f.stop);
+  const asset=f.repository.findAssetById("old")!;
+  await rejects(f.service.startReadCanary("owner",asset),/副本未验证/);
+  f.service.setEnabled(true,["owner"]);await idle(f.service);
+  const before=spaceFingerprint(f.repository.portableSpace()),traffic=f.pool.traffic,puts=f.pool.puts;
+  await f.service.startReadCanary("owner",asset);
+  const selected=f.service.selectedRead("owner",asset)!;
+  ok(selected.ledgerAssetId.startsWith("transition:"));
+  equal(f.ledger.poolObject("owner",asset.id,selected.reference.sourceRef),null,"the original business ID is not the copy's ledger ID");
+  equal(f.ledger.poolObject("owner",selected.ledgerAssetId,selected.reference.sourceRef)?.state,"ready");
+  equal(f.service.selectedRead("member",asset),null,"equal asset IDs cannot cross accounts");
+  equal(f.service.selectedRead("owner",{...asset,id:"different"}),null);
+  equal(f.service.snapshot().stage,"read_canary");
+  await f.service.startReadCanary("owner",asset);equal(f.pool.puts,puts);equal(f.pool.traffic,traffic);
+  equal(spaceFingerprint(f.repository.portableSpace()),before);deepEqual(readFileSync(join(f.assets,"old.jpg")),f.bytes);
+  const other={...asset,id:"other"};f.repository.insertAsset(other);
+  f.service.wake();await idle(f.service);
+  await rejects(f.service.startReadCanary("owner",other),/已有一张照片/);
+  f.repository.deleteAsset("other");
+  f.service.setEnabled(false);await f.restart();ok(f.service.selectedRead("owner",asset));ok(f.service.localPrimary);
+  f.service.stopReadCanary();f.service.stopReadCanary();await f.restart();equal(f.service.selectedRead("owner",asset),null);
+  equal(f.service.snapshot().stage,"copy_only");equal(spaceFingerprint(f.repository.portableSpace()),before);
+});
+
+test("read canary refuses changed references, original bytes and unowned copy rows",async t=>{
+  const f=fixture();t.after(f.stop);
+  f.service.setEnabled(true,["owner"]);await idle(f.service);
+  const asset=f.repository.findAssetById("old")!;
+  await rejects(f.service.startReadCanary("member",asset),/复制范围/);
+  await rejects(f.service.startReadCanary("owner",{...asset,kind:"file"}),/本地照片/);
+  await f.service.startReadCanary("owner",asset);
+  await rejects(async()=>f.service.selectedRead("owner",{...asset,storageRefs:[{sourceId:"local",sourceRef:"different.jpg"}]}),/原件已变化/);
+  const db=new DatabaseSync(join(f.root,"ledger.sqlite"));
+  db.prepare("UPDATE storage_pool_objects SET account_id='member' WHERE asset_id LIKE 'transition:%'").run();
+  await rejects(async()=>f.service.selectedRead("owner",asset),/对象账目不符/);
+  db.prepare("UPDATE storage_pool_objects SET account_id='owner' WHERE asset_id LIKE 'transition:%'").run();db.close();
+  writeFileSync(join(f.assets,"old.jpg"),Buffer.alloc(f.bytes.length,1));
+  await rejects(async()=>f.service.selectedRead("owner",asset),/原件已变化/);
+  f.service.stopReadCanary();equal(f.service.selectedRead("owner",asset),null,"rollback never requires a healthy source or provider");
+});

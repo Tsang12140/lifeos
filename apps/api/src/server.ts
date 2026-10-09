@@ -1100,6 +1100,26 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
 
           const session = sessionFor(req);
           if (session === null) throw new HttpError(401, "authentication_required", "Authentication required");
+          if (path === "/api/admin/storage-pool/read-canary") {
+            if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可切换照片试读");
+            if (poolTransition === null) throw new HttpError(503, "storage_pool_disabled", "存储池接入尚未启用");
+            if (req.method === "GET") { setJson(res,200,poolTransition.readCanarySnapshot()); return; }
+            // Rollback must work even when the provider is offline or a quota is exhausted.
+            if (req.method === "DELETE") { poolTransition.stopReadCanary(); setJson(res,200,poolTransition.readCanarySnapshot()); return; }
+            if (req.method !== "PUT") throw new HttpError(405, "method_not_allowed", "Method not allowed");
+            requireJsonContentType(req);
+            const input = jsonObject(await readBody(req,config.bodyLimitBytes),"body");
+            hasOnlyKeys(input,["assetId"]);
+            const assetId = stringField(input.assetId,"assetId",{ nonEmpty: true });
+            const asset = appFor(session.account).repository.findAssetById(assetId);
+            if (asset === null) throw new HttpError(404,"not_found","照片不存在");
+            try { await poolReadiness(); await poolTransition.startReadCanary(session.account.id,asset); }
+            catch (error) {
+              if (error instanceof StoragePoolError) throw new HttpError(error.status,error.code,error.message);
+              throw error;
+            }
+            setJson(res,200,poolTransition.readCanarySnapshot()); return;
+          }
           if (path === "/api/admin/storage-pool/transition") {
             if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可管理存储过渡");
             if (poolTransition === null) throw new HttpError(503, "storage_pool_disabled", "存储池接入尚未启用");

@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { assertValidAsset, type Asset } from "@lifeos/core";
+import { assertValidAsset, type Asset, type StorageReference } from "@lifeos/core";
 import { readSpaceTables, spaceFingerprint, type SpaceTables } from "./portable-space.js";
 import { resolveLocalAsset, ASSET_MEDIA_TYPES } from "./asset-static.js";
 import { trashPathFor } from "./asset-gc.js";
@@ -14,6 +14,11 @@ export interface TransitionSpace { readonly accountId: string; readonly database
 type State = "queued" | "uploading" | "verifying" | "verified" | "failed" | "pending";
 type Job = { id: string; account_id: string; asset_id: string; kind: "asset" | "database"; source_path: string; source_fingerprint: string;
   bytes: number; sha256: string | null; object_key: string | null; attempt_id: string | null; state: State; error: string | null; media_type: string };
+type ReadCanary = { account_id: string; asset_id: string; job_id: string; selected_at: number };
+export interface TransitionRead {
+  readonly reference: StorageReference;
+  readonly ledgerAssetId: string;
+}
 const within = (root: string, path: string) => { const r = relative(root, path); return r !== "" && !isAbsolute(r) && r !== ".." && !r.startsWith("../") && !r.startsWith("..\\"); };
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 async function fileHash(path: string): Promise<string> {
@@ -38,7 +43,7 @@ export function decryptTransitionSnapshot(body: Buffer, accountId: string, stabl
   return value.tables as SpaceTables;
 }
 
-/** First migration stage. Old references/read paths are never replaced; no old or remote objects are deleted. */
+/** Copy originals, with one explicit reversible read canary. Business references and files remain intact. */
 export class PoolTransition {
   readonly #db: DatabaseSync;
   readonly #privateRoot: string;
@@ -67,6 +72,8 @@ export class PoolTransition {
         kind TEXT NOT NULL, source_path TEXT NOT NULL, source_fingerprint TEXT NOT NULL, bytes INTEGER NOT NULL,
         sha256 TEXT, object_key TEXT, attempt_id TEXT, state TEXT NOT NULL, error TEXT, media_type TEXT NOT NULL,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS read_canary (id INTEGER PRIMARY KEY CHECK(id=1), account_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL, job_id TEXT NOT NULL, original_asset_json TEXT NOT NULL, selected_at INTEGER NOT NULL);
       UPDATE jobs SET state='pending', error='interrupted_upload' WHERE state='uploading';
       UPDATE jobs SET state='failed', error='interrupted_verification' WHERE state='verifying';`);
     if (!this.#db.prepare("PRAGMA table_info(settings)").all().some(column => column.name === "account_ids_json")) {
@@ -112,11 +119,60 @@ export class PoolTransition {
   }
   public snapshot() {
     const scope = this.#jobScope();
+    const readCanary = this.readCanarySnapshot();
     const counts = Object.fromEntries(["queued", "uploading", "verifying", "verified", "failed", "pending"].map(state => [state, Number(this.#db.prepare("SELECT count(*) AS n FROM jobs WHERE state=?"+scope.sql).get(state,...scope.ids)!.n)]));
     const totals = this.#db.prepare("SELECT count(*) AS total, coalesce(sum(CASE WHEN state='verified' THEN bytes ELSE 0 END),0) AS verified_bytes FROM jobs WHERE 1"+scope.sql).get(...scope.ids)!;
-    return { enabled: this.enabled, localPrimary: this.localPrimary, accountIds: this.accountIds, busy: this.#busy, stage: "copy_only" as const, counts, total: Number(totals.total), verifiedBytes: Number(totals.verified_bytes),
-      scanError: this.#scanError, databaseEncryption: "server-master-key" as const,
+    return { enabled: this.enabled, localPrimary: this.localPrimary, accountIds: this.accountIds, busy: this.#busy, stage: readCanary.enabled ? "read_canary" as const : "copy_only" as const, counts, total: Number(totals.total), verifiedBytes: Number(totals.verified_bytes),
+      scanError: this.#scanError, databaseEncryption: "server-master-key" as const, readCanary,
       issues: this.#db.prepare("SELECT account_id AS accountId, asset_id AS assetId, kind, state, error FROM jobs WHERE state IN ('failed','pending')"+scope.sql+" ORDER BY updated_at DESC LIMIT 100").all(...scope.ids) };
+  }
+  public readCanarySnapshot() {
+    const row = this.#db.prepare("SELECT account_id,asset_id,job_id,selected_at FROM read_canary WHERE id=1").get() as ReadCanary | undefined;
+    return { enabled: row !== undefined, accountId: row?.account_id ?? null, assetId: row?.asset_id ?? null,
+      selectedAt: row?.selected_at ?? null, delivery: "server-proxy" as const, originalsPreserved: true };
+  }
+  #verifiedRead(accountId: string, asset: Asset, jobId?: string): { job: Job; read: TransitionRead } {
+    const space = this.#spaces().find(item => item.accountId === accountId);
+    if (!space?.assetRoot || asset.kind !== "photo" || asset.storageRefs.some(ref => ref.sourceId === "lifeos-pool")) {
+      throw new StoragePoolError("pool_canary_unavailable", "请选择已验证的本地照片", 409);
+    }
+    const jobs = this.#db.prepare("SELECT * FROM jobs WHERE account_id=? AND asset_id=? AND kind='asset' AND state='verified'" + (jobId === undefined ? "" : " AND id=?"))
+      .all(accountId,asset.id,...(jobId === undefined ? [] : [jobId])) as unknown as Job[];
+    for (const job of jobs) {
+      if (!job.object_key || !job.sha256) continue;
+      const source = JSON.parse(job.source_fingerprint) as { stamp: string; reference: StorageReference; trash: boolean };
+      if (source.trash || source.reference.sourceId !== "local" || !asset.storageRefs.some(ref => JSON.stringify(ref) === JSON.stringify(source.reference))) continue;
+      try {
+        const path = resolveLocalAsset(space.assetRoot,source.reference.sourceRef).file;
+        if (lstatSync(path).isSymbolicLink() || realpathSync(path) !== realpathSync(job.source_path) || fileStamp(path) !== source.stamp) continue;
+        if (asset.sizeBytes !== undefined && asset.sizeBytes !== job.bytes) continue;
+        const ledgerAssetId = `transition:${job.id}`;
+        const object = this.#store.poolObject(accountId,ledgerAssetId,job.object_key);
+        if (object?.state !== "ready" || object.bytes !== job.bytes) continue;
+        return { job, read: { ledgerAssetId, reference: { sourceId: "lifeos-pool", sourceRef: job.object_key,
+          mediaType: job.media_type, contentHash: { algorithm: "sha256", value: job.sha256 } } } };
+      } catch { /* Missing or changed local originals must not silently select an old remote version. */ }
+    }
+    throw new StoragePoolError("pool_canary_unavailable", "照片副本未验证、原件已变化或对象账目不符，请先切回本地并核对", 409);
+  }
+  public async startReadCanary(accountId: string, asset: Asset): Promise<void> {
+    if (this.accountIds !== null && !this.accountIds.includes(accountId)) throw new StoragePoolError("pool_canary_scope", "照片不在当前复制范围内", 409);
+    const { job } = this.#verifiedRead(accountId,asset);
+    // Recheck bytes once on activation; ordinary reads validate the saved file identity.
+    if (await fileHash(job.source_path) !== job.sha256) throw new StoragePoolError("pool_canary_changed", "原件内容与已验证副本不符", 409);
+    this.#verifiedRead(accountId,asset,job.id);
+    const current = this.#db.prepare("SELECT account_id,asset_id,job_id,selected_at FROM read_canary WHERE id=1").get() as ReadCanary | undefined;
+    if (current && (current.account_id !== accountId || current.asset_id !== asset.id || current.job_id !== job.id)) {
+      throw new StoragePoolError("pool_canary_active", "已有一张照片正在试读，请先切回本地", 409);
+    }
+    this.#db.prepare("INSERT OR IGNORE INTO read_canary(id,account_id,asset_id,job_id,original_asset_json,selected_at) VALUES(1,?,?,?,?,?)")
+      .run(accountId,asset.id,job.id,JSON.stringify(asset),Date.now());
+  }
+  public stopReadCanary(): void { this.#db.exec("DELETE FROM read_canary WHERE id=1"); }
+  public selectedRead(accountId: string, asset: Asset): TransitionRead | null {
+    const row = this.#db.prepare("SELECT account_id,asset_id,job_id,selected_at FROM read_canary WHERE id=1").get() as ReadCanary | undefined;
+    if (!row || row.account_id !== accountId || row.asset_id !== asset.id) return null;
+    return this.#verifiedRead(accountId,asset,row.job_id).read;
   }
   public retry(): void {
     // A possibly committed upload must never be blindly uploaded again.
