@@ -4,6 +4,7 @@ import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, read
 import { DatabaseSync } from "node:sqlite";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { clearVideoDownloadCache } from "./video-assets.js";
 import {
   PLACE_ROLES,
   RELATION_KINDS,
@@ -193,8 +194,8 @@ function recordLoginFailure(failures: Map<string, LoginFailureBucket>, key: stri
 const RECORD_KINDS: readonly RecordKind[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
 const ENTITY_KINDS: readonly EntityKind[] = ["person", "project", "place", "topic", "movie"];
-const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
-const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
+const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "video", "file"];
+const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "video", "attachment"];
 const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["intimacy", "fitness", "period_start", "period_end"];
 
 
@@ -585,6 +586,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       closed = true;
       backupScheduler.stop();
       closeArchiveService(repository);
+      clearVideoDownloadCache(repository);
       weatherArchiveScheduler.stop();
       assetGcScheduler.stop();
       calendarTaskLabels.close();

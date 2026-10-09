@@ -39,7 +39,7 @@ import {
 
 const RECORD_KINDS: readonly string[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
-const ASSET_KINDS: readonly string[] = ["photo", "audio", "file"];
+const ASSET_KINDS: readonly string[] = ["photo", "audio", "video", "file"];
 
 function withMentionRefs(text: string, refs: readonly EntityRef[], repository: SqliteRecordRepository, decisions: readonly TextEntityDecision[] = []): readonly EntityRef[] {
   const entities = repository.listEntities();

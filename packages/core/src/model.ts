@@ -1,11 +1,13 @@
+import { VIDEO_LIMITS } from "./video.js";
+
 export type RecordId = string;
 export type EntityId = string;
 export type AssetId = string;
 
 export type RecordKind = "journal" | "task" | "event" | "note";
 export type EntityKind = "person" | "project" | "place" | "topic" | "movie";
-export type AssetKind = "photo" | "audio" | "file";
-export type AssetRole = "photo" | "recording" | "attachment";
+export type AssetKind = "photo" | "audio" | "video" | "file";
+export type AssetRole = "photo" | "recording" | "video" | "attachment";
 
 /**
  * An instant includes an offset or Z. The original wall-clock zone, when
@@ -225,6 +227,16 @@ export interface PhotoMetadata {
   readonly details?: PhotoDetails;
 }
 
+export interface VideoMetadata {
+  readonly version: 1;
+  readonly width: number;
+  readonly height: number;
+  readonly durationSeconds: number;
+  readonly frameRate: number;
+  readonly videoCodec: "avc";
+  readonly audioCodec: "aac" | null;
+}
+
 export interface Asset {
   readonly id: AssetId;
   readonly kind: AssetKind;
@@ -232,6 +244,8 @@ export interface Asset {
   readonly originalName?: string;
   readonly sizeBytes?: number;
   readonly photoMetadata?: PhotoMetadata;
+  /** Describes the validated cloud copy. Device originals are never part of an asset/export. */
+  readonly videoMetadata?: VideoMetadata;
   readonly createdAt?: InstantTime;
   /**
    * The last time this asset was put to use — currently only set when a
@@ -596,7 +610,7 @@ export function assertValidEntityRef(value: unknown, name = "entityRef"): assert
 function validateAssetLink(value: unknown, name: string): void {
   const ref = objectValue(value, name);
   nonEmptyStringValue(ref.assetId, `${name}.assetId`);
-  enumValue(ref.role, ["photo", "recording", "attachment"], `${name}.role`);
+  enumValue(ref.role, ["photo", "recording", "video", "attachment"], `${name}.role`);
   optionalStringValue(ref.label, `${name}.label`);
 }
 
@@ -916,10 +930,22 @@ function validateStorageLink(value: unknown, name: string): void {
 
 export function assertValidAsset(value: unknown): asserts value is Asset {
   const asset = objectValue(value, "asset");
-  enumValue(asset.kind, ["photo", "audio", "file"], "asset.kind");
+  enumValue(asset.kind, ["photo", "audio", "video", "file"], "asset.kind");
   nonEmptyStringValue(asset.id, "asset.id");
   optionalStringValue(asset.mediaType, "asset.mediaType");
   optionalStringValue(asset.originalName, "asset.originalName");
+  if (asset.kind === "video" || asset.videoMetadata !== undefined) {
+    const meta = objectValue(asset.videoMetadata, "asset.videoMetadata");
+    if (asset.kind !== "video" || meta.version !== 1 || asset.mediaType !== "video/mp4") throw new Error("Invalid video asset");
+    for (const field of ["width", "height"] as const) {
+      if (typeof meta[field] !== "number" || !Number.isSafeInteger(meta[field]) || (meta[field] as number) < 2 || (meta[field] as number) > VIDEO_LIMITS.maxLongEdge) throw new Error("Invalid video dimension");
+    }
+    if (Math.min(meta.width as number, meta.height as number) > VIDEO_LIMITS.maxShortEdge) throw new Error("Invalid video short edge");
+    if (typeof meta.durationSeconds !== "number" || !Number.isFinite(meta.durationSeconds) || meta.durationSeconds <= 0 || meta.durationSeconds > VIDEO_LIMITS.maxDurationSeconds + 0.25) throw new Error("Invalid video duration");
+    if (typeof meta.frameRate !== "number" || !Number.isFinite(meta.frameRate) || meta.frameRate <= 0 || meta.frameRate > VIDEO_LIMITS.maxFrameRate + 0.1) throw new Error("Invalid video frame rate");
+    if (meta.videoCodec !== "avc" || (meta.audioCodec !== null && meta.audioCodec !== "aac")) throw new Error("Invalid video codec");
+    if (typeof asset.sizeBytes !== "number" || !Number.isSafeInteger(asset.sizeBytes) || asset.sizeBytes <= 0 || asset.sizeBytes > VIDEO_LIMITS.maxOutputBytes) throw new Error("Invalid video size");
+  }
   if (asset.photoMetadata !== undefined) {
     const metadata = objectValue(asset.photoMetadata, "asset.photoMetadata");
     if (asset.kind !== "photo" || metadata.version !== 1) throw new Error("asset.photoMetadata requires a photo and version 1");

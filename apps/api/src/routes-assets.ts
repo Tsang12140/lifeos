@@ -64,11 +64,12 @@ import { POOL_SOURCE_ID, StoragePoolError } from "./storage-pool.js";
 import type { PoolObjectRow } from "./storage-pool-store.js";
 import { readPhotoMetadata } from "./photo-metadata.js";
 import { MATERIAL_FORMATS } from "./assistant-material.js";
+import { handleVideoRoutes } from "./video-assets.js";
 
 const photoInfoCache = new WeakMap<RouteContext["repository"], Map<string, Promise<Awaited<ReturnType<typeof readPhotoMetadata>>>>>();
 
-const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "file"];
-const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "attachment"];
+const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "video", "file"];
+const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "video", "attachment"];
 
 function isPoolReference(reference: StorageReference): boolean {
   return reference.sourceId === POOL_SOURCE_ID;
@@ -165,6 +166,7 @@ export const handleAssetsRoutes: RouteHandler = async (
   url: URL,
 ): Promise<boolean> => {
   const { config, repository, thumbnails } = ctx;
+  if (await handleVideoRoutes(ctx, req, res, pathname, url)) return true;
 
 
   if (pathname === "/api/assets" && req.method === "GET") {
@@ -177,6 +179,7 @@ export const handleAssetsRoutes: RouteHandler = async (
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
     hasOnlyKeys(input, ["id", "kind", "storageRefs", "originalName", "mediaType", "sizeBytes"]);
+    if (input.kind === "video") throw new HttpError(400, "video_upload_required", "视频必须通过压缩视频上传入口保存");
     const id = input.id === undefined ? `asset_${randomUUID()}` : stringField(input.id, "id", { nonEmpty: true });
     if (repository.findAssetById(id) !== null) throw new HttpError(409, "asset_exists", `Asset already exists: ${id}`);
     const storageRefs = storageRefsField(input.storageRefs);
@@ -464,6 +467,7 @@ export const handleAssetsRoutes: RouteHandler = async (
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
     hasOnlyKeys(input, ["storageRefs", "originalName", "mediaType", "sizeBytes"]);
+    if (existing.kind === "video" && ["storageRefs", "mediaType", "sizeBytes"].some(key => input[key] !== undefined)) throw new HttpError(409, "video_reference_immutable", "视频文件与校验信息不能单独修改，请重新上传视频");
     if (input.storageRefs !== undefined) {
       const replacementRefs = storageRefsField(input.storageRefs);
       if (existing.storageRefs.some(isPoolReference) || replacementRefs.some(isPoolReference)) {

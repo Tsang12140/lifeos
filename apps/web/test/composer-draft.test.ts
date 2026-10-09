@@ -15,6 +15,14 @@ function storage() {
 const draft = { content: "还没发出的正文", kind: "journal" as const, isPrivate: true,
   shots: [{ assetId: "asset-1", role: "photo" as const }] };
 
+test("a mixed photo/video draft survives refresh within its account", () => {
+  const store = storage();
+  const mixed = { ...draft, shots: [...draft.shots, { assetId: "video-1", role: "video" as const }] };
+  assert.equal(writeComposerDraft("account:owner", mixed, store), true);
+  assert.deepEqual(readComposerDraft("account:owner", store)?.shots, mixed.shots);
+  assert.equal(readComposerDraft("account:member", store), null);
+});
+
 test("draft exclusions round trip and invalid marker metadata never discards prose", () => {
   const store = storage();
   const current = { ...draft, entityMentions: [{ start: 0, end: 2, text: "还没", entityId: null, entityType: "person" as const }] };

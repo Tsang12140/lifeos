@@ -6,7 +6,7 @@ const PREFIX = "lifeos.composerDraft.v1.";
 const MAX_CONTENT = 200_000;
 const MAX_SHOTS = 64;
 const KINDS: readonly ComposerKind[] = ["journal", "task", "event", "note"];
-const ROLES = ["photo", "recording", "attachment"];
+const ROLES = ["photo", "recording", "video", "attachment"];
 
 export interface ComposerDraft {
   readonly content: string;

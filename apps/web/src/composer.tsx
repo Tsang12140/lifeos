@@ -1,3 +1,4 @@
+import { VideoInput, type VideoUpload } from "./video-ui";
 import { usePhotoInput } from "./photo-input";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
@@ -17,7 +18,7 @@ import {
   MapPin,
   X,
 } from "lucide-react";
-import type { AssetLink, Entity, EntityCandidate, TextEntityDecision, EntityRef, NoteFormat, PlacePeriod, PlaceRole, TaskStatus, WeatherAttachment } from "@lifeos/core";
+import type { Asset, AssetLink, Entity, EntityCandidate, TextEntityDecision, EntityRef, NoteFormat, PlacePeriod, PlaceRole, TaskStatus, WeatherAttachment } from "@lifeos/core";
 import { PLACE_MARKER, cleanMovieQuery, entitySearchTerms, normalizeEntitySearchTerm, findEntityCandidates } from "@lifeos/core";
 import type { ApiUploadProgress, MovieEntity, RecordView } from "./api";
 import type { ComposerKind, CreateEntity, EntityCreateRequest } from "./app-types";
@@ -45,12 +46,12 @@ export interface NoteEditMeta { format: NoteFormat; title: string; source: strin
 
 interface MentionReviewProps { decisions: readonly TextEntityDecision[]; onDecisionsChange: (decisions: readonly TextEntityDecision[]) => void; }
 
-export interface ComposerProps extends MentionReviewProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string, editRange?: { start: number; end: number }) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
+export interface ComposerProps extends MentionReviewProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string, editRange?: { start: number; end: number }) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; assets: readonly Asset[]; onUploadVideo: VideoUpload; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-export function Composer({ decisions, onDecisionsChange, kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
+export function Composer({ decisions, onDecisionsChange, kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, assets, onUploadVideo, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const candidates = useMemo(() => {
@@ -74,6 +75,9 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
     resetMentionTools();
   };
   const shotZoneRef = useRef<ShotDropZoneHandle>(null);
+  const videoZoneRef = useRef<ShotDropZoneHandle>(null);
+  const mediaStates = useRef<{ scope: string; photo: "active" | "failed" | null; video: "active" | "failed" | null }>({ scope: shotScopeKey, photo: null, video: null });
+  if (mediaStates.current.scope !== shotScopeKey) mediaStates.current = { scope: shotScopeKey, photo: null, video: null };
 
 
   const [shotUploading, setShotUploading] = useState(false);
@@ -81,25 +85,29 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
   const shotSubmissionStateRef = useRef<"active" | "failed" | null>(null);
   const currentShotScopeRef = useRef(shotScopeKey);
   currentShotScopeRef.current = shotScopeKey;
-  const reportShotSubmissionState = (scope: string, state: "active" | "failed" | null) => {
-    onShotSubmissionState(scope, state);
+  const reportMediaState = (scope: string, kind: "photo" | "video", state: "active" | "failed" | null) => {
     if (scope !== currentShotScopeRef.current) return;
-    shotSubmissionStateRef.current = state;
-    setShotSubmissionState(state);
+    mediaStates.current[kind] = state;
+    const states = [mediaStates.current.photo, mediaStates.current.video];
+    const aggregate = states.includes("active") ? "active" : states.includes("failed") ? "failed" : null;
+    onShotSubmissionState(scope, aggregate);
+    shotSubmissionStateRef.current = aggregate;
+    setShotSubmissionState(aggregate);
   };
+  const reportShotSubmissionState = (scope: string, state: "active" | "failed" | null) => reportMediaState(scope, "photo", state);
   const futureJournal = kind === "journal" && (occurredAt.slice(0, 10) || selectedDate) > localDateToday();
   const canSave = !futureJournal && content.trim().length > 0 && !saving && !shotUploading && shotSubmissionState === null && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
   const submitIfReady = () => {
     if (futureJournal) { onNotify("未来日期不能写日记，请选择今天或之前的日期", "warn"); return; }
     const state = shotSubmissionStateRef.current;
     if (state !== null) {
-      onNotify(state === "failed" ? "有照片未上传，请重试或移除后保存" : "照片正在处理，请完成后再保存", "warn");
+      onNotify(state === "failed" ? "有附件未上传，请重试或移除后保存" : "附件正在处理，请完成后再保存", "warn");
       return;
     }
     if (!saving && content.trim().length > 0) onSubmit();
   };
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
-  const { draggingFiles, handlers: entryDragHandlers } = usePhotoInput(shotZoneRef, saving);
+  const { draggingFiles, handlers: entryDragHandlers } = usePhotoInput(shotZoneRef, saving, files => videoZoneRef.current?.takeFiles(files));
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -322,7 +330,7 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
           gap moves, it does not go away. Cancelling the entry's slack here is
           what actually closes it. */}
       <div className="composer-mobile-action-row">
-        <ShotDropZone ref={shotZoneRef} scopeKey={shotScopeKey} disabled={saving} shots={shots} onShotsChange={onShotsChange} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} onSubmissionState={reportShotSubmissionState} />
+        <ShotDropZone ref={shotZoneRef} scopeKey={shotScopeKey} disabled={saving} shots={shots.filter(item => item.role !== "video")} onShotsChange={update => onShotsChange(previous => { const photos = previous.filter(item => item.role !== "video"); return [...previous.filter(item => item.role === "video"), ...(typeof update === "function" ? update(photos) : update)]; })} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} onSubmissionState={reportShotSubmissionState} />
         <button className="primary-button composer-inline-save" type="button" disabled={!canSave} onClick={submitIfReady} aria-label={saving ? "正在保存" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"} title={saving ? "正在保存" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className={editing || kind === "task" ? "composer-inline-save-label" : "visually-hidden"}>{saving ? "保存中" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"}</span></button>
       </div>
     </div>
@@ -330,6 +338,7 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
     {error ? <div className="composer-edit-error" role="alert"><span>{error}</span>{onReloadLatest ? <button type="button" onClick={onReloadLatest}>读取最新版本</button> : null}</div> : null}
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => { setMoviePanelOpen(false); setMovieQuery(undefined); }} initialQuery={movieQuery} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
+    <VideoInput key={shotScopeKey} ref={videoZoneRef} assets={assets} refs={shots} onChange={onShotsChange} disabled={saving} onUpload={onUploadVideo} onNotify={onNotify} onState={state => reportMediaState(shotScopeKey, "video", state)} />
     <div className="composer-footer">
       <div className="composer-fields">
         <div className="place-anchor">

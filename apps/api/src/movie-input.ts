@@ -32,7 +32,7 @@ import {
 } from "./field-validate.js";
 import { aliasesField, sizeBytesField } from "./record-builders.js";
 
-const ASSET_KINDS: readonly string[] = ["photo", "audio", "file"];
+const ASSET_KINDS: readonly string[] = ["photo", "audio", "video", "file"];
 
 export const MOVIE_FIELD_NAMES = [
   "mediaType",

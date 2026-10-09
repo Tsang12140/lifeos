@@ -83,7 +83,7 @@ export function readAssistantVisibility(): boolean {
   }
 }
 
-export const ASSET_ROLE_VALUES: readonly AssetRole[] = ["photo", "recording", "attachment"];
+export const ASSET_ROLE_VALUES: readonly AssetRole[] = ["photo", "recording", "video", "attachment"];
 
 /**
  * Rebuilds a stored draft defensively. A draft is a convenience, never a
@@ -145,7 +145,7 @@ export const ENTITY_META: Record<string, { label: string; icon: LucideIcon }> = 
 
 export const ENTITY_KIND_ORDER: readonly EntityKind[] = ["person", "place", "project", "topic"];
 
-export const ASSET_ROLE_LABEL: Record<AssetRole, string> = { photo: "照片", recording: "录音", attachment: "附件" };
+export const ASSET_ROLE_LABEL: Record<AssetRole, string> = { photo: "照片", recording: "录音", video: "视频", attachment: "附件" };
 
 export const RELATION_META: Record<RelationKind, { label: string; icon: LucideIcon }> = {
   partner: { label: "爱人", icon: Heart },
@@ -192,6 +192,7 @@ export function isLocalAsset(asset: Asset | undefined): boolean {
 export function assetRoleFor(kind: AssetKind): AssetRole {
   if (kind === "photo") return "photo";
   if (kind === "audio") return "recording";
+  if (kind === "video") return "video";
   return "attachment";
 }
 
