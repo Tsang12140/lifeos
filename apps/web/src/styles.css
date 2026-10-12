@@ -1621,16 +1621,17 @@ h2 {
   top: 17px;
   bottom: 17px;
   left: 88px;
+  transform: translateX(-50%);
   width: 1px;
   content: "";
-  background: #b9c6d7;
+  background: #ccd5df;
 }
 
 .timeline-item {
   position: relative;
   display: grid;
   grid-template-columns: 65px 46px minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
+  grid-template-rows: 22px 1fr;
   min-height: 0;
   padding: 0;
 }
@@ -1653,27 +1654,27 @@ h2 {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.45;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
 .timeline-marker {
   grid-column: 2;
-  grid-row: 1 / -1;
+  grid-row: 1;
   position: relative;
   z-index: 1;
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding-top: 8px;
 }
 
 .timeline-marker span {
   display: block;
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--canvas);
+  width: 7px;
+  height: 7px;
+  border: 1px solid #8997a6;
   border-radius: 50%;
-  background: var(--primary);
-  box-shadow: 0 0 0 1px #8199e9;
+  background: var(--canvas);
 }
 
 /* The record is one card. Every part of it — the kind tags, the text, the photos,
@@ -7572,7 +7573,7 @@ button.relation-chip {
   }
 
   .timeline-list::before {
-    left: 64px;
+    left: 64.5px;
   }
 
   .timeline-group-title {
@@ -11678,7 +11679,7 @@ button.mention-review-context { cursor: pointer; }
   .timeline-group-title { margin-left: 30px; }
   .timeline-item { grid-template-columns: 30px minmax(0, 1fr); }
   .timeline-time { grid-column: 2; grid-row: 1; justify-self: start; text-align: left; }
-  .timeline-marker { grid-column: 1; grid-row: 1 / -1; padding-top: 7px; }
+  .timeline-marker { grid-column: 1; }
   .timeline-content { grid-column: 2; grid-row: 2; width: 100%; }
 }
 
