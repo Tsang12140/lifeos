@@ -1,13 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useEffect, useRef, useState } from "react";
 import { ContactRound, Edit3, LoaderCircle, X } from "lucide-react";
 import type { Asset, Entity } from "@lifeos/core";
 import { apiRequest, apiUploadRequest } from "./api";
 import { avatarCrop } from "./contact-avatar-crop";
 import "./contact-avatar.css";
 
+export const EntityPhotoScopeContext = createContext("local");
+
+export function entityPhotoSrc(entity: Entity, scope: string): string | undefined {
+  const id = entity.type === "person" || entity.type === "place" ? entity.avatarAssetId : undefined;
+  return id ? `/api/assets/${encodeURIComponent(id)}/thumbnail?w=160&scope=${encodeURIComponent(scope)}` : entity.type === "place" ? entity.photoUrl : undefined;
+}
+
 export function ContactAvatar({ entity, scope, small = false, onEdit }: { entity: Entity; scope: string; small?: boolean; onEdit: (entity: Entity) => void }) {
   const id = entity.type === "person" || entity.type === "place" ? entity.avatarAssetId : undefined;
-  const src = id ? `/api/assets/${encodeURIComponent(id)}/thumbnail?w=160&scope=${encodeURIComponent(scope)}` : entity.type === "place" ? entity.photoUrl : undefined;
+  const src = entityPhotoSrc(entity, scope);
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
   return <button type="button" className={`contact-avatar ${small ? "is-small" : ""}`} onClick={() => onEdit(entity)} aria-label={`${id ? "更换" : "添加"}${entity.name}的${entity.type === "place" ? "照片" : "头像"}`} title={entity.type === "place" ? "设置地点照片" : id ? "更换头像" : "添加头像"}>

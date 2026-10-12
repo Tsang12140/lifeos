@@ -122,7 +122,8 @@ body {
    输入控件仍由下面那条 `input, textarea, …` 规则单独放回来。 */
 .calendar-day-dialog,
 .asset-preview,
-.assistant-history-dialog {
+.assistant-history-dialog,
+.place-card-dialog {
   -webkit-user-select: none;
   user-select: none;
 }
@@ -160,6 +161,7 @@ select,
 .settings-ai-preset-id,
 .settings-ai-effective-item strong,
 .entity-library-address,
+.place-detail-copy,
 .person-card-field,
 .calendar-task-full-text,
 .photo-information dd,

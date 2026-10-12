@@ -207,6 +207,135 @@ function poolOperationHttpError(error: unknown, operation: string): HttpError {
   return new HttpError(503, `pool_${operation}_failed`, "存储池操作失败，状态待核对");
 }
 
+export async function storeAssetBytes(ctx: RouteContext, bytes: Buffer, mediaType: string, options: { purpose?: "avatar"; originalName?: string | undefined; material?: boolean } = {}): Promise<Asset> {
+  const { config, repository } = ctx;
+  const purpose = options.purpose;
+  const limit = purpose === "avatar" ? Math.min(config.assetUploadLimitBytes, 2 * 1024 * 1024) : config.assetUploadLimitBytes;
+  if (bytes.length > limit) throw new HttpError(413, "body_too_large", "图片文件过大");
+  const isPhoto = ASSET_UPLOAD_FORMATS[mediaType] !== undefined;
+  let format = ASSET_UPLOAD_FORMATS[mediaType] ?? (options.material ? MATERIAL_FORMATS[mediaType] : undefined);
+  if (!format || !bytes.length || !format.matches(bytes)) throw new HttpError(415, "invalid_image", "无法读取图片，请换一张图片");
+  if (purpose === "avatar") {
+    if (!isPhoto) throw new HttpError(415, "invalid_avatar", "头像必须是图片");
+    try { bytes = await sharp(bytes, { limitInputPixels: 40_000_000 }).rotate().resize(160, 160, { fit: "cover" }).webp({ quality: 85 }).toBuffer(); }
+    catch { throw new HttpError(415, "invalid_avatar", "无法读取头像图片，请换一张图片"); }
+    mediaType = "image/webp";
+    format = ASSET_UPLOAD_FORMATS[mediaType]!;
+  }
+  // The hash is computed from the bytes we actually received, never taken
+  // from the request. A client that lied about it could otherwise poison the
+  // index and be handed a different photo back the next time it asked.
+  const contentHash: ContentHash = { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") };
+  // The copy the library already holds wins over writing another file. The
+  // composer asks /api/assets/resolve before it spends the bandwidth, but
+  // that is a courtesy, not a guard: a script, a second tab, or a resolve
+  // that missed all arrive here with bytes the library already has. Reusing
+  // the row is what keeps one photo to one file on disk -- the basis of the
+  // content-addressed plan, and of the time machine's promise that a photo
+  // from a past moment is still resolvable.
+  //
+  // The reuse answers 201 with the existing asset, identical to a fresh
+  // upload. `.review/photo-grid-seed.mjs` reads the id out of a 201, and a
+  // separate shape would only make callers branch on something they do not
+  // act on differently.
+  // New avatars use the configured pool even while historical diary photos
+  // remain local during migration, just like new video uploads.
+  const usePool = ctx.poolBridge.enabled && (purpose === "avatar" || !ctx.poolTransition?.localPrimary);
+  const existing = repository.findAssetByContentHash(contentHash.algorithm, contentHash.value, purpose === "avatar" ? "avatar" : undefined);
+  if (existing !== null && (purpose !== "avatar" || !usePool || existing.storageRefs.some(isPoolReference))) {
+    const existingPoolRef = existing.storageRefs.find(isPoolReference);
+    if (existingPoolRef !== undefined) poolObjectFor(ctx, existing, existingPoolRef);
+    // Taking the photo back into use moves the collector's anchor forward,
+    // so the grace period restarts from now -- the same rule /resolve uses.
+    const photoMetadata = existing.photoMetadata ?? (isPhoto ? await readPhotoMetadata(bytes) : undefined);
+    const reused: Asset = { ...existing, ...(photoMetadata === undefined ? {} : { photoMetadata }), lastUsedAt: nowInstant() };
+    repository.updateAsset(reused);
+    return reused;
+  }
+  const originalName = purpose === "avatar" ? "avatar.webp" : options.originalName;
+  const photoMetadata = isPhoto ? await readPhotoMetadata(bytes) : undefined;
+  if (usePool) {
+    if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
+    const readiness = await ctx.poolPreflight();
+    const assetId = `asset_${randomUUID()}`;
+    let directory: string;
+    try { directory = mkdtempSync(join(tmpdir(), "lifeos-pool-upload-")); }
+    catch { throw new HttpError(500, "pool_temp_unavailable", "无法准备临时上传文件"); }
+    const localPath = join(directory, `upload${format.extension}`);
+    let attemptId: string | undefined;
+    let returnedKey: string | undefined;
+    try {
+      writeFileSync(localPath, bytes, { flag: "wx", mode: 0o600 });
+      attemptId = ctx.poolStore.reserveUpload(ctx.poolAccountId, assetId, bytes.length, readiness.storageFreeBytes);
+      const uploaded = await ctx.poolBridge.putFile(localPath, originalName ?? assetId + format.extension, mediaType);
+      returnedKey = uploaded.key;
+      ctx.poolStore.keepPendingUpload(attemptId, returnedKey);
+      const poolRef = coreValidated("storageRefs", () => {
+        const candidate: StorageReference = { sourceId: POOL_SOURCE_ID, sourceRef: returnedKey!, mediaType, contentHash };
+        assertValidStorageReference(candidate, "storageRefs[0]");
+        return candidate;
+      });
+      const built = buildAsset(
+        { kind: isPhoto ? "photo" : "file", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
+        assetId,
+        [poolRef],
+      );
+      const asset: Asset = { ...built, ...(purpose === "avatar" ? { purpose: "avatar" as const } : {}), ...(photoMetadata === undefined ? {} : { photoMetadata }) };
+      repository.insertAsset(asset);
+      ctx.poolStore.completeUpload(attemptId, returnedKey);
+      if (purpose === "avatar") await ctx.thumbnails.ensure(poolRef, localPath, 160).catch(() => { /* Regenerable cache; the committed avatar remains valid. */ });
+      return asset;
+    } catch (error) {
+      if (attemptId !== undefined) {
+        if (returnedKey !== undefined) {
+          try { ctx.poolStore.keepPendingUpload(attemptId, returnedKey); } catch { /* Preserve the existing reservation for admin review. */ }
+        } else if (error instanceof StoragePoolError && !error.uncertain) {
+          ctx.poolStore.releaseUploadReservation(attemptId);
+        } else if (error instanceof StoragePoolError && error.pendingKey !== undefined) {
+          try { ctx.poolStore.keepPendingUpload(attemptId, error.pendingKey); } catch { /* Preserve reservation. */ }
+        } else {
+          try { ctx.poolStore.keepPendingUpload(attemptId); } catch { /* Preserve reservation. */ }
+        }
+      }
+      if (error instanceof HttpError) throw error;
+      if (error instanceof StoragePoolError) throw poolOperationHttpError(error, "upload");
+      if (error instanceof Error && error.message.includes("额度不足")) throw new HttpError(409, "pool_quota_exceeded", error.message);
+      throw new HttpError(503, "pool_upload_pending", "存储池上传状态待核对，额度预留已保留");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  if (config.assetRoot === undefined) throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to store local originals");
+  let sourceRef: string;
+  try {
+    // The digest goes into the path, so the file lands under a name that is
+    // the picture's own identity rather than a fresh UUID: a second copy of
+    // these bytes cannot be written under a different name later on.
+    sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format, contentHash.value, purpose === "avatar" ? "avatars" : undefined);
+  } catch {
+    throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
+  }
+  const uploadRef = coreValidated("storageRefs", () => {
+    const candidate: StorageReference = { sourceId: "local", sourceRef, mediaType, contentHash };
+    assertValidStorageReference(candidate, "storageRefs[0]");
+    return candidate;
+  });
+  // One dropped photo is one photo asset. The record links to it when the
+  // entry is saved; until then it is an unreferenced upload that
+  // DELETE /api/assets/:id still accepts.
+  const built = buildAsset(
+    { kind: isPhoto ? "photo" : "file", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
+    `asset_${randomUUID()}`,
+    [uploadRef],
+  );
+  const asset: Asset = { ...built, ...(purpose === "avatar" ? { purpose: "avatar" as const } : {}), ...(photoMetadata === undefined ? {} : { photoMetadata }) };
+  repository.insertAsset(asset);
+  if (purpose === "avatar") await ctx.thumbnails.ensure(uploadRef, resolveAssetOriginal(config, repository, asset.id).file, 160).catch(() => { /* Rebuilt on the next image read. */ });
+  ctx.poolTransition?.wake();
+  return asset;
+}
+
 export const handleAssetsRoutes: RouteHandler = async (
   ctx: RouteContext,
   req: IncomingMessage,
@@ -259,126 +388,7 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (!format.matches(bytes)) {
       throw new HttpError(415, "content_type_mismatch", "The uploaded bytes are not the declared image type");
     }
-    if (purpose === "avatar") {
-      if (!isPhoto) throw new HttpError(415, "invalid_avatar", "头像必须是图片");
-      try { bytes = await sharp(bytes, { limitInputPixels: 40_000_000 }).rotate().resize(160, 160, { fit: "cover" }).webp({ quality: 85 }).toBuffer(); }
-      catch { throw new HttpError(415, "invalid_avatar", "无法读取头像图片，请换一张图片"); }
-      mediaType = "image/webp";
-      format = ASSET_UPLOAD_FORMATS[mediaType]!;
-    }
-    // The hash is computed from the bytes we actually received, never taken
-    // from the request. A client that lied about it could otherwise poison the
-    // index and be handed a different photo back the next time it asked.
-    const contentHash: ContentHash = { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") };
-    // The copy the library already holds wins over writing another file. The
-    // composer asks /api/assets/resolve before it spends the bandwidth, but
-    // that is a courtesy, not a guard: a script, a second tab, or a resolve
-    // that missed all arrive here with bytes the library already has. Reusing
-    // the row is what keeps one photo to one file on disk -- the basis of the
-    // content-addressed plan, and of the time machine's promise that a photo
-    // from a past moment is still resolvable.
-    //
-    // The reuse answers 201 with the existing asset, identical to a fresh
-    // upload. `.review/photo-grid-seed.mjs` reads the id out of a 201, and a
-    // separate shape would only make callers branch on something they do not
-    // act on differently.
-    // New avatars use the configured pool even while historical diary photos
-    // remain local during migration, just like new video uploads.
-    const usePool = ctx.poolBridge.enabled && (purpose === "avatar" || !ctx.poolTransition?.localPrimary);
-    const existing = repository.findAssetByContentHash(contentHash.algorithm, contentHash.value, purpose === "avatar" ? "avatar" : undefined);
-    if (existing !== null && (purpose !== "avatar" || !usePool || existing.storageRefs.some(isPoolReference))) {
-      const existingPoolRef = existing.storageRefs.find(isPoolReference);
-      if (existingPoolRef !== undefined) poolObjectFor(ctx, existing, existingPoolRef);
-      // Taking the photo back into use moves the collector's anchor forward,
-      // so the grace period restarts from now -- the same rule /resolve uses.
-      const photoMetadata = existing.photoMetadata ?? (isPhoto ? await readPhotoMetadata(bytes) : undefined);
-      const reused: Asset = { ...existing, ...(photoMetadata === undefined ? {} : { photoMetadata }), lastUsedAt: nowInstant() };
-      repository.updateAsset(reused);
-      setJson(res, 201, reused);
-      return true;
-    }
-    const originalName = purpose === "avatar" ? "avatar.webp" : uploadOriginalName(url.searchParams.get("name"));
-    const photoMetadata = isPhoto ? await readPhotoMetadata(bytes) : undefined;
-    if (usePool) {
-      if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
-      const readiness = await ctx.poolPreflight();
-      const assetId = `asset_${randomUUID()}`;
-      let directory: string;
-      try { directory = mkdtempSync(join(tmpdir(), "lifeos-pool-upload-")); }
-      catch { throw new HttpError(500, "pool_temp_unavailable", "无法准备临时上传文件"); }
-      const localPath = join(directory, `upload${format.extension}`);
-      let attemptId: string | undefined;
-      let returnedKey: string | undefined;
-      try {
-        writeFileSync(localPath, bytes, { flag: "wx", mode: 0o600 });
-        attemptId = ctx.poolStore.reserveUpload(ctx.poolAccountId, assetId, bytes.length, readiness.storageFreeBytes);
-        const uploaded = await ctx.poolBridge.putFile(localPath, originalName ?? assetId + format.extension, mediaType);
-        returnedKey = uploaded.key;
-        ctx.poolStore.keepPendingUpload(attemptId, returnedKey);
-        const poolRef = coreValidated("storageRefs", () => {
-          const candidate: StorageReference = { sourceId: POOL_SOURCE_ID, sourceRef: returnedKey!, mediaType, contentHash };
-          assertValidStorageReference(candidate, "storageRefs[0]");
-          return candidate;
-        });
-        const built = buildAsset(
-          { kind: isPhoto ? "photo" : "file", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
-          assetId,
-          [poolRef],
-        );
-        const asset: Asset = { ...built, ...(purpose === "avatar" ? { purpose: "avatar" as const } : {}), ...(photoMetadata === undefined ? {} : { photoMetadata }) };
-        repository.insertAsset(asset);
-        ctx.poolStore.completeUpload(attemptId, returnedKey);
-        if (purpose === "avatar") await ctx.thumbnails.ensure(poolRef, localPath, 160).catch(() => { /* Regenerable cache; the committed avatar remains valid. */ });
-        setJson(res, 201, asset);
-        return true;
-      } catch (error) {
-        if (attemptId !== undefined) {
-          if (returnedKey !== undefined) {
-            try { ctx.poolStore.keepPendingUpload(attemptId, returnedKey); } catch { /* Preserve the existing reservation for admin review. */ }
-          } else if (error instanceof StoragePoolError && !error.uncertain) {
-            ctx.poolStore.releaseUploadReservation(attemptId);
-          } else if (error instanceof StoragePoolError && error.pendingKey !== undefined) {
-            try { ctx.poolStore.keepPendingUpload(attemptId, error.pendingKey); } catch { /* Preserve reservation. */ }
-          } else {
-            try { ctx.poolStore.keepPendingUpload(attemptId); } catch { /* Preserve reservation. */ }
-          }
-        }
-        if (error instanceof HttpError) throw error;
-        if (error instanceof StoragePoolError) throw poolOperationHttpError(error, "upload");
-        if (error instanceof Error && error.message.includes("额度不足")) throw new HttpError(409, "pool_quota_exceeded", error.message);
-        throw new HttpError(503, "pool_upload_pending", "存储池上传状态待核对，额度预留已保留");
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
-    }
-
-    if (config.assetRoot === undefined) throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to store local originals");
-    let sourceRef: string;
-    try {
-      // The digest goes into the path, so the file lands under a name that is
-      // the picture's own identity rather than a fresh UUID: a second copy of
-      // these bytes cannot be written under a different name later on.
-      sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format, contentHash.value, purpose === "avatar" ? "avatars" : undefined);
-    } catch {
-      throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
-    }
-    const uploadRef = coreValidated("storageRefs", () => {
-      const candidate: StorageReference = { sourceId: "local", sourceRef, mediaType, contentHash };
-      assertValidStorageReference(candidate, "storageRefs[0]");
-      return candidate;
-    });
-    // One dropped photo is one photo asset. The record links to it when the
-    // entry is saved; until then it is an unreferenced upload that
-    // DELETE /api/assets/:id still accepts.
-    const built = buildAsset(
-      { kind: isPhoto ? "photo" : "file", mediaType, sizeBytes: bytes.length, ...(originalName === undefined ? {} : { originalName }) },
-      `asset_${randomUUID()}`,
-      [uploadRef],
-    );
-    const asset: Asset = { ...built, ...(purpose === "avatar" ? { purpose: "avatar" as const } : {}), ...(photoMetadata === undefined ? {} : { photoMetadata }) };
-    repository.insertAsset(asset);
-    if (purpose === "avatar") await ctx.thumbnails.ensure(uploadRef, resolveAssetOriginal(config, repository, asset.id).file, 160).catch(() => { /* Rebuilt on the next image read. */ });
-    ctx.poolTransition?.wake();
+    const asset = await storeAssetBytes(ctx, bytes, mediaType, { ...(purpose === "avatar" ? { purpose } : {}), originalName: uploadOriginalName(url.searchParams.get("name")), material: pathname === "/api/assets/materials" });
     setJson(res, 201, asset);
     return true;
   }

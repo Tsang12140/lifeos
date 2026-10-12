@@ -7,9 +7,17 @@ import { join, resolve, sep } from "node:path";
 import sharp from "sharp";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
+import { placePhotoTransport, placePhotoUrl, downloadPlacePhoto } from "../src/place-photo.js";
+import dns from "node:dns/promises";
+import https from "node:https";
+import { PassThrough } from "node:stream";
 import { normalisePoi, requestPlaceSearch } from "../src/routes-places.js";
 
 test("place search uses the server key independently of IP, saves reusable details and protects place photos", async t => {
+  const transport = placePhotoTransport.download;
+  let photoCalls = 0, failPhoto = false;
+  placePhotoTransport.download = async () => { photoCalls++; if (failPhoto) throw Error("fixture"); return { bytes: await sharp({ create: { width: 300, height: 200, channels: 3, background: "#607060" } }).png().toBuffer(), mediaType: "image/png" }; };
+  t.after(() => { placePhotoTransport.download = transport; });
   const root = mkdtempSync(join(tmpdir(), "lifeos-places-"));
   const original = globalThis.fetch;
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_AMAP_API_KEY: "server-only-poi-key" });
@@ -42,9 +50,21 @@ test("place search uses the server key independently of IP, saves reusable detai
   assert.equal(JSON.stringify(result.body).includes("server-only-poi-key"), false);
   const saved = await call("/api/entities", { type: "place", ...result.body.items[0] });
   assert.equal(saved.status, 201); const id = saved.body.id;
+  assert.ok(saved.body.avatarAssetId, "selected provider photo is stored as a managed asset");
+  const storedImage = await original(base + `/api/assets/${saved.body.avatarAssetId}/thumbnail?w=160`);
+  assert.equal(storedImage.status, 200);
+  const metadata = await sharp(Buffer.from(await storedImage.arrayBuffer())).metadata();
+  assert.equal(metadata.width, 160); assert.equal(metadata.height, 160); assert.equal(metadata.format, "webp");
+  assert.ok(app.repository.referencedAssetIds().has(saved.body.avatarAssetId));
+  assert.equal((await call(`/api/assets/${saved.body.avatarAssetId}`, undefined, "DELETE")).status, 409);
+  assert.equal((await call(`/api/entities/${id}/photo/import`, {})).body.saved, true);
+  assert.equal(photoCalls, 1, "already copied photos are never downloaded again");
   assert.equal((await call("/api/entities", { type: "place", ...result.body.items[0] })).body.id, id);
   assert.equal((await call("/api/entities?type=place")).body.items.length, 1);
   assert.equal(calls, 1, "saving and reusing do not call the provider");
+  assert.equal(photoCalls, 1);
+  await call(`/api/entities/${id}`); await call("/api/entities?type=place");
+  assert.equal(photoCalls, 1, "reads never import or call a provider");
   assert.equal((await call(`/api/entities/${id}`, { role: "深夜食堂", phone: "13800138000" }, "PATCH")).body.role, "深夜食堂");
   for (const fields of [{ longitude: 999, latitude: 1 }, { latitude: null }, { phone: "a".repeat(201) }, { photoUrl: "javascript:alert(1)" }, { role: " " }]) assert.equal((await call(`/api/entities/${id}`, fields, "PATCH")).status, 400);
   assert.equal((await call("/api/entities", { type: "person", name: "错误资料", phone: "123" })).status, 400);
@@ -68,6 +88,28 @@ test("place search uses the server key independently of IP, saves reusable detai
   const cities = (await call("/api/places/cities")).body;
   assert.equal(cities.frequent[0], "广州市"); assert.ok(cities.recent.includes("上海市"));
   assert.ok(!cities.frequent.includes("北京市") && !cities.frequent.includes("深圳市"));
+  failPhoto = true;
+  const missing = await call("/api/entities", { type: "place", name: "图片失效的店", amapId: "BFAIL01", photoUrl: "https://aos-comment.amap.com/missing.jpg" });
+  assert.equal(missing.status, 201); assert.equal(missing.body.avatarAssetId, undefined);
+  const failureId = missing.body.id;
+  assert.equal((await call(`/api/entities/${failureId}/photo/import`, {})).body.saved, false);
+  failPhoto = false;
+  const copied = (await call(`/api/entities/${failureId}/photo/import`, {})).body;
+  assert.equal(copied.saved, true); assert.equal(copied.entity.avatarAssetId, saved.body.avatarAssetId, "identical photo bytes reuse managed asset");
+  const beforeUnsafe = photoCalls;
+  const unsafe = await call("/api/entities", { type: "place", name: "不可信图片", amapId: "BFAIL02", photoUrl: "https://127.0.0.1/private" });
+  assert.equal(unsafe.status, 201); assert.equal(unsafe.body.avatarAssetId, undefined); assert.equal(photoCalls, beforeUnsafe);
+  // A user removing or replacing a photo during a download must win.
+  await call(`/api/entities/${failureId}`, { avatarAssetId: null }, "PATCH");
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const entered = new Promise<void>(done => { started = done; });
+  placePhotoTransport.download = async () => { started(); await gate; return { bytes: image, mediaType: "image/png" }; };
+  const inFlight = call(`/api/entities/${failureId}/photo/import`, {});
+  await entered;
+  await call(`/api/entities/${failureId}`, { photoUrl: null }, "PATCH");
+  release(); await inFlight;
+  assert.equal((await call(`/api/entities/${failureId}`)).body.avatarAssetId, undefined, "concurrent removal is not overwritten");
   providerError = true;
   const failed = await call("/api/places/search", { query: "张三牛肉面", city: "佛山" });
   assert.equal(failed.status, 502); assert.ok(JSON.stringify(failed.body).includes("10003")); assert.ok(!JSON.stringify(failed.body).includes("sensitive-key"));
@@ -128,4 +170,34 @@ test("place transport recovers once from a reset without retrying provider error
   await assert.rejects(requestPlaceSearch(url));
   assert.equal(calls, 1, "an expired deadline cannot launch another request");
   assert.ok(logs.every(line => !line.includes("secret-not-for-logs") && !line.includes("https://")), "logs omit provider URL, key and raw error messages");
+});
+
+
+test("place photo URL rejects arbitrary origins and private DNS before any request", async t => {
+  for (const url of ["http://store.is.autonavi.com/a", "https://store.is.autonavi.com.evil.test/a", "https://user:pass@store.is.autonavi.com/a", "https://aos-comment.amap.com:444/a", "https://localhost/a", "https://169.254.169.254/latest"]) assert.throws(() => placePhotoUrl(url));
+  assert.equal(placePhotoUrl("https://aos-comment.amap.com/a.jpg").hostname, "aos-comment.amap.com");
+  const lookup = dns.lookup;
+  t.after(() => { dns.lookup = lookup; });
+  dns.lookup = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as typeof dns.lookup;
+  await assert.rejects(downloadPlacePhoto("https://store.is.autonavi.com/a"), /private_photo_address/);
+});
+
+test("place photo transport pins public DNS and rejects redirects, oversized bodies and non-images", async t => {
+  const lookup = dns.lookup, get = https.get;
+  t.after(() => { dns.lookup = lookup; https.get = get; });
+  dns.lookup = (async () => [{ address: "8.8.8.8", family: 4 }]) as unknown as typeof dns.lookup;
+  let status = 200, type = "image/png", body = Buffer.from("image"), declared: string | undefined;
+  https.get = ((_url: unknown, options: any, callback: (response: any) => void) => {
+    assert.equal(options.agent, false);
+    options.lookup("store.is.autonavi.com", {}, (error: unknown, address: string, family: number) => { assert.equal(error, null); assert.equal(address, "8.8.8.8"); assert.equal(family, 4); });
+    const request = new PassThrough();
+    const response = Object.assign(new PassThrough(), { statusCode: status, headers: { "content-type": type, ...(declared ? { "content-length": declared } : {}) } });
+    queueMicrotask(() => { callback(response); response.end(body); });
+    return request;
+  }) as unknown as typeof https.get;
+  assert.equal((await downloadPlacePhoto("https://store.is.autonavi.com/a")).bytes.toString(), "image");
+  status = 302; await assert.rejects(downloadPlacePhoto("https://store.is.autonavi.com/a"), /photo_http_failed/);
+  status = 200; type = "text/html"; await assert.rejects(downloadPlacePhoto("https://store.is.autonavi.com/a"), /photo_type_invalid/);
+  type = "image/png"; declared = "9999999"; await assert.rejects(downloadPlacePhoto("https://store.is.autonavi.com/a"), /photo_too_large/);
+  declared = undefined; body = Buffer.alloc(2 * 1024 * 1024 + 1); await assert.rejects(downloadPlacePhoto("https://store.is.autonavi.com/a"), /photo_too_large/);
 });

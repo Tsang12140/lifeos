@@ -46,6 +46,7 @@ import {
 import { readRuntimeMovieConfig } from "./movie-config.js";
 import { MovieModuleError } from "./movie.js";
 import { canonicalPersonName } from "@lifeos/core";
+import { ensurePlacePhoto } from "./place-photo.js";
 import type { RouteContext, RouteHandler } from "./route-context.js";
 
 function avatarField(ctx: RouteContext, type: EntityKind, value: unknown): string | null | undefined {
@@ -138,10 +139,19 @@ export const handleEntitiesRoutes: RouteHandler = async (
     coreValidated("entity", () => assertValidEntity(entity));
     if (entity.type === "place" && entity.amapId) {
       const existing = repository.listEntities({ type: "place" }).find(item => item.type === "place" && item.amapId === entity.amapId);
-      if (existing) { setJson(res, 200, existing); return true; }
+      if (existing) { setJson(res, 200, await ensurePlacePhoto(ctx, existing.id)); return true; }
     }
     repository.insertEntity(entity);
-    setJson(res, 201, entity);
+    setJson(res, 201, entity.type === "place" ? await ensurePlacePhoto(ctx, entity.id) : entity);
+    return true;
+  }
+  const photoMatch = /^\/api\/entities\/([^/]+)\/photo\/import$/.exec(pathname);
+  if (photoMatch && req.method === "POST") {
+    const id = decodeSegment(photoMatch[1]!);
+    const place = repository.findEntityById(id);
+    if (!place || place.type !== "place") throw new HttpError(404, "not_found", "地点不存在");
+    const entity = await ensurePlacePhoto(ctx, id);
+    setJson(res, 200, { entity, saved: entity.type === "place" && Boolean(entity.avatarAssetId) });
     return true;
   }
   const entityMatch = /^\/api\/entities\/([^/]+)$/.exec(pathname);
@@ -194,7 +204,7 @@ export const handleEntitiesRoutes: RouteHandler = async (
     const movieUpdated = withMovieEdits(updated, movieFields);
     if (movieUpdated.type === "place" && movieUpdated.amapId && repository.listEntities({ type: "place" }).some(item => item.type === "place" && item.id !== id && item.amapId === movieUpdated.amapId)) throw new HttpError(409, "place_exists", "这个高德地点已存在，请直接使用已有地点");
     repository.updateEntity(movieUpdated);
-    setJson(res, 200, movieUpdated);
+    setJson(res, 200, movieUpdated.type === "place" && input.photoUrl != null ? await ensurePlacePhoto(ctx, id) : movieUpdated);
     return true;
   }
 

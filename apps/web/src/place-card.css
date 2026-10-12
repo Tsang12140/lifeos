@@ -1,0 +1,22 @@
+.record-place-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 8px; margin-top: 14px; }
+.record-place-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.record-place-card:hover { border-color: var(--line-strong); }
+.record-place-card:disabled { opacity: .6; cursor: default; }
+.record-place-photo { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; border-radius: 8px; overflow: hidden; background: var(--chip-bg, #eeede8); color: var(--muted); }
+.record-place-photo img { width: 100%; height: 100%; object-fit: cover; }
+.record-place-copy { min-width: 0; display: grid; gap: 4px; }
+.record-place-copy strong, .record-place-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.record-place-copy strong { font-size: 14px; font-weight: 600; }
+.record-place-copy small { font-size: 12px; color: var(--muted); }
+.place-card-dialog { width: min(540px, calc(100vw - 24px)); }
+.place-card-heading { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.place-card-heading h2 { font-size: 18px; }
+.place-card-heading small, .place-card-field > small, .place-card-credit { color: var(--muted); }
+.place-card-body { padding: 20px 24px; display: grid; gap: 16px; }
+.place-card-field { display: grid; gap: 6px; }
+.place-card-field p, .place-photo-notice { margin: 0; overflow-wrap: anywhere; }
+.place-card-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 24px; }
+.place-card-actions > :is(button, a) { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; min-height: 40px; margin: 0; padding: 0 12px; border-radius: 10px; font: inherit; font-size: 13px; line-height: 20px; text-decoration: none; }
+@media (max-width: 480px) { .place-card-body { padding: 16px; } .place-card-actions { padding: 16px; } .place-card-actions > :is(button, a) { flex: 1 1 calc(50% - 8px); } }
+
+.place-library-name { color: inherit; font: inherit; text-align: left; padding: 0; background: transparent; cursor: pointer; }
