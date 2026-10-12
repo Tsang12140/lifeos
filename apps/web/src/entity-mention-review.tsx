@@ -51,9 +51,10 @@ function Context({ text, group, renderWord }: { text: string; group: MentionCont
     </div>;
 }
 
-export function EntityMentionReview({ text, candidates, decisions, preferredEntity, onConfirm, onClose }: {
+export function EntityMentionReview({ text, candidates, decisions, preferredEntity, wording, onConfirm, onClose }: {
   text: string; candidates: readonly EntityCandidate[]; decisions: readonly TextEntityDecision[];
   preferredEntity?: Entity; onConfirm: (decisions: readonly TextEntityDecision[]) => void; onClose: () => void;
+  wording?: { value: string; onChange: (value: string) => void };
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [choices, setChoices] = useState(() => new Map(candidates.map((candidate) => {
@@ -112,6 +113,7 @@ export function EntityMentionReview({ text, candidates, decisions, preferredEnti
     <div className="dialog-header"><h2 id="mention-review-title">{preferredEntity ? `核对「${preferredEntity.name}」` : "核对标记"}</h2><button className="icon-button compact-icon-button" type="button" aria-label="关闭标记核对" onClick={onClose}><X size={17} aria-hidden="true" /></button></div>
     {candidates.length > 1 ? <div className="mention-review-tools"><span role="status">已选 {selected} / {candidates.length} 处</span><div className="mention-review-actions"><button className="text-button" type="button" onClick={() => select(candidates, true)}>全选</button><button className="text-button" type="button" onClick={() => select(candidates, false)}>全不选</button></div></div> : null}
     <div className="dialog-body mention-review-body">
+      {wording ? <label className="dialog-field place-mention-wording"><span>这次日记里的称呼</span><input type="text" aria-label="这次日记里的称呼" maxLength={100} value={wording.value} onChange={event => wording.onChange(event.target.value)} /><small>搜索词只用来找店。这里可换成你习惯的称呼，确认后只替换这次选中的文字，不改地点全名。</small></label> : null}
       <ol className="mention-review-list">{groups.map((group, groupIndex) => {
         const selectedInGroup = group.candidates.filter((candidate) => Boolean(choices.get(occurrenceKey(candidate)))).length;
         const all = selectedInGroup === group.candidates.length;
@@ -127,7 +129,7 @@ export function EntityMentionReview({ text, candidates, decisions, preferredEnti
       </li>;
       })}</ol>
     </div>
-    <div className="dialog-footer mention-review-actions"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" disabled={candidates.length === 0} onClick={() => {
+    <div className="dialog-footer mention-review-actions"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" disabled={candidates.length === 0 || (wording !== undefined && !wording.value.trim())} onClick={() => {
       const changed = candidates.map((candidate): TextEntityDecision => { const id = choices.get(occurrenceKey(candidate)) || null; const entity = candidate.entities.find((item) => item.id === id) ?? candidate.entities[0]!; return { start: candidate.start, end: candidate.end, text: candidate.text, entityId: id, entityType: entity.type as "person" | "place" }; });
       const untouched = decisions.filter((decision) => !candidates.some((candidate) => candidate.start < decision.end && decision.start < candidate.end));
       onConfirm([...untouched, ...changed].sort((a, b) => a.start - b.start));

@@ -124,7 +124,8 @@ body {
 .asset-preview,
 .assistant-history-dialog,
 .place-card-dialog,
-.place-map-dialog {
+.place-map-dialog,
+.place-map-view-dialog {
   -webkit-user-select: none;
   user-select: none;
 }

@@ -12,6 +12,45 @@ import dns from "node:dns/promises";
 import https from "node:https";
 import { PassThrough } from "node:stream";
 import { normalisePoi, requestPlaceSearch } from "../src/routes-places.js";
+import { fetchStaticMap } from "../src/place-static-map.js";
+
+test("saved-place maps hide keys, use stored markers, merge concurrent loads and reject invalid requests", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-map-")), original = globalThis.fetch;
+  const { server } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_AMAP_API_KEY: "private-map-key" }));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { globalThis.fetch = original; server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  let calls = 0, broken = false;
+  const png = await sharp({ create: { width: 160, height: 160, channels: 3, background: "#aabbcc" } }).png().toBuffer();
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input)); if (url.hostname !== "restapi.amap.com") return original(input, init);
+    calls++; assert.equal(url.pathname, "/v3/staticmap"); assert.equal(url.searchParams.get("key"), "private-map-key");
+    assert.equal(url.searchParams.get("markers"), "mid,0xE45454,:113.240000,23.120000");
+    await new Promise(done => setTimeout(done, 30));
+    return broken ? Response.json({ status: "0", info: "private-map-key" }) : new Response(png, { headers: { "content-type": "image/png" } });
+  };
+  const saved = await (await original(base + "/api/entities", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "place", name: "地图测试店", longitude: 113.24, latitude: 23.12 }) })).json() as { id: string };
+  assert.equal(calls, 0, "saving a place never generates a map");
+  const path = base + `/api/places/${saved.id}/map?width=160&height=160`;
+  const responses = await Promise.all([original(path), original(path)]);
+  for (const response of responses) { assert.equal(response.status, 200); assert.equal(response.headers.get("content-type"), "image/png"); assert.equal(response.headers.get("cache-control"), "private, no-cache"); assert.deepEqual(Buffer.from(await response.arrayBuffer()), png); assert.ok(!JSON.stringify([...response.headers]).includes("private-map-key")); }
+  assert.equal(calls, 1); await original(path); assert.equal(calls, 1, "repeat image uses bounded memory cache");
+  for (const query of ["width=9999", "zoom=18", "zoom=NaN", "longitude=", "latitude=100", "url=https://example.com", "width=150.5"]) assert.equal((await original(base + `/api/places/${saved.id}/map?${query}`)).status, 400);
+  assert.equal(calls, 1, "invalid requests never reach provider");
+  broken = true; const bad = await original(path + "&zoom=15"); assert.equal(bad.status, 502); assert.ok(!(await bad.text()).includes("private-map-key"));
+  broken = false; assert.equal((await original(path + "&zoom=15&retry=1")).status, 200); assert.equal(calls, 3, "failed response is not cached");
+  assert.equal((await original(base + "/api/places/missing/map")).status, 404);
+});
+
+test("map transport rejects redirects, disguised HTML and unbounded images", async t => {
+  const original = globalThis.fetch; t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (_input, init) => { assert.equal(init?.redirect, "error"); return new Response("<html>bad</html>", { headers: { "content-type": "image/png" } }); };
+  await assert.rejects(fetchStaticMap(new URL("https://restapi.amap.com/v3/staticmap")), /地图暂时/);
+  globalThis.fetch = async () => new Response(Buffer.alloc(1024 * 1024 + 1), { headers: { "content-type": "image/png" } });
+  await assert.rejects(fetchStaticMap(new URL("https://restapi.amap.com/v3/staticmap")), /地图暂时/);
+  globalThis.fetch = async () => new Response("", { status: 302, headers: { "content-type": "image/png" } });
+  await assert.rejects(fetchStaticMap(new URL("https://restapi.amap.com/v3/staticmap")), /地图暂时/);
+});
 
 test("place search uses the server key independently of IP, saves reusable details and protects place photos", async t => {
   const transport = placePhotoTransport.download;

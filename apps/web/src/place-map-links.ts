@@ -13,8 +13,12 @@ export function placeMapLinks(place: MapPlace, platform: MapPlatform) {
   const baiduFields: Record<string, string> = hasPoint ? { location: `${place.latitude},${place.longitude}`, title: place.name, content: place.address || place.name, coord_type: "gcj02" } : { address };
   const baiduPath = hasPoint ? "marker" : "geocoder";
   const baiduWeb = link(`https://api.map.baidu.com/${baiduPath}`, { ...baiduFields, output: "html", src: "webapp.lifeos.web" });
+  const amapApp = hasPoint ? link(`${platform === "ios" ? "iosamap" : "androidamap"}://viewMap`, { sourceApplication: "LifeOS", poiname: place.name, lat: String(place.latitude), lon: String(place.longitude), dev: "0" }) : link(`${platform === "ios" ? "iosamap" : "androidamap"}://poi`, { sourceApplication: "LifeOS", [platform === "ios" ? "name" : "keywords"]: address, dev: "0" });
+  const appleQuery = [place.city, place.address, place.name].filter(Boolean).join(" ");
   return [
-    { id: "amap", name: "高德地图", href: link(amapBase, { ...amap, callnative: platform === "desktop" ? "0" : "1" }), web: link(amapBase, { ...amap, callnative: "0" }) },
-    { id: "baidu", name: "百度地图", href: platform === "desktop" ? baiduWeb : link(`${platform === "ios" ? "baidumap" : "bdapp"}://map/${baiduPath}`, { ...baiduFields, src: `${platform === "ios" ? "ios" : "andr"}.lifeos.web` }), web: baiduWeb },
+    { id: "amap", name: "高德地图", href: platform === "desktop" ? link(amapBase, { ...amap, callnative: "0" }) : amapApp, web: link(amapBase, { ...amap, callnative: "0" }), install: platform === "ios" ? "https://apps.apple.com/cn/app/id461703208" : "https://mobile.amap.com/" },
+    { id: "baidu", name: "百度地图", href: platform === "desktop" ? baiduWeb : link(`${platform === "ios" ? "baidumap" : "bdapp"}://map/${baiduPath}`, { ...baiduFields, src: `${platform === "ios" ? "ios" : "andr"}.lifeos.web` }), web: baiduWeb, install: platform === "ios" ? "https://apps.apple.com/cn/app/id452186370" : "https://map.baidu.com/zt/client/index/" },
+    // Apple receives an address query: do not pass GCJ-02 coordinates as WGS84.
+    ...(platform === "ios" ? [{ id: "apple", name: "苹果地图", href: link("maps://", { q: appleQuery }), web: link("https://maps.apple.com/", { q: appleQuery }), install: "https://apps.apple.com/cn/app/id915056765" }] : []),
   ];
 }

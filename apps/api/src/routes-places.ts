@@ -7,6 +7,7 @@ import { readBody, requireJsonContentType } from "./http-body.js";
 import { boundedIntegerField, hasOnlyKeys, jsonObject, stringField } from "./field-validate.js";
 import type { RouteHandler } from "./route-context.js";
 import { setTimeout as delay } from "node:timers/promises";
+import { handleStaticMap } from "./place-static-map.js";
 
 export interface PlaceSearchItem extends PlaceDetails { name: string; address?: string; role?: string; distanceMeters?: number }
 const searchCache = new Map<string, { expires: number; value: unknown }>();
@@ -53,7 +54,8 @@ export function normalisePoi(value: unknown): PlaceSearchItem | null {
   return { name, amapId, ...Object.fromEntries(Object.entries(fields).filter(([, val]) => val)), ...(role ? { role } : {}), ...(photoUrl ? { photoUrl } : {}), ...(Number.isFinite(longitude) && Number.isFinite(latitude) && Math.abs(longitude!) <= 180 && Math.abs(latitude!) <= 90 ? { longitude: longitude!, latitude: latitude! } : {}) };
 }
 
-export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname) => {
+export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname, url) => {
+  if (await handleStaticMap(ctx, req, res, pathname, url)) return true;
   if (pathname === "/api/places/cities" && req.method === "GET") {
     const places = new Map(ctx.repository.listEntities({ type: "place" }).filter((p): p is Place => p.type === "place").map(p => [p.id, p]));
     const names = [...new Set(Object.values(PLACE_CITY_CATALOG).flat())];

@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { MapPin, Phone, X } from "lucide-react";
 import { PlaceMapButton } from "./place-map";
+import { PlaceMiniMap } from "./place-map-preview";
 import type { Entity, Place } from "@lifeos/core";
 import { apiRequest } from "./api";
 import { ContactAvatar, entityPhotoSrc, EntityPhotoScopeContext } from "./contact-avatar";
@@ -45,14 +46,14 @@ export function PlaceCardDialog({ entity, scope, onClose, onEdit, onEditAvatar, 
   };
   return <dialog ref={dialog} className="modal-dialog place-card-dialog" aria-labelledby="place-card-title" onCancel={event => { event.preventDefault(); close(); }} onClose={close}>
     <div className="dialog-header"><ContactAvatar entity={entity} scope={scope} onEdit={value => { if (!lock.current) onEditAvatar(value); }} /><div className="place-card-heading"><h2 id="place-card-title">{entity.name}</h2>{entity.role ? <small>{placeRoleLabel(entity.role)}</small> : null}</div><button type="button" className="icon-button compact-icon-button" aria-label="关闭地点详情" disabled={busy} onClick={close}><X size={17} aria-hidden="true" /></button></div>
-    <div className="place-card-body">
+    <div className={`place-card-body${Number.isFinite(entity.longitude) && Number.isFinite(entity.latitude) ? " has-map" : ""}`}><div className="place-card-details">
       <div className="place-card-field"><small>地址</small><p className="place-detail-copy">{entity.address || "尚未填写地址"}</p>{entity.city || entity.district ? <small>{[entity.province, entity.city, entity.district].filter(Boolean).join(" ")}</small> : null}</div>
       {entity.phone ? <div className="place-card-field"><small>电话</small><p className="place-detail-copy place-detail-phone">{entity.phone}</p></div> : null}
       {entity.description ? <div className="place-card-field"><small>备注</small><p className="place-detail-copy">{entity.description}</p></div> : null}
       {entity.amapId ? <small className="place-card-credit">地点资料来自高德地图</small> : null}
       {entity.amapId && entity.photoUrl && !entity.avatarAssetId ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void savePhoto()}>{busy ? "保存照片中…" : "保存地点照片"}</button> : null}
       {notice ? <p className="place-photo-notice" role="status">{notice}</p> : null}
-    </div>
+    </div><PlaceMiniMap key={entity.id} place={entity} /></div>
     <div className="dialog-footer place-card-actions">
       <PlaceMapButton place={entity} disabled={busy} />
       {phone ? <a className="secondary-button" href={`tel:${phone}`}><Phone size={15} aria-hidden="true" /><span>打电话</span></a> : null}
