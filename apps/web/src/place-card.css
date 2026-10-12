@@ -24,11 +24,14 @@
 .entity-library-phone { justify-self: start; overflow-wrap: anywhere; }
 .entity-library-phone:is(:hover, :visited, :active) { color: var(--muted); text-decoration: none; }
 .entity-library-map { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; color: var(--ink-soft); background: transparent; font: inherit; cursor: pointer; }
-.place-map-dialog { width: min(380px, calc(100vw - 24px)); }
+.modal-dialog.place-map-dialog { width: min(380px, calc(100vw - 24px)); }
+.modal-dialog.place-map-dialog[data-platform="desktop"] { width: min(320px, calc(100vw - 24px)); }
+.place-map-dialog .dialog-header { align-items: center; padding: 12px 16px; }
 .place-map-dialog .dialog-header h2 { font-size: 16px; }
-.place-map-body { display: grid; gap: 12px; padding: 16px 24px 24px; }
+.place-map-body { display: grid; gap: 12px; padding: 16px; }
+.place-map-dialog[data-platform="desktop"] .place-map-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.place-map-dialog[data-platform="desktop"] .place-map-name { grid-column: 1 / -1; }
 .place-map-name { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .place-map-body > small { color: var(--muted); font-size: 12px; line-height: 1.5; }
-.place-map-row { display: flex; align-items: center; gap: 8px; }
-.place-map-row > a { display: inline-flex; flex: 1; align-items: center; justify-content: center; box-sizing: border-box; height: 40px; min-height: 40px; margin: 0; padding: 0 12px; border-radius: 10px; font-size: 13px; font-weight: 500; line-height: 20px; text-decoration: none; }
-@media (max-width: 480px) { .place-map-body { padding: 16px; } }
+.place-map-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.place-map-dialog .place-map-row > a { display: inline-flex; flex: 1; align-items: center; justify-content: center; box-sizing: border-box; height: 40px; min-height: 40px; margin: 0; padding: 0 12px; border-radius: 10px; font-size: 13px; font-weight: 500; line-height: 20px; text-decoration: none; color: var(--ink-soft); background: var(--surface-soft); border-color: var(--line); }
