@@ -150,11 +150,28 @@ export interface PlaceDetails {
 
 export interface Place extends EntityBase, PlaceDetails {
   readonly type: "place";
+  /** Absent on legacy imports: do not invent a historical first association. */
+  readonly collectionHistory?: {
+    readonly trackingSince: InstantTime;
+    readonly firstJournal?: { readonly recordId: RecordId; readonly linkedAt: InstantTime };
+  };
   readonly role?: PlaceRole;
   readonly period?: PlacePeriod;
   /** Optional detailed street address; never required for a place. */
   readonly address?: string;
   readonly avatarAssetId?: AssetId;
+}
+
+export interface PlaceCollectionArchive {
+  readonly collectedAt?: InstantTime;
+  readonly firstJournalStatus: "unrecorded" | "none" | "available" | "private" | "unavailable";
+  readonly firstJournal?: {
+    readonly id: RecordId;
+    readonly linkedAt: InstantTime;
+    readonly createdAt: InstantTime;
+    readonly occurredAt?: LifeTime;
+    readonly content: string;
+  };
 }
 
 export interface Topic extends EntityBase {
@@ -947,6 +964,16 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
     });
   }
   optionalStringValue(entity.description, "entity.description");
+  if (entity.collectionHistory !== undefined) {
+    if (entity.type !== "place") throw new Error("collectionHistory is only allowed on a place");
+    const history = objectValue(entity.collectionHistory, "entity.collectionHistory");
+    assertValidInstantTime(history.trackingSince, "collectionHistory.trackingSince");
+    if (history.firstJournal !== undefined) {
+      const first = objectValue(history.firstJournal, "collectionHistory.firstJournal");
+      nonEmptyStringValue(first.recordId, "collectionHistory.firstJournal.recordId");
+      assertValidInstantTime(first.linkedAt, "collectionHistory.firstJournal.linkedAt");
+    }
+  }
   if (entity.createdAt !== undefined) {
     assertValidInstantTime(entity.createdAt, "entity.createdAt");
   }

@@ -126,6 +126,7 @@ export const handleEntitiesRoutes: RouteHandler = async (
       id,
       name,
       createdAt: nowInstant(),
+      ...(type === "place" ? { collectionHistory: { trackingSince: nowInstant() } } : {}),
       ...(isImportant === undefined ? {} : { isImportant }),
       ...(avatarAssetId == null ? {} : { avatarAssetId }),
       ...(aliases === undefined ? {} : { aliases }),
@@ -144,6 +145,13 @@ export const handleEntitiesRoutes: RouteHandler = async (
     repository.insertEntity(entity);
     setJson(res, 201, entity.type === "place" ? await ensurePlacePhoto(ctx, entity.id) : entity);
     return true;
+  }
+  const archiveMatch = /^\/api\/entities\/([^/]+)\/collection$/.exec(pathname);
+  if (archiveMatch && req.method === "GET") {
+    ctx.requireAuth(req);
+    const archive = repository.placeCollectionArchive(decodeSegment(archiveMatch[1]!), url.searchParams.get("includePrivate") === "1");
+    if (!archive) throw new HttpError(404, "not_found", "地点不存在");
+    setJson(res, 200, archive); return true;
   }
   const photoMatch = /^\/api\/entities\/([^/]+)\/photo\/import$/.exec(pathname);
   if (photoMatch && req.method === "POST") {

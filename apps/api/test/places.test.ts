@@ -13,6 +13,111 @@ import https from "node:https";
 import { PassThrough } from "node:stream";
 import { normalisePoi, requestPlaceSearch } from "../src/routes-places.js";
 import { fetchStaticMap } from "../src/place-static-map.js";
+import { SqliteRecordRepository } from "../src/repository.js";
+import { buildRecord } from "../src/record-builders.js";
+import { assistantPlaceContext, assistantSafePlan } from "../src/assistant-place-context.js";
+import { chatBackfill } from "../src/assistant-conversation.js";
+import { storeBackfillDraft, commitBackfill, undoBackfill } from "../src/assistant-backfill.js";
+import { assertValidEntity, createInstant, type Place, type BackfillPlan } from "@lifeos/core";
+
+test("place collection keeps the first saved association across backdating, edits, privacy and deletion", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-place-collection-"));
+  const { server, app } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets") }));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  const call = async (path: string, body?: unknown, method?: string) => {
+    const response = await fetch(base + path, { method: method ?? (body === undefined ? "GET" : "POST"), headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    return { status: response.status, body: response.status === 204 ? null : await response.json() as any, cache: response.headers.get("cache-control") };
+  };
+  const place = (await call("/api/entities", { type: "place", name: "新收录门店" })).body as Place;
+  const url = `/api/entities/${place.id}/collection`, refs = [{ entityType: "place", entityId: place.id }];
+  assert.ok(place.collectionHistory); assert.equal((await call(url)).body.firstJournalStatus, "none");
+  const beforeRead = app.repository.exportData(); await call(url); assert.deepEqual(app.repository.exportData(), beforeRead, "reading never writes inferred provenance");
+  await call("/api/records", { kind: "note", content: "仅笔记不算首次日记", entityRefs: refs });
+  assert.equal((await call(url)).body.firstJournalStatus, "none");
+  const first = (await call("/api/records", { kind: "journal", content: "第一次选用此店", entityRefs: refs, occurredAt: createInstant("2001-02-03T10:20:30+08:00") })).body;
+  const captured = (await call(url)).body;
+  assert.equal(captured.firstJournal.id, first.id); assert.equal(captured.collectedAt.value, place.createdAt!.value);
+  assert.ok(Date.parse(captured.firstJournal.linkedAt.value) >= Date.parse(place.createdAt!.value));
+  assert.notEqual(captured.firstJournal.linkedAt.value, first.occurredAt.value); assert.equal((await call(url)).cache, "no-store");
+  await call("/api/records", { kind: "journal", content: "补写更早的那次", entityRefs: refs, occurredAt: createInstant("1999-01-01T01:00:00+08:00") });
+  assert.deepEqual((await call(url)).body, captured, "an earlier event does not replace the original source");
+  const staleEntity = place;
+  const renamed = await call(`/api/entities/${place.id}`, { name: "门店改名后" }, "PATCH"); assert.equal(renamed.status, 200);
+  app.repository.updateEntity({ ...staleEntity, name: "再次改名" });
+  app.repository.writeEntities([{ ...staleEntity, name: "最终名称" }]);
+  assert.deepEqual((await call(url)).body, captured, "stale entity edits cannot erase first association");
+  assert.equal((await call(`/api/entities/${place.id}`, { collectionHistory: {} }, "PATCH")).status, 400);
+  const imported = new SqliteRecordRepository(":memory:"); imported.importData(app.repository.exportData());
+  assert.deepEqual(imported.placeCollectionArchive(place.id), captured); imported.close();
+  const privateEdit = (await call(`/api/records/${first.id}`, { revision: first.revision, isPrivate: true }, "PATCH")).body;
+  const hidden = (await call(url)).body; assert.equal(hidden.firstJournalStatus, "private"); assert.equal(hidden.firstJournal, undefined);
+  const safe = JSON.stringify(assistantPlaceContext(app.repository)); assert.ok(!safe.includes(first.id)); assert.ok(!safe.includes("第一次选用此店"));
+  const snapshot = app.repository.findEntityById(place.id)!;
+  const oldPlan: BackfillPlan = { explanation: "旧草稿", entries: [], objects: [{ key: "p", selected: true, type: "place", name: snapshot.name, aliases: [], description: "", address: "", evidence: "原话", questions: "", existingId: snapshot.id, existingSnapshot: snapshot }] };
+  assert.ok(!JSON.stringify(assistantSafePlan(oldPlan)).includes(first.id));
+  assert.ok(JSON.stringify(oldPlan).includes(first.id), "sanitizing model copies never rewrites durable review snapshots");
+  assert.equal((await call(url + "?includePrivate=1")).body.firstJournal.content, "第一次选用此店");
+  await call(`/api/records/${first.id}`, { revision: privateEdit.revision }, "DELETE");
+  assert.equal((await call(url)).body.firstJournalStatus, "unavailable"); assert.equal((await call(url)).body.firstJournal, undefined);
+  assert.equal((app.repository.findEntityById(place.id) as Place).collectionHistory!.firstJournal!.recordId, first.id, "deletion retains the source identity");
+  app.repository.insertEntity({ id: "legacy-place", type: "place", name: "旧地点", createdAt: createInstant("2000-01-01T00:00:00Z") });
+  await call("/api/records", { kind: "journal", content: "历史记录无法证明首次来源", entityRefs: [{ entityId: "legacy-place", entityType: "place" }] });
+  assert.equal((await call("/api/entities/legacy-place/collection")).body.firstJournalStatus, "unrecorded");
+  app.repository.insertEntity({ id: "undated-place", type: "place", name: "无历史时间地点" });
+  assert.deepEqual((await call("/api/entities/undated-place/collection")).body, { firstJournalStatus: "unrecorded" });
+  assert.equal((await call("/api/entities/missing/collection")).status, 404);
+});
+
+test("place collection API requires authentication", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-place-auth-"));
+  const { server, app } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_PASSWORD: "test-password" }));
+  app.repository.insertEntity({ id: "private-space-place", type: "place", name: "受保护的地点" });
+  server.listen(0, "127.0.0.1"); await once(server, "listening"); const address = server.address(); assert.ok(address && typeof address !== "string");
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/entities/private-space-place/collection?includePrivate=1`);
+  assert.equal(response.status, 401); assert.ok(!(await response.text()).includes("受保护的地点"));
+});
+
+test("place collection is atomic, persists across reopen and reaches AI beyond recent diary context", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-place-origin-")), path = join(root, "lifeos.sqlite");
+  let repository = new SqliteRecordRepository(path);
+  t.after(() => { repository.close(); rmSync(root, { recursive: true, force: true }); });
+  const place: Place = { id: "origin-place", type: "place", name: "年久的店", createdAt: createInstant("2020-01-01T00:00:00Z"), collectionHistory: { trackingSince: createInstant("2020-01-01T00:00:00Z") } };
+  repository.insertEntity(place);
+  const make = (content: string, linked: boolean) => buildRecord({ kind: "journal", content, occurredAt: createInstant("2020-01-01T01:00:00Z"), entityRefs: linked ? [{ entityType: "place", entityId: place.id }] : [] }, repository);
+  assert.throws(() => repository.atomic(() => { repository.insert(make("整批回滚", true)); throw Error("rollback"); }));
+  assert.equal(repository.placeCollectionArchive(place.id)!.firstJournalStatus, "none");
+  const record = make("失败的乐观锁不应写来源", false); repository.insert(record);
+  assert.equal(repository.update({ ...record, entityRefs: [{ entityType: "place", entityId: place.id }] }, 999), false);
+  assert.equal(repository.placeCollectionArchive(place.id)!.firstJournalStatus, "none");
+  assert.equal(repository.update({ ...record, entityRefs: [{ entityType: "place", entityId: place.id }], body: { ...record.body, original: "最初日记的独特内容" } }, 1), true);
+  repository.close(); repository = new SqliteRecordRepository(path);
+  assert.equal(repository.placeCollectionArchive(place.id)!.firstJournal!.id, record.id);
+  for (let i = 0; i < 103; i++) repository.insert(buildRecord({ kind: "journal", content: `后来第${i}次记录`, occurredAt: createInstant("2026-01-01T00:00:00Z") }, repository));
+  const config = readConfig({ LIFEOS_DATA_DIR: root, LIFEOS_DEEPSEEK_API_KEY: "test-only-key" }), original = globalThis.fetch;
+  let payload: any;
+  globalThis.fetch = async (_input, init) => { payload = JSON.parse(String(init?.body)); return Response.json({ choices: [{ message: { content: JSON.stringify({ action: "reply", reply: "已找到收录档案" }) } }] }); };
+  try { await chatBackfill(config, repository, { message: "年久的店是什么时候首次收录的？" }); } finally { globalThis.fetch = original; }
+  const context = JSON.parse(payload.messages.at(-1).content);
+  assert.ok(!context.existingRecords.some((r: any) => r.id === record.id));
+  assert.equal(context.placeArchives[0].firstJournal.id, record.id); assert.equal(context.placeArchives[0].firstJournal.content, "最初日记的独特内容");
+  assert.ok(payload.messages[0].content.includes("补写早年的日记不会改变首次收录"));
+  assert.throws(() => assertValidEntity({ ...place, collectionHistory: { trackingSince: { kind: "instant", value: "bad" } } }));
+  assert.throws(() => assertValidEntity({ ...place, type: "person" }));
+});
+
+test("assistant-created places capture first journals without breaking commit snapshots and undo", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-place-backfill-")), repository = new SqliteRecordRepository(":memory:");
+  t.after(() => { repository.close(); rmSync(root, { recursive: true, force: true }); });
+  const plan: BackfillPlan = { explanation: "来源测试", objects: [{ key: "p", selected: true, type: "place", name: "辅记地点", aliases: [], description: "", address: "", evidence: "原话", questions: "" }], entries: [{ key: "j", selected: true, kind: "journal", content: "第一次在这里吃饭", date: "2020-01-01", evidence: "原话", questions: "", entityKeys: ["p"], assetIds: [] }] };
+  const draft = await storeBackfillDraft(readConfig({ LIFEOS_DATA_DIR: root }), repository, [{ name: "原话", text: "第一次在这里吃饭" }], plan, "rules");
+  const committed = commitBackfill(repository, draft.id, draft.revision), id = committed.entityIds![0]!;
+  assert.equal(repository.placeCollectionArchive(id)!.firstJournal!.id, committed.recordIds![0]);
+  assert.deepEqual(committed.afterEntities![0], repository.findEntityById(id));
+  assert.equal(undoBackfill(repository, draft.id).status, "undone");
+});
 
 test("saved-place maps hide keys, use stored markers, merge concurrent loads and reject invalid requests", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-map-")), original = globalThis.fetch;

@@ -37,6 +37,14 @@
 .place-map-tools > button { display: inline-flex; align-items: center; justify-content: center; height: 40px; min-height: 40px; padding: 0 12px; margin: 0; border-radius: 10px; font-size: 13px; line-height: 20px; }
 @media(max-width: 480px) { .place-card-body.has-map { grid-template-columns: minmax(0, 1fr); } .place-mini-map { width: 100%; height: 140px; } }
 .place-card-field { display: grid; gap: 6px; }
+.place-collection-archive { grid-column: 1 / -1; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.place-collection-archive summary { cursor: pointer; width: fit-content; max-width: 100%; overflow-wrap: anywhere; padding: 4px 0; }
+.place-collection-body { display: grid; gap: 12px; padding-top: 8px; }
+.place-collection-body p { margin: 0; overflow-wrap: anywhere; }
+.place-collection-body > button { justify-self: start; height: 34px; min-height: 34px; margin: 0; padding: 0 12px; font-size: 12px; line-height: 20px; border-radius: 10px; }
+.place-first-journal-body { display: grid; gap: 4px; padding-top: 8px; }
+.place-archive-value { font-size: 12px; color: var(--ink-soft); }
+.place-archive-journal { white-space: pre-wrap; max-height: 240px; overflow: auto; color: var(--ink-soft); }
 .place-card-field p, .place-photo-notice { margin: 0; overflow-wrap: anywhere; }
 .place-card-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 24px; }
 .place-card-actions > :is(button, a) { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; min-height: 40px; margin: 0; padding: 0 12px; border-radius: 10px; font: inherit; font-size: 13px; line-height: 20px; text-decoration: none; }

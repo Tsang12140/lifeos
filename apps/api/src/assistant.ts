@@ -1,4 +1,5 @@
 import type { ApiConfig } from "./config.js";
+import { assistantPlaceContext, PLACE_ARCHIVE_RULE } from "./assistant-place-context.js";
 import { assertAiCredentialTarget, readRuntimeAiConfig, type RuntimeAiConfig } from "./ai-config.js";
 import { type RecordView, SqliteRecordRepository } from "./repository.js";
 
@@ -49,7 +50,7 @@ function contextFor(repository: SqliteRecordRepository): { readonly text: string
     records,
     taskCount: tasks.length,
     openTaskCount: openTasks.length,
-    text: `非隐私记录总数：${records.length}\n任务总数：${tasks.length}\n未完成任务：${openTasks.length}\n已知关联对象：${entities || "暂无"}\n最近记录（最多 80 条）：\n${recent || "暂无记录"}`,
+    text: `非隐私记录总数：${records.length}\n任务总数：${tasks.length}\n未完成任务：${openTasks.length}\n已知关联对象：${entities || "暂无"}\n${PLACE_ARCHIVE_RULE}\n${JSON.stringify(assistantPlaceContext(repository).placeArchives)}\n最近记录（最多 80 条）：\n${recent || "暂无记录"}`,
   };
 }
 

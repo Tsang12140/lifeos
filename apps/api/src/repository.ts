@@ -28,6 +28,7 @@ import {
   type EntityKind,
   type LifeTime,
   type NoteDetails,
+  type PlaceCollectionArchive,
   type RecordKind,
   type TimelineRecord,
   type UiTurnPlan,
@@ -532,6 +533,12 @@ function assistantChatTurnRow(row: Record<string, unknown>): AssistantChatTurnRo
     batchId: nullableTextColumn(row, "batch_id"),
     batchRevision: row.batch_revision === null ? null : numberColumn(row, "batch_revision"),
   };
+}
+
+function preservePlaceCollection(entity: Entity, stored: Entity | null): Entity {
+  if (entity.type !== "place" || stored?.type !== "place") return entity;
+  const { createdAt: _time, collectionHistory: _history, ...edited } = entity;
+  return { ...edited, ...(stored.createdAt ? { createdAt: stored.createdAt } : {}), ...(stored.collectionHistory ? { collectionHistory: stored.collectionHistory } : {}) };
 }
 
 export class SqliteRecordRepository {
@@ -1728,19 +1735,19 @@ export class SqliteRecordRepository {
   public insert(record: TimelineRecord): void {
     record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
-    this.#db.prepare(`
+    this.#withFirstPlaceJournal(record, () => { this.#db.prepare(`
       INSERT INTO records (
         id, kind, body_json, body_original, body_edited, created_at_json, updated_at_json,
         occurred_at_json, weather_json, entity_refs_json, related_record_ids_json, asset_refs_json,
         ai_derived_json, task_json, note_json, is_private, is_demo, is_backfill, revision, timeline_sort, deleted_at_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
-    `).run(...recordInsertParams(record));
+    `).run(...recordInsertParams(record)); return true; });
   }
 
   public update(record: TimelineRecord, expectedRevision: number): boolean {
     record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
-    const result = this.#db.prepare(`
+    return this.#withFirstPlaceJournal(record, () => { const result = this.#db.prepare(`
       UPDATE records SET
         kind = ?, body_json = ?, body_original = ?, body_edited = ?, created_at_json = ?, updated_at_json = ?,
         occurred_at_json = ?, weather_json = ?, entity_refs_json = ?, related_record_ids_json = ?, asset_refs_json = ?,
@@ -1768,7 +1775,41 @@ export class SqliteRecordRepository {
       record.id,
       expectedRevision,
     );
-    return Number(result.changes) === 1;
+    return Number(result.changes) === 1; });
+  }
+
+  /** Association time is server save time, never the diary's backdated event time. */
+  #withFirstPlaceJournal(record: TimelineRecord, write: () => boolean): boolean {
+    if (record.kind !== "journal") return write();
+    this.#db.exec("SAVEPOINT first_place_journal");
+    try {
+      const saved = write();
+      if (saved) this.#captureFirstPlaceJournal(record);
+      this.#db.exec("RELEASE first_place_journal"); return saved;
+    } catch (error) { this.#db.exec("ROLLBACK TO first_place_journal; RELEASE first_place_journal"); throw error; }
+  }
+
+  #captureFirstPlaceJournal(record: TimelineRecord): void {
+    if (record.kind !== "journal") return;
+    for (const id of new Set(record.entityRefs.filter(ref => ref.entityType === "place").map(ref => ref.entityId))) {
+      const place = this.findEntityById(id);
+      if (place?.type !== "place" || !place.collectionHistory || place.collectionHistory.firstJournal) continue;
+      const value: Entity = { ...place, collectionHistory: { ...place.collectionHistory, firstJournal: { recordId: record.id, linkedAt: { kind: "instant", value: new Date().toISOString() } } } };
+      this.#db.prepare("UPDATE entities SET value_json = ? WHERE id = ?").run(JSON.stringify(value), id);
+    }
+  }
+
+  public placeCollectionArchive(id: string, includePrivate = false): PlaceCollectionArchive | null {
+    const place = this.findEntityById(id);
+    if (place?.type !== "place") return null;
+    const base = { ...(place.createdAt ? { collectedAt: place.createdAt } : {}) };
+    if (!place.collectionHistory) return { ...base, firstJournalStatus: "unrecorded" };
+    const first = place.collectionHistory.firstJournal;
+    if (!first) return { ...base, firstJournalStatus: "none" };
+    const record = this.findById(first.recordId);
+    if (!record || record.kind !== "journal" || !record.entityRefs.some(ref => ref.entityType === "place" && ref.entityId === id)) return { ...base, firstJournalStatus: "unavailable" };
+    if (record.isPrivate && !includePrivate) return { ...base, firstJournalStatus: "private" };
+    return { ...base, firstJournalStatus: "available", firstJournal: { id: record.id, linkedAt: first.linkedAt, createdAt: record.createdAt, ...(record.occurredAt ? { occurredAt: record.occurredAt } : {}), content: record.body.edited ?? record.body.original } };
   }
 
   public softDelete(id: string, expectedRevision: number, deletedAt: string): boolean {
@@ -1906,6 +1947,8 @@ export class SqliteRecordRepository {
   }
 
   public updateEntity(entity: Entity): boolean {
+    const stored = this.findEntityById(entity.id);
+    entity = preservePlaceCollection(entity, stored);
     assertValidEntity(entity);
     if (this.findEntityById(entity.id) === null) return false;
     return this.#withNameHistory(entity, () => {
@@ -1952,7 +1995,9 @@ export class SqliteRecordRepository {
     this.#db.exec("BEGIN IMMEDIATE");
     try {
       const update = this.#db.prepare("UPDATE entities SET value_json = ?, address = ? WHERE id = ?");
-      for (const entity of entities) {
+      for (let entity of entities) {
+        const stored = this.findEntityById(entity.id);
+        entity = preservePlaceCollection(entity, stored);
         const result = update.run(JSON.stringify(entity), entityAddress(entity), entity.id);
         if (Number(result.changes) !== 1) throw new Error(`Entity disappeared during write: ${entity.id}`);
       }
