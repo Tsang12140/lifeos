@@ -158,7 +158,7 @@ export function slashSuggestions(commands: readonly ModuleCommand[], query: stri
 }
 
 /** Record text where `@person` and `#place` render as capsules, markers hidden. */
-export function RecordText({ text, entities, decisions }: { readonly text: string; readonly entities: readonly Entity[]; readonly decisions?: readonly import("@lifeos/core").TextEntityDecision[] }) {
+export function RecordText({ text, entities, decisions, onOpenEntity }: { readonly text: string; readonly entities: readonly Entity[]; readonly decisions?: readonly import("@lifeos/core").TextEntityDecision[]; readonly onOpenEntity?: (entity: Entity) => void }) {
   const mentions = useMemo(() => resolveTextEntityMentions(text, entities, decisions), [text, entities, decisions]);
   if (mentions.length === 0) return <>{text}</>;
   const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
@@ -168,9 +168,9 @@ export function RecordText({ text, entities, decisions }: { readonly text: strin
     if (mention.start > cursor) parts.push(text.slice(cursor, mention.start));
     const entity = entitiesById.get(mention.entityId);
     const PlaceIcon = entity?.type === "place" && entity.role === "home" ? House : entity?.type === "place" && entity.role === "work" ? BriefcaseBusiness : MapPin;
-    parts.push(<span className={`mention-chip ${mention.entityType === "place" ? "is-place" : ""}`} title={entity ? `当前名称：${entity.name}\n本文称呼：${mention.matched}` : undefined} key={`${mention.entityId}-${mention.start}-${index}`}>
-      {mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : null}{mention.matched}
-    </span>);
+    const content = <>{mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : null}{mention.matched}</>;
+    const props = { className: `mention-chip ${mention.entityType === "place" ? "is-place" : ""}`, title: entity ? `当前名称：${entity.name}\n本文称呼：${mention.matched}` : undefined };
+    parts.push(entity && onOpenEntity ? <button key={`${mention.entityId}-${mention.start}-${index}`} {...props} type="button" onClick={() => onOpenEntity(entity)}>{content}</button> : <span key={`${mention.entityId}-${mention.start}-${index}`} {...props}>{content}</span>);
     cursor = mention.end;
   });
   if (cursor < text.length) parts.push(text.slice(cursor));

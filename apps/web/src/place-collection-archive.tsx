@@ -5,7 +5,7 @@ import { apiRequest } from "./api";
 const clock = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
 const statusText = { unrecorded: "历史地点未记录首次关联日记，无法确认来源", none: "尚未关联日记", private: "首次关联日记为隐私记录，开启隐私显示后可查看", unavailable: "首次关联日记已删除或解除关联" };
 
-export function PlaceCollectionArchive({ id, includePrivate = false }: { id: string; includePrivate?: boolean }) {
+export function PlaceCollectionArchive({ id, includePrivate = false, onViewRecord }: { id: string; includePrivate?: boolean; onViewRecord: (id: string) => void }) {
   const [open, setOpen] = useState(false), [retry, setRetry] = useState(0);
   const [archive, setArchive] = useState<Archive | null>(null), [error, setError] = useState(false);
   useEffect(() => {
@@ -23,7 +23,7 @@ export function PlaceCollectionArchive({ id, includePrivate = false }: { id: str
         {first ? <details className="place-first-journal"><summary>首次关联日记</summary><div className="place-first-journal-body">
           <small>首次关联时间（北京时间）</small><time className="place-archive-value" dateTime={first.linkedAt.value}>{clock.format(new Date(first.linkedAt.value))}</time>
           <small>日记日期</small><time className="place-archive-value" dateTime={(first.occurredAt ?? first.createdAt).value}>{first.occurredAt && first.occurredAt.kind !== "instant" ? first.occurredAt.value : clock.format(new Date((first.occurredAt ?? first.createdAt).value))}</time>
-          <p className="place-archive-journal">{first.content}</p>
+          <button type="button" className="secondary-button" onClick={() => onViewRecord(first.id)}>查看首次日记</button>
         </div></details> : <p>{statusText[archive.firstJournalStatus as keyof typeof statusText] ?? "首次关联日记暂不可用"}</p>}
       </>}
     </div> : null}

@@ -271,7 +271,7 @@ export function NotesLibrary({ records, loading, error, entities, onRetry, onCre
     {!loading && !error && items.length > 0 ? <div className="notes-grid">{items.map((record) => {
       const format = noteFormatOf(record);
       const details = record.kind === "note" ? record.note : undefined;
-      return <article className="note-card" data-note-card data-note-format={format} key={record.id}>
+      return <article className="note-card" data-note-card data-record-id={record.id} data-note-format={format} key={record.id}>
         <button className="note-card-main" type="button" onClick={() => { setCreateOpen(false); onEdit(record); }}>
           <div className="note-card-meta"><span className="note-format-label">{NOTE_FORMATS.find((item) => item.value === format)?.label ?? "碎片"}</span><time data-note-updated>{noteUpdatedAt(record)}</time></div>
           {format === "article" ? <h2 data-note-title>{details?.title}</h2> : null}

@@ -1,0 +1,9 @@
+.record-peek-dialog .dialog-header h2 { min-width: 0; overflow-wrap: anywhere; }
+.record-peek-dialog .dialog-header > button { flex: 0 0 auto; }
+.record-peek-count { margin: 0 0 16px; color: var(--muted); font-size: .78rem; }
+.record-peek-dialog .timeline-group-title { margin-left: 111px; }
+.record-peek-entry + .record-peek-entry { margin-top: 20px; }
+.record-peek-jump { display: flex; gap: 8px; padding: 10px 0 0 111px; }
+.record-peek-jump button { height: 34px; min-height: 34px; padding: 0 12px; font-size: .75rem; line-height: 1.2; }
+.record-peek-dialog .calendar-day-dialog-footer { flex-wrap: wrap; }
+@media(max-width: 700px) { .record-peek-jump { padding-left: 30px; } .record-peek-dialog .timeline-group-title { margin-left: 30px; } }

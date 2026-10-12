@@ -84,7 +84,7 @@ interface AssistantBackfillProps {
   readonly scope: string;
   readonly configured: boolean;
   readonly onChanged: () => void;
-  readonly onViewRecords: () => void;
+  readonly onViewRecords: (ids: readonly string[]) => void;
   readonly onOpenEntity: (entity: Entity) => void;
   readonly onUiPlan: (plan: UiTurnPlan) => void;
   readonly onUiCommand: (command: UiCommand) => void;
@@ -530,7 +530,7 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
       </> : null}
       {draft ? <div className="backfill-operation-group"><button className="secondary-button" type="button" disabled={disabled || !dirty} onClick={() => void execute("正在保存", async () => { await save(); setNotice("修改已保存，尚未写入记录。"); })}>保存草稿</button></div> : null}
       </details> : null}
-      {showBatch && Boolean(batch?.recordIds?.length) && batch?.status !== "undone" ? <div className="backfill-operation-group backfill-result-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={onViewRecords}>查看辅记</button></div> : null}
+      {showBatch && Boolean(batch?.recordIds?.length) && batch?.status !== "undone" ? <div className="backfill-operation-group backfill-result-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => onViewRecords(batch?.recordIds ?? [])}>查看辅记</button></div> : null}
       </div>
     </div>
     <div className={"backfill-workspace-footer "+(draggingFiles ? "is-dragging" : "")} {...photoHandlers}>

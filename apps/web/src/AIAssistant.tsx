@@ -5,7 +5,7 @@ import { History, MoreHorizontal, Settings2, X } from "lucide-react";
 import { AssistantBackfill, type AssistantBackfillHandle } from "./assistant-backfill";
 import type { AiStatus } from "./api";
 
-interface AIAssistantProps { readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">; readonly status: AiStatus; readonly onOpenSettings: () => void; readonly visible?: boolean; readonly desktopDocked?: boolean; readonly scope: string; readonly onOpenEntity: (entity: Entity) => void; readonly onChanged: () => void; readonly onViewRecords: () => void; readonly onUiPlan: (plan: UiTurnPlan) => void; readonly onUiCommand: (command: UiCommand) => void; readonly privacyRequest: { readonly reason: string } | null; readonly onPrivacyDecision: (decision: "once" | "session" | "never") => void; readonly privacyVisible?: boolean; }
+interface AIAssistantProps { readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">; readonly status: AiStatus; readonly onOpenSettings: () => void; readonly visible?: boolean; readonly desktopDocked?: boolean; readonly scope: string; readonly onOpenEntity: (entity: Entity) => void; readonly onChanged: () => void; readonly onViewRecords: (ids: readonly string[]) => void; readonly onUiPlan: (plan: UiTurnPlan) => void; readonly onUiCommand: (command: UiCommand) => void; readonly privacyRequest: { readonly reason: string } | null; readonly onPrivacyDecision: (decision: "once" | "session" | "never") => void; readonly privacyVisible?: boolean; }
 interface LauncherPosition { readonly x: number; readonly y: number; }
 const LAUNCHER_POSITION_KEY = "lifeos.ai.launcher-position.v1";
 const LAUNCHER_SIZE = 56;

@@ -26,7 +26,7 @@ function PlaceRecordCard({ place, scope, disabled, onOpen }: { place: Place; sco
   </button>;
 }
 
-export function PlaceCardDialog({ entity, scope, includePrivate = false, onClose, onEdit, onEditAvatar, onViewRecords, onSaved }: { entity: Place; scope: string; includePrivate?: boolean; onClose: () => void; onEdit: (entity: Entity) => void; onEditAvatar: (entity: Entity) => void; onViewRecords: (entity: Entity) => void; onSaved: (entity: Entity) => void }) {
+export function PlaceCardDialog({ entity, scope, includePrivate = false, onClose, onEdit, onEditAvatar, onViewRecords, onViewRecord, onSaved }: { entity: Place; scope: string; includePrivate?: boolean; onClose: () => void; onEdit: (entity: Entity) => void; onEditAvatar: (entity: Entity) => void; onViewRecords: (entity: Entity) => void; onViewRecord: (id: string) => void; onSaved: (entity: Entity) => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const lock = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -54,7 +54,7 @@ export function PlaceCardDialog({ entity, scope, includePrivate = false, onClose
       {entity.amapId ? <small className="place-card-credit">地点资料来自高德地图</small> : null}
       {entity.amapId && entity.photoUrl && !entity.avatarAssetId ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void savePhoto()}>{busy ? "保存照片中…" : "保存地点照片"}</button> : null}
       {notice ? <p className="place-photo-notice" role="status">{notice}</p> : null}
-    </div><PlaceMiniMap key={entity.id} place={entity} /><PlaceCollectionArchive key={`${entity.id}:${includePrivate}`} id={entity.id} includePrivate={includePrivate} /></div>
+    </div><PlaceMiniMap key={entity.id} place={entity} /><PlaceCollectionArchive key={`${entity.id}:${includePrivate}`} id={entity.id} includePrivate={includePrivate} onViewRecord={onViewRecord} /></div>
     <div className="dialog-footer place-card-actions">
       <PlaceMapButton place={entity} disabled={busy} />
       {phone ? <a className="secondary-button" href={`tel:${phone}`}><Phone size={15} aria-hidden="true" /><span>打电话</span></a> : null}

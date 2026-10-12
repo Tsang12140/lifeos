@@ -7940,6 +7940,9 @@ button.relation-chip {
 }
 
 .mention-chip {
+  border: 0;
+  font-family: inherit;
+  line-height: inherit;
   display: inline;
   padding: 1px 5px;
   border-radius: 4px;
