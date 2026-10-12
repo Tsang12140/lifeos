@@ -127,7 +127,7 @@ export function EntityMentionReview({ text, candidates, decisions, preferredEnti
       </li>;
       })}</ol>
     </div>
-    <div className="dialog-footer mention-review-actions"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" onClick={() => {
+    <div className="dialog-footer mention-review-actions"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" disabled={candidates.length === 0} onClick={() => {
       const changed = candidates.map((candidate): TextEntityDecision => { const id = choices.get(occurrenceKey(candidate)) || null; const entity = candidate.entities.find((item) => item.id === id) ?? candidate.entities[0]!; return { start: candidate.start, end: candidate.end, text: candidate.text, entityId: id, entityType: entity.type as "person" | "place" }; });
       const untouched = decisions.filter((decision) => !candidates.some((candidate) => candidate.start < decision.end && decision.start < candidate.end));
       onConfirm([...untouched, ...changed].sort((a, b) => a.start - b.start));

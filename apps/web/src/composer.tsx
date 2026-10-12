@@ -72,15 +72,21 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
     }
     return found.sort((a, b) => a.start - b.start);
   }, [content, entities, decisions]);
-  const [review, setReview] = useState<{ text: string; candidates: readonly EntityCandidate[]; entity?: Entity } | null>(null);
+  const [review, setReview] = useState<{ text: string; candidates: readonly EntityCandidate[]; entity?: Entity; selection?: ComposerSelection } | null>(null);
   const uncheckedCandidates = candidates.filter((candidate) => !decisions.some((decision) => decision.start === candidate.start && decision.end === candidate.end));
   const pendingPeople = new Set(uncheckedCandidates.flatMap((candidate) => candidate.entities.filter((entity) => entity.type === "person").map((entity) => entity.id))).size;
   const pendingPlaces = new Set(uncheckedCandidates.flatMap((candidate) => candidate.entities.filter((entity) => entity.type === "place").map((entity) => entity.id))).size;
-  const reviewEntity = (entity: Entity, text = content) => {
+  const reviewEntity = (entity: Entity, text = content, selection?: ComposerSelection) => {
     const vocabulary = entities.some((item) => item.id === entity.id) ? entities : [...entities, entity];
     const occurrences = (text === content ? candidates : findEntityCandidates(text, vocabulary)).filter((candidate) => candidate.entities.some((item) => item.id === entity.id));
-    const fresh = occurrences.length > 0 ? occurrences : findEntityCandidates(text, vocabulary).filter((candidate) => candidate.entities.some((item) => item.id === entity.id));
-    setReview({ text, candidates: fresh, entity });
+    let fresh = occurrences.length > 0 ? occurrences : findEntityCandidates(text, vocabulary).filter((candidate) => candidate.entities.some((item) => item.id === entity.id));
+    // An explicit selection identifies this occurrence even when the provider's
+    // full name differs from the author's wording. Do not add a global alias.
+    if (selection && text.slice(selection.start, selection.end) === selection.text) {
+      fresh = [...fresh.filter(candidate => candidate.end <= selection.start || candidate.start >= selection.end), { ...selection, entities: [entity] }].sort((a, b) => a.start - b.start);
+    }
+    if (fresh.length === 0) { resetMentionTools(); onNotify("正文中没有找到可关联的文字，请选中文字后重试", "warn"); return; }
+    setReview({ text, candidates: fresh, entity, selection });
     resetMentionTools();
   };
   const shotZoneRef = useRef<ShotDropZoneHandle>(null);
@@ -173,9 +179,10 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
       selectionRef.current = null;
       return null;
     }
-    const start = Math.min(element.selectionStart ?? content.length, element.selectionEnd ?? content.length);
-    const end = Math.max(element.selectionStart ?? content.length, element.selectionEnd ?? content.length);
-    const text = content.slice(start, end).trim();
+    const rawStart = Math.min(element.selectionStart ?? content.length, element.selectionEnd ?? content.length);
+    const rawEnd = Math.max(element.selectionStart ?? content.length, element.selectionEnd ?? content.length);
+    const raw = content.slice(rawStart, rawEnd), text = raw.trim();
+    const start = rawStart + raw.indexOf(text), end = start + text.length;
     const selection = text.length === 0 ? null : { start, end, text };
     selectionRef.current = selection;
     return selection;
@@ -221,19 +228,19 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
     const personMatches = exactEntityMatches("person", selection.text);
     const placeMatches = exactEntityMatches("place", selection.text);
     if (source === "person" && personMatches.length === 1) {
-      reviewEntity(personMatches[0]!);
+      reviewEntity(personMatches[0]!, content, selection);
       return;
     }
     if (source === "place" && placeMatches.length === 1) {
-      reviewEntity(placeMatches[0]!);
+      reviewEntity(placeMatches[0]!, content, selection);
       return;
     }
     if (source === "universal" && personMatches.length === 1 && placeMatches.length === 0) {
-      reviewEntity(personMatches[0]!);
+      reviewEntity(personMatches[0]!, content, selection);
       return;
     }
     if (source === "universal" && placeMatches.length === 1 && personMatches.length === 0) {
-      reviewEntity(placeMatches[0]!);
+      reviewEntity(placeMatches[0]!, content, selection);
       return;
     }
     setPickerKind(null);
@@ -253,7 +260,7 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
     const entity = await onCreateEntity(type, name, extras);
     if (entity === null) return false;
     const selection = selectionRef.current;
-    if (selection !== null) reviewEntity(entity);
+    if (selection !== null) reviewEntity(entity, content, selection);
     else {
       const caret = inputRef.current?.selectionStart ?? content.length;
       const next = `${content.slice(0, caret)}${entity.name}${content.slice(caret)}`;
@@ -350,8 +357,8 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
           <button className={`icon-button compact-icon-button ${pickerKind === "person" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if (selectionRef.current !== null) openSmartMention("person"); else { setPickerKind((current) => (current === "person" ? null : "person")); setCreateOpen(false); setSmartMentionPrompt(null); } }} disabled={saving} aria-label="插入人物" aria-expanded={pickerKind === "person"}><User size={15} strokeWidth={1.9} aria-hidden="true" /></button>
           <button className={`icon-button compact-icon-button ${pickerKind === "place" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { setPickerSearch(selectionRef.current?.text ?? ""); setPickerKind((current) => (current === "place" ? null : "place")); setCreateOpen(false); setSmartMentionPrompt(null); }} disabled={saving} aria-label="插入地点" aria-expanded={pickerKind === "place"}><MapPin size={15} strokeWidth={1.9} aria-hidden="true" /></button>
           {smartHintVisible ? <p className="smart-mention-toast" role="status">先选中一段文字，再关联人物或地点</p> : null}
-          {smartPromptOpen ? <div className="place-popover smart-mention-popover"><div className="smart-mention-header"><Sparkles size={14} aria-hidden="true" /><strong>{smartPromptTitle}</strong></div>{smartChoices.length > 0 ? <div className="smart-choice-grid">{smartChoices.map(({ entity, type }) => { const KindIcon = type === "person" ? User : MapPin; const detail = entityHint(entity, entities) || (type === "person" ? "@ 人物" : "# 地点"); return <button className="smart-choice" key={`${type}-${entity.id}`} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => reviewEntity(entity)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{entity.name}</strong><small>{detail}</small></span></button>; })}</div> : <div className="smart-choice-grid">{smartCreateTypes.map((type) => { const KindIcon = type === "person" ? User : MapPin; return <button className={`smart-choice smart-choice-${type}`} key={type} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => beginSmartCreate(type)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{type === "person" ? "人物" : "地点"}，{smartSelectionText}</strong><small>新建并核对标记</small></span></button>; })}</div>}</div> : null}
-          {pickerKind === "place" && !createOpen ? <div className="place-popover entity-picker-popover" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closePicker(); } }}><PlaceSearch entities={entities} initialQuery={pickerSearch} onManual={name => { setPickerSearch(name); setCreateOpen(true); }} onPick={async choice => { if ("id" in choice) { if (selectionRef.current !== null) { reviewEntity(choice); return; } const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + choice.name + content.slice(caret); onContentChange(next); reviewEntity(choice, next); } else { if (!await submitCreateForm({ ...choice, type: "place" })) throw new Error("地点未能保存，请重试"); } }} /></div> : pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} aria-label={`查找${pickerKind === "place" ? "地点" : "人物"}`} autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建并核对标记" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + entity.name + content.slice(caret); onContentChange(next); reviewEntity(entity, next); }}><KindIcon size={13} strokeWidth={1.8} aria-hidden="true" /><span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
+          {smartPromptOpen ? <div className="place-popover smart-mention-popover"><div className="smart-mention-header"><Sparkles size={14} aria-hidden="true" /><strong>{smartPromptTitle}</strong></div>{smartChoices.length > 0 ? <div className="smart-choice-grid">{smartChoices.map(({ entity, type }) => { const KindIcon = type === "person" ? User : MapPin; const detail = entityHint(entity, entities) || (type === "person" ? "@ 人物" : "# 地点"); return <button className="smart-choice" key={`${type}-${entity.id}`} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => reviewEntity(entity, content, smartMentionPrompt?.selection)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{entity.name}</strong><small>{detail}</small></span></button>; })}</div> : <div className="smart-choice-grid">{smartCreateTypes.map((type) => { const KindIcon = type === "person" ? User : MapPin; return <button className={`smart-choice smart-choice-${type}`} key={type} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => beginSmartCreate(type)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{type === "person" ? "人物" : "地点"}，{smartSelectionText}</strong><small>新建并核对标记</small></span></button>; })}</div>}</div> : null}
+          {pickerKind === "place" && !createOpen ? <div className="place-popover entity-picker-popover" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closePicker(); } }}><PlaceSearch entities={entities} initialQuery={pickerSearch} onManual={name => { setPickerSearch(name); setCreateOpen(true); }} onPick={async choice => { if ("id" in choice) { if (selectionRef.current !== null) { reviewEntity(choice, content, selectionRef.current); return; } const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + choice.name + content.slice(caret); onContentChange(next); reviewEntity(choice, next); } else { if (!await submitCreateForm({ ...choice, type: "place" })) throw new Error("地点未能保存，请重试"); } }} /></div> : pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} aria-label={`查找${pickerKind === "place" ? "地点" : "人物"}`} autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建并核对标记" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + entity.name + content.slice(caret); onContentChange(next); reviewEntity(entity, next); }}><KindIcon size={13} strokeWidth={1.8} aria-hidden="true" /><span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
         </div>
         {/* A task gets the range picker instead: both ends of a task can be in
             the future, and the occurrence field's cap at "now" is exactly what
@@ -367,7 +374,7 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
       </div>
       <button className="primary-button composer-desktop-save" type="button" disabled={!canSave} onClick={submitIfReady}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"}</span></button>
     </div>
-    {review !== null ? <EntityMentionReview text={review.text} candidates={review.candidates} decisions={decisions} preferredEntity={review.entity} onClose={() => setReview(null)} onConfirm={(next) => { if (content !== review.text) { setReview(null); onNotify("正文已变化，请重新检查标记", "warn"); return; } onDecisionsChange(next); setReview(null); }} /> : null}
+    {review !== null ? <EntityMentionReview text={review.text} candidates={review.candidates} decisions={review.selection ? decisions.filter(decision => decision.end <= review.selection!.start || decision.start >= review.selection!.end) : decisions} preferredEntity={review.entity} onClose={() => setReview(null)} onConfirm={(next) => { if (content !== review.text) { setReview(null); onNotify("正文已变化，请重新检查标记", "warn"); return; } onDecisionsChange(next); setReview(null); onNotify("人物与地点已核对"); }} /> : null}
   </section>;
 }
 
