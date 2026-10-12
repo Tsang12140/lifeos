@@ -328,7 +328,7 @@ export function assertImportReferences(bundle: ExportBundleV1, repository: Sqlit
   const incomingAssets = new Set(bundle.assets.map((asset) => asset.id));
 
   for (const entity of bundle.entities) {
-    if (entity.type === "person" && entity.avatarAssetId) {
+    if ((entity.type === "person" || entity.type === "place") && entity.avatarAssetId) {
       const avatar = bundle.assets.find(asset => asset.id === entity.avatarAssetId) ?? repository.findAssetById(entity.avatarAssetId);
       if (!avatar || avatar.kind !== "photo" || avatar.purpose !== "avatar") throw new HttpError(400, "invalid_avatar", "导入的人物头像不存在或类型不符");
     }

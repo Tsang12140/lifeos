@@ -671,7 +671,7 @@ function referencedIdsInSnapshot(db: DatabaseSync): ReadonlySet<string> {
   if (tables.has("entities")) {
     for (const row of db.prepare("SELECT value_json FROM entities").all()) {
       const entity = JSON.parse(String(row["value_json"]));
-      if (entity.type === "person" && typeof entity.avatarAssetId === "string") ids.add(entity.avatarAssetId);
+      if ((entity.type === "person" || entity.type === "place") && typeof entity.avatarAssetId === "string") ids.add(entity.avatarAssetId);
     }
   }
   return ids;

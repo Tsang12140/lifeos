@@ -1,4 +1,4 @@
-import type { Entity, EntityKind, PlacePeriod, PlaceRole, RecordKind } from "@lifeos/core";
+import type { Entity, EntityKind, PlaceDetails, PlacePeriod, PlaceRole, RecordKind } from "@lifeos/core";
 
 export type AppView = "today" | "timeline" | "calendar" | "tasks" | "notes" | "entities" | "timemachine" | "settings";
 export type SettingsPageId = "account/session" | "account/storage" | "data/import-export" | "data/backup" | "data/demo" | "data/photos" | "appearance/interface" | "integrations/weather" | "integrations/ai" | "integrations/movie" | "private/cycle" | "about";
@@ -7,7 +7,7 @@ export type ComposerKind = Extract<RecordKind, "journal" | "task" | "event" | "n
 export type UiFontId = "misans";
 
 /** Everything the create form can collect in one shot. */
-export interface EntityCreateRequest {
+export interface EntityCreateRequest extends PlaceDetails {
   readonly type: "person" | "place";
   readonly name: string;
   readonly aliases?: readonly string[];
@@ -17,6 +17,14 @@ export interface EntityCreateRequest {
 }
 
 export interface EntityEditPatch {
+  readonly phone?: string | null;
+  readonly city?: string | null;
+  readonly province?: string | null;
+  readonly district?: string | null;
+  readonly amapId?: string | null;
+  readonly photoUrl?: string | null;
+  readonly longitude?: number | null;
+  readonly latitude?: number | null;
   readonly isImportant?: boolean;
   readonly name: string;
   readonly aliases: readonly string[];
@@ -34,5 +42,5 @@ export type CreateEntity = (
     readonly role?: PlaceRole;
     readonly period?: PlacePeriod;
     readonly address?: string;
-  },
+  } & PlaceDetails,
 ) => Promise<Entity | null>;

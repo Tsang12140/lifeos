@@ -158,6 +158,7 @@ import { handleArchiveRoutes, closeArchiveService } from "./routes-archive.js";
 import { handleRecordsRoutes } from "./routes-records.js";
 import { handleAssetsRoutes } from "./routes-assets.js";
 import { handleEntitiesRoutes } from "./routes-entities.js";
+import { handlePlacesRoutes } from "./routes-places.js";
 import { handleAiMovieRoutes } from "./routes-ai-movie.js";
 import { handleAssistantBackfillRoutes } from "./routes-assistant-backfill.js";
 import { handleAssistantHistoryRoutes } from "./routes-assistant-history.js";
@@ -528,6 +529,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (await handleWeatherRoutes(ctx, req, res, pathname, url)) return;
     if (await handleModulesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleRecordsRoutes(ctx, req, res, pathname, url)) return;
+    if (await handlePlacesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleEntitiesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAssetsRoutes(ctx, req, res, pathname, url)) return;
     throw new HttpError(404, "not_found", "API route not found");

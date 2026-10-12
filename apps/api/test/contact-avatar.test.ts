@@ -40,7 +40,7 @@ test("avatars normalise, remain protected without diary records, and round trip 
   assert.equal((await fetch(base + `/api/assets/${asset.id}/content`)).status, 200);
   const person = await (await call("/api/entities", "POST", { id: "avatar-person", type: "person", name: "老朋友", isImportant: true, avatarAssetId: asset.id })).json() as Entity;
   assert.equal(person.type, "person");
-  assert.equal((await call("/api/entities", "POST", { type: "place", name: "地点", avatarAssetId: asset.id })).status, 400);
+  assert.equal((await call("/api/entities", "POST", { type: "project", name: "项目", avatarAssetId: asset.id })).status, 400);
   assert.equal((await call(`/api/entities/${person.id}`, "PATCH", { avatarAssetId: "missing" })).status, 400);
   assert.equal((await call(`/api/assets/${asset.id}`, "DELETE")).status, 409);
   assert.ok(app.repository.referencedAssetIds().has(asset.id));

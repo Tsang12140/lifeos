@@ -23,6 +23,7 @@ import {
 } from "./mention";
 import { slashSuggestions as slashSuggestionsFn } from "./mention";
 import { clampFixedMenuPosition } from "./menu-position";
+import { PlaceSearch, PlaceRoleField, placeDetailsOf, type PlaceDraft } from "./place-search";
 
 /**
  * One entry in the right-click menu. The menu is generic on purpose: the box
@@ -168,6 +169,8 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
   const [until, setUntil] = useState("");
   const [hasAddress, setHasAddress] = useState(false);
   const [address, setAddress] = useState("");
+  const [details, setDetails] = useState<Partial<PlaceDraft>>({});
+  const [searchOpen, setSearchOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const cleanName = name.replace(/[@#]/g, "").trim();
   const submit = async () => {
@@ -181,6 +184,7 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
       ...(type === "place" && role !== "" ? { role } : {}),
       ...(type === "place" && hasPeriod && (from !== "" || until !== "") ? { period: { ...(from === "" ? {} : { from }), ...(until === "" ? {} : { until }) } } : {}),
       ...(type === "place" && hasAddress && address.trim() ? { address: address.trim() } : {}),
+      ...(type === "place" ? placeDetailsOf(details) : {}),
     });
     setBusy(false);
     if (created) onCancel();
@@ -202,13 +206,11 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
       <AliasField disabled={busy} value={aliases} onChange={setAliases} label="别名，用斜杠分隔" />
     </div>
     {type === "place" ? <>
-      <div className="entity-create-row">
-        <span className="entity-create-label">角色</span>
-        <div className="entity-create-types">
-          <button type="button" className={`entity-type-option ${role === "" ? "is-active" : ""}`} aria-pressed={role === ""} onClick={() => setRole("")}>未指定</button>
-          {PLACE_ROLES.map((option) => <button key={option} type="button" className={`entity-type-option ${role === option ? "is-active" : ""}`} onClick={() => setRole(option)}>{PLACE_ROLE_LABELS[option]}</button>)}
-        </div>
-      </div>
+      <div className="place-search-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setSearchOpen(value => !value)}>{searchOpen ? "收起地点搜索" : "搜索店铺或地址"}</button></div>
+      {searchOpen ? <PlaceSearch initialQuery={name} onPick={choice => { setName(choice.name); setDetails(choice); setRole(choice.role ?? ""); setAddress(choice.address ?? ""); setHasAddress(Boolean(choice.address)); setSearchOpen(false); }} /> : null}
+      <PlaceRoleField value={role} onChange={setRole} disabled={busy} />
+      <label className="dialog-field"><span>城市</span><input aria-label="地点所在城市" value={details.city ?? ""} disabled={busy} onChange={event => setDetails(value => ({ ...value, city: event.target.value || undefined }))} /></label>
+      <label className="dialog-field"><span>电话</span><input aria-label="地点电话" type="tel" value={details.phone ?? ""} disabled={busy} onChange={event => setDetails(value => ({ ...value, phone: event.target.value || undefined }))} /></label>
       <div className="entity-create-row entity-create-optional-row">
         <label className="entity-optional-toggle"><input type="checkbox" checked={hasPeriod} onChange={(event) => setHasPeriod(event.target.checked)} />添加时期</label>
         <label className="entity-optional-toggle"><input type="checkbox" checked={hasAddress} onChange={(event) => setHasAddress(event.target.checked)} />添加详细地址</label>
@@ -374,12 +376,8 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
 
   const submitCreateForm = async (request: EntityCreateRequest): Promise<boolean> => {
     if (mention === null) return false;
-    const entity = await onCreateEntity(request.type, request.name, {
-      ...(request.aliases === undefined ? {} : { aliases: request.aliases }),
-      ...(request.role === undefined ? {} : { role: request.role }),
-      ...(request.period === undefined ? {} : { period: request.period }),
-      ...(request.address === undefined ? {} : { address: request.address }),
-    });
+    const { type, name, ...extras } = request;
+    const entity = await onCreateEntity(type, name, extras);
     if (entity === null) return false;
     // The form decides the kind last — a ## trigger that was switched to a
     // person must still insert as @.

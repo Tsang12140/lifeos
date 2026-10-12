@@ -12,7 +12,8 @@ import type { RecordView } from "./api";
 import type { ModuleCommand } from "./movie";
 import { isMovieEntity, relationLabelFor } from "./app-meta";
 
-export const PLACE_ROLE_LABELS: Record<(typeof PLACE_ROLES)[number], string> = { home: "家", work: "工作", other: "其他" };
+export const PLACE_ROLE_LABELS: Record<string, string> = { home: "家", work: "工作", dining: "餐饮", travel: "旅行", shopping: "购物", medical: "医疗", school: "学校", other: "其他" };
+export const placeRoleLabel = (role: string) => PLACE_ROLE_LABELS[role] ?? role;
 
 /**
  * Secondary information for a quick-picker row. The picker already tells us
@@ -28,7 +29,7 @@ export function entityHint(entity: Entity, entities: readonly Entity[] = []): st
     if (relation !== undefined) parts.push(relation);
   }
   if (entity.type === "place") {
-    if (entity.role !== undefined) parts.push(PLACE_ROLE_LABELS[entity.role]);
+    if (entity.role !== undefined) parts.push(placeRoleLabel(entity.role));
     const { period } = entity;
     if (period !== undefined && (period.from !== undefined || period.until !== undefined)) {
       parts.push(`${period.from ?? "…"} – ${period.until ?? "至今"}`);

@@ -18,3 +18,4 @@ export { VIDEO_LIMITS } from "./video.js";
 export * from "./photo-analysis.js";
 export * from "./calendar-presentation.js";
 export * from "./photo-wall.js";
+export { PLACE_CITY_CATALOG } from "./place-cities.js";

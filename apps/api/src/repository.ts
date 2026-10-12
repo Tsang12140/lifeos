@@ -2106,13 +2106,13 @@ export class SqliteRecordRepository {
    * pass over the table is also far cheaper than asking per asset.
    */
   public avatarReferenceEntityIds(assetId: string): readonly string[] {
-    return this.listEntities({ type: "person" }).filter(entity => entity.type === "person" && entity.avatarAssetId === assetId).map(entity => entity.id);
+    return this.listEntities().filter(entity => (entity.type === "person" || entity.type === "place") && entity.avatarAssetId === assetId).map(entity => entity.id);
   }
 
   public referencedAssetIds(): ReadonlySet<string> {
     const ids = new Set<string>();
-    for (const entity of this.listEntities({ type: "person" })) {
-      if (entity.type === "person" && entity.avatarAssetId) ids.add(entity.avatarAssetId);
+    for (const entity of this.listEntities()) {
+      if ((entity.type === "person" || entity.type === "place") && entity.avatarAssetId) ids.add(entity.avatarAssetId);
     }
     for (const row of this.#db.prepare("SELECT asset_refs_json FROM records").all()) {
       const refs = parseJson<readonly Record<string, unknown>[]>(textColumn(row, "asset_refs_json"), "asset_refs_json");

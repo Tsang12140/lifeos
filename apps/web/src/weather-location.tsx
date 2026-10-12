@@ -124,7 +124,7 @@ export function AmapLocationSettings() {
   };
   return <section className="settings-amap-card" aria-labelledby="amap-title">
     <h3 id="amap-title">高德备用定位</h3>
-    <p className="weather-location-note">优先使用浏览器定位。启用后，手动定位失败时通过高德查询大致城市，仅支持国内 IPv4。Key 在服务器加密保存，也为后续地点搜索预留。</p>
+    <p className="weather-location-note">优先使用浏览器定位。启用后，手动定位失败时通过高德查询大致城市，仅支持国内 IPv4。Key 与日记和地点管理中的地点搜索共用，关闭备用定位不影响搜索。</p>
     <label className="weather-location-option"><input type="checkbox" checked={enabled} disabled={!status || busy} onChange={event => setEnabled(event.target.checked)} />启用网络备用定位</label>
     <label className="dialog-field"><span>高德 Web 服务 API Key{status?.hasKey ? "（已配置，留空保留）" : ""}</span><input type="password" autoComplete="new-password" value={key} disabled={!status || busy || clear} onChange={event => setKey(event.target.value)} /></label>
     {status?.keySource === "env" ? <p className="weather-location-note">当前使用服务器 .env 中的 LIFEOS_AMAP_API_KEY。修改后需重启 API 服务；此处填写新 Key 会优先使用新值。</p> : null}

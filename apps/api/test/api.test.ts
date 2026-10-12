@@ -2316,7 +2316,7 @@ test("places carry role and period, and # mentions attach place refs on write", 
   equal((roleBack.body as { role?: string }).role, "work");
   equal((roleBack.body as { period?: { from?: string } }).period?.from, "2025-09");
 
-  const badRole = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "x", role: "cafe" }) });
+  const badRole = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "x", role: " " }) });
   equal(badRole.response.status, 400);
   const roleOnPerson = await request(harness.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "人", role: "home" }) });
   equal(roleOnPerson.response.status, 400);

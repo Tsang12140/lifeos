@@ -112,8 +112,8 @@ export interface EntityBase {
  * rented flat are both "home", and two employers are both "work". Roles are
  * not unique — several places may carry the same role at once.
  */
-export type PlaceRole = "home" | "work" | "other";
-export const PLACE_ROLES: readonly PlaceRole[] = ["home", "work", "other"];
+export type PlaceRole = string;
+export const PLACE_ROLES: readonly PlaceRole[] = ["home", "work", "dining", "travel", "shopping", "medical", "school", "other"];
 
 /**
  * When a place was current. Precision is calendar months (`YYYY-MM`) —
@@ -137,12 +137,24 @@ export interface Project extends EntityBase {
   readonly type: "project";
 }
 
-export interface Place extends EntityBase {
+export interface PlaceDetails {
+  readonly phone?: string;
+  readonly city?: string;
+  readonly province?: string;
+  readonly district?: string;
+  readonly longitude?: number;
+  readonly latitude?: number;
+  readonly amapId?: string;
+  readonly photoUrl?: string;
+}
+
+export interface Place extends EntityBase, PlaceDetails {
   readonly type: "place";
   readonly role?: PlaceRole;
   readonly period?: PlacePeriod;
   /** Optional detailed street address; never required for a place. */
   readonly address?: string;
+  readonly avatarAssetId?: AssetId;
 }
 
 export interface Topic extends EntityBase {
@@ -861,7 +873,7 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
     });
   }
   if (entity.avatarAssetId !== undefined) {
-    if (entity.type !== "person") throw new Error("Only people can have an avatar");
+    if (entity.type !== "person" && entity.type !== "place") throw new Error("Only people and places can have an avatar");
     nonEmptyStringValue(entity.avatarAssetId, "entity.avatarAssetId");
   }
   if (entity.isImportant !== undefined) {
@@ -872,7 +884,8 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
     if (entity.type !== "place") {
       throw new Error("entity.role is only allowed on a place");
     }
-    enumValue(entity.role, PLACE_ROLES, "entity.role");
+    const role = nonEmptyStringValue(entity.role, "entity.role");
+    if (role.trim().length === 0 || role.length > 30) throw new Error("entity.role must have 1 to 30 characters");
   }
   if (entity.period !== undefined) {
     if (entity.type !== "place") {
@@ -897,6 +910,25 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
     }
     optionalStringValue(entity.address, "entity.address");
   }
+  for (const field of ["phone", "city", "province", "district", "amapId", "photoUrl"] as const) {
+    if (entity[field] === undefined) continue;
+    if (entity.type !== "place") throw new Error(`${field} is only allowed on a place`);
+    const value = nonEmptyStringValue(entity[field], `entity.${field}`);
+    if (value.length > (field === "photoUrl" ? 2000 : 200)) throw new Error(`entity.${field} is too long`);
+    if (field === "amapId" && !/^[A-Za-z0-9_-]{1,100}$/.test(value)) throw new Error("entity.amapId is invalid");
+    if (field === "photoUrl") {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password) throw new Error("entity.photoUrl must use HTTPS");
+    }
+  }
+  for (const field of ["longitude", "latitude"] as const) {
+    if (entity[field] === undefined) continue;
+    if (entity.type !== "place") throw new Error(`${field} is only allowed on a place`);
+    const value = entity[field];
+    const limit = field === "longitude" ? 180 : 90;
+    if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > limit) throw new Error(`entity.${field} is invalid`);
+  }
+  if ((entity.longitude === undefined) !== (entity.latitude === undefined)) throw new Error("Place coordinates must be supplied together");
   const movieFieldNames = ["mediaType", "originalTitle", "releaseYear", "posterUrl", "overview", "externalIds", "doubanRating", "personalRating", "personalReview", "watchedAt", "watched"];
   const carriesMovieFields = movieFieldNames.some((field) => entity[field] !== undefined);
   if (entity.type !== "movie" && carriesMovieFields) {

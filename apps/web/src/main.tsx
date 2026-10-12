@@ -1,3 +1,4 @@
+import type { PlaceDetails } from "@lifeos/core";
 import { useCalendarPresentations } from "./calendar-cache";
 import { VideoScopeContext } from "./video-ui";
 import type { CustomHabit, UiCommand, UiTurnPlan } from "@lifeos/core";
@@ -1345,9 +1346,10 @@ function App() {
   useEffect(() => { installDiagnostics(); }, []);
   useEffect(() => installDialogDismiss(), []);
 
-  const handleCreateEntity = async (type: EntityKind, name: string, extras?: { readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string }): Promise<Entity | null> => {
+  const handleCreateEntity = async (type: EntityKind, name: string, extras?: { readonly aliases?: readonly string[]; readonly role?: PlaceRole; readonly period?: PlacePeriod; readonly address?: string } & PlaceDetails): Promise<Entity | null> => {
     try {
       const payloadBody = {
+        ...extras,
         type,
         name,
         ...(extras?.aliases === undefined ? {} : { aliases: extras.aliases }),
@@ -1356,7 +1358,7 @@ function App() {
         ...(type === "place" && extras?.address !== undefined ? { address: extras.address } : {}),
       };
       const entity = await apiRequest<Entity>("/api/entities", { method: "POST", body: JSON.stringify(payloadBody) });
-      setEntities((current) => [...current, entity]);
+      setEntities((current) => [...current.filter(item => item.id !== entity.id), entity]);
       showToast(`已新建${ENTITY_META[type].label}「${name}」`);
       return entity;
     } catch (error) {

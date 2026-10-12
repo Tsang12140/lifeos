@@ -6,17 +6,18 @@ import { avatarCrop } from "./contact-avatar-crop";
 import "./contact-avatar.css";
 
 export function ContactAvatar({ entity, scope, small = false, onEdit }: { entity: Entity; scope: string; small?: boolean; onEdit: (entity: Entity) => void }) {
-  const id = entity.type === "person" ? entity.avatarAssetId : undefined;
-  const src = id ? `/api/assets/${encodeURIComponent(id)}/thumbnail?w=160&scope=${encodeURIComponent(scope)}` : undefined;
+  const id = entity.type === "person" || entity.type === "place" ? entity.avatarAssetId : undefined;
+  const src = id ? `/api/assets/${encodeURIComponent(id)}/thumbnail?w=160&scope=${encodeURIComponent(scope)}` : entity.type === "place" ? entity.photoUrl : undefined;
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  return <button type="button" className={`contact-avatar ${small ? "is-small" : ""}`} onClick={() => onEdit(entity)} aria-label={`${id ? "更换" : "添加"}${entity.name}的头像`} title={id ? "更换头像" : "添加头像"}>
-    {src && !failed ? <img src={src} alt="" decoding="async" onError={() => setFailed(true)} /> : <ContactRound size={small ? 20 : 25} strokeWidth={1.7} aria-hidden="true" />}
+  return <button type="button" className={`contact-avatar ${small ? "is-small" : ""}`} onClick={() => onEdit(entity)} aria-label={`${id ? "更换" : "添加"}${entity.name}的${entity.type === "place" ? "照片" : "头像"}`} title={entity.type === "place" ? "设置地点照片" : id ? "更换头像" : "添加头像"}>
+    {src && !failed ? <img src={src} alt="" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <ContactRound size={small ? 20 : 25} strokeWidth={1.7} aria-hidden="true" />}
     <span className="contact-avatar-edit"><Edit3 size={small ? 10 : 12} strokeWidth={1.8} aria-hidden="true" /></span>
   </button>;
 }
 
 export function ContactAvatarDialog({ entity, onClose, onSaved }: { entity: Entity | null; onClose: () => void; onSaved: (entity: Entity) => void }) {
+  const subject = entity?.type === "place" ? "照片" : "头像";
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -72,7 +73,7 @@ export function ContactAvatarDialog({ entity, onClose, onSaved }: { entity: Enti
         const asset = await apiUploadRequest<Asset>("/api/assets/uploads?purpose=avatar", blob, { contentType: blob.type });
         avatarAssetId = asset.id;
       }
-      const updated = await apiRequest<Entity>(`/api/entities/${encodeURIComponent(entity.id)}`, { method: "PATCH", body: JSON.stringify({ avatarAssetId }) });
+      const updated = await apiRequest<Entity>(`/api/entities/${encodeURIComponent(entity.id)}`, { method: "PATCH", body: JSON.stringify({ avatarAssetId, ...(entity.type === "place" && remove ? { photoUrl: null } : {}) }) });
       onSaved(updated); onClose();
     } catch (e) { setError(e instanceof Error ? e.message : "头像未能保存，请重试"); }
     finally { lock.current = false; setBusy(false); }
@@ -83,7 +84,7 @@ export function ContactAvatarDialog({ entity, onClose, onSaved }: { entity: Enti
     onDragOver={e => { if (!e.dataTransfer.types.includes("Files")) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = lock.current ? "none" : "copy"; }}
     onDragLeave={e => { e.stopPropagation(); dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); }}
     onDrop={e => { e.preventDefault(); e.stopPropagation(); dragDepth.current = 0; setDragging(false); receiveFiles(e.dataTransfer.files); }}>
-    <div className="dialog-header"><h2 id="contact-avatar-title">设置头像</h2><button type="button" className="icon-button compact-icon-button" aria-label="关闭头像设置" disabled={busy} onClick={close}><X size={17} /></button></div>
+    <div className="dialog-header"><h2 id="contact-avatar-title">{entity?.type === "place" ? "设置地点照片" : "设置头像"}</h2><button type="button" className="icon-button compact-icon-button" aria-label="关闭头像设置" disabled={busy} onClick={close}><X size={17} /></button></div>
     <div className="contact-avatar-body">
       <div className="contact-avatar-crop" role="img" aria-label="头像裁切预览，可拖动或使用方向键移动图片" tabIndex={image ? 0 : -1}
         onPointerDown={e => { if (!crop || busy) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { x: e.clientX, y: e.clientY, ox: crop.x, oy: crop.y }; }}
@@ -93,11 +94,11 @@ export function ContactAvatarDialog({ entity, onClose, onSaved }: { entity: Enti
         {image && crop ? <img src={image.src} alt="" draggable={false} style={{ width: `${crop.width * 100}%`, height: `${crop.height * 100}%`, left: `${50 + crop.x * 100}%`, top: `${50 + crop.y * 100}%` }} /> : <ContactRound size={52} strokeWidth={1.3} aria-hidden="true" />}
       </div>
       {image ? <label className="contact-avatar-zoom">缩放<input type="range" min="1" max="3" step=".01" value={zoom} disabled={busy} onChange={e => { const value = Number(e.target.value); const next = avatarCrop(image.naturalWidth, image.naturalHeight, value, offset.x, offset.y); setZoom(value); setOffset({ x: next.x, y: next.y }); }} /></label> : null}
-      <p className="contact-avatar-hint">选择、粘贴或拖入图片，再拖动和缩放调整头像。</p>
-      <div className="contact-avatar-options"><button type="button" className="secondary-button" disabled={busy} onClick={() => input.current?.click()}>选择图片</button>{entity?.type === "person" && entity.avatarAssetId ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void save(true)}>移除头像</button> : null}</div>
+      <p className="contact-avatar-hint">选择、粘贴或拖入图片，再拖动和缩放调整{subject}。</p>
+      <div className="contact-avatar-options"><button type="button" className="secondary-button" disabled={busy} onClick={() => input.current?.click()}>选择图片</button>{((entity?.type === "person" || entity?.type === "place") && entity.avatarAssetId) || (entity?.type === "place" && entity.photoUrl) ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void save(true)}>移除{subject}</button> : null}</div>
       <input ref={input} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" aria-label="选择头像图片" disabled={busy} onChange={e => { const file = e.currentTarget.files?.[0]; if (file) void choose(file); e.currentTarget.value = ""; }} />
       {error ? <p className="dialog-error" role="alert">{error}</p> : null}
     </div>
-    <div className="dialog-footer"><button type="button" className="secondary-button" disabled={busy} onClick={close}>取消</button><button type="button" className="primary-button" disabled={busy || !image} onClick={() => void save()}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : null}<span>{busy ? "保存中" : "保存头像"}</span></button></div>
+    <div className="dialog-footer"><button type="button" className="secondary-button" disabled={busy} onClick={close}>取消</button><button type="button" className="primary-button" disabled={busy || !image} onClick={() => void save()}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : null}<span>{busy ? "保存中" : `保存${subject}`}</span></button></div>
   </dialog>;
 }

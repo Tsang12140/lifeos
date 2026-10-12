@@ -1,0 +1,26 @@
+.place-search-panel{display:grid;gap:12px;min-width:0;text-align:left;color:var(--ink,#26334b)}
+.place-search-inputs{display:grid;grid-template-columns:minmax(100px,1fr) minmax(160px,2fr);gap:10px}
+.place-search-inputs label{display:grid;gap:6px;min-width:0;font-size:12px}
+.place-search-inputs input,.place-role-field input{box-sizing:border-box;width:100%;min-width:0;min-height:40px;padding:8px 10px;border:1px solid #d6dce5;border-radius:9px;background:var(--paper,#fff);font:inherit;color:inherit}
+.place-city-suggestions{display:grid;gap:7px}
+.place-city-group{display:flex;align-items:baseline;gap:8px;font-size:12px}
+.place-city-group>span{flex:0 0 4em;color:#748096}
+.place-city-group>div{display:flex;flex-wrap:wrap;gap:6px}
+.place-city-button{min-height:32px;padding:5px 8px;border:1px solid #dce1e8;border-radius:8px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.place-city-button[aria-pressed=true]{background:#e9edf4;border-color:#8c9bb3}
+.place-search-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 0}
+.place-search-actions>.primary-button,.place-search-actions>.secondary-button{height:40px;min-height:40px;padding:0 14px;margin:0;border-radius:10px;font-size:14px;line-height:20px}
+.place-search-list{display:grid;gap:8px;min-width:0}
+.place-search-list h4{margin:0;font-size:13px}
+.place-search-result{display:flex;align-items:center;gap:10px;box-sizing:border-box;width:100%;min-width:0;padding:10px;border:1px solid #dce1e8;border-radius:10px;background:var(--paper,#fff);text-align:left;font:inherit;color:inherit;cursor:pointer}
+.place-search-result>span{display:grid;gap:5px;flex:1;min-width:0;overflow-wrap:anywhere}
+.place-search-result>small{flex:0 0 auto;font-size:12px;color:#65738a}
+.place-search-result small,.place-search-credit,.place-role-field small{font-size:12px;color:#748096;line-height:1.5}
+.place-search-result img{width:48px;height:48px;flex:0 0 48px;border-radius:8px;object-fit:cover}
+.entity-picker-popover:has(.place-search-panel){width:min(560px,calc(100vw - 48px));max-height:min(650px,70vh);overflow:auto;padding:14px;box-sizing:border-box}
+.place-library-controls{display:grid;gap:12px;margin:16px 0}
+.place-role-filters{display:flex;flex-wrap:wrap;gap:8px}
+.place-role-filters button{min-height:34px;padding:6px 10px;border:1px solid #dce1e8;border-radius:9px;background:transparent;color:inherit;cursor:pointer}
+.place-role-filters button[aria-pressed=true]{background:#e9edf4;border-color:#8c9bb3}
+.entity-library-address{flex-wrap:wrap;gap:12px}
+@media(max-width:420px){.place-search-inputs{grid-template-columns:minmax(0,1fr)}.place-search-actions>.primary-button,.place-search-actions>.secondary-button{flex:1 1 auto}.place-city-group{align-items:flex-start}.place-search-result>small{max-width:4em}}

@@ -576,7 +576,8 @@ test("places carry role and period; other kinds reject them", () => {
   throws(() => assertValidEntity({ ...place, period: { from: "2024-13" } }), /YYYY-MM/);
   throws(() => assertValidEntity({ ...place, period: { until: "2026-13" } }), /YYYY-MM/);
   throws(() => assertValidEntity({ ...place, period: { from: "2026-01", until: "2024-01" } }), /must not be after/);
-  throws(() => assertValidEntity({ ...place, role: "cafe" }), /unsupported value/);
+  assertValidEntity({ ...place, role: "cafe" });
+  throws(() => assertValidEntity({ ...place, role: " " }), /1 to 30/);
   throws(() => assertValidEntity({ type: "person", id: "p1", name: "人", role: "home" }), /only allowed on a place/);
   throws(() => assertValidEntity({ type: "person", id: "p1", name: "人", period: { from: "2024-01" } }), /only allowed on a place/);
   assertValidEntity({ ...place, address: "广东省佛山市南海区桂城街道 1 号" });
