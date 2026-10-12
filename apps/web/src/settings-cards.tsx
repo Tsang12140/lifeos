@@ -68,6 +68,7 @@ import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { WeatherSimulator } from "./WeatherSimulator";
 import { PoolStorageSettingsCard } from "./PoolStorageSettingsCard";
 import { locateWeatherDevice, setWeatherFollowEnabled, weatherFollowEnabled } from "./weather-follow";
+import { AmapLocationSettings, useWeatherLocation } from "./weather-location";
 import { MovieSettingsCard } from "./movie";
 import type { MovieModuleStatusState } from "./movie";
 import {
@@ -377,6 +378,7 @@ function BackupSettingsContent({ backupStatus, readReady, backupBusy, onBackup, 
 }
 
 export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged, onRetry }: { readonly profilesState: WeatherProfilesState; readonly tenantId?: string | null; readonly onChanged: (status: WeatherStatus) => void; readonly onRetry: () => void }) {
+  const locationControl = useWeatherLocation();
   const profilesPayload = profilesState.status;
   const status = profilesPayload?.status ?? null;
   const statusReady = profilesState.phase === "ready" && profilesPayload !== null;
@@ -430,6 +432,9 @@ export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged,
     setError(null);
     try {
       const next = await apiRequest<WeatherStatus>("/api/weather/config", { method: "POST", body: JSON.stringify({ enabled, locationId, city, apiHost, ...(apiKey.trim() ? { apiKey } : {}) }) });
+      if (tenantId !== null && (locationId.trim() !== status?.locationId || city.trim() !== status?.city)) {
+        setWeatherFollowEnabled(tenantId, false); setFollowEnabled(false);
+      }
       onChanged(next);
       setApiKey("");
       setMessage("已保存");
@@ -459,6 +464,7 @@ export function WeatherSettingsCard({ profilesState, tenantId = null, onChanged,
   const stateLabel = profilesState.phase === "ready" ? status?.configured ? "已连接" : "未配置" : profilesState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-weather-card">
     <div className="settings-weather-overview"><div className="settings-card-icon"><CloudSun size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>天气</strong><small className="settings-weather-scope">{status?.city || status?.locationId || "未选择城市"}</small></div><span className={`settings-status ${profilesState.phase === "ready" && status?.configured ? "is-ready" : ""}`} data-weather-status-phase={profilesState.phase}>{stateLabel}</span></div>
+    <div className="weather-location-manual"><button type="button" className="secondary-button" disabled={locationControl.busy || followBusy} onClick={locationControl.request}>{locationControl.busy ? "定位中…" : "获取当前位置"}</button><small>固定城市切换前会请你确认。</small></div>
     {tenantId === null ? null : <div className="settings-weather-follow">
       <div className="settings-card-copy"><strong>跟随当前位置</strong></div>
       <label className="settings-switch" title="跟随当前位置"><input type="checkbox" checked={followEnabled} disabled={followBusy} onChange={(event) => void toggleFollow(event.target.checked)} aria-label="跟随当前位置" /><span aria-hidden="true" /></label>
@@ -871,7 +877,7 @@ export function SettingsView({ page, mobileEntry, onNavigatePage, onImport, onLo
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <><FontSettingsCard value={uiFont} onChange={onUiFontChange} /><WeatherSimulatorCard /></>
-    : page === "integrations/weather" ? <WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? null} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} />
+    : page === "integrations/weather" ? <><WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? "local"} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} /><AmapLocationSettings /></>
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />

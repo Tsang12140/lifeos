@@ -20,14 +20,14 @@ export function setWeatherFollowEnabled(tenantId: string, enabled: boolean): voi
   window.dispatchEvent(new Event(FOLLOW_CHANGED));
 }
 
-function currentCoordinates(): Promise<{ latitude: number; longitude: number }> {
+export function currentCoordinates(): Promise<{ latitude: number; longitude: number }> {
   if (!window.isSecureContext || !navigator.geolocation) {
     return Promise.reject(new Error("当前位置需要 HTTPS 和浏览器定位支持；也可以手动选择城市。"));
   }
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude }),
-      (error) => reject(new Error(error.code === 1 ? "定位权限未开启；可以手动选择城市。" : "暂时无法获取位置；可以手动选择城市。")),
+      (error) => reject(new Error(error.code === 1 ? "定位权限受限，请检查系统定位服务、Safari 网站权限和网站定位策略。" : error.code === 3 ? "获取当前位置超时，请重试或手动选择城市。" : "浏览器暂时无法提供位置，请检查定位服务和网络后重试。")),
       { enableHighAccuracy: false, maximumAge: 5 * 60_000, timeout: 12_000 },
     );
   });
@@ -51,6 +51,7 @@ export function useWeatherAutoFollow(tenantId: string | undefined, onLocationCha
     let busy = false;
     let lastSentAt = 0;
     let lastPosition: { latitude: number; longitude: number } | null = null;
+    let generation = 0;
     const shouldFollow = () => weatherFollowEnabled(tenantId);
     const send = async (latitude: number, longitude: number) => {
       if (!active || !shouldFollow() || busy) return;
@@ -68,12 +69,18 @@ export function useWeatherAutoFollow(tenantId: string | undefined, onLocationCha
       finally { busy = false; }
     };
     const stop = () => {
+      generation += 1;
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
       watchId = null;
     };
-    const start = () => {
+    const start = async () => {
       stop();
+      const attempt = generation;
       if (!shouldFollow() || document.visibilityState !== "visible" || !window.isSecureContext || !navigator.geolocation) return;
+      try {
+        if (!navigator.permissions?.query || (await navigator.permissions.query({ name: "geolocation" })).state !== "granted") return;
+      } catch { return; }
+      if (!active || attempt !== generation || !shouldFollow() || document.visibilityState !== "visible") return;
       watchId = navigator.geolocation.watchPosition(
         ({ coords }) => { void send(coords.latitude, coords.longitude); },
         () => { /* Permission may expire; manual city remains available. */ },

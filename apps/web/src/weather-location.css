@@ -1,0 +1,20 @@
+dialog.weather-location-dialog { width: min(440px, calc(100vw - 32px)); padding: 24px; }
+.weather-location-dialog p { line-height: 1.7; }
+.weather-location-note { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.weather-location-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 12px; }
+.weather-location-actions > button { min-height: 40px; margin: 0; }
+.settings-amap-card { display: grid; gap: 12px; padding-top: 20px; margin-top: 20px; border-top: 1px solid var(--line); }
+.settings-amap-card h3, .settings-amap-card p { margin: 0; }
+.weather-location-option { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.weather-location-manual { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.weather-location-manual small { color: var(--muted); }
+.weather-header-place[type="button"] { background: transparent; border: 0; padding: 0; cursor: pointer; font-family: inherit; line-height: inherit; }
+.weather-header-place[type="button"]:disabled { cursor: wait; opacity: .65; }
+.weather-header-summary:has(> .weather-header-place[type="button"]) { cursor: default; }
+.weather-header-refresh-target { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.weather-header-refresh-target:focus-visible, .weather-header-place[type="button"]:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: 4px; }
+@media (max-width: 480px) {
+  dialog.weather-location-dialog { padding: 20px; }
+  .weather-location-actions > button { flex: 1 1 auto; }
+  .weather-location-manual { flex-wrap: wrap; }
+}

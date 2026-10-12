@@ -7,6 +7,7 @@ import { WeatherSky } from "./WeatherBackground";
 import { SunEventHint } from "./SunEventHint";
 import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
 import { weatherLocationDisplayName } from "./weather-locations";
+import { useWeatherLocation } from "./weather-location";
 
 interface WeatherPayload {
   readonly weatherSnapshot: WeatherSnapshot | null;
@@ -121,6 +122,7 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, max
 }
 
 export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice, showDateNavigation = true, maxDate }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void; readonly showDateNavigation?: boolean; readonly maxDate?: string }) {
+  const locationControl = useWeatherLocation();
   const headerRef = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const topbar = headerRef.current?.closest<HTMLElement>(".topbar");
@@ -283,12 +285,12 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className={`weather-header-content ${showDateNavigation ? "" : "weather-header-content--summary-only"}`}>
       <DateFlipControl selectedDate={selectedDate} onChange={onDateChange} onStep={onDateStep} showSteps={showDateNavigation} maxDate={maxDate} />
-      <div className="weather-header-summary" role={status?.configured ? "button" : undefined} tabIndex={status?.configured ? 0 : undefined} aria-label={status?.configured ? `刷新${selectedDate}天气` : undefined} aria-busy={manualBusy || loading ? "true" : undefined} onClick={status?.configured ? () => void refresh({ manual: true, escalate: armed }) : undefined} onKeyDown={status?.configured ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } } : undefined}>
+      <div className="weather-header-summary" aria-busy={manualBusy || loading ? "true" : undefined}>
+        {status?.city || status?.locationId ? <button className="weather-header-place" type="button" aria-label="重新获取当前位置" disabled={locationControl.busy} onClick={locationControl.request}><MapPin size={13} aria-hidden="true" />{locationControl.busy ? "定位中…" : payload?.location ? locationLabel : status.city || status.locationId}</button> : null}
         {status?.configured && displayDay && decision ? <>
-          <span className="weather-header-place"><MapPin size={13} aria-hidden="true" />{locationLabel}</span>
-          <span className="weather-header-reading"><span className="weather-header-condition"><WeatherConditionGlyph category={decision.category} /><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
+          <span className="weather-header-reading weather-header-refresh-target" role="button" tabIndex={0} aria-label={`刷新${selectedDate}天气`} onClick={() => void refresh({ manual: true, escalate: armed })} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } }}><span className="weather-header-condition"><WeatherConditionGlyph category={decision.category} /><strong>{displayDay.textDay}</strong></span><strong className="weather-header-temperature">{temperature}</strong></span>
           {sunEvent ? <SunEventHint event={sunEvent} /> : null}
-        </> : status?.configured ? <span className="weather-header-unavailable">{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
+        </> : status?.configured ? <span className="weather-header-unavailable weather-header-refresh-target" role="button" tabIndex={0} aria-label="重试读取天气" onClick={() => void refresh({ manual: true, escalate: armed })} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void refresh({ manual: true, escalate: armed }); } }}>{loading ? "正在读取天气…" : "天气暂时不可用"}</span> : <button className="weather-configure-button" type="button" onClick={onOpenSettings}><CloudSun size={16} aria-hidden="true" /><span>天气未配置</span><Settings2 size={15} aria-hidden="true" /></button>}
       </div>
     </div>
     {status?.configured && manualBusy ? <span className="weather-header-refresh-status" aria-hidden="true"><LoaderCircle className="spin" size={15} /></span> : null}

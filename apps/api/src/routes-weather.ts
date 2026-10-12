@@ -9,7 +9,8 @@ import {
   verifyWeatherLocation,
   WEATHER_OBSERVATION_TIME_ZONE,
 } from "./weather.js";
-import { readRuntimeWeatherConfig, saveRuntimeWeatherConfig } from "./weather-config.js";
+import { readRuntimeWeatherConfig, saveRuntimeWeatherConfig, runtimeWeatherConfigForLocation } from "./weather-config.js";
+import { locationClientIp, lookupAmapIp, publicAmapConfig, saveAmapConfig } from "./amap-location.js";
 import {
   listWeatherProfiles,
   publicWeatherConfig,
@@ -33,6 +34,7 @@ import type { RouteContext, RouteHandler } from "./route-context.js";
  */
 const GEO_MIN_INTERVAL_MS = 60_000;
 const lastGeoLookupAt = new Map<string, number>();
+const previews = new Map<string, { expires: number; pending: ReturnType<typeof lookupWeatherLocationByCoordinates> }>();
 function geoLookupAllowed(key: string, now: number): boolean {
   if (lastGeoLookupAt.size > 2048) lastGeoLookupAt.clear();
   const previous = lastGeoLookupAt.get(key);
@@ -56,6 +58,35 @@ export const handleWeatherRoutes: RouteHandler = async (
   url: URL,
 ): Promise<boolean> => {
   const { config, repository, weatherArchiveScheduler, loginFailures, authenticated } = ctx;
+  if (pathname === "/api/location/config" && req.method === "GET") {
+    setJson(res, 200, publicAmapConfig(config)); return true;
+  }
+  if (pathname === "/api/location/config" && req.method === "POST") {
+    requireJsonContentType(req, true);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["enabled", "apiKey", "clearApiKey"]);
+    setJson(res, 200, saveAmapConfig(config, {
+      enabled: booleanField(input.enabled, "enabled"),
+      ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
+      ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
+    })); return true;
+  }
+  if (pathname === "/api/location/ip" && req.method === "POST") {
+    requireJsonContentType(req, true);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, []);
+    const ip = locationClientIp(req);
+    if (ip === null) throw new HttpError(422, "location_ip_unavailable", "无法识别可用的国内 IPv4 地址；请使用浏览器定位或手动选择城市");
+    try {
+      const point = await lookupAmapIp(config, ip);
+      const deviceId = weatherDeviceId(req, res, config);
+      const runtime = runtimeWeatherConfigForLocation(config, weatherLocationOverride(config, repository.getWeatherDeviceLocation(deviceId)));
+      const location = await lookupWeatherLocationByCoordinates(config, runtime, point.longitude, point.latitude);
+      if (!location) throw new Error("网络位置已获取，但天气服务无法识别城市，请检查天气配置");
+      setJson(res, 200, { locationId: location.id, city: location.name, source: "ip", location });
+    } catch (error) { throw new HttpError(502, "location_ip_failed", error instanceof Error ? error.message : "网络定位失败"); }
+    return true;
+  }
   if (pathname === "/api/weather" && req.method === "GET") {
     // Same three-tier day-key rule as every other date endpoint: the regex
     // alone would let 2026-02-30 through, and this value is used as a cache key.
@@ -200,6 +231,12 @@ export const handleWeatherRoutes: RouteHandler = async (
     const city = stringField(input.city ?? "", "city").trim();
     if (!locationId && !city) throw new HttpError(400, "invalid_weather_location", "位置 ID 和城市名至少填写一个");
     const deviceId = weatherDeviceId(req, res, config);
+    const activeId = repository.getWeatherDeviceLocation(deviceId)?.profileId;
+    const active = activeId ? readWeatherProfile(config, activeId) : null;
+    if (active?.source === "file" && active.apiKey) {
+      const runtime = readRuntimeWeatherConfig(config);
+      saveRuntimeWeatherConfig(config, { enabled: runtime.enabled, locationId, city, apiHost: active.apiHost, apiKey: active.apiKey });
+    }
     const deviceLocation = repository.saveWeatherDeviceLocation(deviceId, locationId, city, JSON.stringify(nowInstant()));
     clearWeatherCache();
     setJson(res, 200, { ...publicWeatherConfig(config, weatherLocationOverride(config, deviceLocation)), locationId: deviceLocation.locationId, city: deviceLocation.city, locationScope: "device" });
@@ -211,11 +248,27 @@ export const handleWeatherRoutes: RouteHandler = async (
     // the resolved city id and label reach the repository.
     requireJsonContentType(req, true);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["latitude", "longitude"]);
+    hasOnlyKeys(input, ["latitude", "longitude", "preview"]);
     const latitude = coordinateField(input.latitude, "latitude", -90, 90);
     const longitude = coordinateField(input.longitude, "longitude", -180, 180);
     const deviceId = weatherDeviceId(req, res, config);
     const priorDeviceLocation = repository.getWeatherDeviceLocation(deviceId);
+    const preview = input.preview === undefined ? false : booleanField(input.preview, "preview");
+    if (preview) {
+      const runtime = runtimeWeatherConfigForLocation(config, weatherLocationOverride(config, priorDeviceLocation));
+      if (!runtime.apiKey) throw new HttpError(400, "weather_not_configured", "坐标已获取，但天气服务尚未配置，无法识别城市");
+      const key = `${config.dataDirectory}|${deviceId}|${priorDeviceLocation?.profileId ?? ""}|${longitude.toFixed(2)},${latitude.toFixed(2)}`;
+      if (previews.size > 2048) previews.clear();
+      let cached = previews.get(key);
+      if (!cached || cached.expires <= Date.now()) {
+        cached = { expires: Date.now() + GEO_MIN_INTERVAL_MS, pending: lookupWeatherLocationByCoordinates(config, runtime, longitude, latitude) };
+        previews.set(key, cached);
+      }
+      const location = await cached.pending;
+      if (location === null) { previews.delete(key); throw new HttpError(502, "weather_location_failed", "坐标已获取，但天气服务暂时无法识别城市，请重试或手动选择"); }
+      setJson(res, 200, { locationId: location.id, city: location.name, source: "browser", location });
+      return true;
+    }
     const activeProfile = priorDeviceLocation?.profileId ? readWeatherProfile(config, priorDeviceLocation.profileId) : null;
     let runtime = readRuntimeWeatherConfig(config);
     if (activeProfile?.source === "file" && activeProfile.apiKey) {
