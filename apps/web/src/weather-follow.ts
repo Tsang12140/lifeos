@@ -1,3 +1,4 @@
+import { rememberDevicePoint } from "./place-search-options";
 import { useEffect } from "react";
 import { apiRequest } from "./api";
 import type { WeatherConfigStatus } from "./weather";
@@ -26,7 +27,7 @@ export function currentCoordinates(): Promise<{ latitude: number; longitude: num
   }
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(
-      ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude }),
+      ({ coords, timestamp }) => { rememberDevicePoint(coords, timestamp); resolve({ latitude: coords.latitude, longitude: coords.longitude }); },
       (error) => reject(new Error(error.code === 1 ? "定位权限受限，请检查系统定位服务、Safari 网站权限和网站定位策略。" : error.code === 3 ? "获取当前位置超时，请重试或手动选择城市。" : "浏览器暂时无法提供位置，请检查定位服务和网络后重试。")),
       { enableHighAccuracy: false, maximumAge: 5 * 60_000, timeout: 12_000 },
     );
@@ -82,7 +83,7 @@ export function useWeatherAutoFollow(tenantId: string | undefined, onLocationCha
       } catch { return; }
       if (!active || attempt !== generation || !shouldFollow() || document.visibilityState !== "visible") return;
       watchId = navigator.geolocation.watchPosition(
-        ({ coords }) => { void send(coords.latitude, coords.longitude); },
+        ({ coords, timestamp }) => { rememberDevicePoint(coords, timestamp); void send(coords.latitude, coords.longitude); },
         () => { /* Permission may expire; manual city remains available. */ },
         { enableHighAccuracy: false, maximumAge: 5 * 60_000, timeout: 12_000 },
       );

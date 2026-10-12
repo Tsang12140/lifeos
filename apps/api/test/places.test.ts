@@ -111,8 +111,57 @@ test("place search uses the server key independently of IP, saves reusable detai
   release(); await inFlight;
   assert.equal((await call(`/api/entities/${failureId}`)).body.avatarAssetId, undefined, "concurrent removal is not overwritten");
   providerError = true;
-  const failed = await call("/api/places/search", { query: "张三牛肉面", city: "佛山" });
+  const failed = await call("/api/places/search", { query: "另一家牛肉面", city: "佛山" });
   assert.equal(failed.status, 502); assert.ok(JSON.stringify(failed.body).includes("10003")); assert.ok(!JSON.stringify(failed.body).includes("sensitive-key"));
+});
+
+test("nearby search converts GPS, sorts distances, caches requests and falls back without precise coordinates", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-nearby-"));
+  const original = globalThis.fetch;
+  const { server } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_AMAP_API_KEY: "nearby-secret" }));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const urls: URL[] = []; let failConversion = false;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname !== "restapi.amap.com") return original(input, init);
+    urls.push(url);
+    if (url.pathname.endsWith("/convert")) {
+      assert.equal(url.searchParams.get("coordsys"), "gps");
+      return Response.json(failConversion ? { status: "0" } : { status: "1", locations: "113.12,23.04" });
+    }
+    return Response.json({ status: "1", pois: [{ id: "BFAR", name: "陈师傅牛肉店（远）", location: "113.13,23.04" }, { id: "BNEAR", name: "陈师傅牛肉店（近）", location: "113.1203,23.04" }] });
+  };
+  t.after(async () => { globalThis.fetch = original; server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
+  const call = async (body: unknown) => { const r = await original(`http://127.0.0.1:${address.port}/api/places/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, value: await r.json() as any }; };
+  const location = { longitude: 113.115, latitude: 23.035, accuracy: 15 };
+  const body = { query: "陈师傅牛肉店", location };
+  const result = await call(body);
+  assert.equal(result.status, 200); assert.equal(result.value.mode, "nearby");
+  assert.equal(urls.length, 2); assert.equal(urls[1]!.pathname, "/v5/place/around");
+  assert.equal(urls[1]!.searchParams.get("location"), "113.120000,23.040000");
+  assert.equal(urls[1]!.searchParams.get("sortrule"), "distance");
+  assert.equal(urls[1]!.searchParams.get("radius"), "5000");
+  assert.equal(result.value.items[0].amapId, "BNEAR");
+  assert.ok(result.value.items[0].distanceMeters > 20 && result.value.items[0].distanceMeters < 40, "distance uses the converted origin, not raw GPS");
+  assert.ok(!JSON.stringify(result.value).includes("nearby-secret"));
+  await call(body); assert.equal(urls.length, 2, "repeated searches use a short cache");
+  await call({ ...body, radius: 50000 }); assert.equal(urls.length, 3, "new radius reuses conversion only");
+  assert.equal(urls.at(-1)!.searchParams.get("radius"), "50000");
+  const city = await call({ ...body, city: "广州" });
+  assert.equal(city.value.mode, "text"); assert.equal(city.value.items[0].distanceMeters, undefined);
+  assert.equal(urls.at(-1)!.pathname, "/v5/place/text"); assert.equal(urls.at(-1)!.searchParams.get("region"), "广州");
+  const coarse = await call({ ...body, location: { ...location, accuracy: 3000 } });
+  assert.equal(coarse.value.mode, "text"); assert.equal(coarse.value.origin, undefined);
+  assert.equal(urls.at(-1)!.searchParams.has("region"), false);
+  assert.equal((await call({ query: "地址" })).status, 200, "city and GPS are optional");
+  const before = urls.length;
+  for (const invalid of [{ ...body, radius: 50001 }, { ...body, location: { ...location, latitude: 91 } }, { ...body, location: { latitude: 1, longitude: 1 } }, { ...body, location: { ...location, accuracy: -1 } }]) assert.equal((await call(invalid)).status, 400);
+  assert.equal(urls.length, before, "invalid inputs spend no quota");
+  failConversion = true;
+  const fallback = await call({ ...body, location: { ...location, longitude: 114 } });
+  assert.equal(fallback.status, 200); assert.equal(fallback.value.mode, "text");
+  assert.equal(urls.at(-1)!.pathname, "/v5/place/text");
 });
 
 test("POI parser tolerates missing photos, array-shaped empty fields, and invalid coordinates", () => {

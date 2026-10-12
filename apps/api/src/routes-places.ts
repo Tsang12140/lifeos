@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { providerSearchPoint, placeDistance, type SearchPoint } from "./place-proximity.js";
 import { PLACE_CITY_CATALOG, type Place, type PlaceDetails } from "@lifeos/core";
 import { readAmapConfig } from "./amap-location.js";
 import { HttpError, setJson } from "./http-kit.js";
@@ -6,7 +8,8 @@ import { boundedIntegerField, hasOnlyKeys, jsonObject, stringField } from "./fie
 import type { RouteHandler } from "./route-context.js";
 import { setTimeout as delay } from "node:timers/promises";
 
-export interface PlaceSearchItem extends PlaceDetails { name: string; address?: string; role?: string }
+export interface PlaceSearchItem extends PlaceDetails { name: string; address?: string; role?: string; distanceMeters?: number }
+const searchCache = new Map<string, { expires: number; value: unknown }>();
 const limits = new Map<string, { time: number; count: number }>();
 const text = (value: unknown): string => typeof value === "string" ? value.trim() : "";
 const transientCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
@@ -19,8 +22,7 @@ function transportCode(error: unknown): string {
 }
 
 /** Retry a broken connection once, within one shared deadline. Never log the URL/key. */
-export async function requestPlaceSearch(url: URL) {
-  const signal = AbortSignal.timeout(10000);
+export async function requestPlaceSearch(url: URL, signal = AbortSignal.timeout(10000)) {
   for (let attempt = 1; ; attempt++) {
     try {
       const response = await fetch(url, { redirect: "error", signal, cache: "no-store" });
@@ -77,31 +79,60 @@ export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname) 
   if (pathname !== "/api/places/search" || req.method !== "POST") return false;
   requireJsonContentType(req);
   const input = jsonObject(await readBody(req, ctx.config.bodyLimitBytes), "body");
-  hasOnlyKeys(input, ["query", "city", "page"]);
+  hasOnlyKeys(input, ["query", "city", "page", "location", "radius"]);
   const query = stringField(input.query, "query", { nonEmpty: true }).trim();
   const city = input.city === undefined ? "" : stringField(input.city, "city").trim();
   const page = input.page === undefined ? 1 : boundedIntegerField(input.page, "page", 1, 20);
   if (!query || query.length > 80 || city.length > 80) throw new HttpError(400, "invalid_query", "关键词或城市过长，请缩短后再搜");
+  let location: SearchPoint | undefined;
+  if (input.location !== undefined) {
+    const raw = jsonObject(input.location, "location");
+    hasOnlyKeys(raw, ["latitude", "longitude", "accuracy"]);
+    for (const [name, bound] of [["longitude", 180], ["latitude", 90], ["accuracy", 100000]] as const) {
+      if (typeof raw[name] !== "number" || !Number.isFinite(raw[name]) || (name === "accuracy" ? raw[name] < 0 || raw[name] > bound : Math.abs(raw[name]) > bound)) throw new HttpError(400, "invalid_location", "当前位置无效，请重新定位");
+    }
+    if ((raw.accuracy as number) <= 1000 && !city) location = raw as unknown as SearchPoint;
+  }
+  const radius = input.radius === undefined ? 5000 : boundedIntegerField(input.radius, "radius", 1000, 50000);
   const runtime = readAmapConfig(ctx.config);
   if (!runtime.apiKey) throw new HttpError(409, "amap_key_missing", "请先配置高德 Web 服务 Key，再搜索店铺或地址");
   const key = ctx.config.dataDirectory;
+  const cacheKey = createHash("sha256").update(JSON.stringify([key, runtime.apiKey, query, city, page, location, radius])).digest("hex");
+  const cached = searchCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) { setJson(res, 200, cached.value); return true; }
   if (limits.size > 2048) limits.clear();
   const limit = limits.get(key);
   if (limit && limit.time > Date.now() - 60000 && limit.count >= 30) throw new HttpError(429, "search_limit", "搜索太频繁，请稍后再试");
   limits.set(key, limit && limit.time > Date.now() - 60000 ? { ...limit, count: limit.count + 1 } : { time: Date.now(), count: 1 });
-  const url = new URL("https://restapi.amap.com/v5/place/text");
-  url.search = new URLSearchParams({ key: runtime.apiKey, keywords: query, ...(city ? { region: city, city_limit: "true" } : {}), show_fields: "business,photos", page_size: "10", page_num: String(page) }).toString();
+  const abort = new AbortController();
+  const onClose = () => { if (!res.writableEnded) abort.abort(); };
+  res.on("close", onClose);
+  const signal = AbortSignal.any([AbortSignal.timeout(10000), abort.signal]);
   try {
-    const { response, data } = await requestPlaceSearch(url);
+    let origin: SearchPoint | undefined;
+    if (location) {
+      try { origin = await providerSearchPoint(key, runtime.apiKey, location, AbortSignal.any([signal, AbortSignal.timeout(3000)])); }
+      catch { if (signal.aborted) throw Error("search_aborted"); /* A city/global search still works without precise coordinates. */ }
+    }
+    const url = new URL(origin ? "https://restapi.amap.com/v5/place/around" : "https://restapi.amap.com/v5/place/text");
+    url.search = new URLSearchParams({ key: runtime.apiKey, keywords: query, ...(city ? { region: city, city_limit: "true" } : {}), ...(origin ? { location: `${origin.longitude.toFixed(6)},${origin.latitude.toFixed(6)}`, radius: String(radius), sortrule: "distance" } : {}), show_fields: "business,photos", page_size: "10", page_num: String(page) }).toString();
+    const { response, data } = await requestPlaceSearch(url, signal);
     if (!response.ok || data?.status !== "1" || !Array.isArray(data.pois)) {
       const code = /^\d{5}$/.test(data?.infocode ?? "") ? data!.infocode : "unknown";
-      throw new HttpError(502, "amap_search_failed", `高德搜索暂不可用（${code}），请检查 Key 的搜索权限或配额`);
+      throw new HttpError(502, "amap_search_failed", `地点搜索暂不可用（${code}），请检查搜索服务配置或配额`);
     }
-    const items = data.pois.map(normalisePoi).filter((item): item is PlaceSearchItem => item !== null);
-    setJson(res, 200, { items, page, hasMore: data.pois.length === 10 && page < 20, source: "amap" });
+    const items = data.pois.map(normalisePoi).filter((item): item is PlaceSearchItem => item !== null).map(item => {
+      const distanceMeters = origin ? placeDistance(origin, item) : undefined;
+      return { ...item, ...(distanceMeters === undefined ? {} : { distanceMeters }) };
+    });
+    if (origin) items.sort((a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity));
+    const value = { items, page, hasMore: data.pois.length === 10 && page < 20, source: "amap", mode: origin ? "nearby" : "text", ...(origin ? { origin, radius } : {}) };
+    if (searchCache.size >= 128) searchCache.delete(searchCache.keys().next().value!);
+    searchCache.set(cacheKey, { expires: Date.now() + 60_000, value });
+    setJson(res, 200, value);
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(502, "amap_search_unavailable", "地点搜索连接失败或超时，请重试");
-  }
+  } finally { res.off("close", onClose); }
   return true;
 };
