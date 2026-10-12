@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isBackdropDismiss } from "./dialog-dismiss";
 import {
   BookOpen,
   Check,
@@ -116,9 +117,9 @@ export function RelationPanel({ entities, assets, candidates, draft, onChange, o
 
     <div className="relation-create">
       <select value={createKind} onChange={(event) => setCreateKind(event.target.value as EntityKind)} aria-label="要新建的关联对象类型">{ENTITY_KIND_ORDER.map((kind) => <option value={kind} key={kind}>{ENTITY_META[kind].label}</option>)}</select>
-      <input value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="名称" aria-label="新关联对象名称" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
-      <AliasField value={createAliases} onChange={setCreateAliases} label="新关联对象别名" placeholder="别名（可选，用 / 分隔）" compact />
-      {createKind === "place" ? <><label className="entity-optional-toggle"><input type="checkbox" checked={createHasAddress} onChange={(event) => setCreateHasAddress(event.target.checked)} />添加详细地址</label>{createHasAddress ? <input value={createAddress} onChange={(event) => setCreateAddress(event.target.value)} placeholder="街道、门牌等（可选）" aria-label="新地点详细地址" /> : null}</> : null}
+      <input value={createName} onChange={(event) => setCreateName(event.target.value)} aria-label="新关联对象名称" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submitEntity(); } }} />
+      <AliasField value={createAliases} onChange={setCreateAliases} label="新关联对象别名" compact />
+      {createKind === "place" ? <><label className="entity-optional-toggle"><input type="checkbox" checked={createHasAddress} onChange={(event) => setCreateHasAddress(event.target.checked)} />添加详细地址</label>{createHasAddress ? <input value={createAddress} onChange={(event) => setCreateAddress(event.target.value)} aria-label="新地点详细地址" /> : null}</> : null}
       <button className="secondary-button relation-create-button" type="button" onClick={() => void submitEntity()} disabled={!createName.trim() || creating}>{creating ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}<span>新建并关联</span></button>
     </div>
 
@@ -217,7 +218,7 @@ export function NoteEditorDialog({ record, createOpen, entities, onCreateEntity,
     else setSaveError(result.message);
   };
   return <dialog ref={dialogRef} className="modal-dialog note-editor-dialog" aria-labelledby="note-editor-title"
-    onCancel={(event) => { event.preventDefault(); if (dirty) warnBeforeDiscard(); else onClose(); }}
+    onCancel={(event) => { event.preventDefault(); if (dirty && !isBackdropDismiss(event.nativeEvent)) warnBeforeDiscard(); else onClose(); }}
     onPointerDown={(event) => {
       backdropGestureRef.current = null;
       backdropPointerDownRef.current = event.isPrimary && event.button === 0 && event.target === event.currentTarget ? event.pointerId : null;
@@ -242,9 +243,9 @@ export function NoteEditorDialog({ record, createOpen, entities, onCreateEntity,
     <div className="dialog-header"><div><p className="eyebrow">{record === null ? "新建笔记" : "编辑笔记"}</p><h2 id="note-editor-title">{record === null ? "留下一点值得回看的文字" : "更新这条笔记"}</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭笔记编辑器"><X size={17} aria-hidden="true" /></button></div>
     <div className="dialog-body note-editor-body" data-note-editor>
       <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${draft.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={draft.format === item.value} key={item.value} onClick={() => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, format: item.value, metadataTouched: true })); }}><span className="note-format-option-title">{item.label}</span><small>{item.hint}</small></button>)}</div>
-      {draft.format === "article" ? <label className="dialog-field note-title-field"><span>标题</span><input data-note-title value={draft.title} maxLength={300} onChange={(event) => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, title: event.target.value, metadataTouched: true })); }} placeholder="给文章一个清楚的标题" /></label> : null}
-      <label className="dialog-field note-body-field"><span>{draft.format === "quote" ? "引文" : "正文"}</span><MentionBox textareaRef={bodyRef} value={draft.content} onChange={(value) => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, content: value })); }} entities={entities} onCreateEntity={onCreateEntity} rows={8} ariaLabel={draft.format === "quote" ? "引文正文" : "笔记正文"} placeholder={draft.format === "quote" ? "粘贴或输入值得保存的引文……" : draft.format === "article" ? "写下文章内容……" : "记下此刻的想法……"} /></label>
-      {draft.format === "quote" ? <label className="dialog-field note-source-field"><span>出处（可选）</span><input data-note-source value={draft.source} maxLength={1000} onChange={(event) => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, source: event.target.value, metadataTouched: true })); }} placeholder="书名、作者或网页链接" /></label> : null}
+      {draft.format === "article" ? <label className="dialog-field note-title-field"><span>标题</span><input data-note-title value={draft.title} maxLength={300} onChange={(event) => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, title: event.target.value, metadataTouched: true })); }} /></label> : null}
+      <label className="dialog-field note-body-field"><span>{draft.format === "quote" ? "引文" : "正文"}</span><MentionBox textareaRef={bodyRef} value={draft.content} onChange={(value) => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, content: value })); }} entities={entities} onCreateEntity={onCreateEntity} rows={8} ariaLabel={draft.format === "quote" ? "引文正文" : "笔记正文"} /></label>
+      {draft.format === "quote" ? <label className="dialog-field note-source-field"><span>出处（可选）</span><input data-note-source value={draft.source} maxLength={1000} onChange={(event) => { setSaveError(null); setCloseWarning(null); setDraft((current) => ({ ...current, source: event.target.value, metadataTouched: true })); }} /></label> : null}
       {closeWarning ? <p className="dialog-error note-editor-error" data-note-close-warning role="status"><CircleHelp size={17} aria-hidden="true" /><span>{closeWarning}</span></p> : null}
       {saveError ? <p className="dialog-error note-editor-error" data-note-save-error role="alert"><CircleHelp size={17} aria-hidden="true" /><span>{saveError}</span></p> : null}
     </div>

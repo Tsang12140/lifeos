@@ -2,18 +2,24 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
+import { nameVocabulary, planNameHistory, snapshotMentions } from "./entity-name-history.js";
+import { HttpError } from "./http-kit.js";
 import { readSpaceTables, replaceSpaceTables, type SpaceTables } from "./portable-space.js";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, type BackupRetention } from "./backup-retention.js";
 import {
   assertValidAsset,
   assertValidCycleIntimacyModuleData,
   assertValidEntity,
+  contactActivity,
+  type ContactActivity,
+  type ContactActivitySource,
   assertValidTimelineRecord,
   entitySearchTerms,
   normalizeEntitySearchTerm,
   periodEndSpan,
   type Asset,
   type AssetKind,
+  type AssistantHistoryAttachment,
   type CycleIntimacyEvent,
   type CycleIntimacyModuleConfig,
   type CycleIntimacyModuleData,
@@ -24,6 +30,7 @@ import {
   type NoteDetails,
   type RecordKind,
   type TimelineRecord,
+  type UiTurnPlan,
 } from "@lifeos/core";
 
 export type RecordView = TimelineRecord & { readonly revision: number };
@@ -398,6 +405,135 @@ function ensureUniqueIds<T extends { id: string }>(values: readonly T[], name: s
   }
 }
 
+export interface AssistantConversationRow {
+  readonly id: string;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly clearedAt: string | null;
+  readonly clearSeq: number;
+  readonly batchId: string | null;
+  readonly messageCount: number;
+  readonly preview: string;
+}
+
+export interface AssistantMessageRow {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly seq: number;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAt: string;
+  readonly attachments: readonly AssistantHistoryAttachment[];
+  /** The compiled interface commands this reply carried, if any. */
+  readonly ui?: UiTurnPlan;
+  readonly turnId?: string;
+  readonly turnStatus?: "running" | "failed" | "interrupted" | "completed";
+  readonly retryable?: boolean;
+}
+
+export interface AssistantConversationCursor {
+  readonly updatedAt: string;
+  readonly id: string;
+}
+
+export interface AssistantConversationQuery {
+  readonly q?: string;
+  readonly limit: number;
+  readonly cursor?: AssistantConversationCursor;
+  /** Inclusive UTC instant corresponding to Shanghai midnight for `from`. */
+  readonly fromAt?: string;
+  /** Exclusive UTC instant corresponding to midnight after Shanghai `to`. */
+  readonly toBefore?: string;
+}
+
+export type AssistantChatTurnStatus = "running" | "failed" | "interrupted" | "completed";
+
+export interface AssistantChatTurnRow {
+  readonly conversationId: string;
+  readonly turnId: string;
+  readonly requestHash: string;
+  readonly status: AssistantChatTurnStatus;
+  readonly userMessageId: string;
+  readonly userMessageSeq: number;
+  readonly context: readonly { readonly role: "user" | "assistant"; readonly text: string }[];
+  readonly result: unknown | null;
+  readonly retryable: boolean;
+  readonly errorCode: string | null;
+  readonly boundBatchId: string | null;
+  readonly boundBatchRevision: number | null;
+  readonly batchId: string | null;
+  readonly batchRevision: number | null;
+}
+
+export interface AssistantMessagePage {
+  readonly items: readonly AssistantMessageRow[];
+  readonly hasMore: boolean;
+  readonly nextBeforeSeq: number | null;
+}
+
+export interface BeginAssistantChatTurnInput {
+  readonly conversationId: string;
+  readonly turnId: string;
+  readonly requestHash: string;
+  readonly userText: string;
+  readonly attachments: readonly AssistantHistoryAttachment[];
+  readonly context: readonly { readonly role: "user" | "assistant"; readonly text: string }[];
+  readonly batchId: string | null;
+  readonly batchRevision: number | null;
+  readonly at: string;
+}
+
+function assistantConversationSelect(preview = "coalesce((SELECT m.text FROM assistant_messages m WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.seq LIMIT 1), '')"): string {
+  return `
+  SELECT c.id AS id, c.started_at AS started_at, c.updated_at AS updated_at, c.cleared_at AS cleared_at,
+    c.clear_seq AS clear_seq, c.batch_id AS batch_id,
+    (SELECT COUNT(*) FROM assistant_messages m WHERE m.conversation_id = c.id) AS message_count,
+    ${preview} AS preview
+  FROM assistant_conversations c
+`;
+}
+
+const ASSISTANT_CONVERSATION_SELECT = assistantConversationSelect();
+
+function assistantConversationRow(row: Record<string, unknown>): AssistantConversationRow {
+  return {
+    id: textColumn(row, "id"),
+    startedAt: textColumn(row, "started_at"),
+    updatedAt: textColumn(row, "updated_at"),
+    clearedAt: nullableTextColumn(row, "cleared_at"),
+    clearSeq: numberColumn(row, "clear_seq"),
+    batchId: nullableTextColumn(row, "batch_id"),
+    messageCount: numberColumn(row, "message_count"),
+    preview: textColumn(row, "preview"),
+  };
+}
+
+function assistantChatTurnRow(row: Record<string, unknown>): AssistantChatTurnRow {
+  const status = textColumn(row, "status");
+  if (status !== "running" && status !== "failed" && status !== "interrupted" && status !== "completed") {
+    throw new Error("SQLite assistant turn status is invalid");
+  }
+  const context = parseJson<unknown>(textColumn(row, "context_json"), "assistant_chat_turns.context_json");
+  if (!Array.isArray(context)) throw new Error("SQLite assistant turn context is invalid");
+  const resultValue = row.result_json === null ? null : textColumn(row, "result_json");
+  return {
+    conversationId: textColumn(row, "conversation_id"),
+    turnId: textColumn(row, "turn_id"),
+    requestHash: textColumn(row, "request_hash"),
+    status,
+    userMessageId: textColumn(row, "user_message_id"),
+    userMessageSeq: numberColumn(row, "user_message_seq"),
+    context: context as readonly { readonly role: "user" | "assistant"; readonly text: string }[],
+    result: resultValue === null ? null : parseJson<unknown>(resultValue, "assistant_chat_turns.result_json"),
+    retryable: booleanColumn(row, "retryable"),
+    errorCode: nullableTextColumn(row, "error_code"),
+    boundBatchId: nullableTextColumn(row, "bound_batch_id"),
+    boundBatchRevision: row.bound_batch_revision === null ? null : numberColumn(row, "bound_batch_revision"),
+    batchId: nullableTextColumn(row, "batch_id"),
+    batchRevision: row.batch_revision === null ? null : numberColumn(row, "batch_revision"),
+  };
+}
+
 export class SqliteRecordRepository {
   readonly #db: DatabaseSync;
 
@@ -439,6 +575,55 @@ export class SqliteRecordRepository {
       CREATE INDEX IF NOT EXISTS records_timeline_idx ON records (deleted_at_json, timeline_sort DESC, created_at_json DESC, id DESC);
       CREATE INDEX IF NOT EXISTS records_kind_idx ON records (deleted_at_json, kind);
       CREATE TABLE IF NOT EXISTS assistant_batches (id TEXT PRIMARY KEY NOT NULL, updated_at TEXT NOT NULL, value_json TEXT NOT NULL) STRICT;
+      -- The AI assistant transcript. A conversation is the unit the person
+      -- resumes; clearing the screen only stamps cleared_at, so the messages
+      -- stay readable from the history dialog.
+      CREATE TABLE IF NOT EXISTS assistant_conversations (
+        id TEXT PRIMARY KEY NOT NULL,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        cleared_at TEXT,
+        clear_seq INTEGER NOT NULL DEFAULT 0,
+        batch_id TEXT
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS assistant_conversations_updated_idx ON assistant_conversations (updated_at DESC, id DESC);
+      CREATE TABLE IF NOT EXISTS assistant_messages (
+        id TEXT PRIMARY KEY NOT NULL,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
+        turn_id TEXT,
+        ui_json TEXT
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS assistant_messages_conversation_idx ON assistant_messages (conversation_id, seq);
+      CREATE INDEX IF NOT EXISTS assistant_messages_created_idx ON assistant_messages (created_at DESC);
+      CREATE TABLE IF NOT EXISTS assistant_history_state (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        current_conversation_id TEXT
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS assistant_chat_turns (
+        conversation_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'failed', 'interrupted', 'completed')),
+        user_message_id TEXT NOT NULL,
+        user_message_seq INTEGER NOT NULL,
+        context_json TEXT NOT NULL,
+        result_json TEXT,
+        retryable INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
+        bound_batch_id TEXT,
+        bound_batch_revision INTEGER,
+        batch_id TEXT,
+        batch_revision INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(conversation_id, turn_id)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS assistant_chat_turns_status_idx ON assistant_chat_turns (conversation_id, status);
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY NOT NULL,
         value_json TEXT NOT NULL,
@@ -555,6 +740,75 @@ export class SqliteRecordRepository {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS weather_observation_day_idx ON weather_observation (date, location_key);
     `);
+    const assistantConversationColumns = this.#db.prepare("PRAGMA table_info(assistant_conversations)").all() as readonly Record<string, unknown>[];
+    if (!assistantConversationColumns.some((column) => column.name === "clear_seq")) {
+      this.#db.exec("ALTER TABLE assistant_conversations ADD COLUMN clear_seq INTEGER NOT NULL DEFAULT 0");
+      this.#db.exec("UPDATE assistant_conversations SET clear_seq = (SELECT coalesce(max(m.seq), 0) FROM assistant_messages m WHERE m.conversation_id = assistant_conversations.id AND assistant_conversations.cleared_at IS NOT NULL AND m.created_at <= assistant_conversations.cleared_at)");
+    }
+    if (!assistantConversationColumns.some((column) => column.name === "batch_id")) {
+      this.#db.exec("ALTER TABLE assistant_conversations ADD COLUMN batch_id TEXT");
+    }
+    const assistantMessageColumns = this.#db.prepare("PRAGMA table_info(assistant_messages)").all() as readonly Record<string, unknown>[];
+    if (!assistantMessageColumns.some((column) => column.name === "attachments_json")) {
+      this.#db.exec("ALTER TABLE assistant_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!assistantMessageColumns.some((column) => column.name === "turn_id")) {
+      this.#db.exec("ALTER TABLE assistant_messages ADD COLUMN turn_id TEXT");
+    }
+    // The compiled interface commands for a turn belong to the message, the same
+    // way its attachments do: reopening a conversation has to be able to redraw
+    // the buttons that were on screen, or a clarify prompt loses the very
+    // candidates it was asking about. Nullable, because most turns only talk.
+    if (!assistantMessageColumns.some((column) => column.name === "ui_json")) {
+      this.#db.exec("ALTER TABLE assistant_messages ADD COLUMN ui_json TEXT");
+    }
+    this.#db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS assistant_messages_turn_role_idx ON assistant_messages (conversation_id, turn_id, role) WHERE turn_id IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS assistant_history_state (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        current_conversation_id TEXT
+      ) STRICT;
+      INSERT OR IGNORE INTO assistant_history_state(id, current_conversation_id)
+      VALUES(1, (SELECT id FROM assistant_conversations ORDER BY updated_at DESC, id DESC LIMIT 1));
+      CREATE TABLE IF NOT EXISTS assistant_chat_turns (
+        conversation_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running', 'failed', 'interrupted', 'completed')),
+        user_message_id TEXT NOT NULL,
+        user_message_seq INTEGER NOT NULL,
+        context_json TEXT NOT NULL,
+        result_json TEXT,
+        retryable INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
+        bound_batch_id TEXT,
+        bound_batch_revision INTEGER,
+        batch_id TEXT,
+        batch_revision INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(conversation_id, turn_id)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS assistant_chat_turns_status_idx ON assistant_chat_turns (conversation_id, status);
+    `);
+    let assistantTurnColumns = this.#db.prepare("PRAGMA table_info(assistant_chat_turns)").all() as readonly Record<string, unknown>[];
+    if (!assistantTurnColumns.some((column) => column.name === "batch_id")) {
+      this.#db.exec("ALTER TABLE assistant_chat_turns ADD COLUMN batch_id TEXT");
+      assistantTurnColumns = this.#db.prepare("PRAGMA table_info(assistant_chat_turns)").all() as readonly Record<string, unknown>[];
+    }
+    if (!assistantTurnColumns.some((column) => column.name === "batch_revision")) {
+      this.#db.exec("ALTER TABLE assistant_chat_turns ADD COLUMN batch_revision INTEGER");
+      assistantTurnColumns = this.#db.prepare("PRAGMA table_info(assistant_chat_turns)").all() as readonly Record<string, unknown>[];
+    }
+    if (!assistantTurnColumns.some((column) => column.name === "bound_batch_id")) {
+      this.#db.exec("ALTER TABLE assistant_chat_turns ADD COLUMN bound_batch_id TEXT");
+      this.#db.exec("UPDATE assistant_chat_turns SET bound_batch_id = batch_id");
+      assistantTurnColumns = this.#db.prepare("PRAGMA table_info(assistant_chat_turns)").all() as readonly Record<string, unknown>[];
+    }
+    if (!assistantTurnColumns.some((column) => column.name === "bound_batch_revision")) {
+      this.#db.exec("ALTER TABLE assistant_chat_turns ADD COLUMN bound_batch_revision INTEGER");
+      this.#db.exec("UPDATE assistant_chat_turns SET bound_batch_revision = batch_revision");
+    }
     const recordColumns = this.#db.prepare("PRAGMA table_info(records)").all() as readonly Record<string, unknown>[];
     if (!recordColumns.some((column) => column.name === "is_private")) {
       this.#db.exec("ALTER TABLE records ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0");
@@ -1184,6 +1438,247 @@ export class SqliteRecordRepository {
     this.#db.prepare("INSERT INTO assistant_batches(id, updated_at, value_json) VALUES(?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, value_json=excluded.value_json").run(batch.id, batch.updatedAt, JSON.stringify(batch));
   }
 
+  /** Conversation summaries, matched literally and without English case differences. */
+  public assistantConversations(query: AssistantConversationQuery): readonly AssistantConversationRow[] {
+    const where: string[] = ["EXISTS (SELECT 1 FROM assistant_messages m WHERE m.conversation_id = c.id)"];
+    const params: (string | number)[] = [];
+    const messageTerms: string[] = ["m.conversation_id = c.id"];
+    const messageParams: string[] = [];
+    if ((query.q !== undefined && query.q.length > 0) || query.fromAt !== undefined || query.toBefore !== undefined) {
+      if (query.q !== undefined && query.q.length > 0) { messageTerms.push("instr(lower(m.text), lower(?)) > 0"); messageParams.push(query.q); }
+      if (query.fromAt !== undefined) { messageTerms.push("m.created_at >= ?"); messageParams.push(query.fromAt); }
+      if (query.toBefore !== undefined) { messageTerms.push("m.created_at < ?"); messageParams.push(query.toBefore); }
+      where.push(`EXISTS (SELECT 1 FROM assistant_messages m WHERE ${messageTerms.join(" AND ")})`);
+      params.push(...messageParams);
+    }
+    if (query.cursor !== undefined) {
+      where.push("(c.updated_at < ? OR (c.updated_at = ? AND c.id < ?))");
+      params.push(query.cursor.updatedAt, query.cursor.updatedAt, query.cursor.id);
+    }
+    params.push(query.limit);
+    // Show the actual hit, including AI-only replies, rather than an unrelated opening question.
+    const select = query.q
+      ? assistantConversationSelect(`(SELECT m.text FROM assistant_messages m WHERE ${messageTerms.join(" AND ")} ORDER BY m.seq DESC LIMIT 1)`)
+      : ASSISTANT_CONVERSATION_SELECT;
+    const rows = this.#db.prepare(`
+      ${select}
+      WHERE ${where.join(" AND ")}
+      ORDER BY c.updated_at DESC, c.id DESC LIMIT ?
+    `).all(...(query.q ? [...messageParams, ...params] : params)) as readonly Record<string, unknown>[];
+    return rows.map(assistantConversationRow);
+  }
+
+  public assistantConversation(id: string): AssistantConversationRow | null {
+    const row = this.#db.prepare(`${ASSISTANT_CONVERSATION_SELECT} WHERE c.id = ?`).get(id) as Record<string, unknown> | undefined;
+    return row === undefined ? null : assistantConversationRow(row);
+  }
+
+  public assistantCurrentConversationId(): string | null {
+    const row = this.#db.prepare("SELECT current_conversation_id FROM assistant_history_state WHERE id = 1").get() as Record<string, unknown> | undefined;
+    return row === undefined ? null : nullableTextColumn(row, "current_conversation_id");
+  }
+
+  public assistantCurrentConversation(): AssistantConversationRow | null {
+    const id = this.assistantCurrentConversationId();
+    return id === null ? null : this.assistantConversation(id);
+  }
+
+  public createAssistantConversation(id: string, at: string, batchId: string | null = null): void {
+    this.#db.prepare("INSERT INTO assistant_conversations(id, started_at, updated_at, cleared_at, clear_seq, batch_id) VALUES(?, ?, ?, NULL, 0, ?)").run(id, at, at, batchId);
+  }
+
+  public setAssistantCurrentConversation(id: string | null): boolean {
+    if (id !== null && this.assistantConversation(id) === null) return false;
+    this.#db.prepare("UPDATE assistant_history_state SET current_conversation_id = ? WHERE id = 1").run(id);
+    return true;
+  }
+
+  public setAssistantConversationBatch(id: string, batchId: string | null): boolean {
+    return this.#db.prepare("UPDATE assistant_conversations SET batch_id = ? WHERE id = ?").run(batchId, id).changes > 0;
+  }
+
+  /** Returns false when the conversation is gone, so the caller can 404. */
+  public touchAssistantConversation(id: string, at: string): boolean {
+    return this.#db.prepare("UPDATE assistant_conversations SET updated_at = ? WHERE id = ?").run(at, id).changes > 0;
+  }
+
+  /** Hide messages through the current seq; timestamps can collide within one millisecond. */
+  public clearAssistantConversation(id: string, at: string): boolean {
+    return this.atomic(() => {
+      const exists = this.#db.prepare("SELECT id FROM assistant_conversations WHERE id = ?").get(id);
+      if (exists === undefined) return false;
+      this.#db.prepare("UPDATE assistant_conversations SET cleared_at = ?, clear_seq = (SELECT coalesce(max(seq), 0) FROM assistant_messages WHERE conversation_id = ?), updated_at = ? WHERE id = ?").run(at, id, at, id);
+      return true;
+    });
+  }
+
+  /**
+   * Brings a conversation back on screen and makes it the current one. The
+   * screen is un-hidden on purpose: picking a thread out of the archive is a
+   * request to see it, so a stale cleared_at must not swallow the messages.
+   */
+  public resumeAssistantConversation(id: string, at: string): boolean {
+    return this.atomic(() => {
+      const changed = this.#db.prepare("UPDATE assistant_conversations SET updated_at = ?, cleared_at = NULL, clear_seq = 0 WHERE id = ?").run(at, id).changes > 0;
+      if (changed) this.#db.prepare("UPDATE assistant_history_state SET current_conversation_id = ? WHERE id = 1").run(id);
+      return changed;
+    });
+  }
+
+  public appendAssistantMessages(conversationId: string, messages: readonly { readonly role: string; readonly text: string; readonly attachments?: readonly AssistantHistoryAttachment[]; readonly ui?: UiTurnPlan }[], at: string): void {
+    this.atomic(() => {
+      const seqRow = this.#db.prepare("SELECT coalesce(max(seq), 0) AS seq FROM assistant_messages WHERE conversation_id = ?").get(conversationId) as Record<string, unknown>;
+      const start = numberColumn(seqRow, "seq") + 1;
+      const insert = this.#db.prepare("INSERT INTO assistant_messages(id, conversation_id, role, text, created_at, seq, attachments_json, turn_id, ui_json) VALUES(?, ?, ?, ?, ?, ?, ?, NULL, ?)");
+      messages.forEach((message, index) => insert.run(randomUUID(), conversationId, message.role, message.text, at, start + index, JSON.stringify(message.attachments ?? []), message.ui === undefined ? null : JSON.stringify(message.ui)));
+      this.#db.prepare("UPDATE assistant_conversations SET updated_at = ? WHERE id = ?").run(at, conversationId);
+    });
+  }
+
+  public assistantMessagePage(conversationId: string, options: { readonly beforeSeq?: number; readonly afterSeq?: number; readonly limit: number }): AssistantMessagePage {
+    const where = ["m.conversation_id = ?"];
+    const params: (string | number)[] = [conversationId];
+    if (options.beforeSeq !== undefined) { where.push("m.seq < ?"); params.push(options.beforeSeq); }
+    if (options.afterSeq !== undefined) { where.push("m.seq > ?"); params.push(options.afterSeq); }
+    params.push(options.limit + 1);
+    const rows = this.#db.prepare(`
+      SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, m.seq, m.attachments_json, m.ui_json, m.turn_id, t.status AS turn_status, t.retryable AS turn_retryable
+      FROM assistant_messages m
+      LEFT JOIN assistant_chat_turns t ON t.conversation_id = m.conversation_id AND t.turn_id = m.turn_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY m.seq DESC LIMIT ?
+    `).all(...params) as readonly Record<string, unknown>[];
+    const hasMore = rows.length > options.limit;
+    const items = rows.slice(0, options.limit).reverse().map((row): AssistantMessageRow => this.#assistantMessageRow(row));
+    return { items, hasMore, nextBeforeSeq: hasMore ? (items[0]?.seq ?? null) : null };
+  }
+
+  public assistantMessageContextBefore(conversationId: string, beforeSeq: number, afterSeq: number, limit: number): readonly { readonly role: "user" | "assistant"; readonly text: string }[] {
+    return this.assistantMessagePage(conversationId, { beforeSeq, afterSeq, limit }).items.map(({ role, text }) => ({ role, text }));
+  }
+
+  public assistantMessages(conversationId: string, since: string | null, limit: number): readonly AssistantMessageRow[] {
+    const rows = this.#db.prepare(`
+      SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, m.seq, m.attachments_json, m.ui_json, m.turn_id, t.status AS turn_status, t.retryable AS turn_retryable
+      FROM assistant_messages m
+      LEFT JOIN assistant_chat_turns t ON t.conversation_id = m.conversation_id AND t.turn_id = m.turn_id
+      WHERE m.conversation_id = ? AND (? IS NULL OR m.created_at > ?)
+      ORDER BY m.seq LIMIT ?
+    `).all(conversationId, since, since, limit) as readonly Record<string, unknown>[];
+    return rows.map((row) => this.#assistantMessageRow(row));
+  }
+
+  #assistantMessageRow(row: Record<string, unknown>): AssistantMessageRow {
+    const attachments = parseJson<unknown>(textColumn(row, "attachments_json"), "assistant_messages.attachments_json");
+    if (!Array.isArray(attachments)) throw new Error("SQLite assistant message attachments are invalid");
+    const uiJson = nullableTextColumn(row, "ui_json");
+    const ui = uiJson === null ? null : parseJson<unknown>(uiJson, "assistant_messages.ui_json");
+    if (ui !== null && (typeof ui !== "object" || Array.isArray(ui))) throw new Error("SQLite assistant message ui is invalid");
+    const turnId = nullableTextColumn(row, "turn_id");
+    const turnStatus = nullableTextColumn(row, "turn_status");
+    const turnRetryable = row.turn_retryable === null || row.turn_retryable === undefined ? null : booleanColumn(row, "turn_retryable");
+    return {
+      id: textColumn(row, "id"), conversationId: textColumn(row, "conversation_id"), seq: numberColumn(row, "seq"),
+      role: textColumn(row, "role") === "user" ? "user" : "assistant", text: textColumn(row, "text"), createdAt: textColumn(row, "created_at"),
+      attachments: attachments as readonly AssistantHistoryAttachment[],
+      ...(ui === null ? {} : { ui: ui as UiTurnPlan }),
+      ...(turnId === null ? {} : { turnId }),
+      ...(turnStatus === null ? {} : { turnStatus: turnStatus as AssistantChatTurnStatus }),
+      ...(turnRetryable === null ? {} : { retryable: turnRetryable }),
+    } as AssistantMessageRow;
+  }
+
+  public assistantChatTurn(conversationId: string, turnId: string): AssistantChatTurnRow | null {
+    const row = this.#db.prepare("SELECT * FROM assistant_chat_turns WHERE conversation_id = ? AND turn_id = ?").get(conversationId, turnId) as Record<string, unknown> | undefined;
+    return row === undefined ? null : assistantChatTurnRow(row);
+  }
+
+  public assistantRunningChatTurn(conversationId: string): AssistantChatTurnRow | null {
+    const row = this.#db.prepare("SELECT * FROM assistant_chat_turns WHERE conversation_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1").get(conversationId) as Record<string, unknown> | undefined;
+    return row === undefined ? null : assistantChatTurnRow(row);
+  }
+
+  public beginAssistantChatTurn(input: BeginAssistantChatTurnInput): AssistantChatTurnRow {
+    return this.atomic(() => {
+      if (this.assistantConversation(input.conversationId) === null) throw new Error("Assistant conversation disappeared before turn start");
+      const seqRow = this.#db.prepare("SELECT coalesce(max(seq), 0) AS seq FROM assistant_messages WHERE conversation_id = ?").get(input.conversationId) as Record<string, unknown>;
+      const seq = numberColumn(seqRow, "seq") + 1;
+      const userMessageId = randomUUID();
+      this.#db.prepare("INSERT INTO assistant_messages(id, conversation_id, role, text, created_at, seq, attachments_json, turn_id) VALUES(?, ?, 'user', ?, ?, ?, ?, ?)")
+        .run(userMessageId, input.conversationId, input.userText, input.at, seq, JSON.stringify(input.attachments), input.turnId);
+      this.#db.prepare(`
+        INSERT INTO assistant_chat_turns(conversation_id, turn_id, request_hash, status, user_message_id, user_message_seq, context_json, result_json, retryable, error_code, bound_batch_id, bound_batch_revision, batch_id, batch_revision, created_at, updated_at)
+        VALUES(?, ?, ?, 'running', ?, ?, ?, NULL, 0, NULL, ?, ?, ?, ?, ?, ?)
+      `).run(input.conversationId, input.turnId, input.requestHash, userMessageId, seq, JSON.stringify(input.context), input.batchId, input.batchRevision, input.batchId, input.batchRevision, input.at, input.at);
+      this.#db.prepare("UPDATE assistant_conversations SET updated_at = ? WHERE id = ?").run(input.at, input.conversationId);
+      return this.assistantChatTurn(input.conversationId, input.turnId)!;
+    });
+  }
+
+  public retryAssistantChatTurn(conversationId: string, turnId: string, at: string): boolean {
+    return this.#db.prepare("UPDATE assistant_chat_turns SET status = 'running', retryable = 0, error_code = NULL, updated_at = ? WHERE conversation_id = ? AND turn_id = ? AND status = 'failed' AND retryable = 1").run(at, conversationId, turnId).changes === 1;
+  }
+
+  public failAssistantChatTurn(conversationId: string, turnId: string, errorCode: string, retryable: boolean, at: string): void {
+    this.#db.prepare("UPDATE assistant_chat_turns SET status = 'failed', retryable = ?, error_code = ?, updated_at = ? WHERE conversation_id = ? AND turn_id = ? AND status = 'running'")
+      .run(retryable ? 1 : 0, errorCode.slice(0, 100), at, conversationId, turnId);
+  }
+
+  public interruptAssistantChatTurn(conversationId: string, turnId: string, at: string): void {
+    this.#db.prepare("UPDATE assistant_chat_turns SET status = 'interrupted', retryable = 0, error_code = 'turn_interrupted', updated_at = ? WHERE conversation_id = ? AND turn_id = ? AND status = 'running'")
+      .run(at, conversationId, turnId);
+  }
+
+  public completeAssistantChatTurn(conversationId: string, turnId: string, answer: unknown, batchId: string | null, batchRevision: number | null, at: string): boolean {
+    return this.atomic(() => {
+      const turn = this.assistantChatTurn(conversationId, turnId);
+      if (turn === null || turn.status !== "running") return false;
+      const conversation = this.assistantConversation(conversationId);
+      if (conversation === null) return false;
+      if (turn.userMessageSeq > conversation.clearSeq) {
+        const seqRow = this.#db.prepare("SELECT coalesce(max(seq), 0) AS seq FROM assistant_messages WHERE conversation_id = ?").get(conversationId) as Record<string, unknown>;
+        const seq = numberColumn(seqRow, "seq") + 1;
+        const ui = (answer as { readonly ui?: unknown }).ui;
+        this.#db.prepare("INSERT INTO assistant_messages(id, conversation_id, role, text, created_at, seq, attachments_json, turn_id, ui_json) VALUES(?, ?, 'assistant', ?, ?, ?, '[]', ?, ?)")
+          .run(randomUUID(), conversationId, (answer as { reply: string }).reply, at, seq, turnId, ui === undefined ? null : JSON.stringify(ui));
+      }
+      this.#db.prepare("UPDATE assistant_conversations SET updated_at = ?, batch_id = coalesce(?, batch_id) WHERE id = ?").run(at, batchId, conversationId);
+      this.#db.prepare("UPDATE assistant_chat_turns SET status = 'completed', result_json = ?, batch_id = coalesce(?, batch_id), batch_revision = coalesce(?, batch_revision), retryable = 0, error_code = NULL, updated_at = ? WHERE conversation_id = ? AND turn_id = ?")
+        .run(JSON.stringify(answer), batchId, batchRevision, at, conversationId, turnId);
+      return true;
+    });
+  }
+
+  public deleteAssistantConversation(id: string): void {
+    this.atomic(() => {
+      this.#db.prepare("DELETE FROM assistant_chat_turns WHERE conversation_id = ?").run(id);
+      this.#db.prepare("DELETE FROM assistant_messages WHERE conversation_id = ?").run(id);
+      this.#db.prepare("DELETE FROM assistant_conversations WHERE id = ?").run(id);
+      this.#db.prepare("UPDATE assistant_history_state SET current_conversation_id = NULL WHERE id = 1 AND current_conversation_id = ?").run(id);
+    });
+  }
+
+  /** Photo-only projection for the monthly background check. Never reads diary bodies. */
+  public calendarBackgroundAssets(month: string, hideDemo: boolean, today: string): readonly Asset[] {
+    const rows = this.#db.prepare(`SELECT r.id AS record_id,
+      coalesce(r.occurred_at_json, r.created_at_json) AS time_json, r.created_at_json AS created_json,
+      a.value_json AS asset_json, ref.key AS photo_order
+      FROM records r, json_each(r.asset_refs_json) ref JOIN assets a ON a.id = json_extract(ref.value, '$.assetId')
+      WHERE r.deleted_at_json IS NULL AND r.kind = 'journal' AND r.is_private = 0
+      AND (? = 0 OR r.is_demo = 0) AND json_extract(ref.value, '$.role') = 'photo'
+      AND json_extract(a.value_json, '$.kind') = 'photo'
+      AND NOT EXISTS (SELECT 1 FROM asset_trash t WHERE t.asset_id = a.id AND t.restored_at IS NULL)`);
+    const formatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" });
+    return rows.all(hideDemo ? 1 : 0).map(row => {
+      const time = JSON.parse(String(row.time_json)) as { kind: string; value: string };
+      const date = time.kind === "instant" ? formatter.format(new Date(time.value)) : time.value.slice(0, 10);
+      return { row, date, time: time.value };
+    }).filter(item => item.date.startsWith(month + "-") && item.date <= today)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time) || String(a.row.created_json).localeCompare(String(b.row.created_json)) || String(a.row.record_id).localeCompare(String(b.row.record_id)) || Number(a.row.photo_order) - Number(b.row.photo_order))
+      .map(item => JSON.parse(String(item.row.asset_json)) as Asset)
+      .filter(asset => asset.storageRefs.some(ref => ref.sourceId === "local" || ref.sourceId === "lifeos-pool"));
+  }
+
   public list(query: RecordListQuery = {}): readonly RecordView[] {
     const where = ["deleted_at_json IS NULL"];
     const params: (string | number)[] = [];
@@ -1231,6 +1726,7 @@ export class SqliteRecordRepository {
   }
 
   public insert(record: TimelineRecord): void {
+    record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
     this.#db.prepare(`
       INSERT INTO records (
@@ -1242,6 +1738,7 @@ export class SqliteRecordRepository {
   }
 
   public update(record: TimelineRecord, expectedRevision: number): boolean {
+    record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
     const result = this.#db.prepare(`
       UPDATE records SET
@@ -1366,6 +1863,20 @@ export class SqliteRecordRepository {
     }
   }
 
+  /** Complete live-record projection, independent of timeline pagination and selected date. */
+  public contactActivity(hideDemo = false, includePrivate = false, now = new Date()): readonly ContactActivity[] {
+    const rows = this.#db.prepare(`SELECT id, created_at_json, occurred_at_json, entity_refs_json FROM records
+      WHERE deleted_at_json IS NULL AND (? = 0 OR is_demo = 0) AND (? = 1 OR is_private = 0)`)
+      .all(hideDemo ? 1 : 0, includePrivate ? 1 : 0);
+    const sources: ContactActivitySource[] = rows.map(row => ({
+      id: textColumn(row, "id"),
+      createdAt: parseJson(textColumn(row, "created_at_json"), "created_at_json"),
+      ...(row.occurred_at_json === null ? {} : { occurredAt: parseJson(textColumn(row, "occurred_at_json"), "occurred_at_json") }),
+      entityRefs: parseJson(textColumn(row, "entity_refs_json"), "entity_refs_json"),
+    }));
+    return contactActivity(sources, now);
+  }
+
   public listEntities(query: EntityListQuery = {}): readonly Entity[] {
     const items: Entity[] = [];
     const needle = query.q === undefined ? undefined : normalizeEntitySearchTerm(query.q);
@@ -1389,13 +1900,47 @@ export class SqliteRecordRepository {
 
   public insertEntity(entity: Entity): void {
     assertValidEntity(entity);
-    this.#db.prepare("INSERT INTO entities (id, value_json, address) VALUES (?, ?, ?)").run(entity.id, JSON.stringify(entity), entityAddress(entity));
+    this.#withNameHistory(entity, () => {
+      this.#db.prepare("INSERT INTO entities (id, value_json, address) VALUES (?, ?, ?)").run(entity.id, JSON.stringify(entity), entityAddress(entity));
+    });
   }
 
   public updateEntity(entity: Entity): boolean {
     assertValidEntity(entity);
-    const result = this.#db.prepare("UPDATE entities SET value_json = ?, address = ? WHERE id = ?").run(JSON.stringify(entity), entityAddress(entity), entity.id);
-    return Number(result.changes) === 1;
+    if (this.findEntityById(entity.id) === null) return false;
+    return this.#withNameHistory(entity, () => {
+      const result = this.#db.prepare("UPDATE entities SET value_json = ?, address = ? WHERE id = ?").run(JSON.stringify(entity), entityAddress(entity), entity.id);
+      return Number(result.changes) === 1;
+    });
+  }
+
+  /** Savepoints compose with assistant transactions. Text and timestamps stay
+   * untouched; revision advances so an editor opened earlier cannot undo this. */
+  #withNameHistory<T>(entity: Entity, write: () => T): T {
+    const existing = this.findEntityById(entity.id);
+    if ((entity.type !== "person" && entity.type !== "place") || (existing && nameVocabulary(existing) === nameVocabulary(entity))) return write();
+    this.#db.exec("SAVEPOINT entity_name_history");
+    try {
+      const before = this.listEntities();
+      const after = [...before.filter(e => e.id !== entity.id), entity];
+      const pending: { id: string; body: TimelineRecord["body"]; refs: TimelineRecord["entityRefs"] }[] = [];
+      const review = [];
+      for (const row of this.#db.prepare("SELECT * FROM records").all()) {
+        const record = rowToView(readRecordRow(row));
+        const plan = planNameHistory(record, before, after, row.deleted_at_json !== null);
+        if (plan.conflicts.length) review.push({ recordId: record.id, revision: record.revision, text: record.body.edited ?? record.body.original, isPrivate: record.isPrivate === true, candidates: plan.conflicts, decisions: record.body.entityMentions ?? [] });
+        if (JSON.stringify(plan.body) !== JSON.stringify(record.body) || JSON.stringify(plan.refs) !== JSON.stringify(record.entityRefs)) pending.push({ id: record.id, body: plan.body, refs: plan.refs });
+      }
+      if (review.length) throw new HttpError(409, "entity_name_review_required", "部分历史称呼有多个可能的人物，请先核对关联，再保存资料。", { review });
+      const update = this.#db.prepare("UPDATE records SET body_json = ?, entity_refs_json = ?, revision = revision + 1 WHERE id = ?");
+      for (const record of pending) update.run(JSON.stringify(record.body), JSON.stringify(record.refs), record.id);
+      const result = write();
+      this.#db.exec("RELEASE entity_name_history");
+      return result;
+    } catch (error) {
+      this.#db.exec("ROLLBACK TO entity_name_history; RELEASE entity_name_history");
+      throw error;
+    }
   }
 
   /**
@@ -1469,8 +2014,9 @@ export class SqliteRecordRepository {
    * fine at personal scale; a dedicated index table is the obvious next step if
    * that ever stops being true.
    */
-  public findAssetByContentHash(algorithm: string, value: string): Asset | null {
+  public findAssetByContentHash(algorithm: string, value: string, purpose?: "avatar"): Asset | null {
     for (const asset of this.listAssets()) {
+      if (asset.purpose !== purpose) continue;
       for (const reference of asset.storageRefs) {
         if (reference.contentHash?.algorithm === algorithm && reference.contentHash.value === value) return asset;
       }
@@ -1559,8 +2105,15 @@ export class SqliteRecordRepository {
    * still be restored, so its photos must never be mistaken for orphans. One
    * pass over the table is also far cheaper than asking per asset.
    */
+  public avatarReferenceEntityIds(assetId: string): readonly string[] {
+    return this.listEntities({ type: "person" }).filter(entity => entity.type === "person" && entity.avatarAssetId === assetId).map(entity => entity.id);
+  }
+
   public referencedAssetIds(): ReadonlySet<string> {
     const ids = new Set<string>();
+    for (const entity of this.listEntities({ type: "person" })) {
+      if (entity.type === "person" && entity.avatarAssetId) ids.add(entity.avatarAssetId);
+    }
     for (const row of this.#db.prepare("SELECT asset_refs_json FROM records").all()) {
       const refs = parseJson<readonly Record<string, unknown>[]>(textColumn(row, "asset_refs_json"), "asset_refs_json");
       for (const ref of refs) {
@@ -1572,6 +2125,15 @@ export class SqliteRecordRepository {
       if (batch.status === "undone") continue;
       for (const material of batch.materials) if (material.assetId) ids.add(material.assetId);
       for (const entry of batch.plan.entries) for (const id of entry.assetIds) ids.add(id);
+    }
+    for (const row of this.#db.prepare("SELECT attachments_json FROM assistant_messages").all()) {
+      const attachments = parseJson<unknown>(textColumn(row, "attachments_json"), "assistant_messages.attachments_json");
+      if (!Array.isArray(attachments)) continue;
+      for (const value of attachments) {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+        const assetId = (value as Record<string, unknown>).assetId;
+        if (typeof assetId === "string" && assetId !== "") ids.add(assetId);
+      }
     }
     return ids;
   }

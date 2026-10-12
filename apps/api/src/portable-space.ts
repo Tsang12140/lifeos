@@ -73,6 +73,7 @@ export function replaceSpaceTables(db: DatabaseSync, tables: SpaceTables, expect
     db.exec("DELETE FROM cycle_intimacy_day_edit_undo");
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_batches'").get()) db.exec("DELETE FROM assistant_batches");
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_task_labels'").get()) db.exec("DELETE FROM calendar_task_labels");
+    if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_days'").get()) db.exec("DELETE FROM calendar_days");
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }

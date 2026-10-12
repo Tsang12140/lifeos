@@ -1,7 +1,7 @@
 import { dateForTime } from "./timeline-query.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { calendarToday, canEditDaySummary, isAiAssisted, isBackfilled, type RecordKind, type TaskStatus } from "@lifeos/core";
-import { ConflictError } from "./repository.js";
+import { ConflictError, type RecordView } from "./repository.js";
 import { HttpError, setJson, setEmpty } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
 import {
@@ -41,6 +41,16 @@ export const handleRecordsRoutes: RouteHandler = async (
   url: URL,
 ): Promise<boolean> => {
   const { config, repository } = ctx;
+  if (pathname === "/api/calendar/days" && req.method === "GET") {
+    const from = parseDateQuery(url.searchParams.get("from"), "from");
+    const to = parseDateQuery(url.searchParams.get("to"), "to");
+    if (from === undefined || to === undefined || from > to) throw new HttpError(400, "invalid_range", "from and to are required");
+    const dates = datesBetween(from, to);
+    if (dates.length > 42) throw new HttpError(400, "invalid_range", "range must not exceed 42 days");
+    const items = await ctx.calendarDays.resolve(dates, new Date(), url.searchParams.get("hideDemo") === "1");
+    setJson(res, 200, { items });
+    return true;
+  }
   if (pathname === "/api/records" && req.method === "GET") {
     const q = url.searchParams.get("q") ?? undefined;
     if (q !== undefined && q.length > 2000) throw new HttpError(400, "invalid_query", "q is too long");
@@ -77,6 +87,33 @@ export const handleRecordsRoutes: RouteHandler = async (
     const kinds = many("kinds", RECORD_KINDS), statuses = many("statuses", TASK_STATUSES);
     const entityTypes = many("entityTypes", ["person", "place", "movie", "project"] as const);
     const attachments = many("attachments", ["photo", "file"] as const);
+    const ids = (key: string): string[] => {
+      const raw = url.searchParams.get(key);
+      if (raw === null) return [];
+      const values = [...new Set(raw.split(",").map(value => value.trim()))];
+      if (values.length > 100 || values.some(value => !value || value.length > 200)) throw new HttpError(400, "invalid_query", "关联对象筛选格式不正确");
+      return values;
+    };
+    const personIds = ids("personIds"), placeIds = ids("placeIds"), entityIds = ids("entityIds");
+    // Keep legacy faceted reads compatible; the unified search explicitly asks
+    // for conjunctions. Near results relax only these entity capsules.
+    const entityMatch = enumField(url.searchParams.get("entityMatch") || "any", ["any", "all", "near"] as const, "entityMatch");
+    const capsules = [
+      ...personIds.map(entityId => ({ entityId, entityType: "person" })),
+      ...placeIds.map(entityId => ({ entityId, entityType: "place" })),
+      ...entityIds.map(entityId => ({ entityId, entityType: "" })),
+    ];
+    const missingCapsules = (record: RecordView) => capsules.filter(capsule =>
+      !record.entityRefs.some(ref => ref.entityId === capsule.entityId && (!capsule.entityType || ref.entityType === capsule.entityType)));
+    const pageNumber = (key: string, fallback: number, max: number): number => {
+      const raw = url.searchParams.get(key);
+      if (raw === null) return fallback;
+      if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) > max || (key === "limit" && Number(raw) === 0)) throw new HttpError(400, "invalid_query", "分页参数格式不正确");
+      return Number(raw);
+    };
+    const nearLimit = entityMatch === "near" ? pageNumber("limit", 20, 50) : 20;
+    const nearOffset = entityMatch === "near" ? pageNumber("offset", 0, 1000000) : 0;
+    if (entityMatch === "near" && (url.searchParams.get("search") !== "1" || url.searchParams.get("calendar") === "1")) throw new HttpError(400, "invalid_query", "接近结果只用于记录搜索");
     const marker = url.searchParams.get("backfill");
     const assisted = url.searchParams.get("assisted");
     if (assisted !== null && assisted !== "true" && assisted !== "false") throw new HttpError(400, "invalid_query", "assisted筛选格式不正确");
@@ -88,6 +125,15 @@ export const handleRecordsRoutes: RouteHandler = async (
       if (timeScoped && record.kind === "note" && url.searchParams.get("search") !== "1") return false;
       if (kinds.length && !kinds.includes(record.kind)) return false;
       if (statuses.length && (record.kind !== "task" || !statuses.includes(record.task.status))) return false;
+      if (entityMatch === "any") {
+        if (personIds.length && !record.entityRefs.some(ref => ref.entityType === "person" && personIds.includes(ref.entityId))) return false;
+        if (placeIds.length && !record.entityRefs.some(ref => ref.entityType === "place" && placeIds.includes(ref.entityId))) return false;
+        if (entityIds.length && !record.entityRefs.some(ref => entityIds.includes(ref.entityId))) return false;
+      } else {
+        const missing = missingCapsules(record).length;
+        if (entityMatch === "all" ? missing > 0 : missing === 0 || missing === capsules.length) return false;
+      }
+      if (entityMatch === "near" && ((record.isPrivate === true && url.searchParams.get("includePrivate") !== "1") || (record.isDemo === true && url.searchParams.get("hideDemo") === "1"))) return false;
       if (backfill === "all" && !isBackfilled(record)) return false;
       if ((backfill === "ai" || assisted === "true") && !isAiAssisted(record)) return false;
       if (entityTypes.length && !record.entityRefs.some((ref) => entityTypes.includes(ref.entityType as typeof entityTypes[number]))) return false;
@@ -95,7 +141,24 @@ export const handleRecordsRoutes: RouteHandler = async (
       return true;
     });
     const scoped = filterDate(sourceRecords, date, timeZone);
-    const items = sortTimeline(filterDateRange(scoped, from, to, timeZone), timeZone);
+    const sorted = sortTimeline(filterDateRange(scoped, from, to, timeZone), timeZone);
+    if (entityMatch === "near") {
+      const ranked = sorted.map(record => {
+        const missing = missingCapsules(record);
+        return { record, matched: capsules.length - missing.length, total: capsules.length, missing };
+      }).sort((a, b) => b.matched - a.matched); // Stable sort retains newest-first ties.
+      const page = ranked.slice(nearOffset, nearOffset + nearLimit);
+      setJson(res, 200, {
+        items: page.map(item => item.record), total: ranked.length,
+        matches: page.map(({ record, ...score }) => ({ recordId: record.id, ...score })),
+        nextOffset: nearOffset + page.length < ranked.length ? nearOffset + page.length : null,
+      });
+      return true;
+    }
+    // Calendar cards need an excerpt; opening a day uses the full-record route.
+    const items = url.searchParams.get("calendar") === "1"
+      ? sorted.filter(record => record.isPrivate !== true).map(record => ({ ...record, body: { original: Array.from(record.body.edited ?? record.body.original).slice(0, 180).join("") }, aiDerived: [] }))
+      : sorted;
     setJson(res, 200, { items });
     return true;
   }
@@ -134,6 +197,7 @@ export const handleRecordsRoutes: RouteHandler = async (
     const items = await resolveDaySummaries({
       dates,
       recordsForDate: (date) => byDate.get(date) ?? [],
+      latestRecordsForDate: date => collectSummarisableRecords(repository, timeZone).get(date) ?? [],
       cache: repository,
       provider: daySummaryProvider,
       force: url.searchParams.get("force") === "1",
@@ -212,6 +276,8 @@ export const handleRecordsRoutes: RouteHandler = async (
       cache: repository,
       provider: daySummaryProvider,
       force: true,
+      today: new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date()),
+      latestRecordsForDate: date => collectSummarisableRecords(repository, timeZone).get(date) ?? [],
     });
     setJson(res, 200, summaryPayload(items, daySummaryProvider));
     return true;

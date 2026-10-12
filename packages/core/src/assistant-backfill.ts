@@ -1,4 +1,5 @@
 import type { CycleIntimacyEventKind, CycleIntimacyModuleData, Entity, Movie, RecordKind, TimelineRecord } from "./model.js";
+import type { UiTurnPlan } from "./ui-command.js";
 
 export interface BackfillMaterial {
   readonly name: string;
@@ -103,6 +104,15 @@ export interface BackfillChatAnswer {
   readonly action: "reply" | "draft" | "commit" | "undo";
   readonly mode: "ai" | "rules";
   readonly batch?: BackfillBatch;
+  /**
+   * Compiled interface commands for this turn — filtering, jumping, opening a
+   * card, asking to see private records. Absent means "just talk", which is what
+   * every turn did before this existed.
+   */
+  readonly ui?: UiTurnPlan;
+  /** Present when the reply was produced by the durable assistant chat endpoint. */
+  readonly conversationId?: string;
+  readonly turnId?: string;
 }
 export function isAiBackfill(record: Pick<TimelineRecord, "aiDerived" | "isBackfill">): boolean {
   // Compatibility for callers that used this name to identify AI provenance.

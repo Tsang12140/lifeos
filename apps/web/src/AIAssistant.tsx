@@ -1,11 +1,11 @@
 import type { ComposerProps } from "./composer";
-import type { Entity } from "@lifeos/core";
+import type { Entity, UiCommand, UiTurnPlan } from "@lifeos/core";
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Settings2, X } from "lucide-react";
-import { AssistantBackfill } from "./assistant-backfill";
+import { History, MoreHorizontal, Settings2, X } from "lucide-react";
+import { AssistantBackfill, type AssistantBackfillHandle } from "./assistant-backfill";
 import type { AiStatus } from "./api";
 
-interface AIAssistantProps { readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">; readonly status: AiStatus; readonly onOpenSettings: () => void; readonly visible?: boolean; readonly desktopDocked?: boolean; readonly scope: string; readonly onOpenEntity: (entity: Entity) => void; readonly onChanged: () => void; readonly onViewRecords: () => void; }
+interface AIAssistantProps { readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">; readonly status: AiStatus; readonly onOpenSettings: () => void; readonly visible?: boolean; readonly desktopDocked?: boolean; readonly scope: string; readonly onOpenEntity: (entity: Entity) => void; readonly onChanged: () => void; readonly onViewRecords: () => void; readonly onUiPlan: (plan: UiTurnPlan) => void; readonly onUiCommand: (command: UiCommand) => void; readonly privacyRequest: { readonly reason: string } | null; readonly onPrivacyDecision: (decision: "once" | "session" | "never") => void; readonly privacyVisible?: boolean; }
 interface LauncherPosition { readonly x: number; readonly y: number; }
 const LAUNCHER_POSITION_KEY = "lifeos.ai.launcher-position.v1";
 const LAUNCHER_SIZE = 56;
@@ -14,7 +14,9 @@ function constrainLauncherPosition(x: number, y: number): LauncherPosition {
   const maxX = Math.max(LAUNCHER_EDGE, window.innerWidth - LAUNCHER_SIZE - LAUNCHER_EDGE);
   // On a phone the last 64px are the solid bottom navigation. Keep the
   // launcher 12px above that rail, whatever position a previous drag saved.
-  const reservedBottom = window.matchMedia("(max-width: 900px)").matches ? 76 : LAUNCHER_EDGE;
+  const reservedBottom = window.matchMedia("(max-width: 900px)").matches
+    ? (document.querySelector(".mobile-nav")?.getBoundingClientRect().height || 64) + LAUNCHER_EDGE
+    : LAUNCHER_EDGE;
   const maxY = Math.max(LAUNCHER_EDGE, window.innerHeight - LAUNCHER_SIZE - reservedBottom);
   return { x: Math.min(maxX, Math.max(LAUNCHER_EDGE, x)), y: Math.min(maxY, Math.max(LAUNCHER_EDGE, y)) };
 }
@@ -37,7 +39,8 @@ function AssistantLogo() {
 }
 
 
-export function AIAssistant({ photoInput, status, onOpenSettings, visible = true, desktopDocked = false, scope, onChanged, onViewRecords, onOpenEntity }: AIAssistantProps) {
+export function AIAssistant({ photoInput, status, onOpenSettings, visible = true, desktopDocked = false, scope, onChanged, onViewRecords, onOpenEntity, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false }: AIAssistantProps) {
+  const backfillRef = useRef<AssistantBackfillHandle>(null);
   const [open, setOpen] = useState(false);
   const [desktopLayout, setDesktopLayout] = useState(() => window.matchMedia("(min-width: 901px)").matches);
   const docked = desktopDocked && desktopLayout;
@@ -70,15 +73,21 @@ export function AIAssistant({ photoInput, status, onOpenSettings, visible = true
   const openAssistant = () => setOpen(true);
   const beginLauncherDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
+    // Touch drags may never emit the synthetic click that normally consumes
+    // this flag. A new gesture must still be able to open the assistant.
+    if (!desktopLayout) suppressLauncherClickRef.current = false;
     const rect = event.currentTarget.getBoundingClientRect();
     launcherDragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDraggingLauncher(true);
+    if (desktopLayout) setDraggingLauncher(true);
   };
   const moveLauncher = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const drag = launcherDragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
     if (Math.abs(event.clientX - drag.startX) > 4 || Math.abs(event.clientY - drag.startY) > 4) drag.moved = true;
+    if (!drag.moved && !desktopLayout) return;
+    setDraggingLauncher(true);
+    if (!desktopLayout) event.currentTarget.style.setProperty("--ai-launcher-lift", "0px");
     setLauncherPosition(constrainLauncherPosition(event.clientX - drag.offsetX, event.clientY - drag.offsetY));
   };
   const endLauncherDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -86,6 +95,9 @@ export function AIAssistant({ photoInput, status, onOpenSettings, visible = true
     if (drag === null || drag.pointerId !== event.pointerId) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     if (drag.moved) suppressLauncherClickRef.current = true;
+    // Captured touch pointers are not guaranteed to produce a compatibility
+    // click. Complete a stationary tap here; any later click is idempotent.
+    if (!desktopLayout && !drag.moved && event.pointerType === "touch" && event.type === "pointerup") openAssistant();
     launcherDragRef.current = null;
     setDraggingLauncher(false);
   };
@@ -101,14 +113,26 @@ export function AIAssistant({ photoInput, status, onOpenSettings, visible = true
     window.addEventListener("lifeos:close-ai", closeForSettings);
     return () => window.removeEventListener("lifeos:close-ai", closeForSettings);
   }, []);
+  /**
+   * The assistant's own commands must not shut the assistant.
+   *
+   * Desktop search keeps the docked rail. On a narrow window the same event
+   * keeps the floating conversation, clarification and offer buttons open
+   * while the assistant applies a filter or navigates.
+   */
+  useEffect(() => {
+    const keepInFront = () => openAssistant();
+    window.addEventListener("lifeos:open-ai", keepInFront);
+    return () => window.removeEventListener("lifeos:open-ai", keepInFront);
+  }, []);
 
 
   if (!visible) return null;
   return <>
     {open && !docked ? <button className="ai-assistant-backdrop" type="button" aria-label="关闭 AI 助手背景" onClick={close} /> : null}
     <section className={`ai-assistant-panel has-backfill ${expanded ? "is-open" : ""} ${docked ? "is-docked" : ""}`} aria-hidden={!expanded} inert={!expanded} aria-label="AI 助手">
-      <header className="ai-assistant-header"><div className="ai-assistant-title"><span className="ai-assistant-logo"><AssistantLogo /></span><div><strong>AI管家</strong></div></div><div className="ai-assistant-actions"><button className="ai-header-icon" type="button" onClick={onOpenSettings} aria-label="AI 助手设置"><Settings2 size={17} aria-hidden="true" /></button>{!docked ? <button className="ai-header-icon" type="button" onClick={close} aria-label="关闭 AI 助手"><X size={17} aria-hidden="true" /></button> : null}</div></header>
-      <AssistantBackfill photoInput={photoInput} key={scope} scope={scope} configured={status.configured} onChanged={onChanged} onViewRecords={onViewRecords} onOpenEntity={onOpenEntity} />
+      <header className="ai-assistant-header" onContextMenu={(event) => { event.preventDefault(); backfillRef.current?.openMenu(event.clientX, event.clientY); }}><div className="ai-assistant-title"><span className="ai-assistant-logo"><AssistantLogo /></span><div><strong>AI管家</strong></div></div><div className="ai-assistant-actions"><button className="ai-header-icon" type="button" onClick={() => backfillRef.current?.openHistory()} aria-label="聊天记录"><History size={17} aria-hidden="true" /></button>{!docked ? <button className="ai-header-icon" type="button" aria-haspopup="menu" aria-label="更多操作" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); backfillRef.current?.openMenu(rect.right - 12, rect.bottom + 6); }}><MoreHorizontal size={17} aria-hidden="true" /></button> : null}{!status.configured ? <button className="ai-header-icon" type="button" onClick={onOpenSettings} aria-label="AI 助手设置"><Settings2 size={17} aria-hidden="true" /></button> : null}{!docked ? <button className="ai-header-icon" type="button" onClick={close} aria-label="关闭 AI 助手"><X size={17} aria-hidden="true" /></button> : null}</div></header>
+      <AssistantBackfill ref={backfillRef} photoInput={photoInput} key={scope} scope={scope} configured={status.configured} onChanged={onChanged} onViewRecords={onViewRecords} onOpenEntity={onOpenEntity} onOpenSettings={onOpenSettings} onUiPlan={onUiPlan} onUiCommand={onUiCommand} privacyRequest={privacyRequest} onPrivacyDecision={onPrivacyDecision} privacyVisible={privacyVisible} />
     </section>
     <button className={`ai-assistant-launcher ${expanded ? "is-hidden" : ""} ${draggingLauncher ? "is-dragging" : ""}`} type="button" aria-hidden={expanded} tabIndex={expanded ? -1 : 0} style={launcherPosition === null ? undefined : { left: `${launcherPosition.x}px`, top: `${launcherPosition.y}px`, right: "auto", bottom: "auto" }} onPointerDown={beginLauncherDrag} onPointerMove={moveLauncher} onPointerUp={endLauncherDrag} onPointerCancel={endLauncherDrag} onClick={activateLauncher} aria-label="打开 AI 助手，可拖拽移动"><AssistantLogo /></button>
   </>;

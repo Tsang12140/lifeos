@@ -144,7 +144,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
       </form> : null}
 
       {stage === "invite" ? <form className="welcome-form" onSubmit={(event) => void checkInvite(event)}>
-        <label><span>邀请码</span><input autoComplete="off" value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} placeholder="粘贴管理员给你的邀请码" required /></label>
+        <label><span>邀请码</span><input autoComplete="off" value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} required /></label>
         {error ? <p className="welcome-error" role="alert">{error}</p> : null}
         <button className="primary-button welcome-main-action" type="submit" disabled={busy || !inviteCode.trim()}>{busy ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{busy ? "验证中…" : "继续"}</span></button>
         <button className="welcome-text-action" type="button" onClick={() => switchTo("login")}><ArrowLeft size={15} />返回登录</button>
@@ -152,7 +152,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
 
       {stage === "create" ? <form className="welcome-form" onSubmit={(event) => void register(event)}>
         <label><span>登录账号</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={32} required /></label>
-        <label><span>称呼（选填，与登录账号不同）</span><input autoComplete="nickname" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="可以怎么称呼你" maxLength={80} /></label>
+        <label><span>称呼（选填，与登录账号不同）</span><input autoComplete="nickname" value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} /></label>
         <WelcomePasswordField id="welcome-create-password" label="设置密码（至少 10 位）" value={password} onChange={setPassword} autoComplete="new-password" minLength={10} />
         {error ? <p className="welcome-error" role="alert">{error}</p> : null}
         <button className="primary-button welcome-main-action" type="submit" disabled={busy || !username.trim() || password.length < 10}>{busy ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{busy ? "创建中…" : "创建并登录"}</span></button>

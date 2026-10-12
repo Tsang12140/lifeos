@@ -1,0 +1,126 @@
+/* Scoped to annotation review; keep shared composer and task icon styles untouched. */
+.mention-review-item.mention-review-context-group { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px 0; }
+.mention-review-group-toggle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  color: #465266;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mention-review-group-toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.mention-review-group-box {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+}
+.mention-review-group-toggle:is([data-state="all"], [data-state="mixed"]) { color: #4b86d5; }
+.mention-review-group-toggle:hover:not(:has(input:disabled)) { background: var(--surface-soft); border-radius: 5px; }
+.mention-review-group-toggle:has(input:focus-visible) .mention-review-group-box { outline: 2px solid #4b86d5; border-radius: 5px; }
+.mention-review-group-toggle:has(input:disabled) { cursor: default; }
+.mention-review-context .mention-review-word {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: bottom;
+  gap: 4px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: normal;
+  color: var(--muted);
+}
+.mention-review-word[data-entity-type="person"].is-selected { color: #8a705b; }
+.mention-review-word[data-entity-type="place"].is-selected { color: #4b86d5; }
+.mention-review-word input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.mention-review-word:has(input:focus-visible) { outline: 2px solid currentColor; outline-offset: 2px; }
+.mention-review-word:has(input:disabled) { cursor: default; }
+.mention-review-word .mention-review-circle {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+.mention-review-word .mention-review-circle svg { opacity: 0; }
+.mention-review-word.is-selected .mention-review-circle { background: currentColor; }
+.mention-review-word.is-selected .mention-review-circle svg { opacity: 1; color: white; }
+.mention-review-word .mention-review-type-icon { flex-shrink: 0; }
+.mention-review-context .mention-review-word strong { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.mention-review-context:not(.is-expanded) .mention-review-word { max-width: calc(100% - 1em); }
+.mention-review-context:not(.is-expanded) .mention-review-word strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.mention-review-context .mention-review-word.is-unselected strong { color: var(--muted); font-weight: 400; }
+.mention-review-word:hover { background: var(--surface-soft); }
+.mention-review-word:has(input:disabled):hover { background: none; }
+.mention-review-copy .mention-review-assignment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-size: .75rem;
+  color: var(--muted);
+}
+.mention-review-assignment span { overflow-wrap: anywhere; }
+.mention-review-copy .mention-review-assignment select { min-width: 0; margin-top: 0; }
+.mention-review-copy .mention-review-context { position: relative; }
+.mention-review-body { scrollbar-gutter: stable; }
+.mention-review-context > span { position: relative; z-index: 1; pointer-events: none; }
+.mention-review-context .mention-review-word { z-index: 1; }
+.mention-review-context .mention-review-context-toggle {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.mention-review-context-toggle:focus-visible { outline: 2px solid #4b86d5; outline-offset: 2px; }
+.mention-review-context .context-near { opacity: .62; }
+.mention-review-context .context-far {
+  color: transparent;
+  background-clip: text;
+  -webkit-background-clip: text;
+}
+.mention-review-context .context-before {
+  background-image: linear-gradient(to right, transparent, color-mix(in srgb, var(--ink) 40%, transparent));
+}
+.mention-review-context .context-after {
+  background-image: linear-gradient(to right, color-mix(in srgb, var(--ink) 40%, transparent), transparent);
+}

@@ -18,7 +18,12 @@ export type ThumbnailCache = ReturnType<typeof createThumbnailCache>;
 
 import type { CalendarTaskLabels } from "./calendar-task-labels.js";
 
+import type { CalendarDays } from "./calendar-days.js";
+import type { CalendarBackgrounds } from "./calendar-backgrounds.js";
+
 export interface RouteContext {
+  readonly calendarDays: CalendarDays;
+  readonly calendarBackgrounds: CalendarBackgrounds;
   readonly config: ApiConfig;
   readonly repository: SqliteRecordRepository;
   readonly calendarTaskLabels: CalendarTaskLabels;

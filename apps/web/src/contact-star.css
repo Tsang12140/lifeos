@@ -1,0 +1,15 @@
+.contact-star.icon-button {
+  flex: 0 0 auto;
+  color: #888880;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.contact-star.icon-button:hover { color: #666660; border-color: transparent; background: rgb(128 128 112 / 0.07); }
+.contact-star.icon-button:focus-visible { outline: 2px solid #b9ab72; outline-offset: 2px; }
+.contact-star svg { display: block; }
+.contact-star[aria-pressed="true"] svg { filter: drop-shadow(0 1px 0.6px rgb(174 148 56 / 0.15)); }
+.contact-star:disabled { cursor: wait; }
+.entity-library-card-actions { display: flex; align-items: center; gap: 4px; }
+.person-card-name { display: flex; align-items: center; gap: 6px; }
+.person-card-name h2 { min-width: 0; overflow-wrap: anywhere; }

@@ -1,0 +1,48 @@
+/* One continuous mask covers the top gap and upper rounded corners. Its outer
+   edge curves into the card, leaving the side strips and lower corners clear. */
+html {
+  scroll-padding-top: var(--weather-sticky-height, 0px);
+}
+
+.topbar {
+  position: sticky;
+  top: var(--weather-viewport-top, 0px);
+  z-index: 20;
+  /* Keep the unrelated right rail interactive outside the weather region. */
+  pointer-events: none;
+}
+
+.weather-header-frame {
+  --weather-frame-top: 26px;
+  --weather-frame-radius: 21px;
+  position: relative;
+  margin: calc(-1 * var(--weather-frame-top)) 0 0;
+  padding: var(--weather-frame-top) 0 0;
+  pointer-events: none;
+}
+
+.weather-header-frame::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: -16px;
+  left: -16px;
+  height: calc(var(--weather-frame-top) + var(--weather-frame-radius));
+  border-radius: 0 0 16px 16px / 0 0 var(--weather-frame-radius) var(--weather-frame-radius);
+  background: var(--canvas);
+  pointer-events: auto;
+}
+
+.weather-header-frame > .weather-header {
+  z-index: 1;
+  border-radius: var(--weather-frame-radius);
+  pointer-events: auto;
+}
+
+.app-shell[data-view="tasks"] .weather-header-frame::before {
+  background: #fffcf5;
+}
+
+@media (max-width: 900px) {
+  .weather-header-frame { --weather-frame-top: 16px; --weather-frame-radius: 18px; }
+}

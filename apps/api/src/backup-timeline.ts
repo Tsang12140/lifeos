@@ -659,12 +659,20 @@ export interface SnapshotAssetReferences {
   readonly unreadable: readonly string[];
 }
 
-/** The asset ids one snapshot's records point at, timeline and recycle bin alike. */
+/** Asset ids retained by a snapshot's records (including recycle bin) and person avatars. */
 function referencedIdsInSnapshot(db: DatabaseSync): ReadonlySet<string> {
   const ids = new Set<string>();
-  if (!snapshotTables(db).has("records")) return ids;
-  for (const row of db.prepare("SELECT asset_refs_json FROM records").all()) {
-    for (const id of referencedAssetIds(row["asset_refs_json"])) ids.add(id);
+  const tables = snapshotTables(db);
+  if (tables.has("records")) {
+    for (const row of db.prepare("SELECT asset_refs_json FROM records").all()) {
+      for (const id of referencedAssetIds(row["asset_refs_json"])) ids.add(id);
+    }
+  }
+  if (tables.has("entities")) {
+    for (const row of db.prepare("SELECT value_json FROM entities").all()) {
+      const entity = JSON.parse(String(row["value_json"]));
+      if (entity.type === "person" && typeof entity.avatarAssetId === "string") ids.add(entity.avatarAssetId);
+    }
   }
   return ids;
 }

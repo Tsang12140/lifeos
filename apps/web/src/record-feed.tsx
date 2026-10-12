@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ComponentProps } from
 import { LoaderCircle } from "lucide-react";
 import { Timeline, TimelineItem, groupRecords } from "./timeline";
 import { ErrorState, LoadingState } from "./timeline-states";
-import { displayDate, shortDate } from "./time";
+import { displayDate, shiftDate, shortDate } from "./time";
 
 type RecordFeedProps = ComponentProps<typeof Timeline> & {
   today: string;
@@ -49,20 +49,21 @@ export function RecordFeed(props: RecordFeedProps) {
     target?.scrollIntoView({ block: "start", behavior: "instant" });
   }, [selectedDate, jumpVersion, today, dataCurrent, loading, error, records]);
 
-  const items = (dayRecords: typeof todayRecords) => dayRecords.map(record => <TimelineItem {...props} key={record.id} record={record} />);
+  const items = (dayRecords: typeof todayRecords) => dayRecords.map(record => <TimelineItem {...props} key={record.id} record={record} focused={record.id === props.focusRecordId} />);
   const ready = records !== null;
-  return <section className="timeline-section record-feed" data-view="today" ref={root} aria-labelledby="record-feed-title" aria-busy={refreshing || !dataCurrent ? "true" : undefined}>
-    <div className="section-heading"><div className="record-feed-heading"><h2 id="record-feed-title">今天</h2><span>{shortDate(today)}</span></div>{todayRecords.length ? <span className="record-count">{todayRecords.length} 条</span> : null}</div>
+  return <section className="timeline-section record-feed" data-view="today" ref={root} aria-label="记录时间轴" aria-busy={refreshing || !dataCurrent ? "true" : undefined}>
+    {todayRecords.length > 0 ? <div className="section-heading"><div className="record-feed-heading"><h2 id="record-feed-title">今天</h2><span>{shortDate(today)}</span></div><span className="record-count">{todayRecords.length} 条</span></div> : null}
     {loading && records === null ? <LoadingState /> : null}
     {error ? <ErrorState message={error} onRetry={onRetry} /> : null}
     {records !== null && !error && (refreshing || !dataCurrent) ? <div className="timeline-refresh-state" role="status"><LoaderCircle className="spin" size={16} aria-hidden="true" /><span>正在更新记录…</span></div> : null}
     {ready ? <>
-      <div className={`timeline-list record-feed-today ${interactionDisabled ? "is-stale" : ""}`} data-feed-date={today}>
-        <div className="timeline-group">{todayRecords.length ? items(todayRecords) : <p className="record-feed-empty">今天还没有记录</p>}</div>
-      </div>
-      {history.length ? <><EarlierDivider /><div className={`timeline-list record-feed-history ${interactionDisabled ? "is-stale" : ""}`}>
+      {todayRecords.length > 0 ? <div className={`timeline-list record-feed-today ${interactionDisabled ? "is-stale" : ""}`} data-feed-date={today}>
+        <div className="timeline-group">{items(todayRecords)}</div>
+      </div> : null}
+      {todayRecords.length === 0 && history.length === 0 && dataCurrent && !error ? <p className="record-feed-empty">还没有记录</p> : null}
+      {history.length ? <>{todayRecords.length > 0 ? <EarlierDivider /> : null}<div className={`timeline-list record-feed-history ${interactionDisabled ? "is-stale" : ""}`}>
         {shownHistory.map(group => <div className="timeline-group" key={group.date} data-feed-date={group.date}>
-          <div className="record-feed-day-heading"><h3 className="timeline-group-title">{group.date.slice(0, 4) !== today.slice(0, 4) ? `${group.date.slice(0, 4)}年` : ""}{displayDate(group.date)}</h3><button className="record-feed-backfill" type="button" disabled={interactionDisabled} onClick={() => onBackfill(group.date)} aria-label={`补记${group.date}`}>补记这一天</button></div>
+          <div className="record-feed-day-heading"><h3 className="timeline-group-title">{group.date === shiftDate(today, -1) ? "昨天，" : ""}{group.date.slice(0, 4) !== today.slice(0, 4) ? `${group.date.slice(0, 4)}年` : ""}{displayDate(group.date)}</h3><button className="record-feed-backfill" type="button" disabled={interactionDisabled} onClick={() => onBackfill(group.date)} aria-label={`补记${group.date}`}>补记这一天</button></div>
           {group.records.length ? items(group.records) : <p className="record-feed-empty">这一天还没有记录</p>}
         </div>)}
       </div>{shownHistory.length < history.length ? <div className="record-feed-more"><button className="secondary-button" type="button" onClick={() => setHistoryLimit(shownHistory.length + 14)}>查看更多</button></div> : null}</> : null}

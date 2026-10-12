@@ -1,3 +1,4 @@
+import { calendarAssetVersion } from "./calendar-days.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -62,9 +63,57 @@ import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, parseThumbnailWidth } from "./deriv
 import type { RouteContext, RouteHandler } from "./route-context.js";
 import { POOL_SOURCE_ID, StoragePoolError } from "./storage-pool.js";
 import type { PoolObjectRow } from "./storage-pool-store.js";
+import sharp from "sharp";
 import { readPhotoMetadata } from "./photo-metadata.js";
 import { MATERIAL_FORMATS } from "./assistant-material.js";
 import { handleVideoRoutes } from "./video-assets.js";
+
+/** Hash-less registered local files may be replaced outside the API; their stat also versions the URL. */
+export function assetThumbnailVersion(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset): string {
+  let stamp: string | undefined;
+  if (asset.storageRefs.some(ref => ref.sourceId === "local" && ref.contentHash === undefined)) {
+    try { const file = resolveAssetOriginal(ctx.config, ctx.repository, asset.id).file; const stat = statSync(file); stamp = stat.size + ":" + stat.mtimeMs + ":" + stat.ctimeMs; }
+    catch { stamp = "missing"; }
+  }
+  return calendarAssetVersion(ctx.config.databasePath, asset, stamp);
+}
+
+export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width: import("./derived-thumbs.js").ThumbnailWidth): Promise<{ file: string; source: string; canary: boolean }> {
+  const { config, repository, thumbnails } = ctx;
+  const asset = repository.findAssetById(id);
+  if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
+  const poolRead = assetPoolRead(ctx,asset);
+  const poolReference = poolRead?.reference;
+  let file: string;
+  let source = "local-derived";
+  if (poolReference !== undefined) {
+    poolObjectFor(ctx, asset, poolReference, poolRead!.ledgerAssetId);
+    const cached = thumbnails.cached(poolReference, width);
+    if (cached !== null) { file = cached; source = "derived-cache"; }
+    else {
+      const mime = asset.mediaType ?? poolReference.mediaType ?? "";
+      const extension = Object.entries(ASSET_MEDIA_TYPES).find(([, value]) => value === mime)?.[0];
+      if (extension === undefined || !THUMBNAILABLE_ASSET_EXTENSIONS.has(extension)) {
+        throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
+      }
+      const downloaded = await downloadPoolAsset(ctx, asset, poolReference, poolRead!.ledgerAssetId);
+      try {
+        file = await thumbnails.ensure(poolReference, downloaded.file, width);
+        source = "pool-derived";
+      } catch {
+        throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original");
+      } finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
+    }
+  } else {
+    const original = resolveAssetOriginal(config, repository, id);
+    if (!THUMBNAILABLE_ASSET_EXTENSIONS.has(extname(original.file).toLowerCase())) {
+      throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
+    }
+    try { file = await thumbnails.ensure(original.reference, original.file, width); }
+    catch { throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original"); }
+  }
+  return { file, source, canary: poolRead?.canary === true };
+}
 
 const photoInfoCache = new WeakMap<RouteContext["repository"], Map<string, Promise<Awaited<ReturnType<typeof readPhotoMetadata>>>>>();
 
@@ -197,16 +246,25 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (!ctx.poolBridge.enabled && config.assetRoot === undefined) {
       throw new HttpError(404, "asset_root_not_configured", "Set LIFEOS_ASSET_ROOT to store local originals");
     }
-    const mediaType = baseMediaType(req.headers["content-type"]);
+    const purpose = url.searchParams.get("purpose");
+    if (purpose !== null && (purpose !== "avatar" || pathname !== "/api/assets/uploads")) throw new HttpError(400, "invalid_field", "不支持的图片用途");
+    let mediaType = baseMediaType(req.headers["content-type"]);
     const isPhoto = ASSET_UPLOAD_FORMATS[mediaType] !== undefined;
-    const format = ASSET_UPLOAD_FORMATS[mediaType] ?? (pathname === "/api/assets/materials" ? MATERIAL_FORMATS[mediaType] : undefined);
+    let format = ASSET_UPLOAD_FORMATS[mediaType] ?? (pathname === "/api/assets/materials" ? MATERIAL_FORMATS[mediaType] : undefined);
     if (format === undefined) {
       throw new HttpError(415, "unsupported_media_type", "Only JPEG, PNG, WebP, GIF and AVIF photos can be uploaded");
     }
-    const bytes = await readRawBody(req, config.assetUploadLimitBytes);
+    let bytes = await readRawBody(req, purpose === "avatar" ? Math.min(config.assetUploadLimitBytes, 2 * 1024 * 1024) : config.assetUploadLimitBytes);
     if (bytes.length === 0) throw new HttpError(400, "empty_upload", "The uploaded photo is empty");
     if (!format.matches(bytes)) {
       throw new HttpError(415, "content_type_mismatch", "The uploaded bytes are not the declared image type");
+    }
+    if (purpose === "avatar") {
+      if (!isPhoto) throw new HttpError(415, "invalid_avatar", "头像必须是图片");
+      try { bytes = await sharp(bytes, { limitInputPixels: 40_000_000 }).rotate().resize(160, 160, { fit: "cover" }).webp({ quality: 85 }).toBuffer(); }
+      catch { throw new HttpError(415, "invalid_avatar", "无法读取头像图片，请换一张图片"); }
+      mediaType = "image/webp";
+      format = ASSET_UPLOAD_FORMATS[mediaType]!;
     }
     // The hash is computed from the bytes we actually received, never taken
     // from the request. A client that lied about it could otherwise poison the
@@ -224,8 +282,11 @@ export const handleAssetsRoutes: RouteHandler = async (
     // upload. `.review/photo-grid-seed.mjs` reads the id out of a 201, and a
     // separate shape would only make callers branch on something they do not
     // act on differently.
-    const existing = repository.findAssetByContentHash(contentHash.algorithm, contentHash.value);
-    if (existing !== null) {
+    // New avatars use the configured pool even while historical diary photos
+    // remain local during migration, just like new video uploads.
+    const usePool = ctx.poolBridge.enabled && (purpose === "avatar" || !ctx.poolTransition?.localPrimary);
+    const existing = repository.findAssetByContentHash(contentHash.algorithm, contentHash.value, purpose === "avatar" ? "avatar" : undefined);
+    if (existing !== null && (purpose !== "avatar" || !usePool || existing.storageRefs.some(isPoolReference))) {
       const existingPoolRef = existing.storageRefs.find(isPoolReference);
       if (existingPoolRef !== undefined) poolObjectFor(ctx, existing, existingPoolRef);
       // Taking the photo back into use moves the collector's anchor forward,
@@ -236,9 +297,9 @@ export const handleAssetsRoutes: RouteHandler = async (
       setJson(res, 201, reused);
       return true;
     }
-    const originalName = uploadOriginalName(url.searchParams.get("name"));
+    const originalName = purpose === "avatar" ? "avatar.webp" : uploadOriginalName(url.searchParams.get("name"));
     const photoMetadata = isPhoto ? await readPhotoMetadata(bytes) : undefined;
-    if (ctx.poolBridge.enabled && !ctx.poolTransition?.localPrimary) {
+    if (usePool) {
       if (ctx.poolStore === null) throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪");
       const readiness = await ctx.poolPreflight();
       const assetId = `asset_${randomUUID()}`;
@@ -264,9 +325,10 @@ export const handleAssetsRoutes: RouteHandler = async (
           assetId,
           [poolRef],
         );
-        const asset: Asset = { ...built, ...(photoMetadata === undefined ? {} : { photoMetadata }) };
+        const asset: Asset = { ...built, ...(purpose === "avatar" ? { purpose: "avatar" as const } : {}), ...(photoMetadata === undefined ? {} : { photoMetadata }) };
         repository.insertAsset(asset);
         ctx.poolStore.completeUpload(attemptId, returnedKey);
+        if (purpose === "avatar") await ctx.thumbnails.ensure(poolRef, localPath, 160).catch(() => { /* Regenerable cache; the committed avatar remains valid. */ });
         setJson(res, 201, asset);
         return true;
       } catch (error) {
@@ -296,7 +358,7 @@ export const handleAssetsRoutes: RouteHandler = async (
       // The digest goes into the path, so the file lands under a name that is
       // the picture's own identity rather than a fresh UUID: a second copy of
       // these bytes cannot be written under a different name later on.
-      sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format, contentHash.value);
+      sourceRef = storeUploadedPhoto(config.assetRoot, bytes, format, contentHash.value, purpose === "avatar" ? "avatars" : undefined);
     } catch {
       throw new HttpError(500, "asset_write_failed", "Could not write the photo into LIFEOS_ASSET_ROOT");
     }
@@ -313,8 +375,9 @@ export const handleAssetsRoutes: RouteHandler = async (
       `asset_${randomUUID()}`,
       [uploadRef],
     );
-    const asset: Asset = { ...built, ...(photoMetadata === undefined ? {} : { photoMetadata }) };
+    const asset: Asset = { ...built, ...(purpose === "avatar" ? { purpose: "avatar" as const } : {}), ...(photoMetadata === undefined ? {} : { photoMetadata }) };
     repository.insertAsset(asset);
+    if (purpose === "avatar") await ctx.thumbnails.ensure(uploadRef, resolveAssetOriginal(config, repository, asset.id).file, 160).catch(() => { /* Rebuilt on the next image read. */ });
     ctx.poolTransition?.wake();
     setJson(res, 201, asset);
     return true;
@@ -431,8 +494,8 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (req.method === "DELETE") {
       requireJsonContentType(req, true);
       const references = repository.assetReferenceRecordIds(id);
-      if (references.length > 0) {
-        throw new HttpError(409, "asset_in_use", `Asset is still referenced by ${references.length} record(s)`);
+      if (references.length > 0 || repository.avatarReferenceEntityIds(id).length > 0) {
+        throw new HttpError(409, "asset_in_use", "图片仍被记录或人物头像使用，无法删除");
       }
       const poolReference = existing.storageRefs.find(isPoolReference);
       if (poolReference !== undefined) {
@@ -607,40 +670,13 @@ export const handleAssetsRoutes: RouteHandler = async (
     const id = decodeSegment(assetThumbnailMatch[1]!);
     const asset = repository.findAssetById(id);
     if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
-    const poolRead = assetPoolRead(ctx,asset);
-    const poolReference = poolRead?.reference;
-    let file: string;
-    let source = "local-derived";
-    if (poolReference !== undefined) {
-      poolObjectFor(ctx, asset, poolReference, poolRead!.ledgerAssetId);
-      const cached = thumbnails.cached(poolReference, width);
-      if (cached !== null) { file = cached; source = "derived-cache"; }
-      else {
-        const mime = asset.mediaType ?? poolReference.mediaType ?? "";
-        const extension = Object.entries(ASSET_MEDIA_TYPES).find(([, value]) => value === mime)?.[0];
-        if (extension === undefined || !THUMBNAILABLE_ASSET_EXTENSIONS.has(extension)) {
-          throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
-        }
-        const downloaded = await downloadPoolAsset(ctx, asset, poolReference, poolRead!.ledgerAssetId);
-        try {
-          file = await thumbnails.ensure(poolReference, downloaded.file, width);
-          source = "pool-derived";
-        } catch {
-          throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original");
-        } finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
-      }
-    } else {
-      const original = resolveAssetOriginal(config, repository, id);
-      if (!THUMBNAILABLE_ASSET_EXTENSIONS.has(extname(original.file).toLowerCase())) {
-        throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
-      }
-      try { file = await thumbnails.ensure(original.reference, original.file, width); }
-      catch { throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original"); }
-    }
+    const version = url.searchParams.get("v");
+    if (version !== null && version !== assetThumbnailVersion(ctx, asset)) throw new HttpError(409, "asset_version_changed", "照片已更新，请刷新日历");
+    const { file, source, canary } = await resolveAssetThumbnail(ctx, id, width);
     res.writeHead(200, {
       "content-type": `image/${THUMBNAIL_FORMAT}`,
       "content-length": String(statSync(file).size),
-      "cache-control": poolRead?.canary ? "no-store" : "private, max-age=300",
+      "cache-control": canary ? "no-store" : version === null ? "private, max-age=300" : "private, max-age=31536000, immutable",
       "x-lifeos-asset-source": source,
       "content-disposition": "inline",
     });

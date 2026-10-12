@@ -191,7 +191,9 @@ export function patchRecord(
   if (input.content !== undefined || input.entityMentions !== undefined) {
     const previousMentions = resolveTextEntityMentions(current.body.edited ?? current.body.original, repository.listEntities(), current.body.entityMentions);
     const managedIds = new Set(previousMentions.map((mention) => mention.entityId));
-    const refs = input.entityMentions === undefined && current.body.entityMentions === undefined ? record.entityRefs : record.entityRefs.filter((ref) => !managedIds.has(ref.entityId));
+    // A spelling snapshot is not permission to remove independently reviewed
+    // relations (notably assistant entries). Only explicit marking edits do so.
+    const refs = input.entityMentions === undefined ? record.entityRefs : record.entityRefs.filter((ref) => !managedIds.has(ref.entityId));
     record = { ...record, entityRefs: withMentionRefs(record.body.edited ?? record.body.original, refs, repository, record.body.entityMentions) };
   }
   if (input.relatedRecordIds !== undefined) {
@@ -326,6 +328,10 @@ export function assertImportReferences(bundle: ExportBundleV1, repository: Sqlit
   const incomingAssets = new Set(bundle.assets.map((asset) => asset.id));
 
   for (const entity of bundle.entities) {
+    if (entity.type === "person" && entity.avatarAssetId) {
+      const avatar = bundle.assets.find(asset => asset.id === entity.avatarAssetId) ?? repository.findAssetById(entity.avatarAssetId);
+      if (!avatar || avatar.kind !== "photo" || avatar.purpose !== "avatar") throw new HttpError(400, "invalid_avatar", "导入的人物头像不存在或类型不符");
+    }
     for (const relation of entity.relations ?? []) {
       if (relation.entityId === entity.id) {
         throw new HttpError(400, "self_relation", "An entity cannot relate to itself");

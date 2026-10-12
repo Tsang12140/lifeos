@@ -180,11 +180,145 @@ import { cameraEvidenceFromExif, readPhotoMetadata } from "../src/photo-metadata
 import { CalendarTaskLabels } from "../src/calendar-task-labels.js";
 import { buildManualDaySummary, resolveDaySummaries, summarySources } from "../src/summary.js";
 import { calendarToday, type CustomHabit, type DaySummary } from "@lifeos/core";
+import { calendarPhotoUrl, type CalendarPresentation } from "@lifeos/core";
 import { photoDetailsFromExif } from "../src/photo-details.js";
 import type { RecordView } from "../src/repository.js";
 import { summaryFingerprint, type DaySummaryProvider } from "@lifeos/core";
 
 function backfillItems(body: unknown): unknown[] { return (body as { items: unknown[] }).items; }
+
+test("contacts aggregate the complete live record set and preserve owner importance across restart", async () => {
+  let h = await startHarness();
+  try {
+    const personResult = await request(h.base, "/api/entities", { method: "POST", ...json({ id: "contact-heat", type: "person", name: "久未见的朋友", isImportant: true }) });
+    equal(personResult.response.status, 201);
+    const person = personResult.body as Entity;
+    equal(person.type === "person" && person.isImportant, true);
+    const record = await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "和朋友聊天", entityRefs: [{ entityType: "person", entityId: person.id }] }) });
+    equal(record.response.status, 201);
+    const r = record.body as RecordView;
+    const repository = new SqliteRecordRepository(join(h.root, "lifeos.sqlite"));
+    try {
+      for (let index = 0; index < 110; index++) repository.insert({ ...r, id: `heat-${index}`, isDemo: index < 10, isPrivate: index >= 100 });
+      equal(repository.contactActivity(false, true)[0]?.recordCount, 111);
+      equal(repository.contactActivity(true, false)[0]?.recordCount, 91);
+    } finally { repository.close(); }
+    const activity = await request(h.base, "/api/contacts/activity?hideDemo=1");
+    equal(activity.response.status, 200);
+    equal((activity.body as { items: { recordCount: number }[] }).items[0]?.recordCount, 91);
+    ok(!JSON.stringify(activity.body).includes("和朋友聊天"), "heat metadata never sends diary bodies");
+    const all = await request(h.base, "/api/contacts/activity?includePrivate=1");
+    equal((all.body as { items: { recordCount: number }[] }).items[0]?.recordCount, 111);
+    await request(h.base, `/api/records/${r.id}`, { method: "DELETE", ...json({ revision: r.revision }) });
+    equal(((await request(h.base, "/api/contacts/activity?includePrivate=1")).body as { items: { recordCount: number }[] }).items[0]?.recordCount, 110);
+    equal((await request(h.base, `/api/entities/${person.id}`, { method: "PATCH", ...json({ description: "仍然在意" }) })).response.status, 200);
+    equal(((await request(h.base, `/api/entities/${person.id}`)).body as { isImportant: boolean }).isImportant, true);
+    equal((await request(h.base, `/api/entities/${person.id}`, { method: "PATCH", ...json({ isImportant: "yes" }) })).response.status, 400);
+    equal((await request(h.base, "/api/entities", { method: "POST", ...json({ type: "place", name: "地点", isImportant: false }) })).response.status, 400);
+    const root = h.root; await h.stop(false); h = await startHarness(undefined, 1024 * 1024, root);
+    equal(((await request(h.base, `/api/entities/${person.id}`)).body as { isImportant: boolean }).isImportant, true);
+    equal((await request(h.base, `/api/entities/${person.id}`, { method: "PATCH", ...json({ isImportant: false }) })).response.status, 200);
+    equal(((await request(h.base, `/api/entities/${person.id}`)).body as { isImportant: boolean }).isImportant, false);
+  } finally { await h.stop(); }
+});
+
+test("contact activity requires the same authentication as diary records", async () => {
+  const h = await startHarness("contact-test-password");
+  try { equal((await request(h.base, "/api/contacts/activity")).response.status, 401); }
+  finally { await h.stop(); }
+});
+
+test("record search intersects people, places, dates and keywords while alternatives use OR", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const entity = async (type: "person" | "place", name: string) => {
+    const result = await request(h.base, "/api/entities", { method: "POST", ...json({ type, name }) });
+    equal(result.response.status, 201); return result.body as Entity;
+  };
+  const sister = await entity("person", "姐姐"), brother = await entity("person", "弟弟");
+  const home = await entity("place", "家里"), cafe = await entity("place", "A咖啡店"), park = await entity("place", "公园");
+  const add = async (content: string, date: string, person: Entity | null, place: Entity, kind = "journal") => {
+    const result = await request(h.base, "/api/records", { method: "POST", ...json({ kind, content, occurredAt: { kind: "instant", value: date }, entityRefs: [...(person ? [{ entityType: person.type, entityId: person.id }] : []), { entityType: place.type, entityId: place.id }] }) });
+    equal(result.response.status, 201, JSON.stringify(result.body)); return result.body as RecordView;
+  };
+  // Both date edges are Shanghai dates, despite falling on other UTC dates.
+  const first = await add("组合散步甲", "2026-04-30T16:00:00Z", sister, home);
+  const middle = await add("组合阅读乙", "2026-06-09T08:00:00Z", sister, cafe);
+  const last = await add("组合散步丙", "2026-06-30T15:59:59Z", sister, home);
+  await add("组合太早", "2026-04-30T15:59:59Z", sister, home);
+  await add("组合太晚", "2026-06-30T16:00:00Z", sister, home);
+  const outsidePlace = await add("组合其他地点", "2026-05-10T08:00:00Z", sister, park);
+  const outsidePerson = await add("组合其他人物", "2026-05-10T08:00:00Z", brother, home);
+  await add("正文姐姐但未关联", "2026-05-10T08:00:00Z", null, home);
+  await add("组合任务", "2026-05-10T08:00:00Z", sister, home, "task");
+  const params = new URLSearchParams({ search: "1", kinds: "journal", from: "2026-05-01", to: "2026-06-30", timeZone: "Asia/Shanghai", personIds: sister.id, placeIds: `${home.id},${cafe.id}` });
+  const list = async (query: URLSearchParams) => {
+    const result = await request(h.base, "/api/records?" + query);
+    equal(result.response.status, 200); return (result.body as { items: RecordView[] }).items.map(r => r.id).sort();
+  };
+  deepEqual(await list(params), [first.id, middle.id, last.id].sort());
+  params.set("q", "散步"); deepEqual(await list(params), [first.id, last.id].sort());
+  params.delete("q"); params.set("personIds", `${sister.id},${brother.id}`);
+  deepEqual(await list(params), [first.id, middle.id, last.id, outsidePerson.id].sort());
+  params.delete("placeIds"); deepEqual(await list(params), [first.id, middle.id, last.id, outsidePerson.id, outsidePlace.id].sort());
+  params.set("personIds", home.id); deepEqual(await list(params), [], "a place ID cannot match a person condition");
+  params.set("personIds", "missing-person"); deepEqual(await list(params), [], "unknown IDs must not broaden results");
+  params.set("personIds", sister.id); params.set("entityIds", cafe.id); deepEqual(await list(params), [middle.id]);
+  for (const bad of ["", `${sister.id},`, "x".repeat(201), Array.from({ length: 101 }, (_, i) => `id-${i}`).join(",")]) {
+    params.set("personIds", bad); equal((await request(h.base, "/api/records?" + params)).response.status, 400);
+  }
+});
+
+test("capsule search requires every entity and ranks paged near matches without relaxing other filters", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const entities: Entity[] = [];
+  for (const [name, type] of [["A", "person"], ["B", "person"], ["C", "place"], ["D", "person"], ["E", "place"]]) {
+    const created = await request(h.base, "/api/entities", { method: "POST", ...json({ type, name }) });
+    equal(created.response.status, 201); entities.push(created.body as Entity);
+  }
+  const add = async (name: string, letters: string, day: string, extra = {}) => {
+    const created = await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "咖啡 " + name, occurredAt: { kind: "date", value: day }, entityRefs: entities.filter(entity => letters.includes(entity.name)).map(entity => ({ entityType: entity.type, entityId: entity.id })), ...extra }) });
+    equal(created.response.status, 201, JSON.stringify(created.body)); return created.body as RecordView;
+  };
+  const exact = await add("全部", "ABCDE", "2026-10-01");
+  const withoutD = await add("缺D", "ABCE", "2026-10-07");
+  const withoutB = await add("缺B", "ACDE", "2026-10-09");
+  const withoutC = await add("缺C", "ABDE", "2026-10-08");
+  const three = await add("三项", "ACE", "2026-10-10");
+  const two = await add("两项", "AB", "2026-10-11");
+  await add("零项", "", "2026-10-11");
+  const privateRecord = await add("私密", "ABCE", "2026-10-11", { isPrivate: true });
+  const demo = await add("预置", "ABCE", "2026-10-10", { isDemo: true });
+  await add("任务", "ABCE", "2026-10-10", { kind: "task" });
+  const params = new URLSearchParams({ search: "1", entityMatch: "all", kinds: "journal", timeZone: "Asia/Shanghai", personIds: entities.filter(e => e.type === "person").map(e => e.id).join(","), placeIds: entities.filter(e => e.type === "place").map(e => e.id).join(",") });
+  const list = async () => {
+    const result = await request(h.base, "/api/records?" + params); equal(result.response.status, 200);
+    return result.body as { items: RecordView[]; total: number; nextOffset: number | null; matches: { recordId: string; matched: number; total: number; missing: { entityId: string; entityType: string }[] }[] };
+  };
+  deepEqual((await list()).items.map(r => r.id), [exact.id], "same-type people and places both use AND");
+  params.set("entityMatch", "near"); params.set("hideDemo", "1"); params.set("limit", "2");
+  const first = await list(); equal(first.total, 5); equal(first.nextOffset, 2);
+  deepEqual(first.items.map(r => r.id), [withoutB.id, withoutC.id]);
+  deepEqual(first.matches.map(m => [m.matched, m.total]), [[4, 5], [4, 5]]);
+  deepEqual(first.matches[0]!.missing, [{ entityId: entities[1]!.id, entityType: "person" }]);
+  params.set("offset", "2"); const second = await list();
+  deepEqual(second.items.map(r => r.id), [withoutD.id, three.id]); equal(second.nextOffset, 4);
+  params.set("offset", "4"); const third = await list(); deepEqual(third.items.map(r => r.id), [two.id]); equal(third.nextOffset, null);
+  params.set("offset", "0"); params.set("limit", "50"); params.set("includePrivate", "1");
+  ok((await list()).items.some(r => r.id === privateRecord.id));
+  params.delete("hideDemo"); ok((await list()).items.some(r => r.id === demo.id));
+  params.set("q", "缺D"); deepEqual((await list()).items.map(r => r.id), [withoutD.id], "keywords remain mandatory");
+  params.delete("q"); params.set("from", "2026-10-08"); params.set("to", "2026-10-09");
+  deepEqual((await list()).items.map(r => r.id), [withoutB.id, withoutC.id], "date scope remains mandatory");
+  params.set("attachments", "photo"); equal((await list()).total, 0);
+  params.delete("attachments"); params.delete("from"); params.delete("to");
+  params.set("entityMatch", "all"); params.set("personIds", entities[2]!.id); equal((await list()).items.length, 0, "wrong entity type cannot satisfy a person capsule");
+  params.set("personIds", "unknown-person"); equal((await list()).items.length, 0);
+  params.set("entityMatch", "near"); params.delete("personIds"); params.delete("placeIds"); equal((await list()).total, 0);
+  for (const [key, value] of [["entityMatch", "fuzzy"], ["limit", "0"], ["limit", "51"], ["limit", "1.5"], ["offset", "-1"], ["offset", "1000001"], ["search", "0"], ["calendar", "1"]]) {
+    const invalid = new URLSearchParams(params); invalid.set(key!, value!);
+    equal((await request(h.base, "/api/records?" + invalid)).response.status, 400, `${key}=${value}`);
+  }
+});
 
 test("assistant conversation distinguishes questions, facts and current-message confirmation", async (t) => {
   const h = await startHarness(); t.after(() => h.stop());
@@ -378,6 +512,78 @@ test("assistant supplements Shanghai-day records with conflict checks, restores 
   const repeatedBatch = repeat.body as BackfillBatch; equal(repeatedBatch.plan.objects.length, 1); equal(repeatedBatch.plan.entries.length, 2);
   equal((await request(h.base, `/api/ai/backfill/${repeatedBatch.id}/commit`, { method: "POST", ...json({ revision: repeatedBatch.revision }) })).response.status, 200);
   equal(backfillItems((await request(h.base, "/api/records?q=Repeat")).body).length, 2, "关联影片英文名参与关键词搜索");
+});
+
+test("person rename keeps old spelling and identity after alias deletion, reuse and export", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const person = (await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "王哥", aliases: ["老王"] }) })).body as Entity;
+  const record = (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "今天和@王哥、@老王吃饭" }) })).body as RecordView;
+  equal(record.body.entityMentions?.length, 2);
+  const renamed = await request(h.base, `/api/entities/${person.id}`, { method: "PATCH", ...json({ name: "李哥", aliases: ["老王"] }) });
+  equal(renamed.response.status, 200); deepEqual((renamed.body as Entity).aliases, ["老王", "王哥"]);
+  equal((await request(h.base, `/api/entities/${person.id}`, { method: "PATCH", ...json({ aliases: [] }) })).response.status, 200);
+  const other = (await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "另一个人", aliases: ["王哥", "老王"] }) })).body as Entity;
+  const old = (await request(h.base, `/api/records/${record.id}`)).body as RecordView;
+  deepEqual(old.body, record.body); deepEqual(old.entityRefs, record.entityRefs); equal(old.updatedAt, record.updatedAt);
+  equal((await request(h.base, `/api/records?entityId=${person.id}`)).response.status, 200);
+  equal(((await request(h.base, `/api/records?entityId=${person.id}`)).body as { items: RecordView[] }).items.length, 1);
+  const fresh = (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "现在和@王哥聊天" }) })).body as RecordView;
+  equal(fresh.body.entityMentions?.[0]?.entityId, other.id);
+  const edited = (await request(h.base, `/api/records/${old.id}`, { method: "PATCH", ...json({ revision: old.revision, content: "昨天" + old.body.original }) })).body as RecordView;
+  equal(edited.body.entityMentions?.[0]?.entityId, person.id); equal(edited.body.original, old.body.original);
+  const target = await startHarness(); t.after(() => target.stop());
+  const bundle = (await request(h.base, "/api/export?format=json")).body;
+  equal((await request(target.base, "/api/import", { method: "POST", ...json({ bundle }) })).response.status, 201);
+  deepEqual(((await request(target.base, `/api/records/${old.id}`)).body as RecordView).body, edited.body);
+});
+
+test("legacy name migration is atomic, includes trash and requires explicit ambiguity review", async t => {
+  const h = await startHarness();
+  let db: import("node:sqlite").DatabaseSync | undefined;
+  t.after(async () => { db?.close(); await h.stop(); });
+  const { DatabaseSync } = await import("node:sqlite");
+  const a = (await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "甲", aliases: ["王哥", "独有称呼"] }) })).body as Entity;
+  const b = (await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "乙", aliases: ["王哥"] }) })).body as Entity;
+  const make = async (content: string) => (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content }) })).body as RecordView;
+  const unique = await make("与@独有称呼吃饭"), trash = await make("与@独有称呼散步"), ambiguous = await make("与@王哥喝茶");
+  db = new DatabaseSync(h.app.config.databasePath);
+  db.prepare("UPDATE records SET entity_refs_json = ? WHERE id = ?").run(JSON.stringify([{ entityId: a.id, entityType: "person", label: a.name }]), ambiguous.id);
+  for (const record of [unique, trash]) db.prepare("UPDATE records SET body_json = ? WHERE id = ?").run(JSON.stringify({ original: record.body.original }), record.id);
+  equal((await request(h.base, `/api/records/${trash.id}`, { method: "DELETE", ...json({ revision: trash.revision }) })).response.status, 204);
+  const denied = await request(h.base, `/api/entities/${a.id}`, { method: "PATCH", ...json({ aliases: [] }) });
+  equal(denied.response.status, 409);
+  const review = (denied.body as { details: { review: { recordId: string; revision: number; candidates: { start: number; end: number; text: string }[] }[] } }).details.review;
+  equal(review.length, 1); equal(review[0]!.recordId, ambiguous.id);
+  deepEqual((await request(h.base, `/api/entities/${a.id}`)).body, a);
+  equal(((await request(h.base, `/api/records/${unique.id}`)).body as RecordView).revision, unique.revision, "failed save rolls back all pending history writes");
+  const candidate = review[0]!.candidates[0]!;
+  equal((await request(h.base, `/api/records/${ambiguous.id}`, { method: "PATCH", ...json({ revision: ambiguous.revision, entityMentions: [{ start: candidate.start, end: candidate.end, text: candidate.text, entityId: b.id, entityType: "person" }] }) })).response.status, 200);
+  equal((await request(h.base, `/api/entities/${a.id}`, { method: "PATCH", ...json({ aliases: [] }) })).response.status, 200);
+  const fixed = (await request(h.base, `/api/records/${unique.id}`)).body as RecordView;
+  equal(fixed.body.entityMentions?.[0]?.entityId, a.id); equal(fixed.body.original, unique.body.original); equal(fixed.revision, unique.revision + 1);
+  equal((await request(h.base, `/api/records/${unique.id}`, { method: "PATCH", ...json({ revision: unique.revision, content: "陈旧草稿" }) })).response.status, 409);
+  const deleted = h.app.repository.findById(trash.id, true)!;
+  equal(deleted.body.entityMentions?.[0]?.entityId, a.id); ok(db.prepare("SELECT deleted_at_json FROM records WHERE id = ?").get(trash.id)?.deleted_at_json);
+  equal(((await request(h.base, `/api/records/${ambiguous.id}`)).body as RecordView).body.entityMentions?.[0]?.entityId, b.id);
+});
+
+test("adding names never retroactively links unknown text or overrides explicit exclusions", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const text = "当时认识@老朋友，现在@新名字";
+  const old = (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: text }) })).body as RecordView;
+  const person = (await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "新名字", aliases: ["老朋友"] }) })).body as Entity;
+  const historical = (await request(h.base, `/api/records/${old.id}`)).body as RecordView;
+  deepEqual(historical.entityRefs, []); equal(historical.body.original, text); deepEqual(historical.body.entityMentions?.map(d => d.entityId), [null, null]);
+  const created = (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: text }) })).body as RecordView;
+  deepEqual(created.body.entityMentions?.map(d => d.entityId), [person.id, person.id]);
+  const excluded = await request(h.base, `/api/records/${created.id}`, { method: "PATCH", ...json({ revision: created.revision, entityMentions: created.body.entityMentions?.map(d => ({ ...d, entityId: null })) }) });
+  equal(excluded.response.status, 200);
+  equal((await request(h.base, `/api/entities/${person.id}`, { method: "PATCH", ...json({ name: "另一个新名", aliases: [] }) })).response.status, 200);
+  equal(((await request(h.base, `/api/records/${created.id}`)).body as RecordView).body.entityMentions?.[0]?.entityId, null);
+  for (const name of ["同称甲", "同称乙"]) equal((await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name, aliases: ["同称"] }) })).response.status, 201);
+  const unresolved = (await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "与@同称说话" }) })).body as RecordView;
+  equal((await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "同称丙", aliases: ["同称"] }) })).response.status, 201, "adding another candidate must preserve unresolved text without blocking creation");
+  equal(((await request(h.base, `/api/records/${unresolved.id}`)).body as RecordView).body.entityMentions?.[0]?.entityId, null);
 });
 
 test("per-occurrence marking preserves aliases, exclusions, references and export round trips", async (t) => {
@@ -4299,7 +4505,7 @@ test("a thumbnail is derived once, filed under the data directory, and rebuilt a
   equal(stats.response.status, 200);
   const statsBody = stats.body as { count: number; bytes: number; widths: number[]; directory: string };
   equal(statsBody.count, 2);
-  equal(statsBody.widths.join(","), "400,1200,2048");
+  equal(statsBody.widths.join(","), "160,400,1200,2048");
   equal(statsBody.directory, thumbsDirectory);
   ok(statsBody.bytes > 0, "the reported size must come from the files, not from a guess");
 
@@ -4649,7 +4855,7 @@ test("calendar summaries defer today, reuse meaningful content, coalesce force a
   } };
   const cache = harness.app.repository;
   const base = { dates: ["2026-10-06"], recordsForDate: () => [record], cache, provider };
-  await resolveDaySummaries({ ...base, today: "2026-10-06" }); equal(calls, 0); equal(cache.readDaySummary("2026-10-06"), null);
+  await resolveDaySummaries({ ...base, today: "2026-10-06" }); equal(calls, 0); ok(cache.readDaySummary("2026-10-06")?.contextRevision?.startsWith("provisional:v1:"));
   equal((await resolveDaySummaries({ ...base, today: "2026-10-05" })).length, 0); equal(calls, 0);
   await Promise.all([resolveDaySummaries({ ...base, today: "2026-10-07" }), resolveDaySummaries({ ...base, today: "2026-10-07" })]); equal(calls, 1);
   const prior = cache.readDaySummary("2026-10-06")!;
@@ -4726,4 +4932,30 @@ test("assistant missing facts remain blocking and future clocks cannot create jo
   await update({date:"",questions:"接受这个方案吗？",questionKind:"confirmation"});equal((await commit()).response.status,400);
   await update({date:"2099-01-01",time:"12:00",questions:""});equal((await commit()).response.status,400);
   equal(((await request(h.base,"/api/records")).body as {items:RecordView[]}).items.length,0);
+});
+
+test("calendar artwork API returns saved small versioned photos and rejects stale versions", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-calendar-http-"));
+  const h = await startHarness(undefined, undefined, root, join(root, "assets")); t.after(() => h.stop());
+  const bytes = await sharp({ create: { width: 960, height: 720, channels: 3, background: "orange" } }).png().toBuffer();
+  const upload = await fetch(h.base + "/api/assets/uploads?name=calendar.png", { method: "POST", headers: { "content-type": "image/png" }, body: bytes });
+  equal(upload.status, 201); const asset = await upload.json() as Asset;
+  const day = calendarToday();
+  const created = await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "首篇带图", occurredAt: { kind: "date", value: day }, assetRefs: [{ assetId: asset.id, role: "photo" }] }) });
+  equal(created.response.status, 201);
+  const path = "/api/calendar/days?from=" + day + "&to=" + day;
+  const response = await request(h.base, path); equal(response.response.status, 200);
+  const saved = (response.body as { items: CalendarPresentation[] }).items[0]!;
+  equal(saved.phase, "provisional"); equal(saved.monthPhoto?.assetId, asset.id);
+  const thumbnail = await fetch(h.base + calendarPhotoUrl(saved.monthPhoto!));
+  equal(thumbnail.status, 200); equal(thumbnail.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  const metadata = await sharp(Buffer.from(await thumbnail.arrayBuffer())).metadata(); equal(metadata.width, 400);
+  equal((await fetch(h.base + "/api/assets/" + asset.id + "/thumbnail?w=400&v=wrong")).status, 409);
+  const legacy = await fetch(h.base + "/api/assets/" + asset.id + "/thumbnail?w=400"); equal(legacy.headers.get("cache-control"), "private, max-age=300"); await legacy.arrayBuffer();
+  deepEqual((await request(h.base, path)).body, response.body);
+  equal((await request(h.base, "/api/calendar/days?from=2026-01-01&to=2026-06-01")).response.status, 400);
+  const record = created.body as RecordView;
+  equal((await request(h.base, "/api/records/" + record.id, { method: "PATCH", ...json({ revision: record.revision, isPrivate: true }) })).response.status, 200);
+  equal((await request(h.base, path)).response.status, 200);
+  equal(((await request(h.base, path)).body as { items: CalendarPresentation[] }).items[0]!.monthPhoto, undefined);
 });

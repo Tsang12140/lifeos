@@ -227,7 +227,7 @@ export function PoolStorageSettingsCard() {
       {(overview.poolDownloadIssues?.length ?? 0) > 0 ? <div className="pool-legacy-notice is-mismatch" role="alert"><strong>有待核对的下载</strong><span>请先核对未决下载，额度编辑已暂停。</span></div> : null}
 
       <div className="pool-user-tools">
-        <label><span>查找用户</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="账号、姓名或空间名" /></label>
+        <label><span>查找用户（账号、姓名或空间名）</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
         <label><span>排列方式</span><select value={order} onChange={event => setOrder(event.target.value)}><option value="owner">管理员优先</option><option value="storage">存储池用量从大到小</option><option value="traffic">月流量用量从大到小</option><option value="local">历史本地文件从大到小</option></select></label>
       </div>
       <small className="pool-usage-state">显示 {users.length} / {overview.users.length} 个账号。项目额度包含所有账号的分配；历史本地文件单独显示。</small>

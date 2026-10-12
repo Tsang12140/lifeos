@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { StorageReference } from "@lifeos/core";
 import sharp from "sharp";
@@ -24,12 +24,12 @@ import sharp from "sharp";
  */
 
 /**
- * 400 covers the timeline grid and composer tray, 1200 covers card backgrounds,
+ * 160 covers avatars, 400 covers the timeline grid and composer tray, 1200 covers card backgrounds,
  * and 2048 bounds both dimensions of the opened photo preview.
  * A `?w=` that is neither is refused rather than rounded down, so a stray value cannot
  * quietly fill the cache with a size nothing will ever request again.
  */
-export const THUMBNAIL_WIDTHS = [400, 1200, 2048] as const;
+export const THUMBNAIL_WIDTHS = [160, 400, 1200, 2048] as const;
 export type ThumbnailWidth = (typeof THUMBNAIL_WIDTHS)[number];
 export const DEFAULT_THUMBNAIL_WIDTH: ThumbnailWidth = 400;
 export const THUMBNAIL_FORMAT = "webp";
@@ -148,7 +148,9 @@ async function derive(sourceFile: string, target: string, width: ThumbnailWidth)
   // a request that arrives mid-write sees either nothing or a complete thumbnail, never
   // a half-encoded one. `toBuffer` also sidesteps `toFile`'s habit of inferring the
   // output format from the extension, which a temporary name would not carry.
-  const bytes = await sharp(sourceFile, { failOn: "none" })
+  // Avatar inputs are tiny. Decode their bytes without retaining a libvips file
+  // handle, which would prevent temporary-file cleanup and avatar removal on Windows.
+  const bytes = await sharp(width === 160 ? readFileSync(sourceFile) : sourceFile, { failOn: "none" })
     // The browser paints the original upright from its EXIF orientation tag, so a
     // thumbnail that skipped this would show up sideways next to a straight original.
     .rotate()

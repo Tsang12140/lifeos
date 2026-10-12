@@ -1,0 +1,126 @@
+/* Task label and prose share the header; lightweight status and actions share the footer. */
+.timeline-item.timeline-task .timeline-content {
+  padding: 8px 10px;
+  container: timeline-task / inline-size;
+}
+
+.timeline-task .task-record-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.timeline-task .task-record-head > .kind-tag {
+  margin-top: 1px;
+}
+
+.timeline-task .task-record-head .timeline-text {
+  min-width: 0;
+  margin: 0;
+}
+
+.timeline-task .task-record-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline-task .task-record-copy {
+  display: block;
+  min-width: 0;
+}
+
+.timeline-task.is-task-collapsed .task-record-copy {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.timeline-task .task-record-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.timeline-task .task-record-metadata:empty {
+  display: none;
+}
+
+.timeline-task .task-record-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.timeline-task .task-record-footer .timeline-status {
+  flex: none;
+  margin: 0;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-weight: 400;
+}
+
+.timeline-task .task-record-footer .timeline-actions {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+
+.timeline-task .timeline-actions > .record-action {
+  justify-content: center;
+  flex: none;
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 6px;
+  font-size: .78rem;
+  line-height: 1.4;
+  border-radius: 8px;
+}
+
+.timeline-task .timeline-actions > .record-action-icon {
+  width: 34px;
+  padding: 0;
+}
+
+.timeline-task.is-task-done .timeline-content {
+  background: #f5f6f8;
+  box-shadow: none;
+}
+
+.timeline-task.is-task-done .task-record-copy {
+  color: var(--muted);
+}
+
+/* Keep status and every action on one line even in a narrow timeline column. */
+@container timeline-task (max-width: 270px) {
+  .timeline-task .timeline-actions > .record-action {
+    width: 34px;
+    padding: 0;
+  }
+  .timeline-task .task-action-label { display: none; }
+}
+
+@container timeline-task (max-width: 210px) {
+  .timeline-task .task-record-footer .timeline-actions { gap: 2px; }
+}
+
+@media (pointer: coarse) {
+  .timeline-task .timeline-actions > .record-action {
+    height: 44px;
+    min-height: 44px;
+  }
+}

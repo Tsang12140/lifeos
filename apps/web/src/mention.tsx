@@ -167,7 +167,7 @@ export function RecordText({ text, entities, decisions }: { readonly text: strin
     if (mention.start > cursor) parts.push(text.slice(cursor, mention.start));
     const entity = entitiesById.get(mention.entityId);
     const PlaceIcon = entity?.type === "place" && entity.role === "home" ? House : entity?.type === "place" && entity.role === "work" ? BriefcaseBusiness : MapPin;
-    parts.push(<span className={`mention-chip ${mention.entityType === "place" ? "is-place" : ""}`} key={`${mention.entityId}-${mention.start}-${index}`}>
+    parts.push(<span className={`mention-chip ${mention.entityType === "place" ? "is-place" : ""}`} title={entity ? `当前名称：${entity.name}\n本文称呼：${mention.matched}` : undefined} key={`${mention.entityId}-${mention.start}-${index}`}>
       {mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : null}{mention.matched}
     </span>);
     cursor = mention.end;

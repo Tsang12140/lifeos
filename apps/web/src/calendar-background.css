@@ -1,0 +1,36 @@
+/* The main workspace owns the photograph; navigation remains an opaque surface. */
+.main-column { position: relative; isolation: isolate; }
+.main-column:has(> .calendar-month-backdrop) { padding-bottom: 120px; }
+.calendar-month-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--canvas);
+}
+.calendar-month-backdrop-image {
+  position: absolute;
+  inset: 0;
+  background-size: 100% auto;
+  background-repeat: repeat-y;
+  background-position: left top;
+  filter: blur(var(--calendar-background-blur, 0px));
+}
+.calendar-month-backdrop-veil {
+  position: absolute;
+  inset: 0;
+  background: rgb(255 255 255 / var(--calendar-background-veil, 0.92));
+}
+.calendar-settings-dialog .calendar-settings-block.calendar-background-settings {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.calendar-background-settings .settings-ai-note { margin: 0; }
+.calendar-background-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+.calendar-background-controls label { display: grid; gap: 6px; min-width: 0; color: var(--ink-soft); font-size: .8rem; }
+.calendar-background-controls label>span { display: flex; justify-content: space-between; gap: 8px; }
+.calendar-background-controls input[type=range] { width: 100%; min-width: 0; padding: 0; accent-color: var(--accent); }
+.calendar-background-controls select { width: 100%; min-width: 0; }
+@media (max-width: 420px) { .calendar-background-controls { grid-template-columns: minmax(0, 1fr); } }

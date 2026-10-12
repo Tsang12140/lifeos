@@ -1,0 +1,27 @@
+@media (max-width: 700px) {
+  /* Each timestamp belongs to the following card. */
+  .timeline-item + .timeline-item {
+    margin-top: 16px;
+  }
+
+  .timeline-item {
+    row-gap: 6px;
+  }
+
+  /* The footer owns its spacing; the button group adds no second margin. */
+  .timeline-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .timeline-footer .relation-row {
+    flex: 0 1 auto;
+    max-width: 100%;
+  }
+
+  .timeline-footer .timeline-actions {
+    margin-top: 0;
+    margin-left: auto;
+  }
+}

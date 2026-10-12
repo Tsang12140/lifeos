@@ -1,3 +1,4 @@
+import { DiaryNavIcon } from "./diary-nav-icon";
 import {
   BookOpen,
   BriefcaseBusiness,
@@ -128,11 +129,11 @@ export function readUiFont(): UiFontId {
   return isUiFontId(stored) ? stored : "misans";
 }
 
-export const COMPOSER_META: Record<ComposerKind, { label: string; placeholder: string; icon: LucideIcon }> = {
-  journal: { label: "日记", placeholder: "记录此刻正在发生的事……", icon: NotebookPen },
-  task: { label: "任务", placeholder: "下一步要完成什么？", icon: ListChecks },
-  event: { label: "事件", placeholder: "记下一个值得回看的时间点……", icon: CalendarDays },
-  note: { label: "笔记", placeholder: "把想法留在这里……", icon: BookOpen },
+export const COMPOSER_META: Record<ComposerKind, { label: string; icon: LucideIcon }> = {
+  journal: { label: "日记", icon: NotebookPen },
+  task: { label: "任务", icon: ListChecks },
+  event: { label: "事件", icon: CalendarDays },
+  note: { label: "笔记", icon: BookOpen },
 };
 
 export const ENTITY_META: Record<string, { label: string; icon: LucideIcon }> = {
@@ -227,7 +228,7 @@ export function mentionVocabulary(record: RecordView, entities: readonly Entity[
 }
 
 export const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
-  { id: "today", label: "记录", icon: NotebookPen },
+  { id: "today", label: "日记", icon: DiaryNavIcon },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "tasks", label: "任务", icon: ListChecks },
   { id: "notes", label: "笔记", icon: NotebookPen },
@@ -238,7 +239,7 @@ export const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon 
 export const SETTINGS_NAV_ITEM: { id: AppView; label: string; icon: LucideIcon } = { id: "settings", label: "设置", icon: Settings };
 
 export const MOBILE_NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
-  { id: "today", label: "记录", icon: NotebookPen },
+  { id: "today", label: "日记", icon: DiaryNavIcon },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "notes", label: "笔记", icon: NotebookPen },
   { id: "entities", label: "联系人", icon: ContactRound },

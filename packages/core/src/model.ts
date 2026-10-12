@@ -127,6 +127,10 @@ export interface PlacePeriod {
 
 export interface Person extends EntityBase {
   readonly type: "person";
+  /** Owner-chosen importance preserves visibility even when activity decays. */
+  readonly isImportant?: boolean;
+  /** A cropped photo asset owned by this person, retained by asset collection. */
+  readonly avatarAssetId?: AssetId;
 }
 
 export interface Project extends EntityBase {
@@ -240,6 +244,8 @@ export interface VideoMetadata {
 export interface Asset {
   readonly id: AssetId;
   readonly kind: AssetKind;
+  /** Profile pictures are independent of diary photo attachments. */
+  readonly purpose?: "avatar";
   readonly mediaType?: string;
   readonly originalName?: string;
   readonly sizeBytes?: number;
@@ -854,6 +860,14 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
       }
     });
   }
+  if (entity.avatarAssetId !== undefined) {
+    if (entity.type !== "person") throw new Error("Only people can have an avatar");
+    nonEmptyStringValue(entity.avatarAssetId, "entity.avatarAssetId");
+  }
+  if (entity.isImportant !== undefined) {
+    if (entity.type !== "person") throw new Error("entity.isImportant is only allowed on a person");
+    if (typeof entity.isImportant !== "boolean") throw new Error("entity.isImportant must be a boolean");
+  }
   if (entity.role !== undefined) {
     if (entity.type !== "place") {
       throw new Error("entity.role is only allowed on a place");
@@ -932,6 +946,7 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
   const asset = objectValue(value, "asset");
   enumValue(asset.kind, ["photo", "audio", "video", "file"], "asset.kind");
   nonEmptyStringValue(asset.id, "asset.id");
+  if (asset.purpose !== undefined && (asset.purpose !== "avatar" || asset.kind !== "photo")) throw new Error("Invalid avatar asset");
   optionalStringValue(asset.mediaType, "asset.mediaType");
   optionalStringValue(asset.originalName, "asset.originalName");
   if (asset.kind === "video" || asset.videoMetadata !== undefined) {

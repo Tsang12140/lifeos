@@ -7,6 +7,7 @@ import { apiRequest } from "./api";
 import type { ApiUploadProgress } from "./api";
 import { ASSET_ROLE_LABEL, assetRoleFor, formatBytes } from "./app-meta";
 import { sha256Hex } from "./contentHash";
+import { isImageFile, isVideoFile, MEDIA_FILE_ACCEPT } from "./media-files";
 
 function assetThumbUrl(assetId: string, width: number): string {
   return `/api/assets/${encodeURIComponent(assetId)}/thumbnail?w=${width}`;
@@ -57,8 +58,10 @@ interface ShotDropZoneProps {
   readonly addOutsideStrip?: boolean;
   readonly disabled?: boolean;
   readonly shots: readonly AssetLink[];
+  readonly assets?: readonly Asset[];
   readonly onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>;
   readonly onUpload: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>;
+  readonly onUploadVideo?: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>;
   /** Says things the drop zone itself no longer says. The zone keeps no message
    *  line of its own: a paragraph of status text under a hand of cards reads as
    *  a defect in the panel. Anything that has to be said is said as a toast. */
@@ -84,6 +87,7 @@ interface PendingShot {
   readonly state: PendingShotState;
   readonly progress: number;
   readonly error?: string;
+  readonly mediaKind?: "photo" | "video";
 }
 
 interface ShotBatchProgress {
@@ -91,7 +95,7 @@ interface ShotBatchProgress {
   readonly total: number;
 }
 
-export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ scopeKey, numbered = false, addOutsideStrip = false, disabled = false, shots, onShotsChange, onUpload, onNotify, onCleared, onBusyChange, onSubmissionState }, ref) {
+export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ scopeKey, numbered = false, addOutsideStrip = false, disabled = false, shots, assets = [], onShotsChange, onUpload, onUploadVideo, onNotify, onCleared, onBusyChange, onSubmissionState }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<readonly PendingShot[]>([]);
   const pendingRef = useRef<readonly PendingShot[]>([]);
@@ -370,7 +374,9 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
         controllersRef.current.set(job.id, controller);
         updatePendingShot(job.id, (shot) => ({ ...shot, state: "preparing", progress: 0, error: undefined }));
         try {
-          const uploaded = await onUpload(job.file, controller.signal, ({ loaded, total }) => {
+          const upload = job.mediaKind === "video" ? onUploadVideo : onUpload;
+          if (!upload) throw new Error("当前入口不支持视频");
+          const uploaded = await upload(job.file, controller.signal, ({ loaded, total }) => {
             if (!isCurrent() || !pendingRef.current.some((shot) => shot.id === job.id)) return;
             const safeTotal = Math.max(0, total);
             const safeLoaded = Math.max(0, Math.min(loaded, safeTotal));
@@ -400,8 +406,8 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
         } catch (error) {
           if (!isCurrent() || !pendingRef.current.some((shot) => shot.id === job.id)) continue;
           if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) continue;
-          updatePendingShot(job.id, (shot) => ({ ...shot, state: "failed", progress: 0, error: error instanceof Error ? error.message : "照片上传失败" }));
-          onNotify("照片上传失败，可重试或移除", "warn");
+          updatePendingShot(job.id, (shot) => ({ ...shot, state: "failed", progress: 0, error: error instanceof Error ? error.message : "媒体上传失败" }));
+          onNotify("媒体上传失败，可重试或移除", "warn");
           // Continue serially so each photo gets its own result. The failed
           // tile remains in place and still blocks saving until resolved.
         } finally {
@@ -415,25 +421,26 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
 
   const takeFiles = (files: readonly File[]) => {
     if (disabled) return;
-    const images = files.filter((file) => file.type.startsWith("image/"));
-    if (images.length === 0) {
-      onNotify("只接受图片文件", "warn");
+    const media = files.filter((file) => isImageFile(file) || (onUploadVideo && isVideoFile(file)));
+    if (media.length === 0) {
+      onNotify(onUploadVideo ? "请选择图片或常见视频" : "请选择图片", "warn");
       return;
     }
+    if (media.length < files.length) onNotify(onUploadVideo ? "已跳过不支持的文件，请选择图片或常见视频" : "已跳过非图片文件", "warn");
     const room = SHOT_LIMIT - shotsRef.current.length - pendingRef.current.length;
     if (room <= 0) {
-      onNotify(`已经 ${SHOT_LIMIT} 张了，时间轴一屏放不下，先删一张再加`, "warn");
+      onNotify(`最多添加 ${SHOT_LIMIT} 项，先移除一项再添加`, "warn");
       return;
     }
-    const batch = images.slice(0, room);
-    if (images.length > room) onNotify(`一次最多 ${SHOT_LIMIT} 张，只收下了前 ${room} 张`, "warn");
+    const batch = media.slice(0, room);
+    if (media.length > room) onNotify(`一次最多 ${SHOT_LIMIT} 项，只收下了前 ${room} 项`, "warn");
     const added: PendingShot[] = [];
     for (const file of batch) {
       try {
         idCounterRef.current += 1;
-        added.push({ id: `${scopeGenerationRef.current}-${idCounterRef.current}`, order: ++nextOrderRef.current, file, previewUrl: URL.createObjectURL(file), state: "queued", progress: 0 });
+        added.push({ id: `${scopeGenerationRef.current}-${idCounterRef.current}`, order: ++nextOrderRef.current, file, previewUrl: URL.createObjectURL(file), state: "queued", progress: 0, mediaKind: isVideoFile(file) ? "video" : "photo" });
       } catch {
-        onNotify("无法预览这张照片，请重新选择", "warn");
+        onNotify("无法预览这个媒体文件，请重新选择", "warn");
       }
     }
     if (added.length === 0) return;
@@ -543,7 +550,8 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
   // this strip owns uploads, thumbnails and the file-picker button.
   const zoneClass = `composer-shots ${empty ? "is-empty" : "has-shots"}`;
 
-  const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple tabIndex={-1} aria-hidden="true" disabled={disabled} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; takeFiles(files); }} />;
+  const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept={onUploadVideo ? MEDIA_FILE_ACCEPT : "image/*"} multiple tabIndex={-1} aria-hidden="true" disabled={disabled} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; takeFiles(files); }} />;
+  const openPicker = () => { if (!disabled && remaining > 0) inputRef.current?.click(); };
 
   /**
    * One strip, one component. Every photo is the same square and they run in the
@@ -563,12 +571,12 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
       <ul ref={stripRef} className="shot-strip" data-count={shots.length + pending.length} aria-busy={busy ? "true" : undefined} onDragOver={(event) => { if (draggingShotRef.current && !disabled && Array.from(event.dataTransfer.types).includes(SHOT_REORDER_TYPE)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move"; updateDragPoint(event.clientX, event.clientY); } }} onDragLeave={event => { const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) updateDragPoint(event.clientX, event.clientY); }} onDrop={dropShot}>
         {strip.map((entry, index) => entry.type === "complete" ? <li className={`shot-tile${reorderClass(`asset:${entry.shot.assetId}`)}`} {...reorderHandlers(`asset:${entry.shot.assetId}`)} key={entry.shot.assetId} data-shot-state="complete" data-asset-id={entry.shot.assetId}>
           {numbered ? <span className="shot-number">{index + 1}</span> : null}
-          <button type="button" draggable={!disabled} className="shot-preview-button" aria-label={`放大查看 ${entry.shot.label ?? "照片"}`} onClick={() => openPreview(`asset:${entry.shot.assetId}`)}><img draggable={!disabled} src={assetThumbUrl(entry.shot.assetId, 400)} alt={entry.shot.label ?? "已添加的照片"} loading="lazy" decoding="async" onLoad={() => releaseCommittedPreview(entry.shot.assetId)} />
-          {committedPreviews.get(entry.shot.assetId) ? <img draggable={!disabled} className="shot-tile-local-preview" src={committedPreviews.get(entry.shot.assetId)} alt="" aria-hidden="true" /> : null}</button>
+          <button type="button" draggable={!disabled} className="shot-preview-button" aria-label={`放大查看 ${entry.shot.label ?? "媒体"}`} onClick={() => openPreview(`asset:${entry.shot.assetId}`)}>{assets.find(asset => asset.id === entry.shot.assetId)?.kind === "video" ? <video muted playsInline preload="metadata" src={assetContentUrl(entry.shot.assetId)} aria-label={entry.shot.label ?? "视频"} /> : <img draggable={!disabled} src={assetThumbUrl(entry.shot.assetId, 400)} alt={entry.shot.label ?? "已添加的媒体"} loading="lazy" decoding="async" onLoad={() => releaseCommittedPreview(entry.shot.assetId)} />}
+          {committedPreviews.get(entry.shot.assetId) && entry.shot.role !== "video" ? <img draggable={!disabled} className="shot-tile-local-preview" src={committedPreviews.get(entry.shot.assetId)} alt="" aria-hidden="true" /> : null}</button>
           <button className="shot-tile-remove" type="button" disabled={disabled} onClick={() => removeAsset(entry.shot.assetId)} aria-label={`移除 ${entry.shot.label ?? "这张照片"}`}><X size={12} strokeWidth={2.4} aria-hidden="true" /></button>
         </li> : <li className={`shot-tile shot-tile-pending${reorderClass(`pending:${entry.shot.id}`)}`} {...reorderHandlers(`pending:${entry.shot.id}`)} key={entry.shot.id} data-shot-state={entry.shot.state} data-upload-id={entry.shot.id} data-file-name={entry.shot.file.name} title={entry.shot.error}>
           {numbered ? <span className="shot-number">{index + 1}</span> : null}
-          <button type="button" draggable={!disabled} className="shot-preview-button" aria-label={`放大查看 ${entry.shot.file.name || "照片"}`} onClick={() => openPreview(`pending:${entry.shot.id}`)}><img draggable={!disabled} src={entry.shot.previewUrl} alt={entry.shot.file.name || "照片"} loading="eager" decoding="async" /></button>
+          <button type="button" draggable={!disabled} className="shot-preview-button" aria-label={`放大查看 ${entry.shot.file.name || "媒体"}`} onClick={() => openPreview(`pending:${entry.shot.id}`)}>{entry.shot.mediaKind === "video" ? <video muted playsInline preload="metadata" src={entry.shot.previewUrl} aria-label={entry.shot.file.name || "视频"} /> : <img draggable={!disabled} src={entry.shot.previewUrl} alt={entry.shot.file.name || "照片"} loading="eager" decoding="async" />}</button>
           {entry.shot.state === "uploading" || entry.shot.state === "processing" ? <div className="shot-upload-progress" role="progressbar" aria-label={`照片上传进度 ${entry.shot.progress}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={entry.shot.progress}><span style={{ width: `${entry.shot.progress}%` }} /></div> : null}
           <span className="shot-upload-state" role="status">{entry.shot.state === "queued" ? "等待" : entry.shot.state === "preparing" ? "准备中" : entry.shot.state === "uploading" ? `${entry.shot.progress}%` : entry.shot.state === "processing" ? "处理中" : "失败"}</span>
           {entry.shot.state === "failed" ? <button className="shot-tile-retry" type="button" disabled={disabled} onClick={() => retry(entry.shot.id)} aria-label={`重试上传 ${entry.shot.file.name || "照片"}`} title="重试上传"><RotateCw size={12} aria-hidden="true" /></button> : null}
@@ -578,13 +586,13 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
         {/* The same dashed square is the only photo slot when empty and stays
             at the end of the row after photos are added. */}
         {!addOutsideStrip ? <li className="shot-tile shot-tile-add">
-          <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled || remaining === 0} aria-label="添加照片">
+          <button type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label="添加照片或视频">
             <Plus size={18} strokeWidth={2} aria-hidden="true" />
           </button>
         </li> : null}
       </ul>
       {addOutsideStrip ? <div className="shot-tile shot-tile-add shot-tile-add-outside">
-        <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled || remaining === 0} aria-label="添加照片">
+        <button type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label="添加照片或视频">
           <Plus size={18} strokeWidth={2} aria-hidden="true" />
         </button>
       </div> : null}
@@ -597,9 +605,9 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
           a control half of them never use. */}
       {!empty || batchProgress !== null
         ? <div className="shot-strip-meta">
-            {!empty ? <span className="shot-strip-tally">{shots.length}/{SHOT_LIMIT}</span> : null}
-            {shots.length > 0 ? <button className="shot-clear" type="button" disabled={disabled} onClick={clearAll} aria-label="清空全部照片"><Eraser size={13} strokeWidth={2} aria-hidden="true" /><span>清空</span></button> : null}
-            {batchProgress !== null ? <span className="shot-progress-summary" role="status">已完成{batchProgress.completed}/{batchProgress.total}张</span> : null}
+            {!empty ? <span className="shot-strip-tally">{shots.length + pending.length}/{SHOT_LIMIT}</span> : null}
+            {shots.length > 0 ? <button className="shot-clear" type="button" disabled={disabled} onClick={clearAll} aria-label="清空全部媒体"><Eraser size={13} strokeWidth={2} aria-hidden="true" /><span>清空</span></button> : null}
+            {batchProgress !== null ? <span className="shot-progress-summary" role="status">已完成{batchProgress.completed}/{batchProgress.total}项</span> : null}
             {busy ? <span className="shot-busy" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span> : null}
           </div> : null}
     </div>

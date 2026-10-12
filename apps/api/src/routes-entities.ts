@@ -12,6 +12,7 @@ import { HttpError, setJson, setEmpty } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
 import {
   coreValidated,
+  booleanField,
   enumField,
   hasOnlyKeys,
   jsonObject,
@@ -47,6 +48,16 @@ import { MovieModuleError } from "./movie.js";
 import { canonicalPersonName } from "@lifeos/core";
 import type { RouteContext, RouteHandler } from "./route-context.js";
 
+function avatarField(ctx: RouteContext, type: EntityKind, value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (type !== "person") throw new HttpError(400, "invalid_field", "只有人物可以设置头像");
+  if (value === null) return null;
+  const id = stringField(value, "avatarAssetId", { nonEmpty: true });
+  const asset = ctx.repository.findAssetById(id);
+  if (!asset || asset.kind !== "photo" || asset.purpose !== "avatar") throw new HttpError(400, "invalid_avatar", "请先上传头像图片");
+  return id;
+}
+
 const ENTITY_KINDS: readonly EntityKind[] = ["person", "project", "place", "topic", "movie"];
 
 export const handleEntitiesRoutes: RouteHandler = async (
@@ -57,6 +68,11 @@ export const handleEntitiesRoutes: RouteHandler = async (
   url: URL,
 ): Promise<boolean> => {
   const { config, repository } = ctx;
+  if (pathname === "/api/contacts/activity" && req.method === "GET") {
+    const people = new Set(repository.listEntities({ type: "person" }).map(entity => entity.id));
+    setJson(res, 200, { items: repository.contactActivity(url.searchParams.get("hideDemo") === "1", url.searchParams.get("includePrivate") === "1").filter(item => people.has(item.entityId)) });
+    return true;
+  }
   if (pathname === "/api/entities" && req.method === "GET") {
     const typeRaw = url.searchParams.get("type");
     const q = url.searchParams.get("q") ?? undefined;
@@ -70,8 +86,11 @@ export const handleEntitiesRoutes: RouteHandler = async (
   if (pathname === "/api/entities" && req.method === "POST") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["id", "type", "name", "aliases", "description", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
+    hasOnlyKeys(input, ["id", "type", "name", "aliases", "description", "isImportant", "avatarAssetId", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
     const type = enumField(input.type, ENTITY_KINDS, "type");
+    const avatarAssetId = avatarField(ctx, type, input.avatarAssetId);
+    const isImportant = input.isImportant === undefined ? undefined : booleanField(input.isImportant, "isImportant");
+    if (isImportant !== undefined && type !== "person") throw new HttpError(400, "invalid_field", "仅联系人可以标为重要");
     if (type === "movie" && !readRuntimeMovieConfig(config).enabled) throw new MovieModuleError(409, "movie_module_disabled", "观影模块未启用；请先在设置中启用");
     assertMovieOnlyFields(type, input);
     const rawName = stringField(input.name, "name", { nonEmpty: true });
@@ -91,6 +110,8 @@ export const handleEntitiesRoutes: RouteHandler = async (
       id,
       name,
       createdAt: nowInstant(),
+      ...(isImportant === undefined ? {} : { isImportant }),
+      ...(avatarAssetId == null ? {} : { avatarAssetId }),
       ...(aliases === undefined ? {} : { aliases }),
       ...(description === undefined ? {} : { description }),
       ...(role === undefined ? {} : { role }),
@@ -129,14 +150,19 @@ export const handleEntitiesRoutes: RouteHandler = async (
     if (existing.type === "movie" && !readRuntimeMovieConfig(config).enabled) throw new MovieModuleError(409, "movie_module_disabled", "观影模块未启用；请先在设置中启用");
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["name", "aliases", "description", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
+    hasOnlyKeys(input, ["name", "aliases", "description", "isImportant", "avatarAssetId", "role", "period", "address", ...MOVIE_FIELD_NAMES]);
+    const isImportant = input.isImportant === undefined ? undefined : booleanField(input.isImportant, "isImportant");
+    if (isImportant !== undefined && existing.type !== "person") throw new HttpError(400, "invalid_field", "仅联系人可以标为重要");
     assertMovieOnlyFields(existing.type, input);
     const role = input.role === undefined ? undefined : input.role === null ? null : placeRoleField(input.role);
     const period = input.period === undefined ? undefined : input.period === null ? null : placePeriodField(input.period);
     const address = input.address === undefined ? undefined : input.address === null ? null : addressField(input.address);
     const movieFields = movieFieldsField(input, true);
     placeOnlyFields(existing.type, role, period, address);
+    const avatarAssetId = avatarField(ctx, existing.type, input.avatarAssetId);
     const updated = withEntityEdits(existing, {
+      ...(avatarAssetId === undefined ? {} : { avatarAssetId }),
+      ...(isImportant === undefined ? {} : { isImportant }),
       ...(input.name === undefined ? {} : { name: existing.type === "person" ? canonicalPersonName(stringField(input.name, "name", { nonEmpty: true })) : stringField(input.name, "name", { nonEmpty: true }) }),
       ...(input.aliases === undefined ? {} : { aliases: aliasesField(input.aliases) }),
       ...(input.description === undefined ? {} : { description: stringField(input.description, "description") }),

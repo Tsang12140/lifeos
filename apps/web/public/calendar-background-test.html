@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LifeOS 月历背景试调</title>
+<style>
+  *{box-sizing:border-box}body{margin:0;color:#26334a;background:#eef2f7;font:14px/1.5 system-ui,sans-serif;user-select:none}
+  .controls{position:relative;z-index:1;display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px;padding:14px 20px;background:#fff;border-bottom:1px solid #d5deea}
+  label{display:flex;align-items:center;gap:8px}input,button{font:inherit}input[type=range]{width:150px;accent-color:#5472a0}input[type=month],button{height:40px;border:1px solid #cfd9e7;border-radius:9px;padding:6px 12px;background:#fff;color:inherit;margin:0}button{cursor:pointer}button:disabled{opacity:.55;cursor:default}output{min-width:48px;user-select:text}#status{color:#66738a}#values{user-select:text;color:#526079}iframe{display:block;width:100%;height:calc(100dvh - var(--controls-height,112px));border:0}input{user-select:text}
+  @media(max-width:600px){.controls{gap:10px;padding:12px}label{flex-wrap:wrap}input[type=range]{width:110px}}
+</style>
+<div class="controls" id="controls">
+  <label>月份 <input id="month" type="month" aria-label="试调月份"></label>
+  <label>白蒙版 <input id="veil" type="range" min="0" max="100" step="1" value="85"><output id="veilValue" for="veil">85%</output></label>
+  <label>柔化 <input id="blur" type="range" min="0" max="12" step="0.5" value="2"><output id="blurValue" for="blur">2px</output></label>
+  <button id="prepare" type="button">准备本月试样</button>
+  <span id="values">白蒙版 85%，柔化 2px</span>
+  <span id="status" role="status">只试调，正式效果等你定。</span>
+</div>
+<iframe id="preview" title="月历背景预览"></iframe>
+<script type="module">
+  const byId=id=>document.getElementById(id), frame=byId('preview'), month=byId('month'), veil=byId('veil'), blur=byId('blur'), prepare=byId('prepare'), status=byId('status');
+  const initial=new URLSearchParams(location.search).get('month');
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const last=new Date(today+'T12:00:00+08:00');last.setUTCMonth(last.getUTCMonth()-1,1);
+  month.value=/^\d{4}-(0[1-9]|1[0-2])$/.test(initial??'')?initial:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(last).slice(0,7);
+  try{const saved=JSON.parse(localStorage.getItem('lifeos.backgroundTest')??'null');if(saved){veil.value=String(saved.veil);blur.value=String(saved.blur)}}catch{}
+  let imageUrl;
+  const publish=()=>{
+    byId('veilValue').textContent=veil.value+'%';byId('blurValue').textContent=blur.value+'px';
+    byId('values').textContent=`白蒙版 ${veil.value}%，柔化 ${blur.value}px`;
+    frame.contentWindow?.postMessage({type:'lifeos-background-preview',veil:Number(veil.value),blur:Number(blur.value),...(imageUrl?{imageUrl}:{})},location.origin);
+    try{localStorage.setItem('lifeos.backgroundTest',JSON.stringify({veil:Number(veil.value),blur:Number(blur.value)}))}catch{}
+  };
+  const load=()=>{imageUrl=undefined;frame.src='/?calendarBackgroundPreview=1&month='+encodeURIComponent(month.value);status.textContent='只试调，正式效果等你定。';};
+  window.addEventListener('message',event=>{if(event.origin===location.origin&&event.source===frame.contentWindow&&event.data?.type==='lifeos-background-preview-ready')publish()});
+  veil.addEventListener('input',publish);blur.addEventListener('input',publish);month.addEventListener('change',load);
+  prepare.addEventListener('click',async()=>{
+    const requested=month.value;prepare.disabled=true;status.textContent='正在准备试样，你可以继续操作。';
+    try{
+      const hideDemo=localStorage.getItem('lifeos.hideDemo')==='1';
+      const response=await fetch('/api/calendar/background/preview?month='+encodeURIComponent(requested)+'&hideDemo='+(hideDemo?'1':'0'),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'}});
+      const value=await response.json();if(!response.ok)throw Error(response.status===401?'请先在下方登录，再准备试样。':value.message??'试样暂时无法准备，请重试。');
+      if(requested!==month.value)return;
+      imageUrl=value.imageUrl??undefined;publish();status.textContent=imageUrl?'试样已就绪，拖动滑条调整即可。':'本月有效照片不足 12 张，保持纯色背景。';
+    }catch(error){status.textContent=error.message}finally{prepare.disabled=false}
+  });
+  new ResizeObserver(()=>document.documentElement.style.setProperty('--controls-height',byId('controls').getBoundingClientRect().height+'px')).observe(byId('controls'));
+  publish();load();
+</script>
+</html>

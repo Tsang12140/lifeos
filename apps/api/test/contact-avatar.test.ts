@@ -1,0 +1,131 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
+import sharp from "sharp";
+import type { Asset, Entity, ExportBundleV1 } from "@lifeos/core";
+import { readConfig } from "../src/config.js";
+import { createHttpServer } from "../src/server.js";
+
+test("avatars normalise, remain protected without diary records, and round trip through exports", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-contact-avatar-"));
+  const previous = process.env.LIFEOS_STORAGE_POOL_ENABLED;
+  process.env.LIFEOS_STORAGE_POOL_ENABLED = "0";
+  const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups") });
+  const { server, app } = createHttpServer(config);
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); if (previous === undefined) delete process.env.LIFEOS_STORAGE_POOL_ENABLED; else process.env.LIFEOS_STORAGE_POOL_ENABLED = previous; assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
+  const call = (path: string, method = "GET", body?: unknown) => fetch(base + path, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const original = await sharp({ create: { width: 1200, height: 600, channels: 3, background: "#c9a87b" } }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+  const upload = (bytes = original, purpose = "avatar") => fetch(base + `/api/assets/uploads?purpose=${purpose}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: bytes });
+  assert.equal((await upload(Buffer.from("invalid"))).status, 415);
+  assert.equal((await upload(original, "other")).status, 400);
+  const response = await upload(); assert.equal(response.status, 201);
+  const asset = await response.json() as Asset;
+  assert.equal(asset.purpose, "avatar"); assert.equal(asset.mediaType, "image/webp"); assert.equal(asset.originalName, "avatar.webp");
+  const stored = await fetch(base + `/api/assets/${asset.id}/content`);
+  const storedBytes = Buffer.from(await stored.arrayBuffer());
+  const metadata = await sharp(storedBytes).metadata();
+  assert.equal(metadata.width, 160); assert.equal(metadata.height, 160); assert.equal(metadata.format, "webp"); assert.equal(metadata.exif, undefined);
+  assert.equal((await (await upload()).json() as Asset).id, asset.id);
+  const ordinaryResponse = await fetch(base + "/api/assets/uploads", { method: "POST", headers: { "content-type": "image/webp" }, body: storedBytes });
+  assert.equal(ordinaryResponse.status, 201); const ordinary = await ordinaryResponse.json() as Asset;
+  assert.notEqual(ordinary.id, asset.id);
+  assert.notEqual(ordinary.storageRefs[0]!.sourceRef, asset.storageRefs[0]!.sourceRef, "equal bytes in different roles cannot share a collectable local file");
+  assert.equal((await call(`/api/assets/${ordinary.id}`, "DELETE")).status, 204);
+  assert.equal((await fetch(base + `/api/assets/${asset.id}/content`)).status, 200);
+  const person = await (await call("/api/entities", "POST", { id: "avatar-person", type: "person", name: "老朋友", isImportant: true, avatarAssetId: asset.id })).json() as Entity;
+  assert.equal(person.type, "person");
+  assert.equal((await call("/api/entities", "POST", { type: "place", name: "地点", avatarAssetId: asset.id })).status, 400);
+  assert.equal((await call(`/api/entities/${person.id}`, "PATCH", { avatarAssetId: "missing" })).status, 400);
+  assert.equal((await call(`/api/assets/${asset.id}`, "DELETE")).status, 409);
+  assert.ok(app.repository.referencedAssetIds().has(asset.id));
+  assert.equal(app.assetGcScheduler.runOnce(new Date(Date.now() + 30 * 86400000))?.collected.includes(asset.id), false);
+  const thumb = await fetch(base + `/api/assets/${asset.id}/thumbnail?w=160`);
+  assert.equal(thumb.status, 200); assert.match(thumb.headers.get("cache-control")!, /private, max-age=300/);
+  assert.equal((await sharp(Buffer.from(await thumb.arrayBuffer())).metadata()).width, 160);
+  const renamed = await (await call(`/api/entities/${person.id}`, "PATCH", { name: "老朋友新名字", isImportant: false })).json() as Entity;
+  assert.ok(renamed.type === "person" && renamed.avatarAssetId === asset.id);
+  const bundle = await (await call("/api/export")).json() as ExportBundleV1;
+  const bad = { ...bundle, entities: bundle.entities.map(e => ({ ...e, avatarAssetId: "missing-avatar" })) };
+  assert.equal((await call("/api/import", "POST", { bundle: bad })).status, 400);
+  assert.equal((await call(`/api/entities/${person.id}`, "DELETE")).status, 204);
+  assert.equal((await call("/api/import", "POST", { bundle: { ...bundle, assets: [] } })).status, 201);
+  assert.ok(app.repository.referencedAssetIds().has(asset.id));
+  assert.equal((await call("/api/backup/local", "POST", {})).status, 201);
+  const ready = async (id: string) => {
+    for (let i = 0; i < 200; i++) {
+      const state: any = await (await call(`/api/archive/jobs/${id}`)).json();
+      if (state.phase !== "working") { assert.equal(state.phase, "ready", state.error); return state; }
+      await new Promise(done => setTimeout(done, 30));
+    }
+    throw Error("Avatar archive timed out");
+  };
+  const exported: any = await (await call("/api/archive/export", "POST", { password: "isolated-avatar-archive" })).json();
+  await ready(exported.id);
+  const archive = Buffer.from(await (await call(`/api/archive/jobs/${exported.id}/download`)).arrayBuffer());
+  assert.equal((await call(`/api/entities/${person.id}`, "PATCH", { avatarAssetId: null })).status, 200);
+  assert.ok(!app.repository.referencedAssetIds().has(asset.id));
+  assert.equal(app.assetGcScheduler.runOnce(new Date(Date.now() + 30 * 86400000))?.collected.includes(asset.id), false, "retained snapshots protect the former avatar");
+  const removed = await call(`/api/assets/${asset.id}`, "DELETE");
+  assert.equal(removed.status, 204, await removed.text());
+  const uploaded: any = await (await fetch(base + "/api/archive/uploads", { method: "POST", headers: { "content-type": "application/octet-stream" }, body: archive })).json();
+  assert.equal((await call("/api/archive/import", "POST", { id: uploaded.id, password: "isolated-avatar-archive" })).status, 202);
+  await ready(uploaded.id);
+  assert.equal((await call("/api/archive/commit", "POST", { id: uploaded.id, replaceConfirmed: true })).status, 200);
+  const restored = await (await call(`/api/entities/${person.id}`)).json() as Entity;
+  assert.ok(restored.type === "person" && restored.avatarAssetId === asset.id);
+  const restoredPhoto = await fetch(base + `/api/assets/${asset.id}/thumbnail?w=160`);
+  assert.equal(restoredPhoto.status, 200);
+  assert.equal((await sharp(Buffer.from(await restoredPhoto.arrayBuffer())).metadata()).width, 160);
+});
+
+test("avatar object storage uses quotas, authenticated access and cached reads without another download", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-avatar-pool-"));
+  const statePath = join(root, "worker.json"), workerPath = join(root, "worker.mjs");
+  writeFileSync(statePath, JSON.stringify({ objects: {}, traffic: 0, puts: 0 }));
+  writeFileSync(workerPath, `
+    import {randomUUID} from 'node:crypto';import {readFileSync,writeFileSync} from 'node:fs';
+    const path=${JSON.stringify(statePath)},root=${JSON.stringify(root)};let raw='';for await(const part of process.stdin)raw+=part;
+    const req=JSON.parse(raw),s=JSON.parse(readFileSync(path,'utf8')),month=new Date().toISOString().slice(0,7),limit=10000000;
+    const send=result=>process.stdout.write(JSON.stringify({ok:true,result})+'\\n'),save=()=>writeFileSync(path,JSON.stringify(s));
+    if(req.op==='usage'){const used=Object.values(s.objects).reduce((n,x)=>n+x.bytes,0);send({consumer:'2',storage_used:used,storage_limit:limit,storage_free:limit-used,traffic_month:month,traffic_used:s.traffic,traffic_limit:limit,traffic_free:limit-s.traffic});}
+    else if(req.op==='put'){const b=readFileSync(req.path),key='pool/2/'+randomUUID(),file=root+'/'+randomUUID()+'.object';writeFileSync(file,b);s.objects[key]={file,bytes:b.length};s.puts++;save();send({key});}
+    else if(req.op==='download'){const x=s.objects[req.key];writeFileSync(req.path,readFileSync(x.file));s.traffic+=x.bytes;save();send({month,bytes:x.bytes});}
+  `);
+  const vars = { LIFEOS_STORAGE_POOL_ENABLED: "1", LIFEOS_POOL_LOCAL_PRIMARY: "1", LIFEOS_POOL_CONSUMER: "2", LIFEOS_POOL_PHP_BINARY: process.execPath, LIFEOS_POOL_WORKER_PATH: workerPath, LIFEOS_LOG_DIR: join(root, "logs") };
+  const previous = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]])); Object.assign(process.env, vars);
+  const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_ACCOUNT_MODE: "1", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_PASSWORD: "isolated-avatar-password", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn" });
+  const { server } = createHttpServer(config); server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
+  let cookie = "";
+  const call = (path: string, method = "GET", body?: unknown, auth = cookie) => fetch(base + path, { method, headers: { cookie: auth, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const login = await call("/api/auth/login", "POST", { username: "owner", password: "isolated-avatar-password" }); assert.equal(login.status, 200); cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  const pool: any = await (await call("/api/admin/storage-pool")).json(); const ownerId = pool.users.find((u: any) => u.role === "owner").accountId;
+  assert.equal((await call(`/api/admin/accounts/${ownerId}/pool-quota`, "PUT", { storageLimitBytes: 1000000, trafficLimitBytes: 1000000 })).status, 200);
+  const bytes = await sharp({ create: { width: 160, height: 160, channels: 3, background: "#9cbdb9" } }).png().toBuffer();
+  const upload = (auth = cookie) => fetch(base + "/api/assets/uploads?purpose=avatar", { method: "POST", headers: { cookie: auth, "content-type": "image/png" }, body: bytes });
+  assert.equal((await upload("")).status, 401);
+  const response = await upload(); assert.equal(response.status, 201); const asset = await response.json() as Asset;
+  assert.equal(asset.storageRefs[0]!.sourceId, "lifeos-pool");
+  const state = () => JSON.parse(readFileSync(statePath, "utf8")); assert.equal(state().puts, 1);
+  assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`, "GET", undefined, "")).status, 401);
+  assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`)).headers.get("x-lifeos-asset-source"), "derived-cache");
+  assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`)).status, 200); assert.equal(state().traffic, 0);
+  assert.equal((await upload()).status, 201); assert.equal(state().puts, 1);
+  assert.equal((await call("/api/assets/thumbnails", "DELETE")).status, 200);
+  const regenerated = await call(`/api/assets/${asset.id}/thumbnail?w=160`);
+  assert.equal(regenerated.status, 200, regenerated.ok ? "" : await regenerated.text());
+  assert.equal(regenerated.headers.get("x-lifeos-asset-source"), "pool-derived");
+  assert.equal(state().traffic, asset.sizeBytes);
+  assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`)).headers.get("x-lifeos-asset-source"), "derived-cache"); assert.equal(state().traffic, asset.sizeBytes);
+  const member = await call("/api/admin/accounts", "POST", { username: "member", password: "isolated-member-password", displayName: "Member", spaceName: "Member" }); assert.equal(member.status, 201);
+  const otherLogin = await call("/api/auth/login", "POST", { username: "member", password: "isolated-member-password" });
+  const otherCookie = otherLogin.headers.get("set-cookie")!.split(";")[0]!;
+  assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`, "GET", undefined, otherCookie)).status, 404);
+});

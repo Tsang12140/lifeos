@@ -47,7 +47,6 @@ export interface MentionBoxProps {
   readonly onCreateEntity: CreateEntity;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
   readonly className?: string;
-  readonly placeholder?: string;
   readonly rows?: number;
   readonly ariaLabel: string;
   readonly autoFocus?: boolean;
@@ -78,7 +77,8 @@ export interface MentionBoxProps {
 /** Each alias has its own editable row. JSON is only the internal form value;
  * legacy slash-separated values remain readable. Delimiters split pasted batches,
  * never a name the owner is typing into a single row. */
-export function AliasField({ value, onChange, label, placeholder, compact = false, disabled = false }: { value: string; onChange: (value: string) => void; label: string; placeholder?: string; compact?: boolean; disabled?: boolean }) {
+export function AliasField({ value, onChange, label, compact = false, disabled = false, preserveHistory = false }: { value: string; onChange: (value: string) => void; label: string; compact?: boolean; disabled?: boolean; preserveHistory?: boolean }) {
+  const [removed, setRemoved] = useState<{ row: string; index: number } | null>(null);
   const rows: string[] = value.startsWith("[") ? (() => { try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") && parsed.length > 0 ? parsed : [""]; } catch { return [value]; } })() : value.split("/");
   const update = (next: readonly string[]) => onChange(JSON.stringify(next.length > 0 ? next : [""]));
   return <div className={`alias-field ${compact ? "is-compact" : ""}`}>
@@ -88,9 +88,10 @@ export function AliasField({ value, onChange, label, placeholder, compact = fals
       const parts = pasted.split(/[、,，/\r\n]+/u).map((part) => part.trim()).filter(Boolean);
       if (parts.length < 2 || (row && (input.selectionStart !== 0 || input.selectionEnd !== row.length))) return;
       event.preventDefault(); update([...rows.slice(0, index), ...parts, ...rows.slice(index + 1)]);
-    }} placeholder="输入一个别名（可选）" aria-label={`${label.replace(/，用斜杠分隔/u, "")} ${index + 1}`} /><button className="icon-button compact-icon-button" type="button" disabled={disabled} aria-label={`删除别名 ${index + 1}`} onClick={() => update(rows.filter((_, i) => i !== index))}><X size={14} aria-hidden="true" /></button></div>)}
-    <button className="text-button alias-add" type="button" disabled={disabled} onClick={() => update([...rows, ""])}><Plus size={14} aria-hidden="true" />添加别名</button>
+    }} aria-label={`${label.replace(/，用斜杠分隔/u, "")} ${index + 1}`} /><button className="icon-button compact-icon-button" type="button" disabled={disabled} aria-label={`删除别名 ${index + 1}`} onClick={() => { setRemoved(row.trim() ? { row, index } : null); update(rows.filter((_, i) => i !== index)); }}><X size={14} aria-hidden="true" /></button></div>)}
+    <div className="alias-field-actions"><button className="text-button alias-add" type="button" disabled={disabled} onClick={() => update([...rows, ""])}><Plus size={14} aria-hidden="true" />添加别名</button>{preserveHistory && removed ? <button className="text-button alias-add" type="button" disabled={disabled} onClick={() => { const next = rows.filter(item => item.trim()); next.splice(Math.min(removed.index, next.length), 0, removed.row); update(next); setRemoved(null); }}>撤销删除</button> : null}</div>
     <small className="alias-paste-hint">可粘贴多个别名，用顿号、逗号或换行分隔</small>
+    {preserveHistory ? <small className="alias-paste-hint">删除别名不会改变已关联的历史记录。</small> : null}
   </div>;
 }
 
@@ -194,7 +195,7 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
     </div>
     <div className="entity-create-row">
       <span className="entity-create-label">名称</span>
-      <input className="entity-create-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="名称（@ # 符号会自动去掉）" autoFocus onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submit(); } }} />
+      <input className="entity-create-input" aria-label="对象名称" value={name} onChange={(event) => setName(event.target.value)} autoFocus onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submit(); } }} />
     </div>
     <div className="entity-create-row">
       <span className="entity-create-label">别名</span>
@@ -220,7 +221,7 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
       </div> : null}
       {hasAddress ? <div className="entity-create-row">
         <span className="entity-create-label">详细地址</span>
-        <input className="entity-create-input" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="街道、门牌等（可选）" />
+        <input className="entity-create-input" aria-label="详细地址" value={address} onChange={(event) => setAddress(event.target.value)} />
       </div> : null}
     </> : null}
     <div className="entity-create-actions">
@@ -240,7 +241,7 @@ export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel,
  * Unknown names are never rewritten, which is what keeps e-mail addresses,
  * passwords, and hex colours safe.
  */
-export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, placeholder, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand, contextActions, candidates = [], decisions = [], onPickEntity, onInspectCandidate, disabled = false }: MentionBoxProps) {
+export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onCreateEntity, textareaRef, className, rows = 3, ariaLabel, autoFocus, autoGrow, autoGrowRows, moduleCommands = [], onSlashCommand, contextActions, candidates = [], decisions = [], onPickEntity, onInspectCandidate, disabled = false }: MentionBoxProps) {
   const localRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? localRef;
   const inputRangeRef = useRef<{ start: number; end: number } | undefined>(undefined);
@@ -487,7 +488,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
       }
       parts.push(value.slice(cursor), "\n"); return parts;
     })()}</div></div> : null}
-    <textarea disabled={disabled} ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} placeholder={placeholder} aria-label={ariaLabel} onScroll={syncMirror} onDoubleClick={(event) => { const at = event.currentTarget.selectionStart; const candidate = candidates.find((item) => item.start <= at && at <= item.end); if (candidate) onInspectCandidate?.(candidate); }} onBeforeInput={(event) => { const el = event.currentTarget; let start = el.selectionStart, end = el.selectionEnd; const type = (event.nativeEvent as InputEvent).inputType; if (start === end && type === "deleteContentBackward") start = Math.max(0, start - (Array.from(el.value.slice(0, start)).at(-1)?.length ?? 1)); if (start === end && type === "deleteContentForward") end = Math.min(el.value.length, end + (Array.from(el.value.slice(end))[0]?.length ?? 1)); inputRangeRef.current = { start, end }; }} onChange={(event) => { onChange(event.target.value, inputRangeRef.current); inputRangeRef.current = undefined; syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
+    <textarea disabled={disabled} ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} aria-label={ariaLabel} onScroll={syncMirror} onDoubleClick={(event) => { const at = event.currentTarget.selectionStart; const candidate = candidates.find((item) => item.start <= at && at <= item.end); if (candidate) onInspectCandidate?.(candidate); }} onBeforeInput={(event) => { const el = event.currentTarget; let start = el.selectionStart, end = el.selectionEnd; const type = (event.nativeEvent as InputEvent).inputType; if (start === end && type === "deleteContentBackward") start = Math.max(0, start - (Array.from(el.value.slice(0, start)).at(-1)?.length ?? 1)); if (start === end && type === "deleteContentForward") end = Math.min(el.value.length, end + (Array.from(el.value.slice(end))[0]?.length ?? 1)); inputRangeRef.current = { start, end }; }} onChange={(event) => { onChange(event.target.value, inputRangeRef.current); inputRangeRef.current = undefined; syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
     {contextMenu !== null ? <div ref={contextMenuRef} className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextPosition.x, top: contextPosition.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text; setContextMenu(null); if (action.disabled !== true) action.onSelect(text); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")}，` : ""}{command.description}</small></button>)}</div> : null}
     {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={onPickEntity ? "创建并核对标记" : `创建并插入 ${mention.marker}`} /> : null}

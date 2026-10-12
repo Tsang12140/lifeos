@@ -1,0 +1,287 @@
+.assistant-history-dialog .assistant-history-search {
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-history-dialog .assistant-history-search-field {
+  box-sizing: border-box;
+  height: 40px;
+  min-height: 40px;
+  align-self: center;
+}
+
+.assistant-history-dialog .assistant-history-search-field input {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  padding-block: 0;
+  line-height: 1.2;
+}
+
+.assistant-history-dialog .assistant-history-search-actions {
+  min-height: 40px;
+  align-items: center;
+  align-self: center;
+}
+
+.assistant-history-dialog .assistant-history-search-actions .secondary-button {
+  box-sizing: border-box;
+  height: 40px;
+  min-height: 40px;
+  align-self: center;
+  margin: 0;
+  line-height: 1;
+}
+
+.assistant-history-range-control {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-self: center;
+}
+
+.assistant-history-range-trigger {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.assistant-history-range-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-history-range-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  box-sizing: border-box;
+  width: min(336px, calc(100vw - 64px));
+  max-height: min(520px, calc(100dvh - 120px));
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 14px 38px rgb(20 33 58 / 18%);
+}
+
+.assistant-history-range-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.assistant-history-range-popover-head {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.assistant-history-range-step {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.77rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.assistant-history-range-clear,
+.assistant-history-range-month-button {
+  display: inline-flex;
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  cursor: pointer;
+  font: inherit;
+}
+
+.assistant-history-range-clear {
+  padding: 0 9px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.assistant-history-range-month-nav {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.assistant-history-range-month-button {
+  width: 36px;
+  padding: 0;
+}
+
+.assistant-history-range-month-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.assistant-history-range-month-select {
+  box-sizing: border-box;
+  height: 32px;
+  min-width: 0;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.assistant-history-range-month-select:hover,
+.assistant-history-range-month-select:focus-visible {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
+.assistant-history-range-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.assistant-history-range-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.assistant-history-range-week > span[role="columnheader"] {
+  display: grid;
+  height: 28px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.assistant-history-range-week > span[role="gridcell"] {
+  min-width: 0;
+}
+
+.assistant-history-range-day {
+  display: grid;
+  box-sizing: border-box;
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-history-range-day:hover,
+.assistant-history-range-month-button:hover,
+.assistant-history-range-clear:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.assistant-history-range-day.is-outside-month {
+  color: #929caf;
+}
+
+.assistant-history-range-day.is-in-range {
+  border-radius: 8px;
+  background: #eef2f6;
+}
+
+.assistant-history-range-day.is-range-start,
+.assistant-history-range-day.is-range-end {
+  border-color: var(--ink-soft);
+  color: #fff;
+  background: var(--ink-soft);
+  font-weight: 700;
+}
+
+.assistant-history-range-day.is-today:not(.is-range-start):not(.is-range-end) {
+  border-color: var(--line-strong);
+  font-weight: 750;
+}
+
+.assistant-history-range-day:focus-visible,
+.assistant-history-range-month-button:focus-visible,
+.assistant-history-range-clear:focus-visible,
+.assistant-history-range-month-select:focus-visible,
+.assistant-history-range-trigger:focus-visible {
+  outline: 2px solid var(--ink-soft);
+  outline-offset: 2px;
+}
+
+.assistant-history-range-hint {
+  margin: 9px 1px 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 560px) {
+  .assistant-history-dialog .assistant-history-search-field {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .assistant-history-range-control {
+    flex: 1 1 160px;
+  }
+
+  .assistant-history-dialog .assistant-history-search-actions {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 360px) {
+  .assistant-history-range-popover {
+    padding: 9px;
+  }
+
+  .assistant-history-range-day {
+    height: 32px;
+    min-height: 32px;
+  }
+}

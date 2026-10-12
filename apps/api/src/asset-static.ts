@@ -129,9 +129,9 @@ export function uploadOriginalName(raw: string | null): string | undefined {
  * Only files written from here on are named this way — the rows already in the
  * database keep their UUID paths, and nothing moves them.
  */
-export function storeUploadedPhoto(root: string, bytes: Buffer, format: { readonly extension: string }, digest: string): string {
+export function storeUploadedPhoto(root: string, bytes: Buffer, format: { readonly extension: string }, digest: string, namespace?: "avatars"): string {
   const day = shanghaiDateKey(new Date());
-  const relativeDirectory = `uploads/${day.slice(0, 4)}/${day.slice(5, 7)}`;
+  const relativeDirectory = `uploads/${namespace ? namespace + "/" : ""}${day.slice(0, 4)}/${day.slice(5, 7)}`;
   const directory = resolve(root, relativeDirectory);
   mkdirSync(directory, { recursive: true });
   const fileName = `${digest}${format.extension}`;

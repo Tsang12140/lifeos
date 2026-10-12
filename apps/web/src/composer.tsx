@@ -1,6 +1,6 @@
-import { VideoInput, type VideoUpload } from "./video-ui";
+import type { VideoUpload } from "./video-ui";
 import { usePhotoInput } from "./photo-input";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import {
   CalendarDays,
   Check,
@@ -11,7 +11,6 @@ import {
   LockKeyhole,
   NotebookPen,
   Plus,
-  Search,
   Send,
   Sparkles,
   User,
@@ -41,25 +40,34 @@ import { enabledModuleCommands, movieRef, MovieAddPanel } from "./movie";
 import { EntityCreateForm, MentionBox, type ContextAction } from "./entity-forms";
 import { ShotDropZone, type ShotDropZoneHandle, type ShotUpload } from "./shot-drop-zone";
 import { EntityMentionReview } from "./entity-mention-review";
+import { VideoScopeContext } from "./video-ui";
+import { compressInWorker } from "./video/client";
+import { saveOriginal } from "./video/originals";
 
 export interface NoteEditMeta { format: NoteFormat; title: string; source: string; metadataTouched: boolean; }
 
 interface MentionReviewProps { decisions: readonly TextEntityDecision[]; onDecisionsChange: (decisions: readonly TextEntityDecision[]) => void; }
 
-export interface ComposerProps extends MentionReviewProps { kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onOpenSearch: () => void; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string, editRange?: { start: number; end: number }) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; assets: readonly Asset[]; onUploadVideo: VideoUpload; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
+export interface ComposerProps extends MentionReviewProps { searchControl?: ReactNode; kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string, editRange?: { start: number; end: number }) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; assets: readonly Asset[]; onUploadVideo: VideoUpload; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-export function Composer({ decisions, onDecisionsChange, kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onOpenSearch, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, assets, onUploadVideo, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
+export function Composer({ searchControl, decisions, onDecisionsChange, kind, content, occurredAt, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, assets, onUploadVideo, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const candidates = useMemo(() => {
     const found = [...findEntityCandidates(content, entities)];
     for (const decision of decisions) {
-      if (decision.entityId === null || found.some((item) => item.start < decision.end && decision.start < item.end)) continue;
+      if (decision.entityId === null || content.slice(decision.start, decision.end) !== decision.text) continue;
       const entity = entities.find((item) => item.id === decision.entityId);
-      if (entity && content.slice(decision.start, decision.end) === decision.text) found.push({ start: decision.start, end: decision.end, text: decision.text, entities: [entity] });
+      if (!entity) continue;
+      const sameRange = found.find(item => item.start === decision.start && item.end === decision.end);
+      const options = [entity, ...(sameRange?.entities ?? []).filter(item => item.id !== entity.id)];
+      // A newly reused alias must not displace the already confirmed owner
+      // in the editor either. Alternatives remain available for explicit fixes.
+      for (let i = found.length - 1; i >= 0; i--) if (found[i]!.start < decision.end && decision.start < found[i]!.end) found.splice(i, 1);
+      found.push({ start: decision.start, end: decision.end, text: decision.text, entities: options });
     }
     return found.sort((a, b) => a.start - b.start);
   }, [content, entities, decisions]);
@@ -75,26 +83,17 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
     resetMentionTools();
   };
   const shotZoneRef = useRef<ShotDropZoneHandle>(null);
-  const videoZoneRef = useRef<ShotDropZoneHandle>(null);
-  const mediaStates = useRef<{ scope: string; photo: "active" | "failed" | null; video: "active" | "failed" | null }>({ scope: shotScopeKey, photo: null, video: null });
-  if (mediaStates.current.scope !== shotScopeKey) mediaStates.current = { scope: shotScopeKey, photo: null, video: null };
-
-
   const [shotUploading, setShotUploading] = useState(false);
   const [shotSubmissionState, setShotSubmissionState] = useState<"active" | "failed" | null>(null);
   const shotSubmissionStateRef = useRef<"active" | "failed" | null>(null);
   const currentShotScopeRef = useRef(shotScopeKey);
   currentShotScopeRef.current = shotScopeKey;
-  const reportMediaState = (scope: string, kind: "photo" | "video", state: "active" | "failed" | null) => {
+  const handleShotSubmissionState = (scope: string, state: "active" | "failed" | null) => {
     if (scope !== currentShotScopeRef.current) return;
-    mediaStates.current[kind] = state;
-    const states = [mediaStates.current.photo, mediaStates.current.video];
-    const aggregate = states.includes("active") ? "active" : states.includes("failed") ? "failed" : null;
-    onShotSubmissionState(scope, aggregate);
-    shotSubmissionStateRef.current = aggregate;
-    setShotSubmissionState(aggregate);
+    shotSubmissionStateRef.current = state;
+    setShotSubmissionState(state);
+    onShotSubmissionState(scope, state);
   };
-  const reportShotSubmissionState = (scope: string, state: "active" | "failed" | null) => reportMediaState(scope, "photo", state);
   const futureJournal = kind === "journal" && (occurredAt.slice(0, 10) || selectedDate) > localDateToday();
   const canSave = !futureJournal && content.trim().length > 0 && !saving && !shotUploading && shotSubmissionState === null && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
   const submitIfReady = () => {
@@ -107,7 +106,17 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
     if (!saving && content.trim().length > 0) onSubmit();
   };
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
-  const { draggingFiles, handlers: entryDragHandlers } = usePhotoInput(shotZoneRef, saving, files => videoZoneRef.current?.takeFiles(files));
+  const { draggingFiles, handlers: entryDragHandlers } = usePhotoInput(shotZoneRef, saving);
+  const videoScope = useContext(VideoScopeContext);
+  const uploadVideo = useCallback<NonNullable<ComponentProps<typeof ShotDropZone>["onUploadVideo"]>>(async (file, signal, progress) => {
+    const compressed = await compressInWorker(file, { signal, onProgress: value => progress({ loaded: Math.floor(value * 80), total: 100 }) });
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const body = new File([compressed.bytes], file.name.replace(/\.[^.]+$/, "") + ".mp4", { type: "video/mp4" });
+    const asset = await onUploadVideo(body, signal, value => progress({ loaded: 80 + Math.floor((value.loaded / Math.max(1, value.total)) * 20), total: 100 }));
+    try { await saveOriginal(videoScope, asset.id, file); }
+    catch { onNotify("视频已上传，但本机原片保存失败，请保留设备相册中的源文件", "warn"); }
+    return { asset, reused: false };
+  }, [onUploadVideo, videoScope, onNotify]);
   const [pickerKind, setPickerKind] = useState<"person" | "place" | null>(null);
   const [pickerSearch, setPickerSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -307,14 +316,14 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
           return <button className={`kind-option ${kind === item ? "is-active" : ""}`} key={item} type="button" role="tab" aria-selected={kind === item} onClick={() => onKindChange(item)}><Icon size={15} strokeWidth={1.8} aria-hidden="true" /><span>{COMPOSER_META[item].label}</span></button>;
         })}
       </div>}
-      <div className="composer-toolbar-actions">
-        <button className="icon-button compact-icon-button composer-search" type="button" onClick={onOpenSearch} aria-label={`搜索${activeMeta.label}`}><Search size={17} strokeWidth={1.9} aria-hidden="true" /></button>
+      <div className={`composer-toolbar-actions ${searchControl ? "has-search" : ""}`}>
+        {searchControl}
         {dismissible ? <button className={editing ? "secondary-button composer-edit-cancel" : "icon-button compact-icon-button composer-close"} type="button" onClick={onClose} aria-label={editing ? "取消编辑" : "关闭记录编辑器"}>{editing ? "取消" : <X size={17} strokeWidth={1.9} aria-hidden="true" />}</button> : null}
       </div>
     </div>
     {editing && kind === "note" && noteMeta && onNoteMetaChange ? <div className="composer-note-fields">
       <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${noteMeta.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={noteMeta.format === item.value} key={item.value} onClick={() => onNoteMetaChange({ ...noteMeta, format: item.value, metadataTouched: true })}><span className="note-format-option-title">{item.label}</span><small>{item.hint}</small></button>)}</div>
-      {noteMeta.format === "article" ? <label className="composer-note-field"><span>标题</span><input data-note-title value={noteMeta.title} maxLength={300} onChange={(event) => onNoteMetaChange({ ...noteMeta, title: event.target.value, metadataTouched: true })} placeholder="给文章一个标题" /></label> : null}
+      {noteMeta.format === "article" ? <label className="composer-note-field"><span>标题</span><input data-note-title value={noteMeta.title} maxLength={300} onChange={(event) => onNoteMetaChange({ ...noteMeta, title: event.target.value, metadataTouched: true })} /></label> : null}
     </div> : null}
     <div className={`composer-entry ${draggingFiles ? "is-dragging" : ""}`} {...entryDragHandlers}>
     {/* Two collapsed rows. The fan used to be the reason for three — a turned
@@ -322,23 +331,22 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
         as well as width. The strip below is a flat 44px row and needs none of
         that, so the field goes back to two rows (about 81px) and the band adds
         its own height underneath. */}
-    <MentionBox disabled={saving} className="composer-input" value={content} onChange={onContentChange} entities={entities} candidates={candidates} decisions={decisions} onPickEntity={(entity, text) => reviewEntity(entity, text)} onInspectCandidate={(candidate) => setReview({ text: content, candidates: candidates.filter((item) => item.entities.some((entity) => candidate.entities.some((option) => option.id === entity.id))) })} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} placeholder={activeMeta.placeholder} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => { setMovieQuery(undefined); setMoviePanelOpen(true); }} contextActions={movieContextActions} />
-    {uncheckedCandidates.length > 0 ? <div className="mention-review-reminder"><span>发现 {pendingPeople > 0 ? `${pendingPeople} 位人物` : ""}{pendingPeople > 0 && pendingPlaces > 0 ? "、" : ""}{pendingPlaces > 0 ? `${pendingPlaces} 处地点` : ""}可关联</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : candidates.length > 0 ? <div className="mention-review-reminder"><span>人物与地点已核对</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : null}
+    <MentionBox disabled={saving} className="composer-input" value={content} onChange={onContentChange} entities={entities} candidates={candidates} decisions={decisions} onPickEntity={(entity, text) => reviewEntity(entity, text)} onInspectCandidate={(candidate) => setReview({ text: content, candidates: candidates.filter((item) => item.entities.some((entity) => candidate.entities.some((option) => option.id === entity.id))) })} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => { setMovieQuery(undefined); setMoviePanelOpen(true); }} contextActions={movieContextActions} />
+    {uncheckedCandidates.length > 0 ? <div className="mention-review-reminder"><span>发现 {pendingPeople > 0 ? `${pendingPeople} 位人物` : ""}{pendingPeople > 0 && pendingPlaces > 0 ? "、" : ""}{pendingPlaces > 0 ? `${pendingPlaces} 处地点` : ""}可关联</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : candidates.length > 0 ? <div className="mention-review-reminder is-reviewed"><span>人物与地点已核对</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : null}
       {/* The photos sit flush under the text block, not under the room. The
           textarea is inset from the room's top by its own padding, so a floor on
           the room leaves that same inset stranded below the text instead — the
           gap moves, it does not go away. Cancelling the entry's slack here is
           what actually closes it. */}
       <div className="composer-mobile-action-row">
-        <ShotDropZone ref={shotZoneRef} scopeKey={shotScopeKey} disabled={saving} shots={shots.filter(item => item.role !== "video")} onShotsChange={update => onShotsChange(previous => { const photos = previous.filter(item => item.role !== "video"); return [...previous.filter(item => item.role === "video"), ...(typeof update === "function" ? update(photos) : update)]; })} onUpload={onUploadShot} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} onSubmissionState={reportShotSubmissionState} />
+        <ShotDropZone ref={shotZoneRef} scopeKey={shotScopeKey} disabled={saving} shots={shots} assets={assets} onShotsChange={onShotsChange} onUpload={onUploadShot} onUploadVideo={uploadVideo} onNotify={onNotify} onCleared={onShotsCleared} onBusyChange={setShotUploading} onSubmissionState={handleShotSubmissionState} />
         <button className="primary-button composer-inline-save" type="button" disabled={!canSave} onClick={submitIfReady} aria-label={saving ? "正在保存" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"} title={saving ? "正在保存" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span className={editing || kind === "task" ? "composer-inline-save-label" : "visually-hidden"}>{saving ? "保存中" : editing ? "保存修改" : kind === "task" ? "添加任务" : "保存"}</span></button>
       </div>
     </div>
-    {editing && kind === "note" && noteMeta?.format === "quote" && onNoteMetaChange ? <label className="composer-note-field composer-note-source"><span>出处（可选）</span><input data-note-source value={noteMeta.source} maxLength={1000} onChange={(event) => onNoteMetaChange({ ...noteMeta, source: event.target.value, metadataTouched: true })} placeholder="书名、作者或网页链接" /></label> : null}
+    {editing && kind === "note" && noteMeta?.format === "quote" && onNoteMetaChange ? <label className="composer-note-field composer-note-source"><span>出处（可选）</span><input data-note-source value={noteMeta.source} maxLength={1000} onChange={(event) => onNoteMetaChange({ ...noteMeta, source: event.target.value, metadataTouched: true })} /></label> : null}
     {error ? <div className="composer-edit-error" role="alert"><span>{error}</span>{onReloadLatest ? <button type="button" onClick={onReloadLatest}>读取最新版本</button> : null}</div> : null}
     {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => { setMoviePanelOpen(false); setMovieQuery(undefined); }} initialQuery={movieQuery} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
-    <VideoInput key={shotScopeKey} ref={videoZoneRef} assets={assets} refs={shots} onChange={onShotsChange} disabled={saving} onUpload={onUploadVideo} onNotify={onNotify} onState={state => reportMediaState(shotScopeKey, "video", state)} />
     <div className="composer-footer">
       <div className="composer-fields">
         <div className="place-anchor">
@@ -346,7 +354,7 @@ export function Composer({ decisions, onDecisionsChange, kind, content, occurred
           <button className={`icon-button compact-icon-button ${pickerKind === "place" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if (selectionRef.current !== null) openSmartMention("place"); else { setPickerKind((current) => (current === "place" ? null : "place")); setCreateOpen(false); setSmartMentionPrompt(null); } }} disabled={saving} aria-label="插入地点" aria-expanded={pickerKind === "place"}><MapPin size={15} strokeWidth={1.9} aria-hidden="true" /></button>
           {smartHintVisible ? <p className="smart-mention-toast" role="status">先选中一段文字，再关联人物或地点</p> : null}
           {smartPromptOpen ? <div className="place-popover smart-mention-popover"><div className="smart-mention-header"><Sparkles size={14} aria-hidden="true" /><strong>{smartPromptTitle}</strong></div>{smartChoices.length > 0 ? <div className="smart-choice-grid">{smartChoices.map(({ entity, type }) => { const KindIcon = type === "person" ? User : MapPin; const detail = entityHint(entity, entities) || (type === "person" ? "@ 人物" : "# 地点"); return <button className="smart-choice" key={`${type}-${entity.id}`} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => reviewEntity(entity)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{entity.name}</strong><small>{detail}</small></span></button>; })}</div> : <div className="smart-choice-grid">{smartCreateTypes.map((type) => { const KindIcon = type === "person" ? User : MapPin; return <button className={`smart-choice smart-choice-${type}`} key={type} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => beginSmartCreate(type)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{type === "person" ? "人物" : "地点"}，{smartSelectionText}</strong><small>新建并核对标记</small></span></button>; })}</div>}</div> : null}
-          {pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} placeholder={`搜索${pickerKind === "place" ? "地点" : "人物"}，或直接输入新名称`} aria-label="搜索" autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建并核对标记" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + entity.name + content.slice(caret); onContentChange(next); reviewEntity(entity, next); }}><KindIcon size={13} strokeWidth={1.8} aria-hidden="true" /><span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
+          {pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} aria-label={`查找${pickerKind === "place" ? "地点" : "人物"}`} autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建并核对标记" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + entity.name + content.slice(caret); onContentChange(next); reviewEntity(entity, next); }}><KindIcon size={13} strokeWidth={1.8} aria-hidden="true" /><span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
         </div>
         {/* A task gets the range picker instead: both ends of a task can be in
             the future, and the occurrence field's cap at "now" is exactly what

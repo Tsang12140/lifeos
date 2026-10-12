@@ -1,3 +1,7 @@
+import { CalendarDays } from "./calendar-days.js";
+import { CalendarBackgrounds } from "./calendar-backgrounds.js";
+import { handleCalendarBackgroundRoutes } from "./routes-calendar-backgrounds.js";
+import { assetThumbnailVersion, resolveAssetThumbnail } from "./routes-assets.js";
 import { CalendarTaskLabels } from "./calendar-task-labels.js";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
@@ -156,6 +160,7 @@ import { handleAssetsRoutes } from "./routes-assets.js";
 import { handleEntitiesRoutes } from "./routes-entities.js";
 import { handleAiMovieRoutes } from "./routes-ai-movie.js";
 import { handleAssistantBackfillRoutes } from "./routes-assistant-backfill.js";
+import { handleAssistantHistoryRoutes } from "./routes-assistant-history.js";
 import { handleWeatherRoutes } from "./routes-weather.js";
 import { handleModulesRoutes } from "./routes-modules.js";
 import { summaryPayload, collectSummarisableRecords } from "./summary-routes.js";
@@ -298,6 +303,7 @@ function parseDateQuery(value: string | null, name: string): string | undefined 
 
 
 interface LifeosApp {
+  readonly calendarBackgrounds?: CalendarBackgrounds;
   readonly config: ApiConfig;
   readonly repository: SqliteRecordRepository;
   readonly backupScheduler: BackupScheduler;
@@ -399,6 +405,24 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   // is a supported operation, not a repair.
   const thumbnails = createThumbnailCache(config.dataDirectory);
 
+  const calendarDays = new CalendarDays(config.databasePath, {
+    repository,
+    assetVersion: asset => assetThumbnailVersion({ config, repository }, asset),
+    thumbnail: async (id, width) => (await resolveAssetThumbnail(routeContext(), id, width)).file,
+    summaries: async (dates, now) => {
+      const byDate = collectSummarisableRecords(repository, "Asia/Shanghai");
+      await resolveDaySummaries({ dates, recordsForDate: date => byDate.get(date) ?? [], latestRecordsForDate: date => collectSummarisableRecords(repository, "Asia/Shanghai").get(date) ?? [], isActive: () => !closed, cache: repository, provider: createDaySummaryProvider(config), today: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now) });
+    },
+    onError: error => console.error("[calendar-days]", error),
+  });
+
+  const calendarBackgrounds = new CalendarBackgrounds(config.dataDirectory, {
+    repository,
+    assetVersion: asset => assetThumbnailVersion({ config, repository }, asset),
+    thumbnail: async id => (await resolveAssetThumbnail(routeContext(), id, 400)).file,
+    onError: error => console.error("[calendar-backgrounds]", error),
+  });
+
   function authenticated(req: IncomingMessage): boolean {
     if (config.password === undefined) return true;
     repository.purgeExpiredSessions();
@@ -419,8 +443,10 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (!originAllowed(req, config)) throw new HttpError(403, "origin_not_allowed", "Origin is not allowed");
   }
 
-  async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): Promise<void> {
-    const ctx: RouteContext = {
+  function routeContext(): RouteContext {
+    return {
+      calendarDays,
+      calendarBackgrounds,
       config,
       repository,
       calendarTaskLabels,
@@ -438,6 +464,11 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       requireAuth,
       checkRequestSecurity,
     };
+  }
+
+  async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): Promise<void> {
+    const ctx = routeContext();
+    if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method ?? "") && !pathname.startsWith("/api/calendar/background")) res.once("finish", () => { if (res.statusCode < 300) { calendarDays.schedule(); calendarBackgrounds.changed(); } });
     if (pathname === "/api/health" && req.method === "GET") {
       setJson(res, 200, { ok: true });
       return;
@@ -488,9 +519,11 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     }
 
     requireAuth(req);
+    if (await handleCalendarBackgroundRoutes(ctx, req, res, pathname, url)) return;
     if (await handleArchiveRoutes(ctx, req, res, pathname, url)) return;
     if (await handleBackupRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAssistantBackfillRoutes(ctx, req, res, pathname, url)) return;
+    if (await handleAssistantHistoryRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAiMovieRoutes(ctx, req, res, pathname, url)) return;
     if (await handleWeatherRoutes(ctx, req, res, pathname, url)) return;
     if (await handleModulesRoutes(ctx, req, res, pathname, url)) return;
@@ -539,6 +572,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
 
   let closed = false;
   const app: LifeosApp = {
+    calendarBackgrounds,
     config,
     repository,
     backupScheduler,
@@ -575,7 +609,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
           : error instanceof SyntaxError
             ? new HttpError(400, "invalid_json", "Invalid request")
             : new HttpError(500, "internal_error", "Internal server error");
-        setJson(res, httpError.status, { error: httpError.code, message: httpError.message });
+        setJson(res, httpError.status, { error: httpError.code, message: httpError.message, ...(httpError.details ? { details: httpError.details } : {}) });
         requestLog(httpError.status, req.method ?? "?", rawPathname(req), startedAt, `${httpError.code}: ${httpError.message}`);
         return;
       }
@@ -589,11 +623,15 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       clearVideoDownloadCache(repository);
       weatherArchiveScheduler.stop();
       assetGcScheduler.stop();
+      calendarDays.close();
+      calendarBackgrounds.close();
       calendarTaskLabels.close();
       repository.close();
       if (ownsPoolStore) poolStore?.close();
     },
   };
+  calendarDays.start();
+  calendarBackgrounds.start();
   return { ...app, config };
 }
 
@@ -1305,7 +1343,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
           : error instanceof SyntaxError
             ? new HttpError(400, "invalid_json", "Invalid request")
             : new HttpError(500, "internal_error", "Internal server error");
-        setJson(res, httpError.status, { error: httpError.code, message: httpError.message });
+        setJson(res, httpError.status, { error: httpError.code, message: httpError.message, ...(httpError.details ? { details: httpError.details } : {}) });
         requestLog(httpError.status, req.method ?? "?", path, startedAt, `${httpError.code}: ${httpError.message}`);
         return;
       }

@@ -6,11 +6,14 @@ import {
   assertValidCycleIntimacyModuleData,
   assertValidTimelineRecord,
   canonicalPersonName,
+  contactActivity,
   cleanMovieQuery,
   createDateOnly,
   createExportBundle,
   createInstant,
   createLocalDateTime,
+  describeUiCommands,
+  entityFilterKey,
   entitySearchTerms,
   escapeMarkdownPath,
   exportRecordMarkdown,
@@ -29,10 +32,43 @@ import {
   summaryFingerprint,
   summaryUsableSources,
   trimSummaryText,
+  compileUiTurnPlan,
+  resolveUiEntity,
+  validateUiCommand,
+  validateUiTurnPlan,
+  UI_COMMANDS,
+  UI_COMMAND_TYPES,
   type Asset,
   type Entity,
   type TaskRecord,
 } from "../src/index.js";
+
+test("contact heat counts linked records once, decays by Shanghai life date and ignores future plans", () => {
+  const refs = [{ entityType: "person" as const, entityId: "friend" }, { entityType: "person" as const, entityId: "friend" }, { entityType: "place" as const, entityId: "place" }];
+  const now = new Date("2026-10-12T00:00:00Z");
+  const row = { id: "one", createdAt: createInstant(now.toISOString()), entityRefs: refs };
+  deepStrictEqual(contactActivity([row, row], now), [{ entityId: "friend", score: 1, recordCount: 1, lastMentionDate: "2026-10-12" }]);
+  const old = { ...row, id: "old", occurredAt: createDateOnly("2026-08-13") };
+  equal(contactActivity([old], now)[0]?.score, 0.5, "backfilling an old event does not make it recent");
+  const older = { ...row, id: "older", occurredAt: createLocalDateTime("2026-06-14T23:30:00") };
+  equal(contactActivity([older], now)[0]?.score, 0.25);
+  const crossMidnight = { ...row, id: "midnight", occurredAt: createInstant("2026-10-11T16:00:00Z") };
+  equal(contactActivity([crossMidnight], now)[0]?.score, 1, "UTC yesterday is Shanghai today");
+  const future = { ...row, id: "future", occurredAt: createDateOnly("2026-10-13") };
+  deepStrictEqual(contactActivity([future], now), []);
+  const combined = contactActivity([row, old, older, crossMidnight], now)[0]!;
+  equal(combined.score, 2.75); equal(combined.recordCount, 4); equal(combined.lastMentionDate, "2026-10-12");
+  ok(contactActivity([row, old], new Date("2028-10-12T00:00:00Z"))[0]!.score < 0.01, "silence eventually sinks historic frequency");
+});
+
+test("importance belongs to people and round-trips through portable exports", () => {
+  const person = { id: "important", type: "person" as const, name: "老朋友", isImportant: true };
+  assertValidEntity(person); assertValidEntity({ ...person, isImportant: false });
+  throws(() => assertValidEntity({ ...person, isImportant: "true" }), /boolean/);
+  throws(() => assertValidEntity({ ...person, type: "place" }), /only allowed on a person/);
+  const bundle = createExportBundle({ records: [], entities: [person], exportedAt: createInstant("2026-10-12T00:00:00Z") });
+  deepStrictEqual(parseExportJson(serializeExportJson(bundle)).entities, [person]);
+});
 
 test("candidate review preserves spaced aliases, longest names and ambiguous identity", () => {
   const entities: Entity[] = [
@@ -714,4 +750,164 @@ test("assistant time uses Shanghai midnight and never invents a clock for histor
   equal(backfillEntryTime({...entry,isBackfill:true},"2026-10-08T04:00:00Z"),"");
   equal(backfillEntryTime({...entry,time:"12:00"},"2026-10-09T04:00:00Z"),"12:00");
   equal(backfillEntryTime({...entry,time:""},"2026-10-08T04:00:00Z"),"");
+});
+
+test("a word two people answer to is asked about, never guessed", () => {
+  const people: Entity[] = [
+    { id: "wangsu", type: "person", name: "王素", aliases: ["姐姐"] },
+    { id: "wanglin", type: "person", name: "王琳", aliases: ["姐姐", "琳姐"] },
+    { id: "mom", type: "person", name: "妈妈" },
+  ];
+  // 两个人都有「姐姐」这个别名是正常结果，不是数据错误 —— 返回候选而不是任选一个。
+  const ambiguous = resolveUiEntity("姐姐", people);
+  equal(ambiguous.kind, "ambiguous");
+  deepStrictEqual(ambiguous.kind === "ambiguous" ? ambiguous.candidates.map((c) => c.entityId).sort() : [], ["wanglin", "wangsu"]);
+  // 唯一别名照旧一步到位。
+  deepStrictEqual(resolveUiEntity("琳姐", people), { kind: "one", entityId: "wanglin" });
+  deepStrictEqual(resolveUiEntity("妈妈", people), { kind: "one", entityId: "mom" });
+  // 真有人的姓名就叫这个词时，姓名命中优先于别名，不会因为别人也叫这个而歧义。
+  const named: Entity[] = [{ id: "named", type: "person", name: "姐姐" }, { id: "other", type: "person", name: "王素", aliases: ["姐姐"] }];
+  deepStrictEqual(resolveUiEntity("姐姐", named), { kind: "one", entityId: "named" });
+  // 空格与大小写归一化沿用既有 entitySearchTerms 口径。
+  const latin: Entity[] = [{ id: "l", type: "person", name: "Ann Lee", aliases: ["annie"] }];
+  deepStrictEqual(resolveUiEntity(" annie ", latin), { kind: "one", entityId: "l" });
+  deepStrictEqual(resolveUiEntity("姑姑", people), { kind: "none" });
+  deepStrictEqual(resolveUiEntity("   ", people), { kind: "none" });
+});
+
+test("entity type picks the same filter bucket the UI already uses", () => {
+  equal(entityFilterKey("person"), "personIds");
+  equal(entityFilterKey("place"), "placeIds");
+  equal(entityFilterKey("movie"), "entityIds");
+  equal(entityFilterKey("project"), "entityIds");
+  equal(entityFilterKey("topic"), "entityIds");
+});
+
+const uiToday = "2026-10-10";
+const uiContext = { entityIds: new Set(["wangsu", "wanglin"]), recordIds: new Set(["r1"]), today: uiToday };
+
+test("the command whitelist rejects anything the model invents", () => {
+  const reject = (raw: unknown) => { const checked = validateUiCommand(raw, uiContext); equal(checked.ok, false); return checked.ok ? "" : checked.reason; };
+  match(reject({ type: "record.delete", params: { recordId: "r1" } }), /未知命令/);
+  match(reject({ type: "view.goto", params: { view: "settings" } }), /不支持的页面/);
+  match(reject({ type: "search.records", params: {} }), /至少要有一个筛选条件/);
+  match(reject({ type: "search.records", params: { from: "2026-10-10", to: "2026-09-11" } }), /不能晚于/);
+  match(reject({ type: "search.records", params: { to: "2026-10-11" } }), /未来日期/);
+  match(reject({ type: "search.records", params: { personIds: ["ghost"] } }), /未知实体/);
+  match(reject({ type: "search.records", params: { from: "昨天" } }), /YYYY-MM-DD/);
+  match(reject({ type: "date.goto", params: { date: "2026-10-11" } }), /未来日期/);
+  match(reject({ type: "entity.open", params: { entityId: "ghost" } }), /不是已知实体/);
+  match(reject({ type: "record.focus", params: { recordId: "ghost" } }), /不是已知记录/);
+  match(reject({ type: "privacy.requestAccess", params: { reason: " ", scope: "once" } }), /reason/);
+});
+
+test("a valid command keeps only the fields it was given", () => {
+  const checked = validateUiCommand({ type: "search.records", params: { kinds: ["journal"], personIds: ["wanglin"], from: "2026-09-11", to: "2026-10-10", junk: "ignored" } }, uiContext);
+  equal(checked.ok, true);
+  deepStrictEqual(checked.ok ? checked.command : null, { type: "search.records", params: { kinds: ["journal"], personIds: ["wanglin"], from: "2026-09-11", to: "2026-10-10" } });
+  const past = validateUiCommand({ type: "date.goto", params: { date: uiToday } }, uiContext);
+  deepStrictEqual(past.ok ? past.command : null, { type: "date.goto", params: { date: uiToday } });
+});
+
+test("one bad command never costs the owner the good ones", () => {
+  const result = validateUiTurnPlan({
+    commands: [
+      { type: "view.goto", params: { view: "today" } },
+      { type: "search.records", params: { personIds: ["ghost"] } },
+      { type: "record.delete", params: { recordId: "r1" } },
+    ],
+  }, uiContext);
+  deepStrictEqual(result.plan.commands, [{ type: "view.goto", params: { view: "today" } }]);
+  equal(result.rejected.length, 2);
+});
+
+test("asking about an ambiguous word stops the guess instead of racing it", () => {
+  const result = validateUiTurnPlan({
+    commands: [{ type: "search.records", params: { personIds: ["wangsu"] } }],
+    clarify: { term: "姐姐", candidates: [{ entityId: "wangsu", name: "王素" }, { entityId: "wanglin", name: "王琳" }] },
+  }, uiContext);
+  equal(result.plan.commands, undefined);
+  equal(result.plan.clarify?.candidates.length, 2);
+  // 候选不足两个不算歧义，直接丢掉，别拿一个问题去烦人。
+  const thin = validateUiTurnPlan({ clarify: { term: "姐姐", candidates: [{ entityId: "wangsu", name: "王素" }] } }, uiContext);
+  equal(thin.plan.clarify, undefined);
+  equal(thin.rejected.length, 1);
+  const ghosted = validateUiTurnPlan({ clarify: { term: "姐姐", candidates: [{ entityId: "ghost", name: "幽灵" }, { entityId: "wanglin", name: "王琳" }] } }, uiContext);
+  equal(ghosted.plan.clarify, undefined);
+});
+
+test("offers need a label and a command that validates", () => {
+  const result = validateUiTurnPlan({ offers: [{ label: "看看这 12 条", command: { type: "search.records", params: { kinds: ["journal"] } } }, { command: { type: "view.goto", params: { view: "today" } } }, { label: "坏的", command: { type: "view.goto", params: { view: "settings" } } }] }, uiContext);
+  equal(result.plan.offers?.length, 1);
+  equal(result.plan.offers?.[0]?.label, "看看这 12 条");
+  equal(result.rejected.length, 2);
+});
+
+test("the prompt block is generated from the registry and P0 has no write command", () => {
+  const prompt = describeUiCommands();
+  for (const spec of UI_COMMANDS) equal(prompt.includes(spec.type), spec.modelFacing, `${spec.type} 的 prompt 可见性与 modelFacing 不一致`);
+  for (const forbidden of ["record.create", "record.update", "record.delete", "task.setStatus", "settings.open"]) equal(UI_COMMAND_TYPES.includes(forbidden as never), false);
+  // 设置页不允许 AI 直接打开：那里放着凭据。
+  equal(UI_COMMAND_TYPES.includes("view.goto"), true);
+  equal(UI_COMMANDS.every((spec) => spec.params.every((param) => param.describe.length > 0)), true);
+  // 隐私授权由系统在「确实有记录被挡住」时发起，不写进 prompt —— 否则模型会为了自己找不到东西而索要权限。
+  equal(UI_COMMAND_TYPES.includes("privacy.requestAccess"), true);
+  equal(prompt.includes("privacy.requestAccess"), false);
+  deepStrictEqual(UI_COMMANDS.filter((spec) => !spec.modelFacing).map((spec) => spec.type), ["privacy.requestAccess"]);
+});
+
+const compileEntities: Entity[] = [
+  { id: "wangsu", type: "person", name: "王素", aliases: ["姐姐"] },
+  { id: "wanglin", type: "person", name: "王琳", aliases: ["姐姐", "琳姐"] },
+  { id: "home", type: "place", name: "老家" },
+];
+const compileContext = {
+  entities: compileEntities,
+  entityIds: new Set(["wangsu", "wanglin", "home"]),
+  recordIds: new Set(["r1"]),
+  today: "2026-10-10",
+  entityHint: (id: string) => (id === "wanglin" ? "最近出现在 2 天前" : undefined),
+};
+
+test("the server turns a nickname into an id, and asks when the nickname is shared", () => {
+  // 唯一别名 → 直接编译成 id。
+  const one = compileUiTurnPlan({ commands: [{ type: "search.records", params: { personIds: ["琳姐"], kinds: ["journal"] } }] }, compileContext);
+  deepStrictEqual(one.plan.commands, [{ type: "search.records", params: { personIds: ["wanglin"], kinds: ["journal"] } }]);
+  // 共用的别名 → 不猜，反问；本次跳转与筛选一并取消。
+  const both = compileUiTurnPlan({ commands: [{ type: "view.goto", params: { view: "today" } }, { type: "search.records", params: { personIds: ["姐姐"] } }] }, compileContext);
+  equal(both.plan.commands, undefined);
+  deepStrictEqual(both.plan.clarify?.candidates.map((c) => c.entityId).sort(), ["wanglin", "wangsu"]);
+  equal(both.plan.clarify?.candidates.find((c) => c.entityId === "wanglin")?.hint, "最近出现在 2 天前");
+  ok(both.rejected.some((reason) => reason.includes("歧义")), both.rejected.join("|"));
+});
+
+test("a filter the server cannot resolve is dropped, never widened", () => {
+  // 认不出「姑姑」时必须整条丢掉 —— 放宽条件会让主人看到所有人的记录。
+  const dropped = compileUiTurnPlan({ commands: [{ type: "search.records", params: { personIds: ["姑姑"] } }] }, compileContext);
+  equal(dropped.plan.commands, undefined);
+  equal(dropped.plan.clarify, undefined);
+  equal(dropped.rejected.length, 1);
+  ok(dropped.rejected[0]!.includes("姑姑"), dropped.rejected[0]);
+});
+
+test("the entity's own type decides the filter bucket", () => {
+  // 模型把人填进 entityIds 也会被纠正到 personIds，而不是照抄。
+  const compiled = compileUiTurnPlan({ commands: [{ type: "search.records", params: { entityIds: ["琳姐"] } }] }, compileContext);
+  deepStrictEqual(compiled.plan.commands, [{ type: "search.records", params: { personIds: ["wanglin"] } }]);
+  const byId = compileUiTurnPlan({ commands: [{ type: "search.records", params: { personIds: ["wangsu"], placeIds: ["home"] } }] }, compileContext);
+  deepStrictEqual(byId.plan.commands, [{ type: "search.records", params: { personIds: ["wangsu"], placeIds: ["home"] } }]);
+});
+
+test("one unresolvable command does not cost the owner the rest of the turn", () => {
+  const mixed = compileUiTurnPlan({ commands: [{ type: "view.goto", params: { view: "calendar" } }, { type: "entity.open", params: { entityId: "姑姑" } }] }, compileContext);
+  deepStrictEqual(mixed.plan.commands, [{ type: "view.goto", params: { view: "calendar" } }]);
+  equal(mixed.rejected.length, 1);
+  const opened = compileUiTurnPlan({ commands: [{ type: "entity.open", params: { entityId: "琳姐" } }] }, compileContext);
+  deepStrictEqual(opened.plan.commands, [{ type: "entity.open", params: { entityId: "wanglin" } }]);
+  const offered = compileUiTurnPlan({ offers: [{ label: "看看这 12 条", command: { type: "search.records", params: { personIds: ["琳姐"] } } }] }, compileContext);
+  equal(offered.plan.offers?.[0]?.label, "看看这 12 条");
+  deepStrictEqual(offered.plan.offers?.[0]?.command, { type: "search.records", params: { personIds: ["wanglin"] } });
+  // 空 turn 与坏结构都只是"没命令"，不是错误。
+  deepStrictEqual(compileUiTurnPlan(undefined, compileContext).plan, {});
+  equal(compileUiTurnPlan("nope", compileContext).rejected.length, 1);
 });

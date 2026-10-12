@@ -5,6 +5,7 @@ import { backfillMaterials, prepareBackfill, requireDraft, saveBackfillPlan, com
 import { extractMaterialText } from "./assistant-material.js";
 import { baseMediaType } from "./asset-static.js";
 import { chatBackfill } from "./assistant-conversation.js";
+import { chatBackfillWithHistory } from "./assistant-chat-history.js";
 import type { RouteHandler } from "./route-context.js";
 
 export const handleAssistantBackfillRoutes: RouteHandler = async (ctx, req, res, pathname) => {
@@ -12,8 +13,10 @@ export const handleAssistantBackfillRoutes: RouteHandler = async (ctx, req, res,
   if (pathname === "/api/ai/backfill/chat" && req.method === "POST") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, Math.max(config.bodyLimitBytes, 18 * 1024 * 1024)), "body");
-    hasOnlyKeys(input, ["message", "materials", "history", "batchId", "revision"]);
-    setJson(res, 200, await chatBackfill(config, repository, input)); return true;
+    hasOnlyKeys(input, ["message", "materials", "history", "batchId", "revision", "conversationId", "turnId", "privacyVisible"]);
+    const durable = input.conversationId !== undefined || input.turnId !== undefined;
+    if (durable && (input.conversationId === undefined || input.turnId === undefined)) throw new HttpError(400, "missing_turn_identity", "conversationId 和 turnId 必须一起提供");
+    setJson(res, 200, await (durable ? chatBackfillWithHistory(config, repository, input) : chatBackfill(config, repository, input))); return true;
   }
   if (pathname === "/api/ai/backfill/material-text" && req.method === "POST") {
     const bytes = await readRawBody(req, Math.min(config.assetUploadLimitBytes, 12 * 1024 * 1024));

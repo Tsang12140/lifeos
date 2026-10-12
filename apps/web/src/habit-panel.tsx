@@ -52,9 +52,9 @@ export function CustomHabitPanel({ habits, date: initialDate, today, actions }: 
       <form onSubmit={event => { event.preventDefault(); void run(async () => { await actions.save(editor ?? null, name.trim(), icon); setEditor(undefined); }); }}>
         <div className="habit-dialog-header"><strong>{editor ? "编辑习惯" : "新建习惯"}</strong><button className="icon-button" type="button" disabled={busy} aria-label="关闭习惯编辑" onClick={() => setEditor(undefined)}><X size={18} /></button></div>
         <div className="habit-dialog-body">
-          <label className="habit-field"><span>名称</span><input aria-label="习惯名称" value={name} maxLength={40} disabled={busy} placeholder="例如：读书、吃素" onChange={event => setName(event.target.value)} /></label>
+          <label className="habit-field"><span>名称</span><input aria-label="习惯名称" value={name} maxLength={40} disabled={busy} onChange={event => setName(event.target.value)} /></label>
           <div className="habit-icon-preview"><HabitIcon name={icon} size={24} /><span>{HABIT_ICONS.find(item => item.id === icon)?.label}</span><small>{HABIT_ICONS.length} 个图标，12 个分类</small></div>
-          <label className="habit-field"><span>搜索图标</span><input aria-label="搜索习惯图标" type="search" value={query} disabled={busy} placeholder="搜索，如读书、蔬菜、运动" onChange={event => setQuery(event.target.value)} /></label>
+          <label className="habit-field"><span>搜索图标</span><input aria-label="搜索习惯图标" type="search" value={query} disabled={busy} onChange={event => setQuery(event.target.value)} /></label>
           <div className="habit-icon-categories" aria-label="图标分类">{categories.map(item => <button type="button" key={item} aria-pressed={category === item} disabled={busy} onClick={() => setCategory(item)}>{item}</button>)}</div>
           <div className="habit-icon-grid" aria-label="习惯图标">{icons.map(item => <button type="button" key={item.id} data-habit-icon={item.id} aria-label={item.label} aria-pressed={icon === item.id} disabled={busy} onClick={() => setIcon(item.id)} title={item.label}><HabitIcon name={item.id} size={22} /><span>{item.label}</span></button>)}</div>
           {icons.length === 0 ? <p className="habit-empty">没有匹配图标，可更换分类或搜索词。</p> : null}

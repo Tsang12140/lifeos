@@ -1,0 +1,37 @@
+/* Mobile keeps a small persistent entrance; desktop dock and launcher stay as-is. */
+@media (max-width: 900px) {
+  .ai-assistant-launcher {
+    bottom: calc(var(--mobile-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 12px);
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    opacity: .7;
+    translate: 0 var(--ai-launcher-lift, 0px);
+    transition: opacity 180ms ease, translate 240ms cubic-bezier(.22, .68, .2, 1) var(--ai-launcher-motion-delay, 180ms);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .ai-assistant-launcher:hover:not(.is-dragging),
+  .ai-assistant-launcher:focus-visible,
+  .ai-assistant-launcher.is-dragging {
+    background: transparent;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .ai-assistant-launcher:focus-visible { outline: 2px solid #3370ff; outline-offset: 2px; }
+  .ai-assistant-launcher.is-dragging { transition: none; }
+  .ai-assistant-launcher.is-hidden { opacity: 0; }
+
+  /* First make room, then reveal the lower button. On dismissal the assistant
+     waits for its 180ms fade before settling back down. */
+  .back-to-top.is-visible { transition-delay: 240ms, 240ms, 0s, 0s, 240ms; }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .ai-assistant-launcher { transition: none; }
+  .back-to-top.is-visible { transition-delay: 0s; }
+}

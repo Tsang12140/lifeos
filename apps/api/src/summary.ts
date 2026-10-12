@@ -189,6 +189,9 @@ export interface DaySummaryRequest {
   readonly force?: boolean;
   /** Automatic month reads wait until the following day; manual regenerate bypasses this. */
   readonly today?: string;
+  /** Re-read after slow AI work so edits/deletes/privacy changes cannot publish obsolete text. */
+  readonly latestRecordsForDate?: (date: string) => readonly RecordView[];
+  readonly isActive?: () => boolean;
 }
 
 /**
@@ -221,6 +224,7 @@ function effectiveFingerprint(sources: readonly SummarySourceRecord[]): string {
   return "content:v1:" + createHash("sha256").update(JSON.stringify(summaryUsableSources(sources).map(s => [s.id, s.kind, s.text.replace(/\s+/gu, " ").trim(), s.labels]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))).digest("hex");
 }
 async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<readonly DaySummary[]> {
+  if (request.isActive?.() === false) return [];
   const settled: DaySummary[] = [];
   const stale: DaySummaryInput[] = [];
   const cacheBefore = new Map<string, string>();
@@ -248,11 +252,18 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
     }
     if (request.force !== true && request.today !== undefined && date > request.today) continue;
     if (request.force !== true && request.today !== undefined && date === request.today) {
-      settled.push({ date, text: ruleSummaryText(sources), provider: "rule", status: "fallback", sourceRevision: fingerprint, contextRevision: "rule:v1", generatedAt: createInstant(new Date().toISOString()) });
+      const first = [...records].filter(r => r.kind === "journal").sort((a, b) => a.createdAt.value.localeCompare(b.createdAt.value) || a.id.localeCompare(b.id))[0];
+      const firstSources = summarySources(first === undefined ? records : [first]);
+      const firstFingerprint = effectiveFingerprint(firstSources);
+      const marker = "provisional:v1:" + firstFingerprint;
+      if (cached !== null && cached.contextRevision === marker) { settled.push(cached); continue; }
+      const initial: DaySummary = { date, text: ruleSummaryText(firstSources), provider: "rule", status: "fallback", sourceRevision: firstFingerprint, contextRevision: marker, generatedAt: createInstant(new Date().toISOString()) };
+      request.cache.writeDaySummary(initial);
+      settled.push(initial);
       continue;
     }
     // Changing providers/prompts does not silently rewrite already generated history.
-    const reusable = cached !== null && cached.sourceRevision === fingerprint && (cached.status === "generated" || (cached.contextRevision === context && (cached.retryAfter === undefined || Date.parse(cached.retryAfter) > Date.now())));
+    const reusable = cached !== null && !cached.contextRevision?.startsWith("provisional:") && cached.sourceRevision === fingerprint && (cached.status === "generated" || (cached.contextRevision === context && (cached.retryAfter === undefined || Date.parse(cached.retryAfter) > Date.now())));
     if (reusable && cached !== null) {
       settled.push(cached);
       continue;
@@ -275,6 +286,8 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
   }
 
   for (const day of stale) {
+    if (request.isActive?.() === false) break;
+    if (request.latestRecordsForDate !== undefined && effectiveFingerprint(summarySources(request.latestRecordsForDate(day.date))) !== effectiveFingerprint(day.records)) continue;
     // Manual writes do not wait behind AI generation. A late reply must respect
     // edits made while this provider request was in flight, even during regenerate.
     const current = request.cache.readDaySummary(day.date);
@@ -294,7 +307,9 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
       status: provider.kind === "ai" ? "generated" : "fallback",
       sourceRevision: effectiveFingerprint(day.records),
       // Remember the attempted provider and a durable backoff after failures.
-      contextRevision: request.provider.kind === "ai" ? context : provider.contextKey ?? provider.providerId,
+      contextRevision: request.force === true && day.date === request.today
+        ? "provisional:v1:" + effectiveFingerprint(summarySources([...request.recordsForDate(day.date)].filter(r => r.kind === "journal").sort((a,b) => a.createdAt.value.localeCompare(b.createdAt.value) || a.id.localeCompare(b.id)).slice(0, 1)))
+        : request.provider.kind === "ai" ? context : provider.contextKey ?? provider.providerId,
       ...(!fromProvider && request.provider.kind === "ai" ? { retryAfter: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } : {}),
     };
     request.cache.writeDaySummary(summary);

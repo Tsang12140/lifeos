@@ -1,0 +1,16 @@
+.search-results-view { min-width: 0; }
+.search-result-modes { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.search-result-modes button, .search-near-match button, .search-near-error button, .search-near-more button { display: inline-flex; align-items: center; justify-content: center; min-width: 0; max-width: 100%; height: 34px; min-height: 34px; margin: 0; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-soft); font: inherit; font-size: .78rem; line-height: 1.2; cursor: pointer; }
+.search-result-modes button[aria-pressed="true"] { background: var(--surface-soft); color: var(--ink); border-color: var(--ink-soft); }
+.search-result-modes button:hover, .search-near-match button:hover, .search-near-more button:hover { background: var(--surface-soft); }
+.search-near-match button { height: auto; min-height: 34px; overflow-wrap: anywhere; }
+.search-near-match button:disabled, .search-near-more button:disabled { opacity: .5; cursor: default; }
+.search-near-results { display: grid; min-width: 0; gap: 16px; }
+.search-near-explanation, .search-near-empty, .search-near-results > [role="status"] { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.6; }
+.search-near-item { min-width: 0; display: grid; gap: 8px; }
+.search-near-match { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: .75rem; line-height: 1.6; }
+.search-near-match > span { min-width: 0; overflow-wrap: anywhere; }
+.search-near-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--danger); font-size: .78rem; }
+.search-near-more { display: flex; justify-content: center; gap: 8px; }
+.search-assistant-hint { margin: 24px 0; color: var(--muted); font-size: .78rem; line-height: 1.8; text-align: center; overflow-wrap: anywhere; }
+.search-assistant-hint button { display: inline; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink-soft); font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }

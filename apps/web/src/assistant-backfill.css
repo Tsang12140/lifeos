@@ -2,6 +2,7 @@
 .ai-assistant-panel.has-backfill .ai-assistant-header { flex-shrink:0; }
 .assistant-backfill { display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden; }
 .backfill-workspace-scroll { flex:1 1 auto;padding:14px 16px;overflow-y:auto;min-height:0;overscroll-behavior:contain; }
+.backfill-workspace-content { display:flow-root; }
 .backfill-intro,.backfill-explanation,.backfill-mode { font-size:13px;line-height:1.6;margin:0 0 12px;color:#5c6675;white-space:pre-wrap; }
 .backfill-explanation,.backfill-evidence { user-select:text; }
 .backfill-field { display:flex;flex-direction:column;gap:6px;margin:0 0 12px;min-width:0; }
@@ -39,7 +40,14 @@
 .backfill-chat-composer .ai-send-button:disabled { background:#bfebd1; }
 .backfill-conversation { display:flex;flex-direction:column;gap:11px;min-height:0; }
 .backfill-chat-message { max-width:100%;min-width:0; }
+.backfill-chat-message.is-assistant { display:flex;flex-direction:column;align-items:flex-start;gap:2px; }
+.backfill-chat-message.is-assistant > .backfill-chat-copy { max-width:100%; }
 .backfill-chat-copy { margin:0;overflow-wrap:anywhere;user-select:text; }
+/* 问候语是**界面文案**，不是主人写下/生成的内容 —— 它复用了 `.backfill-chat-copy`
+   的排版，于是白拿了 `user-select:text`。同一权重靠顺序收回去：
+   可选中只留给真正的对话正文（`.backfill-chat-message` 里那些）。
+   守它的是 `.review/verify-selectability.mjs` 的全量扫描。 */
+.backfill-intro { user-select:none; }
 .backfill-chat-history { margin-bottom:12px;font-size:12px;color:#687283; }
 .backfill-chat-history .backfill-field { margin-top:8px; }
 .backfill-plan-preview { padding:12px;margin-top:12px;border:1px solid #e1e6ed;border-radius:10px; }
@@ -69,10 +77,18 @@
     position:fixed;left:var(--context-left);top:var(--context-top);bottom:24px;width:var(--context-width);z-index:5;
     display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0;
   }
-  .context-rail.is-dock-layout > .task-summary { flex:0 1 auto;position:static;max-height:min(30dvh,240px);overflow-y:auto;scrollbar-width:thin; }
+  .context-rail.is-dock-layout > .task-summary { flex:none;position:static;max-height:min(30dvh,240px);overflow-y:auto;scrollbar-width:auto; }
+  .context-rail.is-dock-layout > .task-summary::-webkit-scrollbar { width:6px; }
+  .context-rail.is-dock-layout > .task-summary::-webkit-scrollbar-track { background:transparent;margin-block:14px; }
+  .context-rail.is-dock-layout > .task-summary::-webkit-scrollbar-thumb { border-radius:6px;background:#d9dfe7; }
+  .context-rail.is-dock-layout > .task-summary:hover::-webkit-scrollbar-thumb { background:#b3bdca; }
+  @supports not selector(::-webkit-scrollbar) {
+    .context-rail.is-dock-layout > .task-summary { scrollbar-width:thin;scrollbar-color:#d9dfe7 transparent; }
+    .context-rail.is-dock-layout > .task-summary:hover { scrollbar-color:#b3bdca transparent; }
+  }
   .ai-assistant-panel.has-backfill.is-docked {
     position:relative;top:auto;right:auto;bottom:auto;z-index:5;
-    flex:1; width:100%;max-width:100%;height:auto;max-height:none;
+    flex:0 1 auto; margin-top:auto; width:100%;max-width:100%;height:var(--assistant-height,320px);max-height:100%;
     min-height:0;
     border-color:#dce3ed;border-radius:18px;
     box-shadow:0 4px 18px rgb(24 36 61 / .045);
@@ -124,3 +140,92 @@
 .backfill-datetime-fields { display:flex;flex-wrap:wrap;gap:8px;max-width:100%; }
 .backfill-datetime-fields input { min-width:0;max-width:100%;min-height:34px;padding:4px 6px;border:1px solid #8a97ab;border-radius:6px;background:white;color:var(--ink);font:inherit; }
 .backfill-plan-preview > .backfill-operation-group:last-child { margin-bottom:0;padding-bottom:0; }
+
+/* =================================================================================
+   AI 管家：右键菜单 + 聊天记录弹窗
+   ---------------------------------------------------------------------------------
+   两个新面：① `.ai-assistant-menu`（贴光标的小 popover，不是居中模态）；
+   ② `.assistant-history-dialog`（宽一点的存档浏览器，左按日期分组、右读全文）。
+   菜单契约与 `.calendar-summary-menu` 一致：定位脚本用 `clampFixedMenuPosition`
+   写 `left`/`top`，所以必须 `position:fixed` + `z-index:62`，且绝不能让 UA 的
+   `inset:0`/`margin:auto` 生效 —— 一旦被居中，它就不再贴着点右键的地方了。
+   弹窗的 `user-select:none` 在 `styles.css` 那条全局弹窗规则里（top layer 不继承）。
+   ================================================================================= */
+
+.ai-assistant-menu { position:fixed; z-index:62; display:grid; gap:1px; min-width:min(148px,calc(100vw - 16px)); max-width:calc(100vw - 16px); padding:4px; border:1px solid var(--line); border-radius:11px; background:var(--surface); box-shadow:var(--shadow-soft); }
+.ai-assistant-menu button { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; margin:0; padding:6px 9px; border:0; border-radius:7px; color:var(--ink-soft); background:transparent; cursor:pointer; font:inherit; font-size:0.8rem; line-height:1.2; text-align:left; }
+.ai-assistant-menu button > svg { flex:none; color:var(--muted); }
+.ai-assistant-menu button:hover,
+.ai-assistant-menu button:focus-visible { outline:none; color:var(--ink); background:var(--surface-soft); }
+.ai-assistant-menu .ai-assistant-menu-label { min-width:0; overflow-wrap:anywhere; }
+.ai-assistant-menu button:disabled { color:var(--muted); cursor:default; }
+
+.ai-configure-link { margin:0; padding:0; border:0; border-radius:0; color:var(--primary); background:transparent; cursor:pointer; font:inherit; font-size:inherit; text-decoration:underline; text-underline-offset:2px; }
+.ai-configure-link:hover { color:var(--primary-strong); }
+
+.modal-dialog.assistant-history-dialog { width:min(calc(100vw - 32px),880px); }
+.assistant-history-dialog .dialog-header { padding:20px 22px 15px; }
+.assistant-history-search { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:14px 22px; border-bottom:1px solid var(--line); }
+.assistant-history-search-field { display:flex; flex:1 1 220px; align-items:center; gap:8px; min-width:0; min-height:40px; padding:0 12px; border:1px solid var(--line); border-radius:10px; color:var(--muted); background:var(--surface-soft); }
+.assistant-history-search-field input { flex:1 1 auto; min-width:0; border:0; background:transparent; color:var(--ink); font:inherit; font-size:0.85rem; }
+.assistant-history-search-field input:focus { outline:none; }
+.assistant-history-date-filter { display:flex; flex:1 1 132px; flex-direction:column; gap:3px; min-width:0; color:var(--muted); font-size:.64rem; line-height:1.2; }
+.assistant-history-date-filter input { width:100%; min-width:0; height:40px; padding:0 8px; border:1px solid var(--line); border-radius:9px; color:var(--ink); background:var(--surface-soft); font:inherit; font-size:.78rem; box-sizing:border-box; }
+.assistant-history-search-actions { display:flex; gap:8px; }
+
+/* 定高（不是 max-height）：只有容器高度确定，两个子面板才会各自滚动，
+   否则网格行被内容撑高、容器一裁，里面就再也滚不动了。 */
+.assistant-history-body { display:grid; grid-template-columns:minmax(200px,264px) minmax(0,1fr); gap:0; height:min(56vh,520px); padding:0; overflow:hidden; }
+.assistant-history-days { display:flex; flex-direction:column; gap:14px; min-height:0; padding:16px 14px 18px; overflow-y:auto; border-right:1px solid var(--line); }
+.assistant-history-day > h3 { margin:0 0 7px; padding:0 6px; color:var(--muted); font-size:0.72rem; font-weight:600; }
+.assistant-history-day > ul { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
+.assistant-history-day button { display:grid; gap:3px; width:100%; min-height:44px; padding:7px 9px; border:0; border-radius:9px; color:var(--ink-soft); background:transparent; cursor:pointer; font:inherit; text-align:left; }
+.assistant-history-day button:hover { background:var(--surface-soft); }
+.assistant-history-day button.is-selected { color:var(--ink); background:var(--surface-soft); box-shadow:inset 0 0 0 1px var(--line); }
+.assistant-history-item-preview { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:0.8rem; line-height:1.45; overflow-wrap:anywhere; }
+.assistant-history-day button small { color:var(--muted); font-size:0.68rem; }
+.assistant-history-thread { display:flex; flex-direction:column; gap:12px; min-height:0; padding:16px 20px 18px; overflow-y:auto; }
+.assistant-history-thread-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0; color:var(--muted); font-size:0.75rem; }
+.assistant-history-messages { display:grid; gap:10px; }
+.assistant-history-message { display:flex; }
+.assistant-history-message.is-user { justify-content:flex-end; }
+.assistant-history-message-copy { max-width:88%; margin:0; padding:8px 11px; border-radius:13px; color:var(--ink-soft); background:var(--surface-soft); font-size:0.82rem; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.assistant-history-message.is-user .assistant-history-message-copy { border-bottom-right-radius:4px; color:#3b4a63; background:var(--primary-soft); }
+.assistant-history-message.is-assistant .assistant-history-message-copy { border-bottom-left-radius:4px; }
+.assistant-history-message-copy mark { padding:0 1px; border-radius:3px; color:inherit; background:#fff0b3; }
+.assistant-history-note { display:flex; align-items:center; gap:6px; margin:0; padding:6px 4px; color:var(--muted); font-size:0.78rem; line-height:1.6; }
+.assistant-history-thread > .assistant-history-note { padding:24px 4px; }
+.assistant-history-error { margin:0; padding:8px 11px; border-radius:9px; color:#8a3b1f; background:#fdece3; font-size:0.78rem; }
+.assistant-history-load-more,.assistant-history-load-older { align-self:flex-start; flex:none; margin:0; }
+.assistant-history-message-content { display:grid; justify-items:start; gap:5px; max-width:100%; min-width:0; }
+.assistant-history-message-copy { user-select:text; }
+.assistant-history-message-time { color:var(--muted); font-size:.65rem; line-height:1.3; }
+.assistant-history-attachments,.backfill-chat-attachments { display:flex; flex-wrap:wrap; gap:6px; max-width:100%; }
+.assistant-history-attachments a,.backfill-chat-attachments button { display:inline-flex; align-items:center; min-width:0; max-width:100%; min-height:28px; padding:4px 8px; border:1px solid var(--line); border-radius:7px; color:var(--primary-strong); background:var(--surface); font:inherit; font-size:.72rem; line-height:1.35; overflow-wrap:anywhere; text-decoration:none; }
+.backfill-chat-attachments button { cursor:pointer; }
+.assistant-history-attachments a:hover,.backfill-chat-attachments button:hover { background:var(--surface-soft); }
+.backfill-chat-copy p { margin:0; white-space:pre-wrap; }
+.backfill-chat-copy time { display:block; margin-top:5px; color:var(--muted); font-size:10px; line-height:1.3; }
+.backfill-pending-turn { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin:0 0 8px; padding:8px 10px; border:1px solid #edcba8; border-radius:10px; color:#785130; background:#fff8ee; font-size:12px; line-height:1.45; }
+.backfill-pending-turn p { flex:1 1 180px; min-width:0; margin:0; overflow-wrap:anywhere; }
+.backfill-pending-turn button { flex:none; min-height:34px; height:34px; padding:6px 10px; line-height:20px; margin:0; }
+.backfill-chat-message time { user-select:none; }
+
+@media (max-width:720px) {
+  .assistant-history-body { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,40%) minmax(0,1fr); height:min(70vh,620px); }
+  .assistant-history-days { border-right:0; border-bottom:1px solid var(--line); }
+  .assistant-history-dialog .dialog-header { padding:16px 16px 12px; }
+  .assistant-history-search { padding:12px 16px; }
+  .assistant-history-thread { padding:12px 14px 14px; }
+}
+
+/* 命令与消歧候选：沿用既有的次要按钮规格，不新造按钮层级。 */
+.backfill-ui-offers,.backfill-ui-clarify .backfill-operation-group { margin-top:8px; }
+.backfill-ui-clarify { margin-top:8px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--surface-soft); }
+.backfill-ui-clarify p { margin:0 0 6px; font-size:12px; line-height:1.45; }
+.backfill-ui-clarify .backfill-operation-group { flex-wrap:wrap; }
+.backfill-ui-hint { display:block; margin-top:2px; color:var(--muted); font-size:10px; line-height:1.3; font-weight:400; }
+/* 隐私授权条：只在确实有记录被挡住时出现，必须显眼且可拒绝。 */
+.backfill-privacy-request { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin:0 0 8px; padding:8px 10px; border:1px solid #d9c9a8; border-radius:10px; color:#6b5530; background:#fdf9ef; font-size:12px; line-height:1.45; }
+.backfill-privacy-request p { flex:1 1 200px; min-width:0; margin:0; overflow-wrap:anywhere; }
+.backfill-privacy-request button { flex:none; min-height:34px; height:34px; padding:6px 10px; line-height:20px; margin:0; }

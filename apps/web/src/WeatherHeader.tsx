@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import "./weather-sticky.css";
 import { CloudSun, LoaderCircle, MapPin, Settings2 } from "lucide-react";
 import { apiRequest } from "./api";
 import { categoryFollowsPhase, findWeatherDay, getMoonPosition, getSolarPosition, getSunEventMoment, getWeatherDecision, getWeatherPhase, hasKnownChinaWeatherTimeZone, nextSunEventBoundaryDelay, shouldRefreshSolarPosition, SOLAR_POSITION_INTERVAL_MS, weatherClockAt, type WeatherCategory, type WeatherConfigStatus, type WeatherLocation, type WeatherSnapshot } from "./weather";
@@ -98,7 +99,15 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, max
           <span className="weather-date-flap-pair weather-date-month-pair">{digits.slice(0, 2).map((digit, index) => renderDigit(digit, index))}</span>
           <span className="weather-date-flap-pair weather-date-day-pair">{digits.slice(2).map((digit, offset) => renderDigit(digit, offset + 2))}</span>
         </span>
-        <input type="date" value={selectedDate} max={maxDate} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
+        <input type="date" value={selectedDate} max={maxDate} onClick={(event) => {
+          if (typeof event.currentTarget.showPicker !== "function") return;
+          try {
+            event.currentTarget.showPicker();
+            event.preventDefault();
+          } catch {
+            // Keep the native click behavior when an embedded browser rejects showPicker.
+          }
+        }} onChange={(event) => { if (event.target.value) onChange(event.target.value); }} aria-label={`选择日期，当前${accessibleDate}`} />
       </label>
       <div className="weather-date-meta" aria-label={`${weekdayShort(selectedDate)}${isToday ? "，今天" : "，回今天"}`}>
         <strong className="weather-date-weekday">{weekdayShort(selectedDate)}</strong>
@@ -112,6 +121,35 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, max
 }
 
 export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChange, onDateStep, onNotice, showDateNavigation = true, maxDate }: { readonly selectedDate: string; readonly status: WeatherConfigStatus | null; readonly onOpenSettings: () => void; readonly onDateChange: (date: string) => void; readonly onDateStep?: (direction: number) => void; readonly onNotice?: (message: string, tone?: "ok" | "warn") => void; readonly showDateNavigation?: boolean; readonly maxDate?: string }) {
+  const headerRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const topbar = headerRef.current?.closest<HTMLElement>(".topbar");
+    if (!topbar) return;
+    const root = document.documentElement;
+    const viewport = window.visualViewport;
+    // A zoomed phone preview can pan its visual viewport independently of page
+    // scrolling. Keep the padded region inside that viewport, and reserve the
+    // same visible clearance when jumping to a date.
+    const measure = () => {
+      const offset = window.innerWidth <= 900 ? viewport?.offsetTop ?? 0 : 0;
+      root.style.setProperty("--weather-viewport-top", `${offset}px`);
+      root.style.setProperty("--weather-sticky-height", `${topbar.getBoundingClientRect().height + offset}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(topbar);
+    viewport?.addEventListener("scroll", measure);
+    viewport?.addEventListener("resize", measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      viewport?.removeEventListener("scroll", measure);
+      viewport?.removeEventListener("resize", measure);
+      window.removeEventListener("resize", measure);
+      root.style.removeProperty("--weather-viewport-top");
+      root.style.removeProperty("--weather-sticky-height");
+    };
+  }, []);
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
   // Only a manual press spins the refresh button. Stepping through dates also
@@ -240,7 +278,7 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
   const temperature = displayDay ? `${displayDay.tempMin}~${displayDay.tempMax}°` : null;
 
   const weatherSceneClass = displayDay && decision ? `weather-header--${decision.category} weather-header--${phase}` : "weather-header--empty";
-  return <section className={`weather-header ${weatherSceneClass} ${showDateNavigation ? "" : "weather-header--summary-only"}`} aria-label={`${selectedDate} 的天气`}>
+  return <div className="weather-header-frame"><section ref={headerRef} className={`weather-header ${weatherSceneClass} ${showDateNavigation ? "" : "weather-header--summary-only"}`} aria-label={`${selectedDate} 的天气`}>
     {displayDay && decision ? <div className="weather-header-background" aria-hidden="true"><WeatherSky category={decision.category} phase={phase} solarPosition={solarPosition} moonPosition={moonPosition} /></div> : null}
     <div className="weather-header-scrim" aria-hidden="true" />
     <div className={`weather-header-content ${showDateNavigation ? "" : "weather-header-content--summary-only"}`}>
@@ -254,5 +292,5 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       </div>
     </div>
     {status?.configured && manualBusy ? <span className="weather-header-refresh-status" aria-hidden="true"><LoaderCircle className="spin" size={15} /></span> : null}
-  </section>;
+  </section></div>;
 }

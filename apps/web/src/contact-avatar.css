@@ -1,0 +1,24 @@
+.contact-avatar{position:relative;display:grid;place-items:center;flex:0 0 auto;width:48px;height:48px;padding:0;border:0;border-radius:15px;background:#e9efff;color:#3559df;cursor:pointer}
+.contact-avatar>img{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.contact-avatar-edit{position:absolute;right:-3px;bottom:-3px;display:grid;place-items:center;width:20px;height:20px;border:2px solid #fff;border-radius:7px;background:#f3f5fa;color:#68758b;box-sizing:border-box}
+.contact-avatar.is-small{width:34px;height:34px;border-radius:10px}
+.contact-avatar.is-small .contact-avatar-edit{width:16px;height:16px;border-radius:6px}
+.contact-avatar:focus-visible{outline:2px solid #3559df;outline-offset:4px}
+.person-card-heading{align-self:center}
+.person-card-name{align-items:center}
+.person-card-heading .person-card-name h2{margin:0}
+.person-card-heading .person-card-relation{margin-top:7px}
+.contact-avatar-dialog{width:min(420px,calc(100vw - 24px))}
+.contact-avatar-dialog .dialog-header h2{margin:0}
+.contact-avatar-body{display:flex;flex-direction:column;align-items:center;gap:16px;padding:8px 24px 24px;min-width:0}
+.contact-avatar-crop{position:relative;display:grid;place-items:center;width:min(256px,100%);aspect-ratio:1;overflow:hidden;border-radius:18px;background:#f0f3f9;color:#8894a8;touch-action:none;cursor:grab;outline-offset:4px}
+.contact-avatar-crop:active{cursor:grabbing}
+.contact-avatar-dialog.is-dragging .contact-avatar-crop{outline:2px solid #6f8fa8;outline-offset:-2px}
+.contact-avatar-crop>img{position:absolute;max-width:none;transform:translate(-50%,-50%);pointer-events:none;user-select:none}
+.contact-avatar-zoom{display:flex;align-items:center;gap:12px;width:min(256px,100%);font-size:.85rem;color:#68758b}
+.contact-avatar-zoom input{flex:1;min-width:0;accent-color:#3559df}
+.contact-avatar-hint{margin:0;font-size:.85rem;line-height:1.5;color:#68758b;text-align:center}
+.contact-avatar-options{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+.contact-avatar-dialog .dialog-footer{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;padding:16px 24px}
+.contact-avatar-dialog .dialog-error{align-self:stretch;margin:0;overflow-wrap:anywhere}
+@media(max-width:360px){.contact-avatar-body{padding-inline:16px}.contact-avatar-dialog .dialog-footer{padding-inline:16px}}

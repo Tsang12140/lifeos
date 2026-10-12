@@ -398,6 +398,7 @@ export interface RecordWritePayload {
 }
 
 export interface EntityWritePayload {
+  readonly isImportant?: boolean;
   readonly id?: string;
   readonly type?: EntityKind;
   readonly name?: string;
@@ -423,7 +424,7 @@ export interface RelationWritePayload {
 
 export type { Asset, AssetKind, AssetLink, AssetRole, Entity, EntityKind, EntityRef, EntityRelation, RelationKind };
 
-export type ApiError = Error & { readonly status?: number };
+export type ApiError = Error & { readonly status?: number; readonly code?: string; readonly details?: unknown };
 
 function createApiError(message: string, status?: number): ApiError {
   const error = new Error(message) as ApiError;
@@ -446,8 +447,12 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 
   if (!response.ok) {
     let message = `请求失败（${response.status}）`;
+    let code: string | undefined;
+    let details: unknown;
     try {
-      const payload = (await response.json()) as { message?: unknown; error?: unknown };
+      const payload = (await response.json()) as { message?: unknown; error?: unknown; details?: unknown };
+      code = typeof payload.error === "string" ? payload.error : undefined;
+      details = payload.details;
       if (typeof payload.message === "string" && payload.message.trim()) {
         message = payload.message;
       } else if (typeof payload.error === "string" && payload.error.trim()) {
@@ -457,7 +462,9 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
       // A non-JSON response still receives a useful status message.
     }
     logApiFailure(`${init.method ?? "GET"} ${path}`, response.status, message);
-    throw createApiError(message, response.status);
+    const error = createApiError(message, response.status);
+    Object.defineProperties(error, { code: { value: code }, details: { value: details } });
+    throw error;
   }
 
   if (response.status === 204) {

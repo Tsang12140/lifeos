@@ -17,6 +17,7 @@ export interface EntityCreateRequest {
 }
 
 export interface EntityEditPatch {
+  readonly isImportant?: boolean;
   readonly name: string;
   readonly aliases: readonly string[];
   readonly description?: string;
