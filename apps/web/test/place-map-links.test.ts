@@ -1,0 +1,35 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mapPlatform, placeMapLinks } from "../src/place-map-links.ts";
+const place = { name: "清平饭店 & 分店", city: "广州", address: "中山七路1号", longitude: 113.245021, latitude: 23.125304 };
+test("map links preserve GCJ02 coordinates with each provider's latitude order and escape names", () => {
+  for (const platform of ["ios", "android", "desktop"] as const) {
+    const [amap, baidu] = placeMapLinks(place, platform);
+    const a = new URL(amap!.href), b = new URL(baidu!.href), web = new URL(baidu!.web);
+    assert.equal(a.searchParams.get("position"), "113.245021,23.125304");
+    assert.equal(a.searchParams.get("coordinate"), "gaode");
+    assert.equal(a.searchParams.get("name"), place.name);
+    assert.equal(a.searchParams.get("callnative"), platform === "desktop" ? "0" : "1");
+    assert.equal(new URL(amap!.web).searchParams.get("callnative"), "0");
+    assert.equal(b.searchParams.get("location"), "23.125304,113.245021");
+    assert.equal(b.searchParams.get("coord_type"), "gcj02");
+    assert.equal(b.searchParams.get("title"), place.name);
+    assert.equal(b.protocol, platform === "ios" ? "baidumap:" : platform === "android" ? "bdapp:" : "https:");
+    assert.equal(web.protocol, "https:"); assert.equal(web.searchParams.get("output"), "html");
+  }
+});
+test("manual places use full address fallback instead of sending invalid or missing coordinates", () => {
+  for (const coords of [{}, { longitude: 200, latitude: 1 }, { longitude: 113 }, { longitude: NaN, latitude: 1 }]) {
+    const [a, b] = placeMapLinks({ name: "面馆", city: "佛山", address: "桂城路1号", ...coords }, "ios");
+    assert.equal(new URL(a!.href).searchParams.get("keyword"), "佛山 桂城路1号");
+    assert.equal(new URL(b!.href).pathname, "/geocoder");
+    assert.equal(new URL(b!.href).searchParams.get("address"), "佛山 桂城路1号");
+    assert.equal(new URL(b!.href).searchParams.has("location"), false);
+  }
+});
+test("map platform includes iPads requesting desktop sites", () => {
+  assert.equal(mapPlatform("Mozilla iPhone"), "ios");
+  assert.equal(mapPlatform("Mozilla Macintosh", 5), "ios");
+  assert.equal(mapPlatform("Mozilla Android"), "android");
+  assert.equal(mapPlatform("Mozilla Windows"), "desktop");
+});

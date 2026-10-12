@@ -123,7 +123,8 @@ body {
 .calendar-day-dialog,
 .asset-preview,
 .assistant-history-dialog,
-.place-card-dialog {
+.place-card-dialog,
+.place-map-dialog {
   -webkit-user-select: none;
   user-select: none;
 }

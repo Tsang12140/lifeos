@@ -247,6 +247,8 @@
 
 （2026-10-12取消事件补充：native cancel即使bubbles:false，React仍可能沿组件树合成传播。EntityMentionReview嵌在EntityEditDialog内已复现一次外侧点击关两层；子核对onCancel必须stopPropagation。回归要用实际React父子，不能仅测挂在body下的原生兄弟弹窗。）
 
+（2026-10-13地图选择补充：嵌在地点详情中的原生dialog，其React合成onCancel/onClose也会关闭父层。子层须拦截两种事件，Escape只关闭地图选择，关闭按钮和Escape均将焦点归还入口；用实际嵌套React组件和真实CDP按键验，不用DOM dispatch代替。跨地图链接须分别验证经纬度顺序、GCJ02标记、无坐标地址回退，不能把高德POI ID当百度UID。复验node .review/verify-place-map-ui.mjs，自带隔离实例。）
+
 ### 第 2 轮 · 按轴扩张（同类但形态不同）
 
 第 1 轮找的是「同一个坑的同类实例」。第 2 轮换成**四条轴**，每轴找**形态不同但根因同族**的问题：
