@@ -7,7 +7,7 @@ import { join, resolve, sep } from "node:path";
 import sharp from "sharp";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
-import { normalisePoi } from "../src/routes-places.js";
+import { normalisePoi, requestPlaceSearch } from "../src/routes-places.js";
 
 test("place search uses the server key independently of IP, saves reusable details and protects place photos", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-places-"));
@@ -78,4 +78,54 @@ test("POI parser tolerates missing photos, array-shaped empty fields, and invali
   const item = normalisePoi({ name: "店", id: "B0001", address: [], business: { tel: [] }, location: "999,20", photos: [{ url: "javascript:alert(1)" }] });
   assert.deepEqual(item, { name: "店", amapId: "B0001" });
   assert.equal(normalisePoi({ name: "店", id: "B0001", photos: [{ url: "http://store.is.autonavi.com/a.jpg" }] })?.photoUrl, "https://store.is.autonavi.com/a.jpg");
+});
+
+test("place transport recovers once from a reset without retrying provider errors or leaking keys", async t => {
+  const original = globalThis.fetch, warn = console.warn;
+  const logs: string[] = [], signals: unknown[] = [];
+  console.warn = message => { logs.push(String(message)); };
+  t.after(() => { globalThis.fetch = original; console.warn = warn; });
+  const url = new URL("https://restapi.amap.com/v5/place/text?key=secret-not-for-logs");
+  const reset = new TypeError(`fetch failed ${url.href}`, { cause: Object.assign(new Error(url.href), { code: "ECONNRESET" }) });
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls++; signals.push(init?.signal);
+    if (calls === 1) throw reset;
+    return Response.json({ status: "1", pois: [] });
+  };
+  assert.equal((await requestPlaceSearch(url)).data?.status, "1");
+  assert.equal(calls, 2); assert.equal(signals[0], signals[1], "one shared deadline covers both attempts");
+  assert.ok(logs.some(line => line.includes("ECONNRESET") && line.includes('"retry":true')));
+
+  calls = 0;
+  globalThis.fetch = async () => { calls++; throw reset; };
+  await assert.rejects(requestPlaceSearch(url), error => error === reset);
+  assert.equal(calls, 2, "permanent network failure stops after one retry");
+
+  calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ status: "0", infocode: "10003" }); };
+  assert.equal((await requestPlaceSearch(url)).data?.infocode, "10003");
+  assert.equal(calls, 1, "provider key/quota rejection is not retried");
+
+  calls = 0;
+  globalThis.fetch = async () => { calls++; return new Response("invalid JSON with secret-not-for-logs"); };
+  await assert.rejects(requestPlaceSearch(url), SyntaxError);
+  assert.equal(calls, 1, "malformed data is not a transient connection failure");
+
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) return new Response(new ReadableStream({ start(controller) { controller.error(reset); } }));
+    return Response.json({ status: "1", pois: [] });
+  };
+  assert.equal((await requestPlaceSearch(url)).data?.status, "1");
+  assert.equal(calls, 2, "a reset while reading the response also recovers");
+
+  calls = 0;
+  const controller = new AbortController();
+  t.mock.method(AbortSignal, "timeout", (milliseconds: number) => { assert.equal(milliseconds, 10000); return controller.signal; });
+  globalThis.fetch = async () => { calls++; controller.abort(); throw reset; };
+  await assert.rejects(requestPlaceSearch(url));
+  assert.equal(calls, 1, "an expired deadline cannot launch another request");
+  assert.ok(logs.every(line => !line.includes("secret-not-for-logs") && !line.includes("https://")), "logs omit provider URL, key and raw error messages");
 });

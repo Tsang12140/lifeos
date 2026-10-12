@@ -4,10 +4,37 @@ import { HttpError, setJson } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
 import { boundedIntegerField, hasOnlyKeys, jsonObject, stringField } from "./field-validate.js";
 import type { RouteHandler } from "./route-context.js";
+import { setTimeout as delay } from "node:timers/promises";
 
 export interface PlaceSearchItem extends PlaceDetails { name: string; address?: string; role?: string }
 const limits = new Map<string, { time: number; count: number }>();
 const text = (value: unknown): string => typeof value === "string" ? value.trim() : "";
+const transientCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
+function transportCode(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown";
+  if (error.name === "TimeoutError") return "TIMEOUT";
+  const item = error as Error & { code?: unknown; cause?: { code?: unknown } };
+  const code = item.cause?.code ?? item.code;
+  return typeof code === "string" && transientCodes.has(code) ? code : "unknown";
+}
+
+/** Retry a broken connection once, within one shared deadline. Never log the URL/key. */
+export async function requestPlaceSearch(url: URL) {
+  const signal = AbortSignal.timeout(10000);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(url, { redirect: "error", signal, cache: "no-store" });
+      const data = await response.json() as { status?: string; infocode?: string; pois?: unknown[] } | null;
+      return { response, data };
+    } catch (error) {
+      const code = transportCode(error);
+      const retry = attempt === 1 && transientCodes.has(code) && !signal.aborted;
+      console.warn(JSON.stringify({ event: "amap_search_transport", attempt, code, retry }));
+      if (!retry) throw error;
+      await delay(150, undefined, { signal });
+    }
+  }
+}
 export function normalisePoi(value: unknown): PlaceSearchItem | null {
   if (!value || typeof value !== "object") return null;
   const poi = value as Record<string, any>;
@@ -65,10 +92,9 @@ export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname) 
   const url = new URL("https://restapi.amap.com/v5/place/text");
   url.search = new URLSearchParams({ key: runtime.apiKey, keywords: query, ...(city ? { region: city, city_limit: "true" } : {}), show_fields: "business,photos", page_size: "10", page_num: String(page) }).toString();
   try {
-    const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(10000), cache: "no-store" });
-    const data = await response.json() as { status?: string; infocode?: string; pois?: unknown[] };
-    if (!response.ok || data.status !== "1" || !Array.isArray(data.pois)) {
-      const code = /^\d{5}$/.test(data.infocode ?? "") ? data.infocode : "unknown";
+    const { response, data } = await requestPlaceSearch(url);
+    if (!response.ok || data?.status !== "1" || !Array.isArray(data.pois)) {
+      const code = /^\d{5}$/.test(data?.infocode ?? "") ? data!.infocode : "unknown";
       throw new HttpError(502, "amap_search_failed", `高德搜索暂不可用（${code}），请检查 Key 的搜索权限或配额`);
     }
     const items = data.pois.map(normalisePoi).filter((item): item is PlaceSearchItem => item !== null);
