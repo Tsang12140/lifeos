@@ -14,6 +14,7 @@ deepseek-v2/
 *.sqlite-*
 **/ai-config.json
 **/weather-config.json
+**/amap-config.json
 **/backup-config.json
 backup/
 backups/

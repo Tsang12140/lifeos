@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
-import { locationClientIp, publicIpv4, readAmapConfig, saveAmapConfig } from "../src/amap-location.js";
+import { locationClientIp, lookupAmapIp, publicAmapConfig, publicIpv4, readAmapConfig, saveAmapConfig } from "../src/amap-location.js";
+import { tenantConfigFor } from "../src/tenant-config.js";
+import type { AccountIdentity } from "../src/identity-store.js";
 import type { IncomingMessage } from "node:http";
 
 test("location previews do not change cities or profile keys; confirmation saves only the city", async t => {
@@ -68,7 +70,7 @@ test("location previews do not change cities or profile keys; confirmation saves
   assert.equal((await call("/api/weather/device/locate", { latitude: 999, longitude: 114, preview: true })).status, 400);
   assert.equal((await call("/api/location/config")).body.enabled, false);
   const saved = await call("/api/location/config", { enabled: true, apiKey: "amap-private-probe" });
-  assert.deepEqual(saved.body, { enabled: true, hasKey: true, keyUnreadable: false });
+  assert.deepEqual(saved.body, { enabled: true, hasKey: true, keyUnreadable: false, keySource: "file" });
   assert.equal(readFileSync(join(config.dataDirectory, "amap-config.json"), "utf8").includes("amap-private-probe"), false);
   assert.equal((await call("/api/location/config", { enabled: true, apiKey: "" })).body.hasKey, true);
   delete process.env.LIFEOS_TRUST_PROXY;
@@ -100,4 +102,44 @@ test("AMap ciphertext survives a blank save with a wrong encryption seed; proxy 
     const req = { socket: { remoteAddress: "::1" }, headers: { "x-real-ip": "127.0.0.1" } } as unknown as IncomingMessage;
     assert.equal(locationClientIp(req), null);
   } finally { assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("AMap environment key supports IP fallback, file precedence and isolated member credentials", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-amap-env-"));
+  const originalFetch = globalThis.fetch;
+  try {
+    const config = readConfig({ LIFEOS_DATA_DIR: root, LIFEOS_AMAP_API_KEY: " env-key-probe " });
+    assert.equal(readConfig({ LIFEOS_AMAP_API_KEY: "  " }).amapApiKey, undefined);
+    assert.deepEqual(publicAmapConfig(config), { enabled: false, hasKey: true, keyUnreadable: false, keySource: "env" });
+    await assert.rejects(lookupAmapIp(config, "8.8.8.8"), /尚未启用/);
+    saveAmapConfig(config, { enabled: true, apiKey: "" });
+    assert.equal(readFileSync(join(root, "amap-config.json"), "utf8").includes("env-key-probe"), false, "blank save never copies the env secret to disk");
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      assert.equal(url.hostname, "restapi.amap.com");
+      assert.equal(url.searchParams.get("key"), "env-key-probe");
+      assert.equal(url.searchParams.get("ip"), "8.8.8.8");
+      return Response.json({ status: "1", city: "广州市", rectangle: "113,23;114,24" });
+    };
+    assert.deepEqual(await lookupAmapIp(config, "8.8.8.8"), { longitude: 113.5, latitude: 23.5 });
+    const correct = { ...config, tenantConfigSecrets: { weather: "correct-env-seed" } };
+    saveAmapConfig(correct, { enabled: true, apiKey: "file-key-probe" });
+    assert.equal(readAmapConfig(correct).apiKey, "file-key-probe");
+    assert.equal(publicAmapConfig(correct).keySource, "file");
+    const wrong = { ...correct, tenantConfigSecrets: { weather: "wrong-env-seed" } };
+    assert.equal(readAmapConfig(wrong).apiKey, undefined, "unreadable saved ciphertext must not silently fall back to env");
+    assert.equal(publicAmapConfig(wrong).keyUnreadable, true);
+    saveAmapConfig(wrong, { enabled: false, apiKey: "" });
+    assert.equal(readAmapConfig(correct).apiKey, "file-key-probe");
+    assert.equal(saveAmapConfig(correct, { enabled: false, clearApiKey: true }).keySource, "env");
+    const member = tenantConfigFor(config, { tenantId: "11111111-1111-4111-8111-111111111111" } as AccountIdentity, "member-master-probe");
+    assert.equal(member.amapApiKey, undefined);
+    assert.equal(publicAmapConfig(member).hasKey, false, "member must not implicitly use the owner's env key");
+    saveAmapConfig(member, { enabled: true, apiKey: "member-key-probe" });
+    assert.equal(readAmapConfig(member).apiKey, "member-key-probe");
+    assert.equal(readAmapConfig(config).apiKey, "env-key-probe");
+  } finally {
+    globalThis.fetch = originalFetch;
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true });
+  }
 });

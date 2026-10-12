@@ -5,7 +5,7 @@ import type { WeatherConfigStatus } from "./weather";
 import "./weather-location.css";
 
 export interface LocationCandidate { locationId: string; city: string; source: "browser" | "ip" }
-export interface AmapStatus { enabled: boolean; hasKey: boolean; keyUnreadable: boolean }
+export interface AmapStatus { enabled: boolean; hasKey: boolean; keyUnreadable: boolean; keySource: "file" | "env" | "none" }
 const LocationContext = createContext<{ request: () => void; busy: boolean }>({ request: () => {}, busy: false });
 export const useWeatherLocation = () => useContext(LocationContext);
 
@@ -127,8 +127,9 @@ export function AmapLocationSettings() {
     <p className="weather-location-note">优先使用浏览器定位。启用后，手动定位失败时通过高德查询大致城市，仅支持国内 IPv4。Key 在服务器加密保存，也为后续地点搜索预留。</p>
     <label className="weather-location-option"><input type="checkbox" checked={enabled} disabled={!status || busy} onChange={event => setEnabled(event.target.checked)} />启用网络备用定位</label>
     <label className="dialog-field"><span>高德 Web 服务 API Key{status?.hasKey ? "（已配置，留空保留）" : ""}</span><input type="password" autoComplete="new-password" value={key} disabled={!status || busy || clear} onChange={event => setKey(event.target.value)} /></label>
+    {status?.keySource === "env" ? <p className="weather-location-note">当前使用服务器 .env 中的 LIFEOS_AMAP_API_KEY。修改后需重启 API 服务；此处填写新 Key 会优先使用新值。</p> : null}
     {status?.keyUnreadable ? <p role="alert" className="settings-inline-error">已保存的 Key 暂时无法解密，请检查服务端配置；留空保存会保留原密文。</p> : null}
-    {status?.hasKey || status?.keyUnreadable ? <label className="weather-location-option"><input type="checkbox" checked={clear} disabled={busy} onChange={event => setClear(event.target.checked)} />清除已保存的高德 Key</label> : null}
+    {status?.keySource === "file" || status?.keyUnreadable ? <label className="weather-location-option"><input type="checkbox" checked={clear} disabled={busy} onChange={event => setClear(event.target.checked)} />清除界面保存的高德 Key（如有环境变量配置，将恢复使用）</label> : null}
     <div className="weather-location-actions"><button type="button" className="secondary-button" disabled={!status || busy} onClick={() => void save()}>{busy ? "保存中…" : "保存高德配置"}</button>{!status && error ? <button type="button" className="secondary-button" onClick={() => setRetry(value => value + 1)}>重试读取</button> : null}</div>
     {message ? <p role="status">{message}</p> : null}{error ? <p role="alert" className="settings-inline-error">{error}</p> : null}
   </section>;

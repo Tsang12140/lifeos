@@ -16,8 +16,9 @@ function stored(config: ApiConfig): Stored {
 function keyFor(config: ApiConfig): Buffer {
   return scryptSync(config.tenantConfigSecrets?.weather || process.env.LIFEOS_AMAP_CONFIG_SECRET?.trim() || process.env.LIFEOS_WEATHER_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-weather:${config.dataDirectory}`, "lifeos-amap-config-v1", 32);
 }
-export function readAmapConfig(config: ApiConfig): { enabled: boolean; apiKey?: string; hasStoredKey: boolean } {
+export function readAmapConfig(config: ApiConfig): { enabled: boolean; apiKey?: string; hasStoredKey: boolean; keySource: "file" | "env" | "none" } {
   const value = stored(config);
+  const hasStoredKey = Boolean(value.encrypted || value.iv || value.tag);
   let apiKey: string | undefined;
   if (value.encrypted && value.iv && value.tag) {
     try {
@@ -26,11 +27,13 @@ export function readAmapConfig(config: ApiConfig): { enabled: boolean; apiKey?: 
       apiKey = Buffer.concat([decipher.update(Buffer.from(value.encrypted, "base64")), decipher.final()]).toString("utf8");
     } catch { /* Preserve unreadable ciphertext; a blank save must never erase it. */ }
   }
-  return { enabled: value.enabled, ...(apiKey ? { apiKey } : {}), hasStoredKey: Boolean(value.encrypted || value.iv || value.tag) };
+  const keySource = apiKey ? "file" : !hasStoredKey && config.amapApiKey ? "env" : "none";
+  if (keySource === "env") apiKey = config.amapApiKey;
+  return { enabled: value.enabled, ...(apiKey ? { apiKey } : {}), hasStoredKey, keySource };
 }
 export function publicAmapConfig(config: ApiConfig) {
   const value = readAmapConfig(config);
-  return { enabled: value.enabled, hasKey: Boolean(value.apiKey), keyUnreadable: value.hasStoredKey && !value.apiKey };
+  return { enabled: value.enabled, hasKey: Boolean(value.apiKey), keyUnreadable: value.hasStoredKey && !value.apiKey, keySource: value.keySource };
 }
 export function saveAmapConfig(config: ApiConfig, input: { enabled: boolean; apiKey?: string; clearApiKey?: boolean }) {
   const previous = stored(config);

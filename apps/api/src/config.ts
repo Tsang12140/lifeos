@@ -63,6 +63,7 @@ export interface ApiConfig {
   readonly deepseekModel: string;
   readonly deepseekBaseUrl: string;
   readonly qweatherApiKey?: string;
+  readonly amapApiKey?: string;
   readonly qweatherLocation?: string;
   readonly qweatherCity?: string;
   readonly qweatherHost: string;
@@ -177,6 +178,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   }
   const deepseekApiKey = env.LIFEOS_DEEPSEEK_API_KEY?.trim();
   const qweatherApiKey = env.QWEATHER_KEY?.trim();
+  const amapApiKey = env.LIFEOS_AMAP_API_KEY?.trim();
   const tmdbApiKey = (env.LIFEOS_TMDB_API_KEY?.trim() || env.TMDB_API_KEY?.trim()) || undefined;
   const backupDirectory = resolve(env.LIFEOS_BACKUP_DIR?.trim() || env.BACKUP_DIR?.trim() || `${dataDirectory}/backups`);
   const backupBucket = env.BACKUP_S3_BUCKET?.trim() || "";
@@ -216,6 +218,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     deepseekModel: env.LIFEOS_DEEPSEEK_MODEL?.trim() || DEFAULT_DEEPSEEK_MODEL,
     deepseekBaseUrl: (env.LIFEOS_DEEPSEEK_BASE_URL?.trim() || DEFAULT_DEEPSEEK_BASE_URL).replace(/\/$/, ""),
     ...(qweatherApiKey === undefined || qweatherApiKey === "" ? {} : { qweatherApiKey }),
+    ...(amapApiKey ? { amapApiKey } : {}),
     ...(env.QWEATHER_LOCATION?.trim() ? { qweatherLocation: env.QWEATHER_LOCATION.trim() } : {}),
     ...(env.QWEATHER_CITY?.trim() ? { qweatherCity: env.QWEATHER_CITY.trim() } : {}),
     qweatherHost: (env.QWEATHER_HOST?.trim() || DEFAULT_QWEATHER_HOST).replace(/^https?:\/\//, "").replace(/\/+$/, ""),

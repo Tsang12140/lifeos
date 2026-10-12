@@ -65,6 +65,7 @@ export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, maste
     sharedIntegrations: _sharedIntegrations,
     deepseekApiKey: _deepseekApiKey,
     qweatherApiKey: _qweatherApiKey,
+    amapApiKey: _amapApiKey,
     qweatherLocation: _qweatherLocation,
     qweatherCity: _qweatherCity,
     tmdbApiKey: _tmdbApiKey,
