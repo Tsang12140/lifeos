@@ -72,6 +72,7 @@
    - 未来时间封顶：`isFutureDay` / `minuteCapFor` 的边界（按 hour 比较，不是按当前时刻）
    - 验收脚本/夹具里是否**硬编码了具体日期**（会在午夜静默失效，失败形态像产品回归）
 2. **CSS 布局与动画**
+   - 任务收起先卸载全文会闪成单行，须保留正文直到裁切结束；字体是否变化要量family/size/weight/line-height/letter-spacing/color，不能把颜色变淡猜成字体被替换。对这种需带动后续布局的局部折叠，允许DESIGN.md明确的240ms单卡原生高度动画，其他装饰继续优先transform/opacity；验证中间高度、无文字缩放、失败不假完成、快速反向、初次加载不播放、减少动态和结束后动画/固定高度/观察器释放。ResizeObserver回调同步写布局会触发undelivered notifications，收尾放到一次requestAnimationFrame并可取消。真实点击收起中的全文按钮应命中可见首行，不能点其被裁掉的几何中心；后续行位移按document坐标(top+scrollY)对账，避免浏览器滚动锚定假绿。复验node .review/verify-task-fold.mjs（隔离随机端口/data，无截图）。
    - 手机拖动入口使用 pointer capture 时，触摸拖动可能不产生兼容 click，旧的“抑制下一次 click”标记不能吞掉新手势；静止触摸 pointerup 也可能没有兼容 click，需验证实际点按能打开、pointercancel 不打开、拖动不误开、下一次点按可用。不能用鼠标拖动和程序 dispatchEvent(click) 代替这组真实CDP触摸断言。
    - 手机悬浮入口与返回顶部的避让要量实际方向和逐帧净距：返回顶部占下方，AI 管家向上让出一个身位，桌面保持原布局。计算位移须用未变换的布局位置（如 offsetTop），不能把上次 translate 后的矩形再次当基准；临时避让不写入拖动位置。跨 React 元素的 class 与内联变量不同步时，CSS transition-delay 可能在动画已启动后才变化；延迟和目标位移应同批更新。覆盖出现/消失、拖动释放、刷新恢复、左右换位、900/901px 断点及 reduced-motion；动画结束后再量最终净距，同时逐帧检查出现过程。复验 node .review/verify-mobile-assistant-20261012.mjs（随机端口/独立数据，不截图）。
    - 标记核对的“两行一个单元”必须按真实内容宽度、字号、勾选/图标盒测量，不能用字数上限冒充行数上限；不能只把溢出正文裁掉而漏掉后面的关键词。逐处UTF16偏移、取消选择与三态总勾选须在重分组/缩放后保留；前后文保持渐隐，超长单个名字折叠省略后须可展开全文。右侧AI管家在记录编辑器旁的空会话基线为保存按钮上沿，不能退回记录列表顶部；内容增长、编辑器增高、短视口安全约束、无编辑器页面320px与手机浮层均需分别量几何。复验：node .review/verify-two-line-assistant-20261012.mjs，所有夹具仅浏览器内存，生产写请求0。

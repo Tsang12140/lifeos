@@ -1,4 +1,5 @@
 import { useRecordDeletion, RecordDeleteUndo } from "./record-deletion";
+import { useTaskFold } from "./task-fold";
 import { PlaceRecordCards } from "./place-card";
 import { lockDialogScroll } from "./dialog-scroll-lock";
 import { isAiAssisted, isBackfilled } from "@lifeos/core";
@@ -553,6 +554,7 @@ export function TimelineItem({ record, assets, entities, movieEnabled, movieProm
   const task = isTaskRecord(record) ? record : undefined;
   const [taskExpanded, setTaskExpanded] = useState(false);
   useEffect(() => setTaskExpanded(false), [record.id, task?.task.status]);
+  const taskFold = useTaskFold(task?.task.status === "done" && !taskExpanded, record.id, Boolean(deletion));
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
   const masked = record.isPrivate === true && !revealed;
   const reveal = () => setRevealed(true);
@@ -579,22 +581,24 @@ export function TimelineItem({ record, assets, entities, movieEnabled, movieProm
   const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"}，{record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{weatherLocationDisplayName({ id: record.weather.locationId, name: record.weather.city })}</small></span></div>;
   if (task) {
     const done = task.task.status === "done";
-    const collapsed = done && !taskExpanded;
+    const collapsed = taskFold.folded;
     const text = <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled || done ? undefined : onOpenEntity} />;
     return <article className={`timeline-item timeline-task ${deletion ? "is-delete-pending" : ""} ${done ? "is-task-done" : ""} ${collapsed ? "is-task-collapsed" : ""} ${interactionDisabled ? "is-stale" : ""} ${focused ? "is-ui-focused" : ""}`} data-record-id={record.id}>
       <div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div>
       <div className="timeline-marker" aria-hidden="true"><span /></div>
       <div className="timeline-content" inert={Boolean(deletion)}>
+        <div className="task-record-body" ref={taskFold.frame}><div className="task-record-body-content" ref={taskFold.content} data-folded={collapsed}>
         <div className="task-record-head">
           <span className="kind-tag kind-task"><Icon size={13} strokeWidth={1.8} aria-hidden="true" />任务</span>
           <div className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : done ? <button className="task-record-toggle" type="button" aria-expanded={taskExpanded} aria-label={taskExpanded ? "收起已完成任务全文" : "展开已完成任务全文"} disabled={interactionDisabled} onClick={() => setTaskExpanded(value => !value)}><span className="task-record-copy">{text}</span></button> : <span className="task-record-copy">{text}</span>}</div>
         </div>
-        {!collapsed ? <>
+        {!collapsed ? <div className="task-record-details">
           <div className="task-record-metadata">{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>
           {!masked && movies.length ? <div className="timeline-movie-cards">{movies.map(movie => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={event => { event.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}
           {!masked && record.assetRefs.some(ref => ref.role === "attachment") ? <div className="record-attachments">{record.assetRefs.filter(ref => ref.role === "attachment").map(ref => <a key={ref.assetId} href={assetContentUrl(ref.assetId)} download>{assets.find(asset => asset.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}
           {photoLine}{weatherLine}{relationLine}
-        </> : null}
+        </div> : null}
+        </div></div>
         <div className="task-record-footer">
           {masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{done ? <Check size={12} aria-hidden="true" /> : null}{statusLabel(task.task.status)}</span>}
           <div className="timeline-actions" aria-label="记录操作">

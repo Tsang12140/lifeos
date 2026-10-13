@@ -28,6 +28,7 @@
   color: inherit;
   background: transparent;
   font: inherit;
+  letter-spacing: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -35,13 +36,19 @@
 .timeline-task .task-record-copy {
   display: block;
   min-width: 0;
+  font: inherit;
+  letter-spacing: inherit;
 }
 
-.timeline-task.is-task-collapsed .task-record-copy {
+.timeline-task .task-record-body-content[data-folded="true"] .task-record-copy {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+.task-record-body, .task-record-body-content, .task-record-details { display: flow-root; }
+.task-record-body.is-folding { overflow: clip; }
+.task-record-body-content[data-folded="true"] > .task-record-details { display: none; }
 
 .timeline-task .task-record-metadata {
   display: flex;
@@ -102,7 +109,7 @@
 }
 
 .timeline-task.is-task-done .task-record-copy {
-  color: var(--muted);
+  color: inherit;
 }
 
 /* Keep status and every action on one line even in a narrow timeline column. */
