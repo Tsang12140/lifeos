@@ -48,9 +48,20 @@ import { lifeTimeDate, shortDate } from "./time";
 
 export function ConfirmDialog({ record, busy, error, onClose, onConfirm }: { record: RecordView | null; busy: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (record && !dialog.open) dialog.showModal(); if (!record && dialog.open) dialog.close(); }, [record]);
+  useEffect(() => {
+    const dialog = dialogRef.current; if (!dialog) return;
+    if (record && !dialog.open) { dialog.showModal(); dialog.querySelector<HTMLButtonElement>(".secondary-button")?.focus(); }
+    if (!record && dialog.open) dialog.close();
+  }, [record]);
   if (!record) return <dialog ref={dialogRef} className="modal-dialog" />;
-  return <dialog ref={dialogRef} className="modal-dialog confirm-dialog" aria-labelledby="delete-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><div className="dialog-header"><div><p className="eyebrow">删除记录</p><h2 id="delete-title">确定要删除这条记录吗？</h2></div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭"><X size={17} aria-hidden="true" /></button></div><p className="confirm-copy">原文会从时间轴移除。导出的备份不会被修改。</p><div className="confirm-preview">{recordText(record)}</div>{error ? <p className="dialog-error" role="alert"><CircleHelp size={17} aria-hidden="true" />{error}</p> : null}<div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>保留</button><button className="danger-button" type="button" onClick={onConfirm} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : <Trash2 size={17} aria-hidden="true" />}<span>{busy ? "删除中" : "删除记录"}</span></button></div></dialog>;
+  return <dialog ref={dialogRef} className="modal-dialog confirm-dialog record-delete-dialog" aria-labelledby="delete-title"
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onClose={event => { if (!event.currentTarget.open && !busy) onClose(); }}>
+    <div className="dialog-header"><h2 id="delete-title">删除这条记录？</h2></div>
+    <p className="confirm-preview">{recordText(record)}</p>
+    {error ? <p className="dialog-error" role="alert">{error}</p> : null}
+    <div className="dialog-footer"><button className="secondary-button" type="button" autoFocus onClick={onClose} disabled={busy}>取消</button><button className="danger-button" type="button" onClick={onConfirm} disabled={busy}>{busy ? "删除中…" : "删除"}</button></div>
+  </dialog>;
 }
 
 export function PersonCardDialog({ entity, entities, scope, includePrivate = false, onEditAvatar, onToggleStar, onClose, onEdit, onViewRecords, onMovieSaved, onPlaceSaved, onViewRecord }: { entity: Entity | null; entities: readonly Entity[]; scope: string; includePrivate?: boolean; onEditAvatar: (entity: Entity) => void; onToggleStar: ToggleContactStar; onClose: () => void; onEdit: (entity: Entity) => void; onViewRecords: (entity: Entity) => void; onMovieSaved: (movie: MovieEntity) => void; onPlaceSaved: (entity: Entity) => void; onViewRecord: (id: string) => void }) {
