@@ -292,6 +292,23 @@ export const handleRecordsRoutes: RouteHandler = async (
     setJson(res, 201, view);
     return true;
   }
+  const restoreMatch = /^\/api\/records\/([^/]+)\/restore$/.exec(pathname);
+  if (restoreMatch && req.method === "POST") {
+    let id: string;
+    try { id = safeId(decodeURIComponent(restoreMatch[1]!)); } catch { throw new HttpError(400, "invalid_id", "记录编号不正确"); }
+    requireJsonContentType(req);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["revision"]);
+    const revision = revisionField(input.revision);
+    const active = repository.findById(id);
+    // A lost restore response can be retried with the same deleted revision.
+    if (active?.revision === revision + 1) { setJson(res, 200, active); return true; }
+    const result = repository.restoreDeletedRecord(id, revision);
+    if (result !== "restored") throw new HttpError(409, result === "expired" ? "undo_expired" : "revision_conflict", result === "expired" ? "撤销时间已结束" : "记录已变化，请刷新后查看");
+    const restored = repository.findById(id);
+    if (!restored) throw new HttpError(409, "revision_conflict", "记录已变化，请刷新后查看");
+    setJson(res, 200, restored); return true;
+  }
   const recordMatch = /^\/api\/records\/([^/]+)$/.exec(pathname);
   if (recordMatch !== null && req.method === "GET") {
     let id: string;
@@ -309,20 +326,24 @@ export const handleRecordsRoutes: RouteHandler = async (
     }
     const id = safeId(decodedId);
     requireJsonContentType(req);
-    const current = repository.findById(id);
-    if (current === null) throw new HttpError(404, "not_found", "Record not found");
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
     if (req.method === "DELETE") {
-      hasOnlyKeys(input, ["revision"]);
+      hasOnlyKeys(input, ["revision", "undoable"]);
+      if (input.undoable !== undefined && typeof input.undoable !== "boolean") throw new HttpError(400, "invalid_field", "undoable must be a boolean");
       const revision = revisionField(input.revision);
+      const receipt = input.undoable === true ? repository.deletionReceipt(id) : null;
+      if (receipt?.revision === revision + 1 && Date.parse(receipt.undoUntil) > Date.now()) { setJson(res, 200, receipt); return true; }
       if (!repository.softDelete(id, revision, JSON.stringify(nowInstant()))) {
         const latest = repository.findById(id);
         if (latest === null) throw new HttpError(404, "not_found", "Record not found");
         throw new HttpError(409, "revision_conflict", "Record was changed; reload before deleting");
       }
+      if (input.undoable === true) { setJson(res, 200, repository.deletionReceipt(id)); return true; }
       setEmpty(res, 204);
       return true;
     }
+    const current = repository.findById(id);
+    if (current === null) throw new HttpError(404, "not_found", "Record not found");
     const patched = patchRecord(current, input, repository);
     if (!repository.update(patched.record, patched.expectedRevision)) {
       const latest = repository.findById(id);

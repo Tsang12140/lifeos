@@ -1,4 +1,5 @@
 import { PlaceSearch } from "./place-search";
+import { hasSavableRecordContent } from "./record-content";
 import { applyPlaceWording } from "./place-mention-wording";
 import type { VideoUpload } from "./video-ui";
 import { usePhotoInput } from "./photo-input";
@@ -103,7 +104,8 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
     onShotSubmissionState(scope, state);
   };
   const futureJournal = kind === "journal" && (occurredAt.slice(0, 10) || selectedDate) > localDateToday();
-  const canSave = !futureJournal && content.trim().length > 0 && !saving && !shotUploading && shotSubmissionState === null && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
+  const hasContent = hasSavableRecordContent(kind, content, shots, assets);
+  const canSave = !futureJournal && hasContent && !saving && !shotUploading && shotSubmissionState === null && (noteMeta?.format !== "article" || noteMeta.title.trim().length > 0);
   const submitIfReady = () => {
     if (futureJournal) { onNotify("未来日期不能写日记，请选择今天或之前的日期", "warn"); return; }
     const state = shotSubmissionStateRef.current;
@@ -111,7 +113,7 @@ export function Composer({ searchControl, decisions, onDecisionsChange, kind, co
       onNotify(state === "failed" ? "有附件未上传，请重试或移除后保存" : "附件正在处理，请完成后再保存", "warn");
       return;
     }
-    if (!saving && content.trim().length > 0) onSubmit();
+    if (!saving && hasContent) onSubmit();
   };
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
   const { draggingFiles, handlers: entryDragHandlers } = usePhotoInput(shotZoneRef, saving);

@@ -938,7 +938,7 @@ export function CalendarView({ hideDemo = false, backgroundScope = "local", mode
       {dates.map((date) => {
         const items = buckets.get(date) ?? [];
         const photoIds = presentations.get(date)?.weekPhotos ?? [];
-        const highlights = weekCardRecords(items);
+        const highlights = weekCardRecords(items).filter(record => recordText(record).trim());
         const weather = weatherByDate.get(date);
         const weatherBadge = weatherIconsEnabled && weather !== undefined ? <span className="calendar-day-weather-icon" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null;
         const picked = cyclePanelOpen && date === (mobileCyclePanelVisible ? mobileCycleDate : anchor);
@@ -969,7 +969,7 @@ export function CalendarView({ hideDemo = false, backgroundScope = "local", mode
           const weather = weatherByDate.get(date);
           const weatherBadge = weatherIconsEnabled && weather !== undefined ? <span className="calendar-day-weather-icon" aria-label={`天气：${weather.text}，${weather.tempMin}到${weather.tempMax}摄氏度`} title={`天气：${weather.text}`}><span aria-hidden="true">{getWeatherEmoji(weather.icon)}</span></span> : null;
           // 上一周只留两条，整排比本周短一截。
-          const highlights = weekCardRecords(items).slice(0, 2);
+          const highlights = weekCardRecords(items).filter(record => recordText(record).trim()).slice(0, 2);
           return <CellTag className={`week-card is-prev ${date === today ? "is-today" : ""} ${weatherBadge === null ? "" : "has-weather-icons"} ${photoIds.length === 0 ? "has-date-art" : ""} ${date > today ? "is-future" : ""}`} data-date={date} key={`prev-${date}`} type="button" aria-disabled={date > today ? true : undefined} tabIndex={date > today ? -1 : undefined} onClick={() => onCalendarDayClick(date)} aria-label={`上一周 ${displayDate(date)}，${items.length} 条记录`}>
             <span className="week-card-head"><span className="week-card-weekday">{weekdayShort(date)}</span><span className="week-card-day">{Number(date.slice(8, 10))}</span></span>
             {weatherBadge}

@@ -107,6 +107,8 @@
    - 内联 `!important` 会打死任何选择器（`MentionBox` 给 textarea 写了
      `min-height: 0px !important`，CSS 里的 `min-height` 全是死代码）
 3. **状态与并发**
+   - 原地删除撤销须沿软删回执、过期校验、恢复、列表重拉、刷新与账户切换整条链检查。服务器绝对时间不能直接减客户端时钟；覆盖客户端快两分钟、剩余时长校准、独立计时与临界传输。DELETE/restore 丢失响应后重试须幂等且不延长原期限，恢复同一 ID 而非复制新记录；原卡片快照按账户/查询隔离，并在隐私过滤之前合并。复验 `node .review/verify-photo-only-undo.mjs`，只用其随机端口/独立 data/assets，禁止往3011/5199造夹具。
+   - 上传失败/等待的验收图片不能与预置上传共用内容哈希，否则客户端去重缓存会绕过真正的上传请求，形成假绿；空正文校验要联查已完成照片、最后一张删除、日历空摘要与删除预览。显式列出测试文件的 npm 脚本必须加入新测试，不能只看总命令退出0；检查 `apps/api/package.json` 与实际测试数量。
    - 清屏不能只断言聊天消息为0：拟写卡片、手动编辑区和结果操作也须收起，刷新与普通回复不得恢复旧草稿；清屏前保存未提交编辑，保留会话绑定和revision，历史继续应恢复内容，清屏失败不得伪装成功。检查旧版仅批次聊天的首次清屏与后续新草稿，不能靠解绑或删除历史实现空屏。隔离复验：`LIFEOS_AHIST_QA_SCREEN_ONLY=1 node .review/verify-assistant-history-reliable-20261010.mjs`。
    - 照片预览须区分请求等待、解码成功和最终失败；仅有图片元素和关闭按钮会使慢响应/失败都表现为空白。查 `rg -n 'AssetPreview|onLoad|onError|naturalWidth|preview-photo' apps/web/src`，用隔离延迟、无效图片/拒绝、缓存再开与加载中换图对账；`complete`也包括失败，须同时核对`naturalWidth > 0`。CSS照片背景与前景共用失败URL时WebKit可能重复请求，背景应等待解码成功再启用，重试保留URL以复用正常缓存。真实线上与本地未发布代码必须分别核对，Windows WebKit非零矩形不能替代实际iPhone会话、内存或网络证明。
    - 浏览日期与新建记录的写入日期不能共用同一个状态：合并今天与历史后，日期跳转只能定位记录，普通保存仍落在今天；显式补记才设过去日期与标记，编辑必须保留原日期。查 `rg -n 'selectedDate|recordingDate|createDate|localNowInputFor|setOccurredAt' apps/web/src`，在隔离库中浏览旧日后真保存并按Asia/Shanghai对账，再覆盖清空时间、取消补记、保存后下一条、日历跳转、跨午夜和上传队列scope；不能只看日期字段文字。搜索/人物筛选不能混入假的今天/更早分界，也不能被首页未来日期上限截掉合法的未来任务。

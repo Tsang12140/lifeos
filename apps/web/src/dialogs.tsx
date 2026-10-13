@@ -1,3 +1,5 @@
+import type { Asset } from "@lifeos/core";
+import { Image as ImageIcon } from "lucide-react";
 import { PlaceMapButton } from "./place-map";
 import { PlaceCardDialog } from "./place-card";
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
@@ -39,14 +41,25 @@ import {
   SELF_ENTITY_ID,
   isMovieEntity,
   recordText,
+  recordLabel,
   relationKindFor,
   relationLabelFor,
 } from "./app-meta";
 import { PLACE_ROLE_LABELS, placeRoleLabel, RecordText, entityHint, mentionVocabulary } from "./mention";
 import { MovieCardDialog } from "./movie";
 import { lifeTimeDate, shortDate } from "./time";
+import { assetThumbUrl } from "./timeline";
 
-export function ConfirmDialog({ record, busy, error, onClose, onConfirm }: { record: RecordView | null; busy: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {
+function DeleteRecordPreview({ record, assets }: { record: RecordView; assets: readonly Asset[] }) {
+  const [failed, setFailed] = useState<readonly string[]>([]);
+  if (recordText(record).trim()) return <p className="confirm-preview">{recordText(record)}</p>;
+  const ids = [...new Set(record.assetRefs.filter(ref => ref.role === "photo" || assets.some(asset => asset.id === ref.assetId && asset.kind === "photo")).map(ref => ref.assetId))];
+  const date = shortDate(lifeTimeDate(record.occurredAt ?? record.createdAt) ?? "");
+  return ids.length ? <div className="delete-preview-media"><div className="delete-preview-thumbs">{ids.slice(0, 3).map(id => <span className="delete-preview-thumb" key={id}>{failed.includes(id) ? <ImageIcon size={18} aria-hidden="true" /> : <img src={assetThumbUrl(id, 400)} alt="日记照片缩略图" onError={() => setFailed(current => [...current, id])} />}</span>)}</div><small>{ids.length} 张照片</small><time dateTime={(record.occurredAt ?? record.createdAt).value}>{date}</time></div>
+    : <p className="delete-preview-fallback">{recordLabel(record.kind)}，{date}</p>;
+}
+
+export function ConfirmDialog({ record, assets = [], busy, error, onClose, onConfirm }: { record: RecordView | null; assets?: readonly Asset[]; busy: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = dialogRef.current; if (!dialog) return;
@@ -58,7 +71,7 @@ export function ConfirmDialog({ record, busy, error, onClose, onConfirm }: { rec
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
     onClose={event => { if (!event.currentTarget.open && !busy) onClose(); }}>
     <div className="dialog-header"><h2 id="delete-title">删除这条记录？</h2></div>
-    <p className="confirm-preview">{recordText(record)}</p>
+    <DeleteRecordPreview key={record.id} record={record} assets={assets} />
     {error ? <p className="dialog-error" role="alert">{error}</p> : null}
     <div className="dialog-footer"><button className="secondary-button" type="button" autoFocus onClick={onClose} disabled={busy}>取消</button><button className="danger-button" type="button" onClick={onConfirm} disabled={busy}>{busy ? "删除中…" : "删除"}</button></div>
   </dialog>;

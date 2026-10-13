@@ -1,0 +1,92 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readConfig } from "../src/config.js";
+import { createHttpServer } from "../src/server.js";
+import { createInstant } from "@lifeos/core";
+
+test("record deletion receipts undo the same identity, reject stale/expired revisions and survive restart", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-record-undo-"));
+  const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets") });
+  let service = createHttpServer(config);
+  const listen = async () => { service.server.listen(0, "127.0.0.1"); await once(service.server, "listening"); return `http://127.0.0.1:${(service.server.address() as { port: number }).port}`; };
+  let base = await listen();
+  t.after(async () => { service.server.closeAllConnections(); await new Promise<void>(done => service.server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  const call = async (url: string, body?: unknown, method = body === undefined ? "GET" : "POST") => {
+    const response = await fetch(base + url, { method, headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const text = await response.text(); return { status: response.status, body: text ? JSON.parse(text) : null };
+  };
+  const record = (await call("/api/records", { kind: "journal", content: "原位撤销夹具", isPrivate: true })).body;
+  const url = `/api/records/${record.id}`;
+  assert.equal((await call(url, { revision: record.revision + 7, undoable: true }, "DELETE")).status, 409);
+  assert.equal((await call(url, { revision: record.revision, undoable: "yes" }, "DELETE")).status, 400);
+  const receipt = await call(url, { revision: record.revision, undoable: true }, "DELETE");
+  assert.equal(receipt.status, 200); assert.equal(receipt.body.revision, record.revision + 1);
+  assert.ok(Date.parse(receipt.body.undoUntil) - Date.now() <= 5000);
+  assert.equal((await call(url)).status, 404);
+  assert.equal((await call("/api/records")).body.items.length, 0);
+  const retried = (await call(url, { revision: record.revision, undoable: true }, "DELETE")).body;
+  assert.equal(retried.revision, receipt.body.revision); assert.equal(retried.undoUntil, receipt.body.undoUntil);
+  assert.ok(retried.remainingMs <= receipt.body.remainingMs, "lost delete response retry does not extend the undo window");
+  assert.equal((await call(url + "/restore", { revision: record.revision })).status, 409);
+  service.server.closeAllConnections(); await new Promise<void>(done => service.server.close(() => done()));
+  service = createHttpServer(config); base = await listen();
+  const restored = await call(url + "/restore", { revision: receipt.body.revision });
+  assert.equal(restored.status, 200); assert.equal(restored.body.id, record.id); assert.equal(restored.body.revision, record.revision + 2);
+  assert.deepEqual(restored.body.body, record.body); assert.equal(restored.body.isPrivate, true);
+  assert.deepEqual((await call(url + "/restore", { revision: receipt.body.revision })).body, restored.body, "lost restore response is idempotent");
+  assert.equal((await call(url, { revision: record.revision, undoable: true }, "DELETE")).status, 409);
+  service.app.repository.softDelete(record.id, restored.body.revision, JSON.stringify(createInstant(new Date(Date.now() - 6000).toISOString())));
+  assert.equal((await call(url + "/restore", { revision: restored.body.revision + 1 })).body.error, "undo_expired");
+  assert.equal((await call(url)).status, 404);
+  const plain = (await call("/api/records", { kind: "task", content: "旧客户端删除契约" })).body;
+  const transit = (await call("/api/records", { kind: "journal", content: "最后一刻点按的网络余量" })).body;
+  const transitReceipt = (await call(`/api/records/${transit.id}`, { revision: transit.revision, undoable: true }, "DELETE")).body;
+  assert.equal(service.app.repository.restoreDeletedRecord(transit.id, transitReceipt.revision, Date.parse(transitReceipt.undoUntil) + 500), "restored");
+  assert.equal((await call(`/api/records/${plain.id}`, { revision: plain.revision }, "DELETE")).status, 204);
+});
+
+test("record restore requires authentication and stays inside the active account space", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-record-undo-accounts-"));
+  const { server } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: root, LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_PASSWORD: "isolated-owner-password", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_ACCOUNT_MODE: "1", LIFEOS_ALLOWED_ORIGINS: "https://example.invalid", LIFEOS_COOKIE_SECURE: "true" }));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const call = async (path: string, body?: unknown, cookie = "", method = body === undefined ? "GET" : "POST") => {
+    const response = await fetch(base + path, { method, headers: { "Content-Type": "application/json", cookie, "x-lifeos-tenant-id": "forged-tenant" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const text = await response.text(); return { status: response.status, body: text ? JSON.parse(text) : null, cookie: (response.headers.get("set-cookie") ?? "").split(";")[0]! };
+  };
+  assert.equal((await call("/api/records/unknown/restore", { revision: 2 })).status, 401);
+  const owner = await call("/api/auth/login", { username: "owner", password: "isolated-owner-password" }); assert.equal(owner.status, 200);
+  assert.equal((await call("/api/admin/accounts", { username: "member", password: "isolated-member-password", displayName: "Member", spaceName: "Member space" }, owner.cookie)).status, 201);
+  const member = await call("/api/auth/login", { username: "member", password: "isolated-member-password" }); assert.equal(member.status, 200);
+  const record = (await call("/api/records", { kind: "journal", content: "OWNER_ONLY_BODY", isPrivate: true }, owner.cookie)).body;
+  const url = `/api/records/${record.id}`;
+  const receipt = (await call(url, { revision: record.revision, undoable: true }, owner.cookie, "DELETE")).body;
+  const denied = await call(url + "/restore", { revision: receipt.revision }, member.cookie);
+  assert.equal(denied.status, 409); assert.ok(!JSON.stringify(denied.body).includes("OWNER_ONLY_BODY"));
+  assert.equal((await call(url, undefined, owner.cookie)).status, 404);
+  assert.equal((await call(url + "/restore", { revision: receipt.revision }, owner.cookie)).status, 200);
+  assert.equal((await call(url, undefined, member.cookie)).status, 404);
+});
+
+test("photo-only journals round-trip without synthetic text and preserve asset refs on empty edits", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-photo-only-"));
+  const { server, app } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets") }));
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const upload = await fetch(base + "/api/assets/uploads", { method: "POST", headers: { "Content-Type": "image/png" }, body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64") });
+  assert.equal(upload.status, 201); const asset = await upload.json() as { id: string };
+  const refs = [{ assetId: asset.id, role: "photo" }];
+  const create = await fetch(base + "/api/records", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "journal", content: "", assetRefs: refs }) });
+  assert.equal(create.status, 201); const record = await create.json() as { id: string; revision: number; body: { original: string }; assetRefs: unknown };
+  assert.equal(record.body.original, ""); assert.deepEqual(record.assetRefs, refs);
+  const patch = await fetch(base + `/api/records/${record.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: record.revision, content: "", assetRefs: refs }) });
+  assert.equal(patch.status, 200); const edited = await patch.json() as { body: { edited: string }; assetRefs: unknown };
+  assert.equal(edited.body.edited, ""); assert.deepEqual(edited.assetRefs, refs);
+  assert.ok(app.repository.exportData().records.some(item => item.id === record.id && item.body.original === ""));
+});

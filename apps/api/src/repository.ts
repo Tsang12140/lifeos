@@ -1820,6 +1820,25 @@ export class SqliteRecordRepository {
     return Number(result.changes) === 1;
   }
 
+  public deletionReceipt(id: string): { revision: number; undoUntil: string; remainingMs: number } | null {
+    const row = this.#db.prepare("SELECT revision, deleted_at_json FROM records WHERE id = ?").get(id);
+    if (!row || !row.deleted_at_json) return null;
+    const deletedAt = JSON.parse(String(row.deleted_at_json)) as { value: string };
+    const deadline = Date.parse(deletedAt.value) + 5000;
+    return { revision: Number(row.revision), undoUntil: new Date(deadline).toISOString(), remainingMs: Math.max(0, deadline - Date.now()) };
+  }
+
+  public restoreDeletedRecord(id: string, expectedRevision: number, now = Date.now()): "restored" | "expired" | "conflict" {
+    return this.atomic(() => {
+      const receipt = this.deletionReceipt(id);
+      if (!receipt || receipt.revision !== expectedRevision) return "conflict";
+      // The UI closes at five seconds; allow a final click one second of transit.
+      if (Date.parse(receipt.undoUntil) + 1000 <= now) return "expired";
+      const result = this.#db.prepare("UPDATE records SET deleted_at_json = NULL, revision = revision + 1 WHERE id = ? AND revision = ? AND deleted_at_json IS NOT NULL").run(id, expectedRevision);
+      return Number(result.changes) === 1 ? "restored" : "conflict";
+    });
+  }
+
   public exportData(): ExportData {
     const records = this.#db.prepare("SELECT * FROM records WHERE deleted_at_json IS NULL ORDER BY timeline_sort DESC, created_at_json DESC, id DESC")
       .all()
