@@ -9,6 +9,23 @@ export function dateForTime(time: LifeTime, timeZone: string): string {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+/**
+ * "2026-10-06（周二）" — the weekday is what makes "上周" readable at a glance.
+ *
+ * The day comes from `dateForTime` (already in the caller's zone); the weekday is
+ * then derived from that day string alone, read as UTC midnight. Parsing the true
+ * instant and asking for its weekday in Asia/Shanghai would give the same answer
+ * here, but only because both sides agree on the zone — deriving it from the
+ * finished day string means the two halves can never drift apart.
+ */
+export function dateWithWeekdayForTime(time: LifeTime, timeZone: string): string {
+  const date = dateForTime(time, timeZone);
+  const parsed = Date.parse(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed)) return date;
+  const weekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date(parsed).getUTCDay()] ?? "";
+  return weekday ? `${date}（${weekday}）` : date;
+}
+
 export function timelineDisplayKey(record: RecordView, timeZone: string): string {
   const time = record.occurredAt ?? record.createdAt;
   if (time.kind === "date") return `${time.value}T00:00:00`;
