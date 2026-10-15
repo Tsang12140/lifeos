@@ -27,7 +27,7 @@ export const handlePhotoDescriptionRoutes: RouteHandler = async (ctx, req, res, 
 
   requireJsonContentType(req, true);
   const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-  hasOnlyKeys(input, ["limit", "dryRun", "recordId"]);
+  hasOnlyKeys(input, ["limit", "dryRun", "recordId", "kinds"]);
 
   let limit: number | undefined;
   if (input.limit !== undefined) {
@@ -44,6 +44,13 @@ export const handlePhotoDescriptionRoutes: RouteHandler = async (ctx, req, res, 
     if (typeof input.recordId !== "string" || input.recordId === "") throw new HttpError(400, "invalid_record_id", "recordId 必须是非空字符串");
     recordId = input.recordId;
   }
+  let kinds: string[] | undefined;
+  if (input.kinds !== undefined) {
+    if (!Array.isArray(input.kinds) || input.kinds.length === 0 || !input.kinds.every((kind) => typeof kind === "string" && kind !== "")) {
+      throw new HttpError(400, "invalid_kinds", "kinds 必须是非空字符串数组");
+    }
+    kinds = input.kinds as string[];
+  }
 
   const run = await describePhotoLibrary({
     repository,
@@ -52,6 +59,7 @@ export const handlePhotoDescriptionRoutes: RouteHandler = async (ctx, req, res, 
     ...(limit === undefined ? {} : { limit }),
     dryRun,
     ...(recordId === undefined ? {} : { recordId }),
+    ...(kinds === undefined ? {} : { kinds }),
   });
   setJson(res, 200, {
     ...run,

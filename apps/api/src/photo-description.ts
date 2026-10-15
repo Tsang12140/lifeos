@@ -58,6 +58,12 @@ export interface PhotoDescriptionRunOptions {
   readonly dryRun?: boolean;
   /** Restrict the pass to a single record — used when checking one entry by hand. */
   readonly recordId?: string;
+  /**
+   * Restrict the pass to these record kinds. Journals only, say, leaving the screenshots
+   * that were filed as tasks alone — a screenshot of one's own UI is not a memory worth
+   * paying a vision model to caption.
+   */
+  readonly kinds?: readonly string[];
   /** Injectable so a test can exercise the whole pass without touching the network. */
   readonly describe?: PhotoDescriber;
 }
@@ -155,7 +161,9 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
 
   const everyone = repository.list();
   const known = collectKnownDescriptions(everyone);
-  const scanned = options.recordId === undefined ? everyone : everyone.filter((record) => record.id === options.recordId);
+  const scanned = everyone.filter((record) =>
+    (options.recordId === undefined || record.id === options.recordId)
+    && (options.kinds === undefined || options.kinds.includes(record.kind)));
 
   const targets = new Map<string, PhotoTarget>();
   let skippedPrivate = 0;

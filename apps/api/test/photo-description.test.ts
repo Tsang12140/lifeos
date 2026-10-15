@@ -226,3 +226,37 @@ test("cleanPhotoDescription drops fences, bullets and refusals", () => {
   assert.equal(cleanPhotoDescription("   "), "");
   assert.equal(cleanPhotoDescription(null), "");
 });
+
+test("kinds keeps screenshots filed as tasks out of the pass", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+
+  // 第二张图挂在一条 task 上，代表「截图那类」；本轮只应处理 journal 的那一张。
+  const bytes = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 20, g: 200, b: 20 } } }).jpeg().toBuffer();
+  writeFileSync(join(fx.root, "assets", "uploads", "task.jpg"), bytes);
+  fx.repository.insertAsset({
+    id: "asset_task",
+    kind: "photo",
+    mediaType: "image/jpeg",
+    storageRefs: [{ sourceId: "local", sourceRef: "uploads/task.jpg", mediaType: "image/jpeg", contentHash: { algorithm: "sha256", value: "b".repeat(64) } }],
+  } as Asset);
+
+  const journal = journalWithPhoto(fx.repository, "今天喝了一杯");
+  const task = buildRecord({ kind: "task", content: "这个也要改改", occurredAt: { kind: "instant", value: "2026-10-15T00:00:00.000Z" }, assetRefs: [{ assetId: "asset_task", role: "photo" }] }, fx.repository);
+  fx.repository.insert(journal);
+  fx.repository.insert(task);
+
+  const run = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    kinds: ["journal"],
+    describe: async () => "一杯拿铁",
+  });
+
+  assert.equal(run.photos, 1, "task 的截图不应进入本轮清点");
+  assert.equal(run.described, 1);
+  assert.equal(run.recordsUpdated, 1);
+  assert.equal(fx.repository.findById(task.id)!.aiDerived.length, 0, "task 记录不得被写入");
+  assert.equal(fx.repository.findById(journal.id)!.aiDerived.length, 1);
+});
