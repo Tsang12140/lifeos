@@ -1,13 +1,14 @@
 import { backfillItemState, backfillEntryTime, backfillEntryReady, calendarToday } from "@lifeos/core";
+import { useActionMenu } from "./action-menu";
 import type { AssetLink } from "@lifeos/core";
 import type { ComposerProps } from "./composer";
 import { ShotDropZone, type ShotDropZoneHandle } from "./shot-drop-zone";
 import { usePhotoInput } from "./photo-input";
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Eraser, Film, History, LoaderCircle, MessageSquarePlus, Plus, Settings2 } from "lucide-react";
+import { Eraser, Film, History, LoaderCircle, MessageSquarePlus, Plus, Settings2, Check, ChevronDown } from "lucide-react";
 import type { Asset, BackfillBatch, BackfillChatMessage, BackfillEntry, BackfillMaterial, BackfillObject, Entity, UiClarify, UiCommand, UiTurnPlan } from "@lifeos/core";
-import { apiRequest, type ApiError } from "./api";
+import { AI_GEARS, apiRequest, gearLabel, type ApiError, type AiGear } from "./api";
 import {
   clearAssistantConversation,
   loadAssistantConversation,
@@ -80,9 +81,13 @@ export interface AssistantBackfillHandle {
 }
 
 interface AssistantBackfillProps {
+  readonly focusRequested?: boolean;
+  readonly onFocusHandled?: () => void;
   readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">;
   readonly scope: string;
   readonly configured: boolean;
+  /** The settings-page default gear; the composer dial starts here and resets on a new conversation. */
+  readonly defaultGear: AiGear;
   readonly onChanged: () => void;
   readonly onViewRecords: (ids: readonly string[]) => void;
   readonly onOpenEntity: (entity: Entity) => void;
@@ -96,7 +101,7 @@ interface AssistantBackfillProps {
   readonly ref?: Ref<AssistantBackfillHandle>;
 }
 
-export function AssistantBackfill({ photoInput, scope, configured, onChanged, onViewRecords, onOpenEntity, onOpenSettings, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false, ref }: AssistantBackfillProps) {
+export function AssistantBackfill({ photoInput, scope, configured, defaultGear, onChanged, onViewRecords, onOpenEntity, onOpenSettings, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false, focusRequested = false, onFocusHandled, ref }: AssistantBackfillProps) {
   const [batch, setBatch] = useState<BackfillBatch | null>(null);
   const [batches, setBatches] = useState<readonly BackfillBatch[]>([]);
   const [shots, setShots] = useState<readonly AssetLink[]>(() => { try { return JSON.parse(sessionStorage.getItem('lifeos.assistant.photos:'+scope) ?? '[]'); } catch { return []; } });
@@ -136,6 +141,28 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
   const bindConversationBatch = (id: string | null) => { conversationBatchRef.current = id; };
   const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  useActionMenu(menuRef, menu !== null, () => setMenu(null));
+  // 回答档位（2026-10-15）：初始取设置页默认档，本次对话内可换，新建对话回默认。
+  // The panel mounts before /api/ai/status resolves, so defaultGear starts as the
+  // fallback ("direct") and corrects itself moments later — follow it until the
+  // owner picks a gear by hand, otherwise the dial would freeze on the fallback.
+  const [gear, setGear] = useState<AiGear>(defaultGear);
+  const gearTouchedRef = useRef(false);
+  useEffect(() => {
+    if (gearTouchedRef.current) return;
+    resetGearToDefault();
+  }, [defaultGear]);
+  const pickGear = (next: AiGear) => {
+    gearTouchedRef.current = true;
+    setGear(next);
+  };
+  const resetGearToDefault = () => {
+    gearTouchedRef.current = false;
+    setGear(defaultGear);
+  };
+  const [gearMenu, setGearMenu] = useState<MenuState | null>(null);
+  const gearMenuRef = useRef<HTMLDivElement>(null);
+  useActionMenu(gearMenuRef, gearMenu !== null, () => setGearMenu(null));
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const toChatMessage = (item: AssistantArchiveMessage): BackfillChatViewMessage => ({
@@ -196,6 +223,7 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
       conversationRef.current = created.conversationId;
       bindConversationBatch(null);
       setConversationId(created.conversationId); setClearedAt(null); setChat([]); setBatch(null); setDirty(false);
+      resetGearToDefault();
       clearPendingAssistantTurn(scope, window.sessionStorage); updatePending(null);
       setReviewOpen(false);
     });
@@ -208,35 +236,13 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
     const next = clampFixedMenuPosition(menu.x, menu.y, rect.width, rect.height, window.innerWidth, window.innerHeight);
     if (next.x !== menu.x || next.y !== menu.y) setMenu({ ...menu, ...next });
   }, [menu]);
-  useEffect(() => {
-    if (menu === null) return;
-    // Pointerdown anywhere but the menu itself dismisses it. Two deliberate
-    // choices here:
-    //  · **bubble**, not capture — the menu's own `onPointerDown` stops the event
-    //    before it reaches `window`, so clicking an item still fires its `click`.
-    //    With capture the window ran first and unmounted the menu mid-gesture,
-    //    leaving every item unclickable. Same contract as `.calendar-summary-menu`.
-    //  · the `contains` guard is what actually protects the portaled menu: it
-    //    lives under `document.body`, outside the React root, so relying on the
-    //    synthetic `stopPropagation` alone would be a coin flip.
-    const close = (event: Event) => {
-      const target = event.target;
-      if (menuRef.current !== null && target instanceof Node && menuRef.current.contains(target)) return;
-      setMenu(null);
-    };
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };
-    const onDismiss = () => setMenu(null);
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onDismiss, true);
-    window.addEventListener("resize", onDismiss);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onDismiss, true);
-      window.removeEventListener("resize", onDismiss);
-    };
-  }, [menu]);
+  useLayoutEffect(() => {
+    const element = gearMenuRef.current;
+    if (element === null || gearMenu === null) return;
+    const rect = element.getBoundingClientRect();
+    const next = clampFixedMenuPosition(gearMenu.x, gearMenu.y, rect.width, rect.height, window.innerWidth, window.innerHeight);
+    if (next.x !== gearMenu.x || next.y !== gearMenu.y) setGearMenu({ ...gearMenu, ...next });
+  }, [gearMenu]);
   useEffect(() => {
     active.current = true;
     setInitializing(true);
@@ -350,6 +356,7 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
         message: turn.message,
         materials: await withImages(materials),
         privacyVisible,
+        effort: gear,
       });
       if (!active.current) return;
       if (result.conversationId !== turn.conversationId || result.turnId !== turn.turnId) throw new Error("服务器返回的消息编号不匹配，本条仍保留待确认");
@@ -450,6 +457,11 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
   });
   const disabled = Boolean(busy) || initializing;
   const chatBlocked = disabled || pendingTurn !== null;
+  useEffect(() => {
+    if (!focusRequested || chatBlocked || !composerRef.current) return;
+    composerRef.current.focus();
+    if (document.activeElement === composerRef.current) onFocusHandled?.();
+  }, [focusRequested, chatBlocked, onFocusHandled]);
   const pendingVisible = pendingTurn !== null && pendingTurn.conversationId === conversationId;
   const pendingArchiveMessage = pendingVisible ? chat.find((item) => item.turnId === pendingTurn.turnId) : undefined;
   const pendingAlreadyInArchive = pendingArchiveMessage !== undefined;
@@ -465,6 +477,7 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
       bindConversationBatch(null);
       conversationRef.current = created.conversationId; setConversationId(created.conversationId);
       setClearedAt(null); setChat([]); setBatch(null); setDirty(false); setReviewOpen(false);
+      resetGearToDefault();
       setInput(pending.message);
       clearPendingAssistantTurn(scope, window.sessionStorage); updatePending(null);
       setNotice("本次没有自动重放；原文和已选附件已放回输入区，检查后可手动发送。");
@@ -545,6 +558,7 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
         <div className="backfill-input-actions">
           <ShotDropZone ref={shotRef} scopeKey={"assistant:"+scope} numbered addOutsideStrip disabled={chatBlocked} shots={shots} onShotsChange={setShots} onUpload={photoInput.onUploadShot} onNotify={photoInput.onNotify} onCleared={photoInput.onShotsCleared} onSubmissionState={(_scope,state)=>setPhotoState(state)} />
           <div className="backfill-operation-group">
+            <button className="secondary-button ai-gear-button" type="button" aria-haspopup="menu" aria-expanded={gearMenu !== null} disabled={chatBlocked} title="回答档位" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setGearMenu({ x: rect.left, y: rect.top - 6 }); }}><span>{gearLabel(gear)}</span><ChevronDown size={14} aria-hidden="true" /></button>
             <button className="primary-button ai-send-button" type="submit" disabled={chatBlocked || photoState !== null || (!input.trim() && !shots.length)}>发送</button>
           </div>
         </div>
@@ -553,8 +567,12 @@ export function AssistantBackfill({ photoInput, scope, configured, onChanged, on
     {menu === null ? null : createPortal(<div ref={menuRef} className="ai-assistant-menu" role="menu" aria-label="AI 管家的操作" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
         <button type="button" role="menuitem" disabled={disabled || pendingTurn !== null} onClick={clearScreen}><Eraser size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">清屏</span></button>
         <button type="button" role="menuitem" disabled={disabled || pendingTurn !== null} onClick={startNewConversation}><MessageSquarePlus size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">新对话</span></button>
+        <div className="action-menu-separator" role="separator" />
         <button type="button" role="menuitem" onClick={() => { setMenu(null); setHistoryOpen(true); }}><History size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">聊天记录</span></button>
         <button type="button" role="menuitem" onClick={() => { setMenu(null); onOpenSettings(); }}><Settings2 size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">AI 设置</span></button>
+    </div>, document.body)}
+    {gearMenu === null ? null : createPortal(<div ref={gearMenuRef} className="ai-assistant-menu ai-gear-menu" role="menu" aria-label="回答档位" style={{ left: gearMenu.x, top: gearMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+        {AI_GEARS.map((option) => <button type="button" role="menuitemradio" aria-checked={gear === option.id} key={option.id} onClick={() => { setGearMenu(null); pickGear(option.id); }}><span className="ai-gear-check" aria-hidden="true">{gear === option.id ? <Check size={14} /> : null}</span><span className="ai-assistant-menu-label">{option.label}<small>{option.detail}</small></span></button>)}
     </div>, document.body)}
     <AssistantHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} actionsDisabled={disabled || pendingTurn !== null} onOpenAttachment={(id) => void openAttachment(id)} onContinue={(detail) => {
       detailGeneration.current++;
