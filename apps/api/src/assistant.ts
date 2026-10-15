@@ -91,9 +91,29 @@ export async function askDeepSeek(config: ApiConfig, runtime: RuntimeAiConfig, s
       signal: controller.signal,
       redirect: "error",
     });
-    if (!response.ok) return null;
-    const payload = await response.json() as { choices?: readonly { message?: { content?: unknown } }[] };
+    if (!response.ok) {
+      console.log(`[ai-usage] model=${runtime.model} http=${response.status} ok=false`);
+      return null;
+    }
+    const payload = await response.json() as {
+      choices?: readonly { message?: { content?: unknown } }[];
+      usage?: {
+        readonly prompt_tokens?: number;
+        readonly completion_tokens?: number;
+        readonly total_tokens?: number;
+        readonly prompt_cache_hit_tokens?: number;
+        readonly prompt_cache_miss_tokens?: number;
+      };
+    };
     const answer = payload.choices?.[0]?.message?.content;
+    // One line per call so a run can be costed from the log instead of guessed at.
+    const usage = payload.usage;
+    if (usage !== undefined) {
+      console.log(
+        `[ai-usage] model=${runtime.model} prompt=${usage.prompt_tokens ?? "?"} completion=${usage.completion_tokens ?? "?"} total=${usage.total_tokens ?? "?"}`
+        + ` cache_hit=${usage.prompt_cache_hit_tokens ?? "?"} cache_miss=${usage.prompt_cache_miss_tokens ?? "?"}`,
+      );
+    }
     return typeof answer === "string" && answer.trim() ? answer.trim() : null;
   } catch {
     return null;
