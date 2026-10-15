@@ -1,7 +1,7 @@
 import { setJson, HttpError } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
 import { hasOnlyKeys, jsonObject } from "./field-validate.js";
-import { describePhotoLibrary } from "./photo-description.js";
+import { PHOTO_DESCRIPTION_VARIANTS, describePhotoLibrary, type PhotoDescriptionVariant } from "./photo-description.js";
 import type { RouteHandler } from "./route-context.js";
 
 /**
@@ -27,7 +27,7 @@ export const handlePhotoDescriptionRoutes: RouteHandler = async (ctx, req, res, 
 
   requireJsonContentType(req, true);
   const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-  hasOnlyKeys(input, ["limit", "dryRun", "recordId", "kinds"]);
+  hasOnlyKeys(input, ["limit", "dryRun", "recordId", "kinds", "variant", "force"]);
 
   let limit: number | undefined;
   if (input.limit !== undefined) {
@@ -51,6 +51,20 @@ export const handlePhotoDescriptionRoutes: RouteHandler = async (ctx, req, res, 
     }
     kinds = input.kinds as string[];
   }
+  let variant: PhotoDescriptionVariant | undefined;
+  if (input.variant !== undefined) {
+    if (typeof input.variant !== "string" || !(PHOTO_DESCRIPTION_VARIANTS as readonly string[]).includes(input.variant)) {
+      throw new HttpError(400, "invalid_variant", `variant 必须是 ${PHOTO_DESCRIPTION_VARIANTS.join(" / ")}`);
+    }
+    variant = input.variant as PhotoDescriptionVariant;
+  }
+  // Re-captioning a pass that is already done. Opt-in on purpose: the default must never
+  // be "spend it again".
+  let force = false;
+  if (input.force !== undefined) {
+    if (typeof input.force !== "boolean") throw new HttpError(400, "invalid_force", "force 必须是布尔值");
+    force = input.force;
+  }
 
   const run = await describePhotoLibrary({
     repository,
@@ -60,6 +74,8 @@ export const handlePhotoDescriptionRoutes: RouteHandler = async (ctx, req, res, 
     dryRun,
     ...(recordId === undefined ? {} : { recordId }),
     ...(kinds === undefined ? {} : { kinds }),
+    ...(variant === undefined ? {} : { variant }),
+    force,
   });
   setJson(res, 200, {
     ...run,

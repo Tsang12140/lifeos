@@ -260,3 +260,164 @@ test("kinds keeps screenshots filed as tasks out of the pass", async (t) => {
   assert.equal(fx.repository.findById(task.id)!.aiDerived.length, 0, "task 记录不得被写入");
   assert.equal(fx.repository.findById(journal.id)!.aiDerived.length, 1);
 });
+
+test("the context pass re-reads an already-captioned photo and hands the record's own words over", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  const journal = journalWithPhoto(fx.repository, "今天用的是浅烘豆，奶泡还是没打起来");
+  fx.repository.insert(journal);
+
+  // 第一遍：只看图。不传背景。（断言放在 describe 之外——describe 抛错会被 pass 里的
+  // try/catch 当成「模型答不出」吞掉，那样测试会以另一种面目失败，误导排查。）
+  const plainSeen: (string | undefined)[] = [];
+  const first = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    describe: async ({ background }) => {
+      plainSeen.push(background);
+      return "一杯拿铁，白色瓷杯";
+    },
+  });
+  assert.deepEqual(plainSeen, [undefined], "plain 档不得携带背景");
+  assert.equal(first.variant, "plain");
+
+  const seen: (string | undefined)[] = [];
+  const second = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    variant: "context",
+    describe: async ({ background }) => {
+      seen.push(background);
+      return "一杯拿铁，白色瓷杯，奶泡未成型";
+    },
+  });
+
+  assert.equal(seen.length, 1, "换档位重跑必须真的再读一次，而不是当成已描述跳过");
+  assert.equal(seen[0], "今天用的是浅烘豆，奶泡还是没打起来", "该条记录的正文应作为背景送出");
+  assert.equal(second.alreadyDescribed, 0);
+  assert.equal(second.described, 1);
+
+  const stored = fx.repository.findById(journal.id)!;
+  assert.equal(stored.body.original, "今天用的是浅烘豆，奶泡还是没打起来", "正文不得被改动");
+  assert.equal(stored.aiDerived.length, 2, "两档结果并存，互不覆盖");
+  assert.deepEqual(
+    stored.aiDerived.map((item) => (item.value as { variant?: string }).variant).sort(),
+    ["context", "plain"],
+  );
+
+  // 各档位各自去重：换回 plain 也不该再花钱。
+  const third = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    describe: async () => {
+      throw new Error("同一档位不得重复读取");
+    },
+  });
+  assert.equal(third.alreadyDescribed, 1);
+});
+
+test("高成本档 = 中成本档 ＋ 思考，且与中成本档各自记账", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  const journal = journalWithPhoto(fx.repository, "今天用的是浅烘豆，奶泡还是没打起来");
+  fx.repository.insert(journal);
+
+  // 高成本档与中成本档的唯一差别是「让不让模型先想」——那是网络层的事，断言在跑批日志里
+  // （effort=high / direct）。这里测的是另外两件必须成立的事：它一样看得见正文背景，
+  // 并且与中成本档各自去重，不会互相把对方当成「已跑过」。
+  const seen: (string | undefined)[] = [];
+  const high = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    variant: "context-thinking",
+    describe: async ({ background }) => {
+      seen.push(background);
+      return "一杯拿铁，白色瓷杯，奶泡未成型";
+    },
+  });
+
+  assert.equal(high.variant, "context-thinking");
+  assert.equal(seen.length, 1, "换档位重跑必须真的再读一次，而不是当成已描述跳过");
+  assert.equal(seen[0], "今天用的是浅烘豆，奶泡还是没打起来", "高成本档应和中成本档一样拿到正文背景");
+  assert.equal(high.described, 1);
+
+  const stored = fx.repository.findById(journal.id)!;
+  assert.equal(stored.body.original, "今天用的是浅烘豆，奶泡还是没打起来", "正文不得被改动");
+  assert.equal(stored.aiDerived.length, 1);
+  assert.equal((stored.aiDerived[0]!.value as { variant?: string }).variant, "context-thinking");
+
+  const mid = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    variant: "context",
+    describe: async ({ background }) => {
+      seen.push(background);
+      return "一杯拿铁";
+    },
+  });
+  assert.equal(mid.described, 1, "高成本档写过的图，中成本档仍应各自再读一次");
+  assert.equal(fx.repository.findById(journal.id)!.aiDerived.length, 2, "两档结果并存，互不覆盖");
+});
+
+test("强制重跑会替换同档位的旧描述，而不是堆成两条", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  const journal = journalWithPhoto(fx.repository, "今天喝了一杯");
+  fx.repository.insert(journal);
+
+  const run = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails };
+  await describePhotoLibrary({ ...run, describe: async () => "第一版描述" });
+
+  // 不强制：同一档位必须零调用地跳过。
+  const skipped = await describePhotoLibrary({
+    ...run,
+    describe: async () => {
+      throw new Error("未强制时不应重复调用模型");
+    },
+  });
+  assert.equal(skipped.alreadyDescribed, 1);
+  assert.equal(skipped.described, 0);
+
+  // 强制：真的再读一次，并且把旧的那条换掉。
+  let calls = 0;
+  const forced = await describePhotoLibrary({
+    ...run,
+    force: true,
+    describe: async () => {
+      calls += 1;
+      return "第二版描述";
+    },
+  });
+  assert.equal(calls, 1, "强制重跑必须真的再读一次");
+  assert.equal(forced.described, 1);
+  assert.equal(forced.alreadyDescribed, 0, "强制重跑没有「已完成」一说");
+
+  const stored = fx.repository.findById(journal.id)!;
+  assert.equal(stored.body.original, "今天喝了一杯", "正文不得被改动");
+  assert.equal(stored.aiDerived.length, 1, "同档位旧描述应被替换，不得堆叠");
+  assert.equal((stored.aiDerived[0]!.value as { text: string }).text, "第二版描述");
+});
+
+test("强制重跑只换自己那一档，别的档位一字不动", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  const journal = journalWithPhoto(fx.repository, "今天用的是浅烘豆");
+  fx.repository.insert(journal);
+
+  const run = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails };
+  await describePhotoLibrary({ ...run, describe: async () => "便宜档描述" });
+  await describePhotoLibrary({ ...run, variant: "context", describe: async () => "中档描述" });
+
+  await describePhotoLibrary({ ...run, variant: "context", force: true, describe: async () => "中档描述·第二版" });
+
+  const stored = fx.repository.findById(journal.id)!;
+  const byVariant = new Map(stored.aiDerived.map((item) => [(item.value as { variant?: string }).variant ?? "plain", (item.value as { text: string }).text]));
+  assert.equal(stored.aiDerived.length, 2, "强制只作用于本档位，不应增加或减少条目");
+  assert.equal(byVariant.get("plain"), "便宜档描述", "别的档位不得被碰");
+  assert.equal(byVariant.get("context"), "中档描述·第二版", "本档位应被换成新的一条");
+});
