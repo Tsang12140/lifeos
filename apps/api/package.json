@@ -18,6 +18,6 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --pretty false",
     "start": "node --use-env-proxy --env-file-if-exists=../../.env dist/src/main.js",
-    "test": "npm run build && node --test --test-isolation=none dist/test/api.test.js dist/test/contact-avatar.test.js dist/test/assistant-history.test.js dist/test/timeline-query.test.js dist/test/calendar-days.test.js dist/test/calendar-backgrounds.test.js dist/test/storage-pool.test.js dist/test/archive.test.js dist/test/pool-transition.test.js dist/test/pool-read-canary.test.js dist/test/video.test.js dist/test/weather-location.test.js dist/test/places.test.js dist/test/record-undo.test.js"
+    "test": "npm run build && node --test --test-isolation=none dist/test/api.test.js dist/test/contact-avatar.test.js dist/test/assistant-history.test.js dist/test/timeline-query.test.js dist/test/photo-description.test.js dist/test/calendar-days.test.js dist/test/calendar-backgrounds.test.js dist/test/storage-pool.test.js dist/test/archive.test.js dist/test/pool-transition.test.js dist/test/pool-read-canary.test.js dist/test/video.test.js dist/test/weather-location.test.js dist/test/places.test.js dist/test/record-undo.test.js"
   }
 }

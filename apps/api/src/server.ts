@@ -161,6 +161,7 @@ import { handleEntitiesRoutes } from "./routes-entities.js";
 import { handlePlacesRoutes } from "./routes-places.js";
 import { handleAiMovieRoutes } from "./routes-ai-movie.js";
 import { handleAssistantBackfillRoutes } from "./routes-assistant-backfill.js";
+import { handlePhotoDescriptionRoutes } from "./routes-photo-description.js";
 import { handleAssistantHistoryRoutes } from "./routes-assistant-history.js";
 import { handleWeatherRoutes } from "./routes-weather.js";
 import { handleModulesRoutes } from "./routes-modules.js";
@@ -524,6 +525,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (await handleArchiveRoutes(ctx, req, res, pathname, url)) return;
     if (await handleBackupRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAssistantBackfillRoutes(ctx, req, res, pathname, url)) return;
+    if (await handlePhotoDescriptionRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAssistantHistoryRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAiMovieRoutes(ctx, req, res, pathname, url)) return;
     if (await handleWeatherRoutes(ctx, req, res, pathname, url)) return;
