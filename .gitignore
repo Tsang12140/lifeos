@@ -24,4 +24,5 @@ backups/
 !.env.example
 coverage/
 .review/
+profiles/
 .DS_Store
