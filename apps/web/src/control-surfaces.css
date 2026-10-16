@@ -1,0 +1,287 @@
+/* Confirmed control appearance, 2026-10-14: gray composer tray, white input,
+   neutral pills and color cross-fades. Geometry belongs to existing groups. */
+:root {
+  --control-ink: #41484f;
+  --control-line: #dce0e4;
+  --control-tray: #f1f2f3;
+  --control-segment: #e9eaeb;
+  --control-muted: #636b74;
+  --control-float-shadow: 0 2px 5px rgb(24 36 61 / .055), 0 10px 28px rgb(24 36 61 / .09);
+}
+.composer.surface {
+  border-color: #e7e9eb;
+  border-radius: 22px;
+  background: var(--control-tray);
+  box-shadow: none;
+}
+.composer .composer-entry {
+  border: 1px solid var(--control-line);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 5px 12px rgb(24 36 61 / .045);
+}
+.composer .composer-entry:focus-within {
+  border-color: #9aa6b2;
+  box-shadow: 0 0 0 2px rgb(100 115 130 / .09), 0 5px 18px rgb(24 36 61 / .04);
+}
+.composer .composer-input {
+  background: transparent;
+  box-shadow: none;
+}
+.composer .composer-shots {
+  border-top-color: transparent;
+  background: transparent;
+  border-radius: 0 0 20px 20px;
+}
+.composer.composer-kind-task .composer-entry {
+  background: #fffaf0;
+  border-color: #d5c7a6;
+}
+.composer.composer-kind-task .composer-entry:focus-within {
+  border-color: #9b8658;
+  box-shadow: 0 0 0 2px rgb(155 134 88 / .10), 0 5px 18px rgb(24 36 61 / .04);
+}
+.composer .composer-footer {
+  gap: 10px;
+  padding: 10px 2px 0;
+}
+.composer .composer-fields {
+  gap: 8px;
+}
+.composer .composer-fields :is(.date-trigger,.task-schedule-trigger,.privacy-toggle,.backfill-toggle,.compact-icon-button) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: #64707b;
+}
+.composer .composer-fields :is(.date-trigger,.task-schedule-trigger,.compact-icon-button):hover {
+  background: #eceeef;
+}
+.composer .composer-fields .privacy-toggle.is-on {
+  background: var(--chip);
+  color: var(--chip-ink);
+}
+.composer-desktop-save {
+  border-radius: 999px;
+  box-shadow: none;
+}
+.composer-kind-journal :is(.composer-desktop-save,.composer-inline-save) {
+  color: #fff;
+  background: var(--control-ink);
+  border-color: var(--control-ink);
+}
+.composer-kind-journal :is(.composer-desktop-save,.composer-inline-save):disabled {
+  background: #e6e8ea;
+  border-color: #e6e8ea;
+  color: #7c858e;
+  opacity: 1;
+}
+.kind-switcher {
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--control-segment);
+}
+.kind-option {
+  border-radius: 999px;
+  padding-inline: 12px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--control-muted);
+  font-weight: 500;
+  transition: background-color 180ms cubic-bezier(.2, 0, 0, 1), color 180ms cubic-bezier(.2, 0, 0, 1), border-color 180ms cubic-bezier(.2, 0, 0, 1);
+}
+.kind-option.is-active {
+  border-color: var(--control-ink);
+  background: var(--control-ink);
+  color: #fff;
+}
+.composer-kind-task .kind-option.is-active {
+  border-color: #e7d4a0;
+  background: #f2dfaa;
+  color: #5c4118;
+}
+/* Library controls share the diary/task segmented shape and motion. */
+.entities-library-toolbar .entities-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--control-segment);
+}
+.entities-tab {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--control-muted);
+  background: transparent;
+  box-shadow: none;
+  font-size: .82rem;
+  font-weight: 500;
+  line-height: 20px;
+  transition: background-color 180ms cubic-bezier(.2, 0, 0, 1), color 180ms cubic-bezier(.2, 0, 0, 1), border-color 180ms cubic-bezier(.2, 0, 0, 1);
+}
+.entities-tab.is-active {
+  border-color: var(--control-ink);
+  color: #fff;
+  background: var(--control-ink);
+  box-shadow: none;
+}
+.entities-tab > span {
+  flex: 0 0 auto;
+  color: inherit;
+  background: rgb(99 107 116 / .10);
+  font-weight: 500;
+  transition: background-color 180ms cubic-bezier(.2, 0, 0, 1);
+}
+.entities-tab.is-active > span {
+  background: rgb(255 255 255 / .16);
+}
+.entities-heading > .primary-button {
+  border-color: var(--control-ink);
+  border-radius: 999px;
+  background: var(--control-ink);
+  color: #fff;
+  box-shadow: none;
+}
+.entities-heading > .primary-button:hover {
+  border-color: #343b42;
+  background: #343b42;
+}
+.entities-heading > .primary-button:disabled {
+  border-color: #e6e8ea;
+  background: #e6e8ea;
+  color: #7c858e;
+  opacity: 1;
+}
+.backfill-chat-composer.ai-assistant-composer {
+  padding: 12px;
+  gap: 10px;
+  background: #fff;
+  border-color: var(--control-line);
+  border-radius: 20px;
+  box-shadow: 0 4px 14px rgb(24 36 61 / .045);
+}
+.backfill-chat-composer.ai-assistant-composer:focus-within {
+  border-color: #9aa6b2;
+  box-shadow: 0 0 0 2px rgb(100 115 130 / .09), 0 4px 14px rgb(24 36 61 / .04);
+}
+.backfill-chat-composer .backfill-input-actions > .backfill-operation-group > button {
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.backfill-chat-composer .ai-gear-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--control-muted);
+  box-shadow: none;
+}
+.backfill-chat-composer .ai-gear-button > .ai-reasoning-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: inherit;
+  fill: currentColor;
+  stroke: none;
+}
+.backfill-chat-composer .ai-gear-button:is(:hover, [aria-expanded="true"]):not(:disabled) {
+  border-color: transparent;
+  background: var(--chip);
+  color: var(--control-ink);
+}
+.backfill-chat-composer .ai-gear-button:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: 2px;
+}
+.backfill-chat-composer .ai-send-button {
+  border-radius: 999px;
+  border-color: var(--control-ink);
+  background: var(--control-ink);
+  color: white;
+  font-weight: 500;
+}
+.backfill-chat-composer .ai-send-button:disabled {
+  border-color: #e6e8ea;
+  background: #e6e8ea;
+  color: #7c858e;
+  opacity: 1;
+}
+.backfill-chat-composer .shot-tile-add-outside > button {
+  border-color: transparent;
+  background: transparent;
+  color: #64707b;
+}
+.record-search-pill {
+  gap: 5px;
+  padding-inline: 4px;
+  border-color: var(--control-line);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgb(24 36 61 / .055);
+}
+.record-search-pill:hover {
+  border-color: #b5bec7;
+  box-shadow: 0 5px 16px rgb(24 36 61 / .075);
+}
+.record-search-pill:focus-within {
+  border-color: #9aa6b2;
+  box-shadow: 0 0 0 2px rgb(100 115 130 / .09), 0 5px 16px rgb(24 36 61 / .055);
+}
+@media (max-width: 700px) {
+  .entities-tab {
+    min-height: 40px;
+  }
+  .composer .composer-fields {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 4px 6px;
+  }
+  .composer .composer-fields .place-anchor {
+    flex: 0 0 auto;
+  }
+  .composer .composer-fields :is(.date-trigger,.task-schedule-trigger) {
+    max-width: 100%;
+  }
+  .composer .composer-footer {
+    padding-top: 8px;
+  }
+}
+@media (max-width: 340px) {
+  .entities-library-toolbar .entities-tabs {
+    border-radius: 20px;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(.kind-option,.entities-tab):not(.is-active):not(:disabled):hover {
+    background: #fff;
+    color: var(--control-ink);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.kind-option,.entities-tab,.entities-tab > span) {
+    transition: none !important;
+  }
+}
+
+/* Drag feedback remains distinct from focus and never clips mention popovers. */
+.composer .composer-entry.is-dragging,
+.composer.composer-kind-task .composer-entry.is-dragging {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* Search panels keep their own layout; only the shared floating surface changes. */
+.record-search :is(.record-search-popup,.record-search-panel) {
+  border-color: var(--control-line);
+  box-shadow: var(--control-float-shadow);
+}

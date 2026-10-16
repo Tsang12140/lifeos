@@ -27,7 +27,6 @@
 .record-search-popup { position: absolute; top: calc(100% + 8px); right: 0; z-index: 40; width: 320px; max-width: calc(100vw - 48px); min-width: 0; height: auto; max-height: none; overflow: visible; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 16px 40px rgb(24 36 61 / .14); }
 .record-search-popup.is-above { top: auto; bottom: calc(100% + 8px); }
 .record-search-suggestions { padding: 8px; }
-.record-search-suggestions .record-search-hint { margin: 0 4px 8px; }
 .record-search-choice { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; min-height: 36px; padding: 0 8px; margin: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ink-soft); font: inherit; text-align: left; cursor: pointer; }
 .record-search-choice:hover, .record-search-choice[aria-selected="true"] { background: var(--surface-soft); }
 .record-search-choice > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

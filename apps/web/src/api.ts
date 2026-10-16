@@ -125,6 +125,27 @@ export interface AiStatus {
 }
 
 /**
+ * The four-gear answer dial (2026-10-15 定案). One control folds 思考开关 and
+ * 推理强度 together — the old two-control pair allowed无效组合 (thinking off
+ * with an effort stored). 存储仍是 thinking + reasoningEffort 两个字段，档位只是
+ * 它们的合并视图：direct = 关思考，其余三档 = 开思考 + 对应 effort。
+ */
+export type AiGear = "direct" | "low" | "high" | "max";
+export const AI_GEARS: readonly { readonly id: AiGear; readonly label: string }[] = [
+  { id: "direct", label: "关闭" },
+  { id: "low", label: "低" },
+  { id: "high", label: "高" },
+  { id: "max", label: "极高" },
+];
+export function gearLabel(gear: AiGear): string {
+  return AI_GEARS.find((option) => option.id === gear)?.label ?? gear;
+}
+export function gearFromStatus(status: Pick<AiStatus, "thinking" | "reasoningEffort"> | null | undefined): AiGear {
+  if (status === undefined || status === null) return "high";
+  return status.thinking ? status.reasoningEffort ?? "high" : "direct";
+}
+
+/**
  * A settings card may display its last confirmed value while a refresh is in
  * flight or has failed, but it must never mistake that display value for a
  * fresh server read that can safely drive a persistence action.
@@ -434,7 +455,7 @@ function createApiError(message: string, status?: number): ApiError {
   return error;
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiResponse(path: string, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
@@ -467,10 +488,12 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     throw error;
   }
 
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
+  return response;
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiResponse(path, init);
+  return response.status === 204 ? undefined as T : await response.json() as T;
 }
 
 /** Upload bytes with the same-origin session cookie and API error convention. */

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, CalendarRange, ChevronLeft, ChevronRight } from "lucide-react";
+import { createPortal } from "react-dom";
+import { consumeDateOutsidePress, useDatePopover } from "./date-popover";
 import { ScrollSlotStrip } from "./ScrollSlotStrip";
 import {
   combineDateTime,
@@ -78,11 +80,22 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
   const [monthAnchor, setMonthAnchor] = useState(() => datePartOf(start) || localDateToday());
   const [fineMinutes, setFineMinutes] = useState(false);
   const [note, setNote] = useState("");
-  const [placement, setPlacement] = useState<"above" | "below">("above");
-  const [room, setRoom] = useState(380);
-  const [panelShiftX, setPanelShiftX] = useState(0);
-  const [fixedBox, setFixedBox] = useState<{ left: number; top: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDatePopover(open, rootRef, panelRef, true);
+
+  useEffect(() => {
+    const collapseWithTaskComposer = (event: Event) => {
+      const origin = event.target;
+      if (origin instanceof Node && rootRef.current !== null && origin.contains(rootRef.current)) {
+        setOpen(false);
+        setNote("");
+      }
+    };
+    document.addEventListener("lifeos:task-composer-collapse", collapseWithTaskComposer);
+    return () => document.removeEventListener("lifeos:task-composer-collapse", collapseWithTaskComposer);
+  }, []);
 
   const startDate = datePartOf(start);
   const startTime = timePartOf(start) || DEFAULT_START_TIME;
@@ -111,16 +124,17 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
       if (target_ instanceof Node && rootRef.current?.contains(target_) === true) return;
       // The panel is placed by its own styles and can land outside the root's
       // box, so a click on it is still a click on this control.
-      if (target_ instanceof Element && target_.closest(".task-schedule-panel") !== null) return;
+      if (target_ instanceof Node && panelRef.current?.contains(target_)) return;
+      consumeDateOutsidePress(event);
       setOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); rootRef.current?.querySelector("button")?.focus(); }
     };
-    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("pointerdown", handlePointer, true);
     document.addEventListener("keydown", handleKey);
     return () => {
-      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("pointerdown", handlePointer, true);
       document.removeEventListener("keydown", handleKey);
     };
   }, [open]);
@@ -129,79 +143,8 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
     setNote("");
     setTarget("start");
     setMonthAnchor(startDate || localDateToday());
-    /*
-     * 往上开还是往下开，**量两边再定**。
-     *
-     * 单日选择器（`DateField`）写死向上开，理由是「输入框在视口底部」。今天视图的
-     * 记录编辑器并不总在底部：2026-09-22 实测触发点在 y=384，上方只有 384px、下方有 600px，
-     * 而面板内容要 500px 上下 —— 向上开时 `max-height` 把整月网格压到 67px（只剩两行），
-     * 点第二下日历基本点不着。既然空间是量得出来的，就不要猜。
-     */
-    const box = rootRef.current?.getBoundingClientRect();
-    if (box === undefined) {
-      setPlacement("above");
-      setRoom(380);
-      setPanelShiftX(0);
-      setFixedBox(null);
-    } else {
-      const above = box.top - 16;
-      const below = window.innerHeight - box.bottom - 16;
-      const next = below > above ? "below" : "above";
-      setPlacement(next);
-      setRoom(Math.max(300, Math.min(560, next === "below" ? below : above)));
-      // Same phone-overflow clamp as DateField (todo §13.1).
-      const panelWidth = Math.min(320, window.innerWidth - 24);
-      const overflow = box.left + panelWidth + 12 - window.innerWidth;
-      setPanelShiftX(overflow > 0 ? -overflow : 0);
-      // `.dialog-body { overflow-y: auto }` (and any other scroll ancestor) will
-      // clip an absolutely positioned panel. When that is the case, lift the
-      // panel to the viewport with `position: fixed` (todo §14).
-      let clipped = false;
-      const rootEl = rootRef.current;
-      for (let el: HTMLElement | null = rootEl?.parentElement ?? null; el !== null; el = el.parentElement) {
-        const style = getComputedStyle(el);
-        if (style.overflow !== "visible" || style.overflowY !== "visible" || style.overflowX !== "visible") {
-          clipped = true;
-          break;
-        }
-      }
-      if (clipped) {
-        const width = Math.min(320, window.innerWidth - 24);
-        const left = Math.max(12, Math.min(box.left, window.innerWidth - width - 12));
-        const top = next === "below" ? box.bottom + 8 : undefined;
-        const bottom = next === "above" ? window.innerHeight - box.top + 8 : undefined;
-        setFixedBox({ left, top: top ?? (bottom === undefined ? box.bottom + 8 : window.innerHeight - bottom - room) });
-        // For "above" we anchor by bottom edge via top calculation with room.
-        if (next === "above" && bottom !== undefined) {
-          setFixedBox({ left, top: Math.max(8, box.top - 8 - room) });
-        }
-      } else {
-        setFixedBox(null);
-      }
-    }
     setOpen((current) => !current);
   };
-
-  // Keep the fixed panel glued to the trigger when the dialog body scrolls.
-  useEffect(() => {
-    if (!open || fixedBox === null) return undefined;
-    const sync = () => {
-      const box = rootRef.current?.getBoundingClientRect();
-      if (box === undefined) return;
-      const width = Math.min(320, window.innerWidth - 24);
-      const left = Math.max(12, Math.min(box.left, window.innerWidth - width - 12));
-      setFixedBox((current) => current === null ? null : ({
-        left,
-        top: placement === "below" ? box.bottom + 8 : Math.max(8, box.top - 8 - room),
-      }));
-    };
-    window.addEventListener("resize", sync);
-    window.addEventListener("scroll", sync, true);
-    return () => {
-      window.removeEventListener("resize", sync);
-      window.removeEventListener("scroll", sync, true);
-    };
-  }, [open, fixedBox, placement, room]);
 
   /*
    * Writing the start is the one move that can invalidate the end. Clearing it
@@ -267,30 +210,10 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
     <button type="button" className="task-schedule-trigger" onClick={openPanel} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}：开始 ${startDate === "" ? "未设置" : `${dayLabel(startDate)} ${startTime}`}，结束 ${endDate === "" ? "未设置" : `${dayLabel(endDate)} ${endTime}`}`}>
       <CalendarRange size={15} strokeWidth={1.8} aria-hidden="true" />
       <span className="task-schedule-part">{startDate === "" ? "开始" : dayLabel(startDate)}<span className="task-schedule-clock">{startTime}</span></span>
-      <span className="task-schedule-arrow" aria-hidden="true">→</span>
+      <ArrowRight className="task-schedule-arrow" size={14} strokeWidth={1.8} aria-hidden="true" />
       <span className={`task-schedule-part ${endDate === "" ? "is-blank" : ""}`}>{endDate === "" ? "结束" : dayLabel(endDate)}<span className="task-schedule-clock">{endTime}</span></span>
     </button>
-    {open ? (() => {
-      const panelStyle: CSSProperties & { [key: string]: string | number | undefined } = {
-        "--task-panel-room": `${room}px`,
-      };
-      if (fixedBox !== null) {
-        panelStyle.position = "fixed";
-        panelStyle.left = `${fixedBox.left}px`;
-        panelStyle.top = `${fixedBox.top}px`;
-        panelStyle.right = "auto";
-        panelStyle.bottom = "auto";
-        panelStyle.width = `${Math.min(320, window.innerWidth - 24)}px`;
-      } else if (panelShiftX !== 0) {
-        panelStyle.left = `${panelShiftX}px`;
-      }
-      return <div
-      className={`task-schedule-panel is-${placement}${fixedBox !== null ? " is-fixed" : ""}`}
-      role="dialog"
-      aria-label={`${label}选择器`}
-      data-placement={placement}
-      style={panelStyle}
-    >
+    {open ? createPortal(<div ref={panelRef} className="task-schedule-panel date-control-popover" role="dialog" aria-label={`${label}选择器`}>
       {/* Always-on month paging. The single-day picker hides its month grid
           behind the header, which is what made crossing a month boundary a
           two-step errand; here the arrows are part of the panel. */}
@@ -310,6 +233,7 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
           </button>;
         })}
       </div>
+      <div className="task-calendar-section">
       <div className="task-cal">
         <div className="task-cal-weekdays">{WEEKDAYS.map((weekday) => <span key={weekday}>{weekday}</span>)}</div>
         <div className="task-cal-grid">
@@ -333,14 +257,19 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
         <span className="task-quick-label">{target === "start" ? "开始" : "结束"}</span>
         {QUICK_PICKS.map((pick) => <button key={pick.label} type="button" className="task-quick-chip" onClick={() => pickQuick(pick.at)}>{pick.label}</button>)}
       </div>
+      </div>
+      <div className="task-time-section">
+      <span className="task-time-heading">{target === "start" ? "开始时间" : "结束时间"}</span>
       <div className="task-panel-time">
-        <ScrollSlotStrip className="date-time-column" scrollKey={`${target}-${activeDate}`}>
+        <div className="date-time-wheels">
+        <ScrollSlotStrip className="date-time-column" scrollKey={`${target}-${activeDate}-${activeTime.slice(0, 2)}`}>
           {hourOptions().map((hour) => <button key={hour} type="button" className={`date-time-slot ${activeTime.startsWith(`${hour}:`) ? "is-selected" : ""}`} onClick={() => writeTime(`${hour}:${minuteSlot}`)} aria-pressed={activeTime.startsWith(`${hour}:`)}>{hour}</button>)}
         </ScrollSlotStrip>
         <span className="date-time-sep" aria-hidden="true">:</span>
-        <ScrollSlotStrip className="date-time-column" scrollKey={`${target}-${activeDate}-minute`}>
+        <ScrollSlotStrip className="date-time-column" scrollKey={`${target}-${activeDate}-minute-${minuteSlot}-${minuteStep}`}>
           {minuteOptions(minuteStep).map((minute) => <button key={minute} type="button" className={`date-time-slot ${minute === minuteSlot ? "is-selected" : ""}`} onClick={() => writeTime(`${activeTime.slice(0, 2)}:${minute}`)} aria-pressed={minute === minuteSlot}>{minute}</button>)}
         </ScrollSlotStrip>
+        </div>
         <div className="task-panel-time-side">
           <label className="task-panel-fine"><input type="checkbox" checked={fineMinutes} onChange={(event) => setFineMinutes(event.target.checked)} /><span>精细</span></label>
           {/* Only the start can mean "now". Offering it for the end would put the
@@ -348,11 +277,11 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
           {target === "start" ? <button type="button" className="text-button" onClick={() => { const now = localNowInput(); setNote(""); onStartChange(now); setMonthAnchor(datePartOf(now) || monthAnchor); }}>此刻</button> : null}
         </div>
       </div>
+      </div>
       <div className="task-panel-foot">
         <span className="task-panel-note" role="status">{note !== "" ? note : `点日历设${target === "start" ? "开始" : "结束"}`}</span>
         <button type="button" className="text-button" disabled={end === ""} onClick={() => { setNote(""); onEndChange(""); }}>清除结束</button>
       </div>
-    </div>;
-    })() : null}
+    </div>, rootRef.current?.closest("dialog") ?? document.body) : null}
   </div>;
 }

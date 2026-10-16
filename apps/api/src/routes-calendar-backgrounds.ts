@@ -6,6 +6,11 @@ import type { RouteHandler } from "./route-context.js";
 
 export const handleCalendarBackgroundRoutes: RouteHandler = async (ctx, req, res, pathname, url) => {
   if (!pathname.startsWith("/api/calendar/background")) return false;
+  // Keep an empty status for old clients so their mounted artwork is cleared.
+  // Settings, images and generation stay inaccessible while their files are retained.
+  if (!ctx.calendarBackgrounds.enabled && !(pathname === "/api/calendar/background" && req.method === "GET")) {
+    throw new HttpError(503, "background_disabled", "月历照片背景已暂时停用");
+  }
   if (pathname === "/api/calendar/background/settings" && req.method === "GET") {
     setJson(res, 200, ctx.calendarBackgrounds.preferences(), { "cache-control": "private, no-store" });
     return true;
@@ -44,7 +49,7 @@ export const handleCalendarBackgroundRoutes: RouteHandler = async (ctx, req, res
     try {
       setJson(res, 200, await ctx.calendarBackgrounds.generateNow(month, hideDemo), { "cache-control": "private, no-store" });
     } catch (error) {
-      if (error instanceof Error && error.message === "background_not_enough_photos") throw new HttpError(409, "background_not_enough_photos", "本月至少需要 12 张有效照片才能生成背景");
+      if (error instanceof Error && error.message === "background_not_enough_photos") throw new HttpError(409, "background_not_enough_photos", "本月至少需要 9 张有效照片才能生成背景");
       if (error instanceof Error && error.message === "background_busy") throw new HttpError(409, "background_busy", "已有拼图正在准备，请稍后再试");
       if (error instanceof Error && error.message === "background_changed") throw new HttpError(409, "background_changed", "照片已发生变化，请重新生成");
       throw error;

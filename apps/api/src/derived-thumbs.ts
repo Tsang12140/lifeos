@@ -57,7 +57,8 @@ export function thumbnailDirectory(dataDirectory: string): string {
  * instead of serving the previous picture forever. Re-hashing whatever comes back
  * keeps a database value from ever steering a path.
  */
-export function thumbnailKey(reference: StorageReference, sourceFile: string): string {
+export function thumbnailKey(reference: StorageReference, sourceFile: string, rotation = 0): string {
+  if (rotation !== 0) return digest(`${thumbnailKey(reference, sourceFile)}:display-rotation:${rotation}`);
   const hash = reference.contentHash;
   if (hash !== undefined) return digest(`${hash.algorithm}:${hash.value}`);
   const info = statSync(sourceFile);
@@ -76,9 +77,9 @@ export interface ThumbnailStats {
 
 export interface ThumbnailCache {
   /** The file holding `width` px of `sourceFile`, derived on first use. */
-  ensure(reference: StorageReference, sourceFile: string, width: ThumbnailWidth): Promise<string>;
+  ensure(reference: StorageReference, sourceFile: string, width: ThumbnailWidth, rotation?: number): Promise<string>;
   /** Returns an existing cache entry without needing to open the original. */
-  cached(reference: StorageReference, width: ThumbnailWidth): string | null;
+  cached(reference: StorageReference, width: ThumbnailWidth, rotation?: number): string | null;
   stats(): ThumbnailStats;
   /** Deletes every derived thumbnail. Never a loss: the next request rebuilds. */
   clear(): { readonly removed: number; readonly freedBytes: number };
@@ -92,19 +93,19 @@ export function createThumbnailCache(dataDirectory: string): ThumbnailCache {
   const pending = new Map<string, Promise<string>>();
 
   return {
-    cached(reference, width) {
+    cached(reference, width, rotation = 0) {
       // Pool references are created only by the upload route and always carry a
       // content hash, so their cache key does not require an original download.
       if (reference.contentHash === undefined) return null;
-      const target = resolve(directory, `${thumbnailKey(reference, "")}-${width}.${THUMBNAIL_FORMAT}`);
+      const target = resolve(directory, `${thumbnailKey(reference, "", rotation)}-${width}.${THUMBNAIL_FORMAT}`);
       return existsSync(target) ? target : null;
     },
-    async ensure(reference, sourceFile, width) {
-      const target = resolve(directory, `${thumbnailKey(reference, sourceFile)}-${width}.${THUMBNAIL_FORMAT}`);
+    async ensure(reference, sourceFile, width, rotation = 0) {
+      const target = resolve(directory, `${thumbnailKey(reference, sourceFile, rotation)}-${width}.${THUMBNAIL_FORMAT}`);
       if (existsSync(target)) return target;
       const running = pending.get(target);
       if (running !== undefined) return running;
-      const job = derive(sourceFile, target, width).finally(() => pending.delete(target));
+      const job = derive(sourceFile, target, width, rotation).finally(() => pending.delete(target));
       pending.set(target, job);
       return job;
     },
@@ -142,7 +143,7 @@ function listThumbnailFiles(directory: string): readonly string[] {
   }
 }
 
-async function derive(sourceFile: string, target: string, width: ThumbnailWidth): Promise<string> {
+async function derive(sourceFile: string, target: string, width: ThumbnailWidth, rotation: number): Promise<string> {
   mkdirSync(dirname(target), { recursive: true });
   // Encode to a buffer, then write under a unique name and rename inside one directory:
   // a request that arrives mid-write sees either nothing or a complete thumbnail, never
@@ -150,10 +151,13 @@ async function derive(sourceFile: string, target: string, width: ThumbnailWidth)
   // output format from the extension, which a temporary name would not carry.
   // Avatar inputs are tiny. Decode their bytes without retaining a libvips file
   // handle, which would prevent temporary-file cleanup and avatar removal on Windows.
-  const bytes = await sharp(width === 160 ? readFileSync(sourceFile) : sourceFile, { failOn: "none" })
+  const input = sharp(width === 160 ? readFileSync(sourceFile) : sourceFile, { failOn: "none" });
+  // Sharp applies only one rotate per pipeline. Bake EXIF first before a user adjustment.
+  const upright = rotation === 0 ? input : sharp(await input.rotate().toBuffer());
+  const bytes = await upright
     // The browser paints the original upright from its EXIF orientation tag, so a
     // thumbnail that skipped this would show up sideways next to a straight original.
-    .rotate()
+    .rotate(rotation === 0 ? undefined : rotation)
     // Never enlarge: a 200px photo blown up to 400 is softness with nothing gained.
     .resize(width === 2048
       ? { width, height: width, fit: "inside", withoutEnlargement: true }

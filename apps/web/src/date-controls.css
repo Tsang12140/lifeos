@@ -1,0 +1,180 @@
+/* Approved reference treatment: one tray, two functional groups. */
+.composer.surface { padding-bottom: 16px; }
+.composer .composer-footer { gap: 8px; margin-top: 0; padding: 14px 0 0; }
+.composer .composer-fields { flex: 1 1 auto; width: auto; min-width: 0; gap: 8px; }
+.composer .composer-metadata {
+  display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+  gap: 8px; min-width: 0; margin-left: auto;
+}
+.composer .composer-metadata :is(.privacy-toggle,.backfill-toggle) { align-self: stretch; }
+.composer .composer-fields :is(.composer-date-control,.privacy-toggle,.backfill-toggle,.compact-icon-button),
+.composer .composer-desktop-save {
+  box-sizing: border-box; min-height: 40px; height: auto; margin: 0;
+}
+.composer .composer-fields .composer-date-control {
+  flex: 0 1 auto; width: auto; min-width: 0; padding: 0;
+  border: 0; border-radius: 999px; background: transparent; box-shadow: none;
+}
+.composer .composer-fields :is(.date-trigger,.task-schedule-trigger) {
+  min-height: 40px; padding: 0 10px; border: 1px solid transparent;
+  border-radius: 999px; gap: 6px; color: #64707b;
+}
+.composer .composer-fields :is(.date-field,.task-schedule).is-open :is(.date-trigger,.task-schedule-trigger) {
+  background: #e5e7e9; border-color: #dce0e4;
+}
+.composer .composer-fields .task-schedule-part { display: inline-flex; }
+.composer .composer-fields :is(.date-trigger-value,.date-trigger-time) { display: inline; }
+.composer .composer-fields .task-schedule-arrow { display: block; }
+.task-schedule-arrow { color: #87909a; }
+.date-field:focus-within,.task-schedule:focus-within,.date-field.is-open,.task-schedule.is-open { border-color: var(--control-line); box-shadow: none; }
+.date-field .date-trigger:focus-visible,.task-schedule .task-schedule-trigger:focus-visible {
+  outline: 2px solid #8995a0; outline-offset: 2px; box-shadow: none;
+}
+
+/* Portalled compound panels: whole-panel scrolling, never a compressed month. */
+.date-control-popover {
+  position: fixed; inset: auto; z-index: 180;
+  box-sizing: border-box; max-width: none; padding: 14px;
+  border: 1px solid var(--control-line); border-radius: 16px;
+  background: #fff; color: var(--control-ink); box-shadow: var(--control-float-shadow);
+  overflow: auto; overscroll-behavior: contain;
+  animation: date-popover-enter 180ms cubic-bezier(.2,0,0,1);
+  --wheel-height: 136px; --slot-height: 34px;
+}
+@keyframes date-popover-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.task-schedule-panel.date-control-popover {
+  display: grid; grid-template-columns: minmax(0,1fr) 132px; gap: 10px 16px;
+}
+.task-panel-head,.task-panel-targets,.task-panel-foot { grid-column: 1 / -1; }
+.date-control-popover :is(.task-panel-head,.date-panel-head) { gap: 4px; }
+.date-control-popover :is(.task-panel-month,.date-panel-title,.date-grid-title) {
+  color: var(--control-ink); font-weight: 600; font-size: .875rem;
+}
+.date-control-popover :is(.task-panel-step,.date-panel-step) {
+  flex: 0 0 34px; width: 34px; height: 34px; border-radius: 999px;
+  color: var(--control-muted); background: transparent;
+}
+.date-control-popover :is(.task-panel-anchor,.date-panel-today,.task-quick-chip,.text-button) {
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; min-height: 34px; margin: 0; padding: 0 8px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--control-muted); font-size: .75rem; line-height: 20px;
+  font-weight: 500; cursor: pointer;
+}
+.date-control-popover :is(.task-panel-anchor,.date-panel-today,.task-quick-chip) { background: #f1f2f3; }
+.date-control-popover .task-panel-targets {
+  gap: 3px; padding: 3px; background: var(--control-segment); border-radius: 14px;
+}
+.date-control-popover .task-target {
+  min-height: 44px; padding: 5px 10px; border: 0; border-radius: 11px;
+  color: var(--control-muted); background: transparent;
+  transition: background-color 180ms cubic-bezier(.2,0,0,1),color 180ms cubic-bezier(.2,0,0,1);
+}
+.date-control-popover .task-target.is-active { background: var(--control-ink); color: #fff; }
+.date-control-popover .task-target :is(.task-target-label,.task-target-value) {
+  color: inherit; font-weight: 500; letter-spacing: 0; line-height: 1.35;
+}
+.date-control-popover .task-target-label { font-size: .6875rem; }
+.date-control-popover .task-target-value { font-size: .75rem; white-space: normal; overflow-wrap: anywhere; }
+.task-calendar-section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.date-control-popover :is(.task-cal,.date-panel-grid) { overflow: visible; min-height: auto; flex-shrink: 0; }
+.date-control-popover .task-cal-weekdays > span { padding-bottom: 8px; font-weight: 500; color: var(--control-muted); }
+.date-control-popover .task-cal-day { height: 34px; color: var(--control-ink); background: transparent; }
+.date-control-popover :is(.task-cal-day.is-outside,.date-grid-day.is-outside) { color: #90979e; }
+.date-control-popover .task-cal-day.is-band { background: #e9eaeb; color: var(--control-ink); }
+.date-control-popover .task-cal-day:is(.is-start,.is-end),
+.date-control-popover .date-grid-day.is-selected,
+.date-control-popover .date-day-slot.is-selected {
+  border-radius: 9px; background: var(--control-ink); color: #fff; border-color: var(--control-ink);
+}
+.date-control-popover .task-cal-day.is-today { box-shadow: inset 0 0 0 1px #9aa3ac; }
+.date-control-popover .task-cal-day.is-today:is(.is-start,.is-end) { box-shadow: none; }
+.date-control-popover .date-grid-day.is-today:not(.is-selected) { border-color: #9aa3ac; }
+.date-control-popover .task-quick { flex-wrap: wrap; gap: 4px; }
+.date-control-popover .task-quick-label { display: none; }
+.date-control-popover .task-quick-chip { padding-inline: 6px; font-size: .6875rem; }
+.task-time-section { display: flex; flex-direction: column; justify-content: center; gap: 8px; min-width: 0; }
+.task-time-heading { color: var(--control-muted); font-size: .75rem; text-align: center; }
+.date-control-popover :is(.task-panel-time,.date-panel-time) {
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 0; border: 0;
+}
+.date-time-wheels {
+  position: relative; display: flex; align-items: center; gap: 4px;
+  isolation: isolate; min-width: 0; --wheel-height: 136px;
+}
+.date-time-wheels::before {
+  content: ""; position: absolute; left: 0; right: 0; top: calc(50% - var(--slot-height) / 2);
+  height: var(--slot-height); border-radius: 9px; background: #eceeef; z-index: -1; pointer-events: none;
+}
+.date-control-popover .date-time-column {
+  flex: 1 1 0; box-sizing: border-box; height: var(--wheel-height);
+  padding-block: calc((var(--wheel-height) - var(--slot-height)) / 2);
+  overscroll-behavior: contain;
+  mask-image: linear-gradient(to bottom,transparent,#000 25%,#000 75%,transparent);
+}
+.date-control-popover .date-time-slot {
+  height: var(--slot-height); min-height: var(--slot-height); line-height: var(--slot-height);
+  color: var(--control-muted); background: transparent; border-radius: 7px; font-size: .875rem;
+}
+.date-control-popover .date-time-slot.is-selected { color: var(--control-ink); background: transparent; font-weight: 650; }
+.date-control-popover .date-time-sep { color: #7c858e; font-weight: 500; }
+.date-control-popover :is(.task-panel-time-side,.date-panel-time-side) {
+  display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap;
+}
+.date-control-popover :is(.task-panel-fine,.date-panel-fine) {
+  min-height: 34px; margin: 0; padding: 0 6px; color: var(--control-muted); font-size: .75rem;
+}
+.date-control-popover input[type="checkbox"] { accent-color: var(--control-ink); }
+.date-control-popover .task-panel-foot { min-width: 0; padding-top: 8px; border-top: 1px solid var(--control-line); }
+.date-control-popover .task-panel-note { white-space: normal; color: var(--control-muted); }
+.date-control-popover :is(button:disabled,.date-time-slot.is-locked) { color: #a0a6ad; cursor: default; }
+.date-control-popover :is(button,input):focus-visible { outline: 2px solid #8995a0; outline-offset: 1px; box-shadow: none; }
+.date-panel.date-control-popover.has-time { display: grid; grid-template-columns: minmax(0,1fr) 132px; gap: 12px 16px; }
+.date-control-popover .date-panel-head { grid-column: 1 / -1; }
+.date-control-popover .date-panel-time { grid-column: 2; grid-row: 2; align-self: center; }
+.date-control-popover .date-panel-fine { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.date-control-popover .date-panel-fine-note { margin-left: auto; color: #7c858e; }
+.date-control-popover .date-day-strip { align-self: center; }
+.date-control-popover .date-day-slot { border-color: transparent; background: #f1f2f3; }
+.date-control-popover .date-day-slot.is-today:not(.is-selected) { border-color: #9aa3ac; }
+.date-control-popover .date-day-slot.is-selected .date-day-weekday { color: inherit; }
+.date-control-popover .date-grid-day { height: 34px; }
+
+@media (hover:hover) and (pointer:fine) {
+  .date-control-popover :is(.task-panel-step,.date-panel-step,.task-panel-anchor,.date-panel-today,.task-quick-chip,.text-button,.date-panel-title):hover:not(:disabled),
+  .date-control-popover .task-target:not(.is-active):hover {
+    color: var(--control-ink); background: #f3f4f5; border-color: transparent;
+  }
+  .date-control-popover :is(.task-cal-day,.date-grid-day):hover:not(:disabled):not(.is-start):not(.is-end):not(.is-selected) { background: #eceeef; }
+}
+@media (max-width: 900px) {
+  .composer .composer-fields { width: 100%; flex-wrap: wrap; }
+  .composer .composer-fields .composer-date-control { flex: 0 1 auto; width: auto; min-width: 0; height: auto; }
+  .composer .composer-fields :is(.date-trigger,.task-schedule-trigger) { width: auto; height: auto; justify-content: flex-start; }
+  .composer .composer-fields .task-schedule-trigger { flex-wrap: wrap; }
+  .composer .composer-metadata { flex: 1 1 auto; }
+  .composer .composer-footer { padding-top: 14px; }
+}
+@media (max-width: 700px) {
+  .composer .composer-metadata { align-items: stretch; flex-basis: 240px; }
+  .composer .composer-metadata .composer-date-control { flex: 1 1 150px; width: auto; }
+  .composer .composer-metadata :is(.date-trigger,.task-schedule-trigger) { width: 100%; line-height: 1.2; row-gap: 2px; }
+  .composer .composer-metadata .task-schedule-part { max-width: 100%; white-space: normal; flex-wrap: wrap; }
+  .task-schedule-panel.date-control-popover,.date-panel.date-control-popover.has-time { grid-template-columns: minmax(0,1fr); }
+  .task-time-section { gap: 4px; }
+  .date-control-popover .task-time-heading { text-align: left; }
+  .date-control-popover :is(.task-panel-time,.date-panel-time) { flex-direction: row; align-items: center; }
+  .date-control-popover .date-panel-time { grid-column: 1; grid-row: auto; }
+  .date-control-popover .date-time-wheels { flex: 1 1 auto; --wheel-height: 102px; }
+  .date-control-popover :is(.task-panel-time-side,.date-panel-time-side) { flex: 0 0 auto; flex-direction: column; }
+}
+@media (pointer:coarse) {
+  .date-control-popover { --slot-height: 40px; }
+  .date-control-popover :is(.task-panel-step,.date-panel-step) { flex-basis: 40px; width: 40px; height: 40px; }
+  .date-control-popover :is(.task-cal-day,.date-grid-day) { height: 40px; }
+  .date-control-popover :is(.task-panel-anchor,.date-panel-today,.task-quick-chip,.text-button,.task-panel-fine,.date-panel-fine) { min-height: 40px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .date-control-popover { animation: none; }
+  .date-control-popover * { transition: none !important; }
+}

@@ -84,6 +84,13 @@ export function BackToTop() {
       setPlacement(current => current.visible === visible && Math.abs(current.bottom - bottom) < .5 ? current : { visible, bottom });
     };
     const schedule = () => { if (tick === null) tick = requestAnimationFrame(update); };
+    // These controls are fixed. Page scroll only changes the visibility cutoff,
+    // not their collision rectangles; do not rescan the DOM on every scroll frame.
+    let aboveCutoff = window.scrollY > VISIBILITY_HEIGHT;
+    const scrolled = () => {
+      const next = window.scrollY > VISIBILITY_HEIGHT;
+      if (next !== aboveCutoff) { aboveCutoff = next; schedule(); }
+    };
     const pointerDown = (event: PointerEvent) => { if (!button.contains(event.target as Node)) cancel(); };
     const keyDown = (event: KeyboardEvent) => { if (SCROLL_KEYS.has(event.key)) cancel(); };
     const transitionEnded = (event: TransitionEvent) => {
@@ -97,9 +104,7 @@ export function BackToTop() {
       if (changes.some(change => !button.contains(change.target))) schedule();
     });
     observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "open", "aria-hidden", "aria-modal"] });
-    const resize = new ResizeObserver(schedule);
-    resize.observe(document.documentElement);
-    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("scroll", scrolled, { passive: true });
     window.addEventListener("resize", schedule);
     window.addEventListener("wheel", cancel, { passive: true });
     window.addEventListener("touchstart", cancel, { passive: true });
@@ -115,8 +120,7 @@ export function BackToTop() {
       cancel();
       if (tick !== null) cancelAnimationFrame(tick);
       observer.disconnect();
-      resize.disconnect();
-      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("scroll", scrolled);
       window.removeEventListener("resize", schedule);
       window.removeEventListener("wheel", cancel);
       window.removeEventListener("touchstart", cancel);

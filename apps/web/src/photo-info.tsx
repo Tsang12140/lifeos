@@ -16,18 +16,18 @@ export function photoSummary(value: PhotoInfo | undefined) {
   ];
   return candidates.filter((item): item is typeof item & { text: string } => Boolean(item.text));
 }
-export function usePhotoInfo({ asset, assetId = asset?.id, localInfo }: { asset?: Asset; assetId?: string; localInfo?: PhotoInfo }) {
+export function usePhotoInfo({ asset, assetId = asset?.id, localInfo, disabled = false }: { asset?: Asset; assetId?: string; localInfo?: PhotoInfo; disabled?: boolean }) {
   const [state, setState] = useState<{ id: string; value?: PhotoInfo; error?: string } | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
-    if (!assetId || assetId.startsWith("pending:")) return;
+    if (disabled || !assetId || assetId.startsWith("pending:")) return;
     const controller = new AbortController();
     setState(null);
     apiRequest<PhotoInfo>(`/api/assets/${encodeURIComponent(assetId)}/photo-info`, { signal: controller.signal })
       .then(value => { if (!controller.signal.aborted) setState({ id: assetId, value }); })
       .catch(() => { if (!controller.signal.aborted) setState({ id: assetId, error: "暂时无法读取照片信息" }); });
     return () => controller.abort();
-  }, [assetId, retry]);
+  }, [assetId, retry, disabled]);
   const local = !assetId || assetId.startsWith("pending:");
   const loading = !local && state?.id !== assetId;
   const error = !local && state?.id === assetId ? state.error : undefined;

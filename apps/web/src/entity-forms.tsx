@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useActionMenu } from "./action-menu";
 import { LoaderCircle, MapPin, Plus, User, X } from "lucide-react";
 import { PLACE_MARKER, PLACE_ROLES, entitySearchTerms, normalizeEntitySearchTerm, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import type { Entity, EntityCandidate, TextEntityDecision } from "@lifeos/core";
@@ -272,6 +273,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
   const [slash, setSlash] = useState<SlashQuery | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string; actions: readonly ContextAction[] } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  useActionMenu(contextMenuRef, contextMenu !== null, () => setContextMenu(null));
   const [contextPosition, setContextPosition] = useState({ x: 0, y: 0 });
   // A right-click outside the selection collapses it before `contextmenu`
   // arrives, so the range is copied on the way down as well. Inside the
@@ -314,26 +316,6 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     document.addEventListener("pointerdown", handleOutsidePointer);
     return () => document.removeEventListener("pointerdown", handleOutsidePointer);
   }, [slash]);
-
-  // Same dismissal contract as the calendar's summary menu: a pointer down
-  // outside, Escape, or a scroll takes it away. Picking an entry closes it too,
-  // and that has to happen in the entry's own click — a press inside the panel
-  // stops its `pointerdown` from ever reaching this window listener.
-  useEffect(() => {
-    if (contextMenu === null) return undefined;
-    const close = () => setContextMenu(null);
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [contextMenu]);
 
   useLayoutEffect(() => {
     const menu = contextMenuRef.current;

@@ -1,5 +1,8 @@
+import { handleNotesRoutes } from "./routes-notes.js";
+import { handleNoteShareRoutes, handlePublicNoteRoutes, publicNoteSpace } from "./routes-note-shares.js";
 import { CalendarDays } from "./calendar-days.js";
 import { CalendarBackgrounds } from "./calendar-backgrounds.js";
+import { backgroundNamespace, legacyBackgroundNamespaces } from "./calendar-background-source.js";
 import { handleCalendarBackgroundRoutes } from "./routes-calendar-backgrounds.js";
 import { assetThumbnailVersion, resolveAssetThumbnail } from "./routes-assets.js";
 import { CalendarTaskLabels } from "./calendar-task-labels.js";
@@ -138,6 +141,7 @@ import {
 } from "./asset-static.js";
 import { isCollectableAsset, planUnreferencedUploads, purgeTrashedAsset, resolveWithinRoot, restoreTrashedAsset, trashAsset, trashDaysRemaining, trashPathFor } from "./asset-gc.js";
 import { AssetGcScheduler, nextAssetGcAt } from "./asset-gc-scheduler.js";
+import { PhotoTextTrigger } from "./photo-text-trigger.js";
 import { buildManualDaySummary, createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
 import { answerLifeosAssistant, type AssistantHistoryItem } from "./assistant.js";
 import { createDualBackup, createLocalBackup, pruneBackups, testS3Backup, uploadS3Backup } from "./backup.js";
@@ -311,6 +315,7 @@ interface LifeosApp {
   readonly backupScheduler: BackupScheduler;
   readonly weatherArchiveScheduler: WeatherArchiveScheduler;
   readonly assetGcScheduler: AssetGcScheduler;
+  readonly photoTextTrigger: PhotoTextTrigger;
   readonly handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   readonly close: () => void;
 }
@@ -332,7 +337,7 @@ export const requestLog = (() => {
       const line: Record<string, unknown> = {
         at: new Date().toISOString(),
         method,
-        path,
+        path: path.replace(/(\/api\/public\/notes\/[^/]+\/)[^/]+/, "$1[redacted]"),
         status,
         ms: Date.now() - startedAt,
       };
@@ -407,6 +412,26 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   // is a supported operation, not a repair.
   const thumbnails = createThumbnailCache(config.dataDirectory);
 
+  // Reading the words off newly filed photos — the "发完日记就跑" trigger. Deliberately
+  // behind the save, never during it: see PhotoTextTrigger for the whole argument. Only
+  // the OCR pass runs by itself; the captioning passes bill per picture and stay on the
+  // button in Settings.
+  const photoTextTrigger = new PhotoTextTrigger({
+    repository,
+    config,
+    thumbnails,
+    onError: (error) => console.error("[photo-text] pass failed:", error),
+    onReport: (report) => {
+      // Silence is the normal outcome: a pass with nothing new in it costs nothing and
+      // should say nothing. The one state that must not pass unnoticed is work that was
+      // asked for and refused — that is how a library quietly stops gaining new words.
+      if (report.read > 0) console.log(`[photo-text] read ${report.read} photo(s) in ${report.slices} slice(s)`);
+      if (report.remaining > 0 || report.unread > 0) {
+        console.error(`[photo-text] ${report.remaining} photo(s) still waiting, ${report.unread} refused this pass`, report.engines);
+      }
+    },
+  });
+
   const calendarDays = new CalendarDays(config.databasePath, {
     repository,
     assetVersion: asset => assetThumbnailVersion({ config, repository }, asset),
@@ -420,7 +445,8 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
 
   const calendarBackgrounds = new CalendarBackgrounds(config.dataDirectory, {
     repository,
-    assetVersion: asset => assetThumbnailVersion({ config, repository }, asset),
+    assetVersion: asset => assetThumbnailVersion({ config, repository }, asset, backgroundNamespace(config.databasePath)),
+    legacyAssetVersions: asset => legacyBackgroundNamespaces(config.databasePath).map(namespace => assetThumbnailVersion({ config, repository }, asset, namespace)),
     thumbnail: async id => (await resolveAssetThumbnail(routeContext(), id, 400)).file,
     onError: error => console.error("[calendar-backgrounds]", error),
   });
@@ -454,6 +480,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       calendarTaskLabels,
       backupScheduler,
       weatherArchiveScheduler,
+      photoTextTrigger,
       thumbnails,
       poolBridge,
       poolStore,
@@ -470,6 +497,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): Promise<void> {
     const ctx = routeContext();
+    if (await handlePublicNoteRoutes(ctx,req,res,pathname,url)) return;
     if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method ?? "") && !pathname.startsWith("/api/calendar/background")) res.once("finish", () => { if (res.statusCode < 300) { calendarDays.schedule(); calendarBackgrounds.changed(); } });
     if (pathname === "/api/health" && req.method === "GET") {
       setJson(res, 200, { ok: true });
@@ -521,6 +549,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     }
 
     requireAuth(req);
+    if (await handleNoteShareRoutes(ctx,req,res,pathname,url)) return;
     if (await handleCalendarBackgroundRoutes(ctx, req, res, pathname, url)) return;
     if (await handleArchiveRoutes(ctx, req, res, pathname, url)) return;
     if (await handleBackupRoutes(ctx, req, res, pathname, url)) return;
@@ -530,6 +559,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (await handleAiMovieRoutes(ctx, req, res, pathname, url)) return;
     if (await handleWeatherRoutes(ctx, req, res, pathname, url)) return;
     if (await handleModulesRoutes(ctx, req, res, pathname, url)) return;
+    if (await handleNotesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleRecordsRoutes(ctx, req, res, pathname, url)) return;
     if (await handlePlacesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleEntitiesRoutes(ctx, req, res, pathname, url)) return;
@@ -582,6 +612,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     backupScheduler,
     weatherArchiveScheduler,
     assetGcScheduler,
+    photoTextTrigger,
     handler: async function handler(req, res): Promise<void> {
       const startedAt = Date.now();
       try {
@@ -627,6 +658,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       clearVideoDownloadCache(repository);
       weatherArchiveScheduler.stop();
       assetGcScheduler.stop();
+      photoTextTrigger.stop();
       calendarDays.close();
       calendarBackgrounds.close();
       calendarTaskLabels.close();
@@ -1142,6 +1174,12 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
             return;
           }
 
+          if(path.startsWith("/api/public/notes/")) {
+            const space=publicNoteSpace(path);
+            const account=identity.listAccounts().find(item=>item.tenantId===space&&!item.disabled);
+            if(!account)throw new HttpError(404,"not_found","分享不存在或已关闭");
+            await appFor(account).handler(req,res);return;
+          }
           const session = sessionFor(req);
           if (session === null) throw new HttpError(401, "authentication_required", "Authentication required");
           if (path === "/api/admin/storage-pool/read-canary") {
@@ -1360,6 +1398,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       backupScheduler: ownerApp.backupScheduler,
       weatherArchiveScheduler: ownerApp.weatherArchiveScheduler,
       assetGcScheduler: ownerApp.assetGcScheduler,
+      photoTextTrigger: ownerApp.photoTextTrigger,
       handler: handleAccountRequest,
       close: () => {
         if (closed) return;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArchiveTransferCard } from "./archive-transfer";
+import { CustomHabitPanel, type HabitActions } from "./habit-panel";
 import {
   Activity,
   ArrowLeft,
@@ -28,6 +29,7 @@ import {
   LogOut,
   PlugZap,
   RotateCcw,
+  ScanText,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -48,7 +50,11 @@ import {
   type Entity,
 } from "@lifeos/core";
 import {
+  AI_GEARS,
   apiRequest,
+  gearFromStatus,
+  gearLabel,
+  type AiGear,
   type AiStatus,
   type AiStatusState,
   type AccountSummary,
@@ -71,6 +77,7 @@ import { locateWeatherDevice, setWeatherFollowEnabled, weatherFollowEnabled } fr
 import { AmapLocationSettings, useWeatherLocation } from "./weather-location";
 import { MovieSettingsCard } from "./movie";
 import type { MovieModuleStatusState } from "./movie";
+import { runPhotoTextSlices } from "./photo-text-run";
 import {
   DEMO_HIDDEN_STORAGE_KEY,
   DEMO_ID_PREFIX,
@@ -117,8 +124,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
   const [enabled, setEnabled] = useState(status?.enabled ?? true);
   const [baseUrl, setBaseUrl] = useState(status?.baseUrl || AI_DEFAULT_BASE_URL);
   const [model, setModel] = useState(status?.model || "deepseek-flash");
-  const [thinking, setThinking] = useState(status?.thinking ?? false);
-  const [reasoningEffort, setReasoningEffort] = useState<AiStatus["reasoningEffort"]>(status?.reasoningEffort ?? null);
+  const [gear, setGear] = useState<AiGear>(() => gearFromStatus(status));
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -127,16 +133,16 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
   useEffect(() => { if (open) window.dispatchEvent(new Event("lifeos:close-ai")); }, [open]);
   useEffect(() => {
     if (status === null) return;
-    setEnabled(status.enabled); setBaseUrl(status.baseUrl || AI_DEFAULT_BASE_URL); setModel(status.model || "deepseek-flash"); setThinking(status.thinking); setReasoningEffort(status.reasoningEffort);
+    setEnabled(status.enabled); setBaseUrl(status.baseUrl || AI_DEFAULT_BASE_URL); setModel(status.model || "deepseek-flash"); setGear(gearFromStatus(status));
   }, [status?.enabled, status?.baseUrl, status?.model, status?.thinking, status?.reasoningEffort]);
-  const currentPreset = aiPresetFor(model, thinking, reasoningEffort, baseUrl);
+  const currentPreset = aiPresetFor(model, gear !== "direct", gear === "direct" ? null : gear, baseUrl);
   const call = async (path: string, body: Record<string, unknown>) => apiRequest<AiStatus & { readonly ok?: boolean; readonly message?: string }>(path, { method: "POST", body: JSON.stringify(body) });
-  const applyPreset = (preset: (typeof AI_PRESETS)[number]) => { if (!statusReady) return; setModel(preset.model); setThinking(preset.thinking); setReasoningEffort(preset.reasoningEffort); setMessage(null); setError(null); };
+  const applyPreset = (preset: (typeof AI_PRESETS)[number]) => { if (!statusReady) return; setModel(preset.model); setGear(preset.thinking ? preset.reasoningEffort ?? "high" : "direct"); setMessage(null); setError(null); };
   const save = async () => {
     if (!statusReady || busy) return;
     setBusy(true); setMessage(null); setError(null);
     try {
-      const next = await call("/api/ai/config", { enabled, baseUrl, model, thinking, reasoningEffort: thinking ? reasoningEffort ?? "high" : null, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
+      const next = await call("/api/ai/config", { enabled, baseUrl, model, thinking: gear !== "direct", reasoningEffort: gear === "direct" ? null : gear, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
       const nextStatus: AiStatus = { preset: next.preset, enabled: next.enabled, configured: next.configured, keyConfigured: next.keyConfigured, keyUnreadable: next.keyUnreadable, provider: next.provider, model: next.model, baseUrl: next.baseUrl, thinking: next.thinking, reasoningEffort: next.reasoningEffort, keySource: next.keySource, summaryPrompt: next.summaryPrompt, summaryPromptCustom: next.summaryPromptCustom };
       setApiKey(""); onChanged(nextStatus); setMessage("AI 配置已保存");
     } catch (cause) { setError(errorMessage(cause, "AI 配置保存失败，请重试")); }
@@ -161,8 +167,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
     </div>
     <div className="settings-ai-effective" aria-label="当前生效的 AI 配置">
       <div className="settings-ai-effective-item" data-ai-effective="model"><span>当前模型</span><strong>{status?.model || "—"}</strong></div>
-      <div className="settings-ai-effective-item" data-ai-effective="thinking"><span>思考</span><strong>{status?.thinking ? "开启" : "关闭"}</strong></div>
-      <div className="settings-ai-effective-item" data-ai-effective="reasoning"><span>推理强度</span><strong>{status?.thinking && status.reasoningEffort !== null ? status.reasoningEffort : "— / 不启用"}</strong></div>
+      <div className="settings-ai-effective-item" data-ai-effective="gear"><span>思考强度</span><strong>{status ? gearLabel(gearFromStatus(status)) : "—"}</strong></div>
       <div className="settings-ai-effective-item is-wide" data-ai-effective="base-url"><span>服务地址</span><strong title={status?.baseUrl}>{status?.baseUrl || "—"}</strong></div>
       <div className="settings-ai-effective-item" data-ai-effective="key"><span>API Key</span><strong>{keyConfigured ? "已配置" : "未配置"}</strong></div>
     </div>
@@ -178,8 +183,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
       <div className="settings-ai-form">
       <div className="settings-ai-fields">
         <label><span>模型</span><input data-ai-field="model" value={model} disabled={!statusReady} onChange={(event) => setModel(event.target.value)} /></label>
-        <label><span>思考开关</span><span className="settings-ai-toggle"><input data-ai-field="thinking" type="checkbox" checked={thinking} disabled={!statusReady} onChange={(event) => { const next = event.target.checked; setThinking(next); setReasoningEffort(next ? reasoningEffort ?? "high" : null); }} /><span>{thinking ? "开启" : "关闭"}</span></span></label>
-        <label><span>推理强度</span><select data-ai-field="reasoning-effort" value={thinking ? reasoningEffort ?? "high" : ""} disabled={!statusReady || !thinking} onChange={(event) => setReasoningEffort(event.target.value === "low" || event.target.value === "high" || event.target.value === "max" ? event.target.value : null)}><option value="">— / 不启用</option><option value="low">low</option><option value="high">high</option><option value="max">max</option></select></label>
+        <label><span>默认思考强度</span><select data-ai-field="gear" value={gear} disabled={!statusReady} onChange={(event) => { const next = AI_GEARS.find((option) => option.id === event.target.value); if (next) setGear(next.id); }}>{AI_GEARS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>
         <label><span>API Key{keyConfigured ? "（留空保留已保存的密钥）" : ""}</span><input data-ai-field="api-key" type="password" value={apiKey} disabled={!statusReady} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" /></label>
         <label className="is-wide"><span>服务地址</span><input data-ai-field="base-url" value={baseUrl} disabled={!statusReady} onChange={(event) => setBaseUrl(event.target.value)} /></label>
         <label className="settings-ai-enabled is-wide"><input data-ai-field="enabled" type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} /><span>启用真实 AI；关闭后仍保留本地规则模式</span></label>
@@ -676,6 +680,192 @@ export function ThumbnailCacheSettingsCard() {
   </div>;
 }
 
+/**
+ * What the text pass has covered, as the stored entries report it. `alreadyDescribed`
+ * counts photos that carry an answer — including the empty marker left for a picture
+ * with no words in it, which is an answer too.
+ */
+interface PhotoTextPassView {
+  readonly photos: number;
+  readonly described: number;
+  readonly alreadyDescribed: number;
+  readonly noDescription: number;
+  readonly unread: number;
+  readonly unreadable: number;
+  readonly remaining: number;
+}
+
+/**
+ * Why a capability cannot be used, when it cannot. Mirrors `PhotoTextState` on the server;
+ * the two cases are told apart because only one of them is fixed by finding a key.
+ */
+type PhotoTextCapabilityState = "ready" | "switched-off" | "no-credential";
+
+interface PhotoTextCapabilityStatus {
+  readonly enabled: boolean;
+  readonly credentials: boolean;
+  readonly state: PhotoTextCapabilityState;
+  readonly available: boolean;
+}
+
+interface PhotoTextStatusView {
+  readonly caption: PhotoTextCapabilityStatus;
+  readonly ocr: PhotoTextCapabilityStatus;
+}
+
+const PHOTO_TEXT_STATE_LABELS: Readonly<Record<PhotoTextCapabilityState, string>> = {
+  ready: "可用",
+  "switched-off": "已关闭",
+  "no-credential": "缺少密钥",
+};
+
+/**
+ * The two capabilities, named the way she thinks about them rather than the way the code
+ * does. The ordering is deliberate: the one that costs money per picture comes first, so
+ * the expensive switch is never the one she finds by accident.
+ */
+const PHOTO_TEXT_CAPABILITIES = [
+  {
+    id: "caption",
+    label: "AI 识别",
+    detail: "让视觉模型用一句话说清照片是什么。每张都要花模型费用，只有你手动点的时候才会跑。",
+  },
+  {
+    id: "ocr",
+    label: "照片文字识别",
+    detail: "读出照片上印的字，之后用这些字就能搜到那张照片。写完日记自动识别新照片。",
+  },
+] as const;
+
+/**
+ * The photo-text pass, made visible — and made runnable by hand.
+ *
+ * It is not on a clock: a run sends her pictures to a cloud service and spends her quota.
+ * What it is on is her own writing — saving an entry that carries photos reads their words
+ * *behind* that save (see `PhotoTextTrigger`), so the ordinary case needs no button at all.
+ * This panel is what remains: seeing what the library has read, and re-running by hand the
+ * photos that a refusal or a spent package left waiting.
+ */
+export function PhotoTextSettingsCard() {
+  const [view, setView] = useState<PhotoTextPassView | null>(null);
+  const [status, setStatus] = useState<PhotoTextStatusView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    // Counters and switches come from two endpoints but belong to one screen, so they are
+    // fetched together: "还剩 14 张" next to a stale "已关闭" would be describing two
+    // different moments of the same library.
+    Promise.all([
+      apiRequest<PhotoTextPassView>("/api/ai/photo-description?variant=ocr", { signal: controller.signal }),
+      apiRequest<PhotoTextStatusView>("/api/ai/photo-description/config", { signal: controller.signal }),
+    ])
+      .then(([pass, config]) => { if (!controller.signal.aborted) { setView(pass); setStatus(config); } })
+      .catch((cause) => { if (!controller.signal.aborted) setError(errorMessage(cause, "识别进度暂不可用")); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [reload]);
+
+  // One switch at a time. The server answers with the status of *both* capabilities, so the
+  // panel is re-rendered from the server's own account of what it now holds rather than from
+  // the checkbox the browser just clicked — the two can differ, and the server wins.
+  const toggle = async (capability: "caption" | "ocr", label: string, next: boolean) => {
+    if (saving !== null) return;
+    setSaving(capability);
+    setMessage(null);
+    setError(null);
+    try {
+      const updated = await apiRequest<PhotoTextStatusView>("/api/ai/photo-description/config", {
+        method: "POST",
+        body: JSON.stringify({ [capability]: next }),
+      });
+      setStatus(updated);
+      setMessage(next ? `${label}已打开。` : `${label}已关闭，之后不会再读取照片；已经识别出来的内容仍然留着，也仍然搜得到。`);
+    } catch (cause) {
+      setError(errorMessage(cause, "开关没能保存，请重试"));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // A pass runs in slices rather than as one long request: reading a whole library takes
+  // half a minute, which is long enough for a request to be cut off — and slicing gives
+  // the panel something to count while it waits.
+  const run = async () => {
+    if (running || view === null || view.remaining === 0) return;
+    setRunning(true);
+    setMessage(null);
+    setError(null);
+    setProgress(0);
+    try {
+      // The stopping rules live in `runPhotoTextSlices`, where they are covered by tests:
+      // a slice that settles nothing while photos remain means the recogniser is refusing,
+      // and retrying it would only hammer a closed door.
+      const outcome = await runPhotoTextSlices(
+        (limit) => apiRequest<PhotoTextPassView>("/api/ai/photo-description", {
+          method: "POST",
+          body: JSON.stringify({ variant: "ocr", limit }),
+        }),
+        (read) => setProgress(read),
+      );
+      setReload((current) => current + 1);
+      setMessage(outcome.stalled ? `读了 ${outcome.read} 张后停下，剩下的这次没能读到，稍后可以再来一次。` : outcome.read === 0 ? "没有需要识别的照片。" : `这次读了 ${outcome.read} 张。`);
+    } catch (cause) {
+      setError(errorMessage(cause, "识别失败，请重试"));
+    } finally {
+      setRunning(false);
+      setProgress(0);
+    }
+  };
+
+  const waiting = view?.remaining ?? 0;
+  const finished = view === null ? 0 : view.photos - waiting;
+  // The switch, not the credential, is what disables the button: a missing key is worth
+  // reporting but not worth blocking, since it may be fixed while this card is open.
+  const ocrOff = status !== null && !status.ocr.enabled;
+  return <div className="settings-asset-trash-card" data-photo-text>
+    <div className="settings-asset-trash-overview">
+      <div className="settings-card-icon"><ScanText size={18} aria-hidden="true" /></div>
+      <div className="settings-card-copy"><strong>照片文字识别</strong><small>读出照片上印的字；往后用这些字就能搜到那张照片。写完日记会自动识别新照片，这里也可以手动补跑。</small></div>
+      <button className="icon-text-button" type="button" onClick={() => setReload((current) => current + 1)} disabled={loading || running}>{loading ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <RotateCcw size={15} aria-hidden="true" />}<span>{loading ? "读取中" : "刷新"}</span></button>
+    </div>
+    <div className="photo-text-capabilities" data-photo-text-capabilities>
+      {PHOTO_TEXT_CAPABILITIES.map((capability) => {
+        const cap = status?.[capability.id] ?? null;
+        const stateLabel = cap === null ? "读取中" : PHOTO_TEXT_STATE_LABELS[cap.state];
+        return <div className="photo-text-capability" data-photo-text-capability={capability.id} key={capability.id}>
+          <div className="photo-text-capability-copy">
+            <strong>{capability.label}<span className={`photo-text-state is-${cap?.state ?? "unknown"}`} data-photo-text-state={capability.id}>{stateLabel}</span></strong>
+            <small>{capability.detail}</small>
+          </div>
+          <label className="settings-switch" title={`${capability.label}：${stateLabel}`}>
+            <input type="checkbox" data-photo-text-switch={capability.id} checked={cap?.enabled ?? false} disabled={cap === null || saving !== null} onChange={(event) => void toggle(capability.id, capability.label, event.target.checked)} aria-label={`${capability.label}开关`} />
+            <span aria-hidden="true" />
+          </label>
+        </div>;
+      })}
+    </div>
+    <div className="settings-asset-trash-stats">
+      <div><small>照片总数</small><strong data-photo-text-total>{view === null ? "—" : `${view.photos} 张`}</strong></div>
+      <div><small>已识别</small><strong data-photo-text-done>{view === null ? "—" : `${finished} 张`}</strong></div>
+      <div><small>还没识别</small><strong data-photo-text-pending>{view === null ? "—" : `${waiting} 张`}</strong></div>
+    </div>
+    <p className="settings-asset-trash-note">识别走云端服务，每张都会消耗当月额度；已经识别过的不再重复识别，确认没有文字的照片也会记下这一结果，不会反复去问。</p>
+    <div className="settings-asset-trash-actions">
+      <button className="icon-text-button" type="button" data-photo-text-run disabled={running || loading || view === null || waiting === 0 || ocrOff} onClick={() => void run()}>{running ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <ScanText size={15} aria-hidden="true" />}<span>{running ? `识别中 ${progress} 张` : view === null ? "读取中" : ocrOff ? "已在设置中关闭" : waiting === 0 ? "已经全部识别" : `识别这 ${waiting} 张`}</span></button>
+    </div>
+    {message !== null ? <p className="settings-inline-success" role="status">{message}</p> : null}
+    {error !== null ? <p className="settings-inline-error" role="alert">{error}</p> : null}
+  </div>;
+}
+
 export function FontSettingsCard({ value, onChange }: { readonly value: UiFontId; readonly onChange: (value: UiFontId) => void }) {
   const selected = UI_FONT_OPTIONS.find((option) => option.id === value) ?? UI_FONT_OPTIONS[0];
   return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
@@ -691,9 +881,17 @@ export function WeatherSimulatorCard() {
 
 export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: CycleIntimacyModuleData | null; readonly onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const [draft, setDraft] = useState<CycleIntimacyModuleConfig | null>(module?.config ?? null);
+  const sourceConfig = useRef(module?.config ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setDraft(module?.config ?? null); }, [module]);
+  useEffect(() => {
+    const next = module?.config ?? null, previous = sourceConfig.current;
+    sourceConfig.current = next;
+    const sameSettings = next && previous && next.enabled === previous.enabled && next.cycleLength === previous.cycleLength && next.periodLength === previous.periodLength && next.anchorStart === previous.anchorStart;
+    // Habit saves refresh this module too; keep unrelated unsaved settings and
+    // refresh their habit list so a later config save cannot restore stale names.
+    setDraft(current => current && next && sameSettings ? { ...current, habits: next.habits } : next);
+  }, [module]);
   if (draft === null) return <div className="settings-card"><div className="settings-card-icon"><Heart size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>正在读取周期设置</strong><small>私密模块配置只在本机登录后读取。</small></div></div>;
   const save = async () => {
     if (busy) return;
@@ -842,7 +1040,7 @@ function InviteManagementCard() {
   </section>;
 }
 
-export function SettingsView({ page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { habitActions?: HabitActions; page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const settingsGroups = SETTINGS_PAGE_GROUPS.map(group => ({ ...group, pages: group.pages.filter(item => item.id !== "account/storage" || (accountMode && account?.role === "owner")) }));
   const activePage = settingsGroups.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? settingsGroups[0].pages[0];
@@ -866,6 +1064,7 @@ export function SettingsView({ page, mobileEntry, onNavigatePage, onImport, onLo
     "integrations/weather": "定位或选择固定城市。",
     "integrations/ai": "AI 助手显示方式与服务配置。",
     "integrations/movie": "管理观影模块与影片识别服务。",
+    "integrations/photo-text": "读出照片里的文字，让它们也能被搜到。",
     "private/cycle": "周期与亲密模块的私密设置。",
     about: "了解本机优先的数据边界。",
   };
@@ -880,7 +1079,8 @@ export function SettingsView({ page, mobileEntry, onNavigatePage, onImport, onLo
     : page === "integrations/weather" ? <><WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? "local"} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} /><AmapLocationSettings /></>
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
-    : page === "private/cycle" ? <CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />
+    : page === "integrations/photo-text" ? <PhotoTextSettingsCard />
+    : page === "private/cycle" ? <><CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />{habitActions && cycleModule ? <div className="settings-card habit-management-card"><CustomHabitPanel management habits={cycleModule.config.habits ?? []} date={localDateToday()} today={localDateToday()} actions={habitActions} /></div> : null}</>
     : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS，本机优先</strong><small>记录与配置由当前 LifeOS 实例管理。</small></div></div>;
   return <section className="settings-page" data-mobile-level={mobileLevel} aria-labelledby="settings-title">
     <header className="settings-page-header"><h1 id="settings-title">设置</h1></header>

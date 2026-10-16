@@ -1,0 +1,156 @@
+/* Approved mobile study: writing surface, then one tools/save footer. */
+.composer-photo-slot, .backfill-photo-slot, .ai-mobile-back { display: none; }
+
+@media (max-width: 900px) {
+  .composer.surface > .composer-entry textarea { font-size: 16px; }
+  .composer.surface .composer-mobile-action-row { display: block; }
+  .composer.surface .composer-inline-save { display: none; }
+  .composer.surface .composer-mobile-action-row .composer-shots {
+    min-height: 0;
+    width: 100%;
+    padding: 8px 12px 12px;
+  }
+  .composer.surface .composer-entry .composer-shots.is-empty,
+  .composer.surface .composer-entry .shot-tile-add { display: none; }
+  .composer.surface > .composer-footer {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) max-content;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 10px 0 0;
+  }
+  .composer.surface > .composer-footer > .composer-fields {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+    min-width: 0;
+  }
+  .composer.surface .composer-photo-slot { display: flex; flex: none; order: 0; }
+  .composer.surface .composer-fields .place-anchor { display: inline-flex; flex: none; order: 1; gap: 0; }
+  .composer.surface .composer-metadata { display: contents; }
+  .composer.surface .composer-metadata .privacy-toggle { order: 2; }
+  .composer.surface .composer-metadata .composer-date-control { order: 3; }
+  .composer.surface .composer-metadata .backfill-toggle { order: 4; }
+  .composer.surface .composer-metadata .composer-status-field { order: 5; flex-basis: 100%; }
+  .composer.surface .composer-fields :is(.compact-icon-button, .composer-date-control, .privacy-toggle, .backfill-toggle) {
+    width: 36px;
+    min-width: 36px;
+    height: 40px;
+    min-height: 40px;
+    flex: none;
+    margin: 0;
+    padding: 0;
+    border-radius: 999px;
+    justify-content: center;
+    gap: 0;
+  }
+  .composer.surface .composer-fields :is(.date-trigger, .task-schedule-trigger) {
+    width: 36px;
+    min-width: 36px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+  .composer.surface .composer-fields :is(.task-schedule-part, .task-schedule-arrow, .date-trigger-value, .date-trigger-time, .privacy-toggle > span, .backfill-toggle > span) { display: none; }
+  .composer.surface > .composer-footer > .composer-desktop-save {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    justify-self: end;
+    width: auto;
+    min-width: 0;
+    height: 40px;
+    min-height: 40px;
+    margin: 0;
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 14px;
+    line-height: 22px;
+    gap: 6px;
+    box-shadow: none;
+  }
+  .composer.surface > .composer-footer > .composer-desktop-save > svg:not(.spin) { display: none; }
+
+  /* A phone conversation fills the visible viewport, including keyboard resize. */
+  .ai-assistant-backdrop { display: none; }
+  .ai-assistant-panel.has-backfill:not(.is-docked) {
+    position: fixed;
+    top: var(--assistant-vv-top, 0px);
+    left: var(--assistant-vv-left, 0px);
+    right: auto;
+    bottom: auto;
+    width: var(--assistant-vv-width, 100vw);
+    height: var(--assistant-vv-height, 100dvh);
+    max-width: none;
+    max-height: none;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface);
+    box-shadow: none;
+    transform: none;
+    transition: opacity 150ms ease;
+    overscroll-behavior: contain;
+  }
+  .ai-assistant-panel.has-backfill .ai-assistant-header {
+    min-height: 60px;
+    gap: 8px;
+    padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+  }
+  .ai-assistant-panel.has-backfill .ai-assistant-title { flex: 1; min-width: 0; gap: 8px; }
+  .ai-assistant-panel.has-backfill .ai-assistant-title > div { min-width: 0; }
+  .ai-assistant-panel.has-backfill .ai-assistant-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+  .ai-assistant-panel.has-backfill .ai-assistant-logo { width: 26px; height: 26px; flex: none; }
+  .ai-assistant-panel.has-backfill .ai-assistant-actions { gap: 4px; flex: none; }
+  .ai-assistant-panel.has-backfill .ai-header-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    margin: 0;
+    padding: 8px;
+    border-radius: 999px;
+  }
+  .ai-assistant-panel.has-backfill .ai-desktop-close { display: none; }
+  .ai-assistant-panel.has-backfill .backfill-workspace-scroll { padding: 14px; }
+  .ai-assistant-panel.has-backfill .backfill-workspace-footer {
+    padding: 10px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  .ai-assistant-panel.has-backfill .backfill-chat-composer textarea { font-size: 16px; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .composer-shots { grid-column: 1 / -1; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .composer-shots.is-empty,
+  .ai-assistant-panel.has-backfill .backfill-input-actions .shot-tile-add { display: none; }
+  .ai-assistant-panel.has-backfill .backfill-photo-slot { display: flex; min-width: 0; grid-column: 1; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group { grid-column: 2; gap: 8px; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group > button,
+  .ai-assistant-panel.has-backfill .backfill-photo-slot > button {
+    width: auto;
+    height: 40px;
+    min-height: 40px;
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 20px;
+    border-radius: 999px;
+    gap: 6px;
+  }
+  .ai-assistant-panel.has-backfill .backfill-photo-slot > button { min-width: 0; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions .shot-row .shot-strip[data-count] .shot-tile { flex-basis: 44px; width: 44px; height: 44px; }
+}
+@media (max-width: 350px) {
+  .ai-assistant-panel.has-backfill .backfill-input-actions { gap: 8px; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group { gap: 8px; }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group > button,
+  .ai-assistant-panel.has-backfill .backfill-photo-slot > button { padding-inline: 8px; gap: 4px; }
+}
+@media (max-width: 360px) {
+  .composer.surface > .composer-footer { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .ai-assistant-panel.has-backfill:not(.is-docked) { transition: none !important; }
+}

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { createPortal } from "react-dom";
+import { consumeDateOutsidePress, useDatePopover } from "./date-popover";
 import { ScrollSlotStrip } from "./ScrollSlotStrip";
 import {
   DAY_WINDOW,
@@ -38,8 +40,9 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
   const [gridOpen, setGridOpen] = useState(false);
   const [longPressStepping, setLongPressStepping] = useState(false);
   const [fineMinutes, setFineMinutes] = useState(false);
-  const [panelShiftX, setPanelShiftX] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDatePopover(open, rootRef, panelRef, showTime);
   const pressRef = useRef<{ timer: number; repeat: number } | null>(null);
 
   // The day the panel works on. Falls back to today for an empty or malformed
@@ -97,16 +100,17 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
       const target = event.target;
       // The panel is positioned by its own styles and can land outside the
       // root's box, so a click on it is still a click on this control.
-      if (target instanceof Element && target.closest(".date-panel") !== null) return;
+      if (target instanceof Node && panelRef.current?.contains(target)) return;
+      consumeDateOutsidePress(event);
       setOpen(false);
     };
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); rootRef.current?.querySelector("button")?.focus(); }
     };
-    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("pointerdown", handlePointer, true);
     document.addEventListener("keydown", handleKey);
     return () => {
-      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("pointerdown", handlePointer, true);
       document.removeEventListener("keydown", handleKey);
     };
   }, [open]);
@@ -157,28 +161,7 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
       const seed = lastWholeHour(localNowInput());
       if (seed !== "") onChange(combineDateTime(day, seed));
     }
-    // The panel is `left: 0` against the trigger. On a phone the trigger can sit
-    // near the middle (composer date at left≈154 on a 430px viewport), and a
-    // 320px panel would stick out past the right edge (todo §13.1). Shift it
-    // left just enough to fit, never past the left gutter.
-    const box = rootRef.current?.getBoundingClientRect();
-    if (box === undefined) {
-      setPanelShiftX(0);
-    } else {
-      const panelWidth = Math.min(320, window.innerWidth - 24);
-      const overflow = box.left + panelWidth + 12 - window.innerWidth;
-      setPanelShiftX(overflow > 0 ? Math.min(0, -overflow) : 0);
-    }
     setOpen((current) => !current);
-  };
-  // How much room the panel has before its own top edge leaves the screen. It
-  // hangs off the trigger's top, so this is the distance from that edge to the
-  // viewport top — minus the 8px gap it sits above the capsule, and a little
-  // breathing space so it never touches the edge. Measured on open rather than
-  // guessed, because the composer's position depends on how much text is in it.
-  const panelRoom = () => {
-    const box = rootRef.current?.getBoundingClientRect();
-    return box === undefined ? 360 : Math.max(220, Math.min(420, Math.round(box.top - 24)));
   };
 
   return <div className={`date-field ${className} ${open ? "is-open" : ""}`} ref={rootRef} data-date-value={value} data-date-time={showTime ? "on" : "off"} data-date-capped={capped ? "on" : "off"}>
@@ -190,7 +173,7 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
       <span className="date-trigger-value">{dayLabel(day)}</span>
       {showTime ? <span className="date-trigger-time">{time || "全天"}</span> : null}
     </button>
-    {open ? <div className="date-panel" role="dialog" aria-label={`${label}选择器`} style={{ "--date-panel-room": `${panelRoom()}px`, ...(panelShiftX !== 0 ? { left: `${panelShiftX}px` } : {}) } as CSSProperties}>
+    {open ? createPortal(<div ref={panelRef} className={`date-panel date-control-popover ${showTime ? "has-time" : ""}`} role="dialog" aria-label={`${label}选择器`}>
       <div className="date-panel-head">
         <button type="button" className={`date-panel-step ${longPressStepping ? "is-fast" : ""}`} onClick={() => commitDate(shiftDate(day, -1))} onPointerDown={() => startDayStep(-1)} onPointerUp={endDayStep} onPointerLeave={endDayStep} aria-label="前一天"><ChevronLeft size={15} aria-hidden="true" /></button>
         <button type="button" className="date-panel-title" onClick={() => setGridOpen((current) => !current)} aria-expanded={gridOpen} title="选择其他日期"><span>{monthTitle(monthAnchor)}</span><ChevronDown size={14} aria-hidden="true" /></button>
@@ -238,7 +221,8 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
           })}
         </ScrollSlotStrip>}
         {showTime ? <div className="date-panel-time">
-          <ScrollSlotStrip className="date-time-column" scrollKey={day}>
+          <div className="date-time-wheels">
+          <ScrollSlotStrip className="date-time-column" scrollKey={`${day}-${time.slice(0, 2)}`}>
             {hourOptions().map((hour) => {
               const locked = hourLocked(hour);
               // Picking an earlier hour keeps the minute you already chose.
@@ -251,12 +235,13 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
             })}
           </ScrollSlotStrip>
           <span className="date-time-sep" aria-hidden="true">:</span>
-          <ScrollSlotStrip className="date-time-column" scrollKey={`${day}-minute`}>
+          <ScrollSlotStrip className="date-time-column" scrollKey={`${day}-minute-${minuteSlot}-${minuteStep}`}>
             {minuteOptions(minuteStep).map((minute) => {
               const locked = minuteLocked(time.slice(0, 2) || capHour, minute);
               return <button type="button" className={`date-time-slot ${minute === minuteSlot ? "is-selected" : ""} ${locked ? "is-locked" : ""}`} key={minute} disabled={locked} onClick={() => commitTime(`${time.slice(0, 2) || capHour}:${minute}`)} aria-pressed={minute === minuteSlot}>{minute}</button>;
             })}
           </ScrollSlotStrip>
+          </div>
           <div className="date-panel-time-side">
             <button type="button" className="text-button" onClick={() => commitTime(localNowInput().slice(11))}>此刻</button>
             <button type="button" className="text-button" onClick={() => commitDate(localDateToday())}>今天</button>
@@ -267,6 +252,6 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
           <span>精细到分钟</span>
           <span className="date-panel-fine-note">{capNow === "" ? "" : `不能晚于 ${capNow.slice(11)}`}</span>
         </label> : null}
-    </div> : null}
+    </div>, rootRef.current?.closest("dialog") ?? document.body) : null}
   </div>;
 }

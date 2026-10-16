@@ -59,7 +59,25 @@
 
 ### 第 1 轮 · 模式库扫捕（已知坑的同类实例）
 
+- **人设不能靠单点禁令无限生长**：审查实际发给模型的整个提示链，不能只看persona文件；固定句数／项数、某种饮品／某个段子的示例、幽默禁令串、日期每次附星期或到秒、全禁编号／列表、旧问答入口的第二身份，以及强制附加查看建议，都可能把回复变成记录员。口吻收拢为少量通用正向原则，按用户问法安排主次、结论和必要依据、证据范围、自然幽默；需要完整清单可展开。保留JSON／plan、隐私、资料权限和明确确认，不用词语替换后处理伪造风格。检查真实上游请求而非只测常量；保护范围做前后比对；小样必须是虚构资料、凭证只读且不回显、不得发主人记录或写生产库。真实回复风格与schema成功分开报告，若仍铺开材料如实留样，不靠为样本新增专用禁令“修绿”。复验node .review/check-persona-boundaries.mjs、node .review/verify-persona-principles.mjs，真实只读node .review/probe-persona-principles-live.mjs。
+
+- **分享窗口、两屏和原生能力不能只测按钮存在**：固定30分钟以点击消息为结束点，不按相邻间隔无限扩张；默认窗口跨100条先补齐，全选要补齐完整会话，失败保留选择，迟到请求不能复活已关闭弹窗。两屏上限按图片高宽比和统一手机参考量最终尺寸，不能靠降像素倍率冒充高度限制；逐档真实字号重排，最小20px仍超限应保留选择报错，核对完整末段和照片。提问原时间与生成时刻分工、跨年及无效时间均验，生成时刻在同一预览的复制／下载期间不能漂移。原画布预先准备PNG，点击时立即写ClipboardItem；只在promise成功后提示，能力缺失／权限拒绝不假报成功。手机分享只证明传入图片，不能宣称已存相册；取消静默、不支持时原图长按，不退回文件下载。长图的成功／错误／帮助必须在固定可见区。320px三按钮可能比内宽多几像素而换行；同组全等宽、实量正常／忙碌／自定义字体中心和边线净距。复验node .review/verify-share-tools.mjs；真实只读node .review/probe-share-tools-live.mjs，仅虚构图内存导出，不实际改系统剪贴板或导出主人图片。
+
+- **分享图的光学对齐不是文件能打开**：固定baseline会导致上紧下松；以真实字体actualBoundingBox计算可见字形块。宋体actualBoundingBoxLeft可以是负数，钳为0或给整段取同一偏移会使不同字形／行缩进错位，必须按每行真实有符号边界对齐。比较CJK、g/p/y下伸、emoji、混排多行与空段；测量／绘制的字体和字重必须一致，浏览器会把700序列化为bold。气泡类版式需对称内缩；当前白底竖幅依DESIGN量最终JPG最小3:4（短图1280×1708）、纯白底、无气泡、深色不透明文字与单一右下署名，长图末尾正文／附件到署名按字号密度保留88px（最小约77px）、底距48px；不能把短图固定竖幅的有意留白误判成旧版多余空白。验收记录Canvas原生fillText/roundRect/Path2D坐标、字体metrics及实际缩放，不镜像实现公式、不截图；JPG魔数／完整末段／选中照片独立检查。口吻提示与动作协议分段，移除机械附星期不得移除上海日期数据或削弱确认／隐私边界。复验node .review/verify-share-tools.mjs（隔离），prompt发送链由assistant-history.test.ts验证。
+
+
+- **对话JPG导出与原生弹窗**：导出专用不可变勾选快照，不能把整页截图／未选消息／未经授权的界面时间／按钮混入；真实JPEG须检查MIME与FFD8FF，不只改后缀。长图与图片附件测最终段、照片绘制、解码失败和Canvas高度／像素预算，超出应报错而非静默截断；字体加载完成再测字、按grapheme分行、保留空行。blob URL在重新选择／关闭回收，晚到生成与账号scope改变不能复活旧图片。原生dialog进入top layer会失去body禁选继承，必须明确列入styles.css禁选，正文只允许消息叶子；在历史dialog上打开分享需验证取消不关父层。时间按上海格式跨年、日期切换与5分钟分隔，手机contextmenu只证明消息菜单路径，不冒充硬件长按验收。复验node .review/verify-share-tools.mjs（隔离）；真实只读node .review/probe-share-tools-live.mjs不生成主人图片。
+
+
+- **流式回复与阅读位置**：只把顶层reply的完整可解码片段送到UI，不能渲染JSON／推理／plan或在半包里执行动作；UTF8、反斜线、unicode代理对、SSE终止标记、断流修复和同编号重连都要覆盖。新消息先可靠保存pending再清空输入；失败／刷新从原编号恢复。长回答对齐问题顶部后不追尾，用户手势往上读后追加和最终历史回填均不得滚走；箭头按真实溢出显示、读到底消失。查rg -n 'streamReply|readingTurnRef|onPreview|partialReply|readAssistantStream' apps/web/src apps/api/src；隔离复验node .review/verify-chat-stream.mjs。
+- **测试原生资源与替身清理顺序**：node:sqlite第二连接须在fixture删目录前close，不能依赖排在目录清理之后的after钩子。清理失败还可能阻止同测试的mock fetch恢复，污染之后无关用例；用try/finally确保原生句柄先释放，不可加盲目重试或放宽后续断言。
+
+
 按下面这份**本项目真实踩过的坑**当模式库，逐条全仓搜同类实例。
+
+- **派生拼图的内容身份与绘制依赖**：Windows同一目录盘符/路径大小写变化应保持缓存有效，Linux路径和不同租户仍区分；有内容哈希时以内容判断版本，无哈希仍核对真实文件版本，不能放过原件替换。旧清单迁移必须核验旧版本且按原排布恢复实际入图名单，不能用新档位倒推旧成品依赖，也不能为兼容放宽删除/隐私撤回。绘制依赖与整月候选更新指纹分开，未入图候选变化/同内容元数据变化/普通新增保持旧图，入图照片删除或改私密立即失效。照片墙9张起步、每6张一档，无12/60张上限；当前正式运行的整月背景功能整体搁置，PHOTO_WALL_ENABLED=false：不渲染整月照片墙、不显示对应设置或生成入口、浏览器该模块请求为0；旧客户端状态返回空图且valid=false，其他背景接口503，旧预览查询参数不能复活。默认不启动定时器、不排队、取消旧dueAt，重启/跨档/改外观不补跑；源码、配置及缓存文件保留，日期格照片/蒙版滑条仍可用。必须用真实既有成品验证隐藏及文件字节不变，不能只测空库；原午夜调度仅在隔离夹具显式enabled:true且automaticGeneration:true下验证，不能因保留源码就自动复活。查 `rg -n 'backgroundNamespace|backgroundSourceVersion|legacyAssetVersions|candidates|safeSources|candidateFingerprint|backgroundTier' apps/api/src`，隔离覆盖E:/e:重启、旧清单/旧上限设置迁移、未入图/入图移除、hash/无hash内容替换、普通更新当前不换/再进入启用；不能把state.json的mtime或GET200当成精确撤图日志，也不能将首次登记待生成误称为已有成品被撤。
+
+- **完整包跨新库／升级库导入**：SQLite 的 `ALTER TABLE ADD COLUMN` 会将字段追加到末尾，同一版本的新建库与升级库字段排列可以不同。清单兼容性检查须核对字段名完整集合且拒绝重复／未知／缺失，逐行校验按清单自身顺序映射，事务内并发指纹按目标库自身顺序读取，插入显式列名；不能只放宽顺序比较而留下字段错配或假并发冲突。查 `rg -n 'table_info|table.columns|spaceFingerprint|replaceSpaceTables' apps/api/src/portable-space.ts`，覆盖新→旧、旧→新、原件／回收站／私密记录、真实并发改动拒绝与失败回滚。复验 Node24 `node --test --test-isolation=none apps/api/dist/test/archive.test.js`（先构建API，全部隔离目录）；浏览器 `.review/verify-encrypted-archive-schema-ui.mjs`。
 
 - 2026-10-13 关联阅读弹窗：多个原生dialog和照片层不能分别保存/恢复body overflow（同时关闭时会恢复hidden）；检查共用计数锁、逐层关闭/同时进入原记录、背景关闭与焦点归还。把正文胶囊从span变button时全量搜父按钮（如已完成任务全文折叠），避免非法button嵌套。CDP Escape必须有虚拟键码27，真实图片加载后等待布局稳定再指针命中；月历浮卡先切month。复验node .review/verify-record-peek.mjs（隔离）。
 不要只报「已经写在 changelog 里的那一个」，要找**还没被发现的同族**。
@@ -72,6 +90,13 @@
    - 未来时间封顶：`isFutureDay` / `minuteCapFor` 的边界（按 hour 比较，不是按当前时刻）
    - 验收脚本/夹具里是否**硬编码了具体日期**（会在午夜静默失效，失败形态像产品回归）
 2. **CSS 布局与动画**
+   - **图片切换的已加载不等于已可见（2026-10-16）**：按URL给img换key会立即移除旧图；onLoad一触发就卸载占位，但新图opacity仍从0淡入，会造成前景空档，即使缓存命中、网络零图片请求也闪。加载时清空照片背景会额外制造整屏亮暗变化；相邻图未预取只会放大首次等待，不能解释暖缓存固定闪烁。分别记录冷/暖缓存的逐帧opacity、placeholder.complete/naturalWidth、背景图none、节点身份与真实HTTP；在隔离文档临时禁用transition作对照，不把改CSS实验当产品修复。排除dialog重挂载、开场动画重播与舞台矩形变化；下一图准备/解码完再交接、占位退场时点与背景连续性需独立验收。复现Node24 node .review/diagnose-photo-flash.mjs（合成API＋真实5199只读拦写，无截图）；证据.photo-flash-findings.txt及photo-flash-samples.json均在.review。
+   - 瀑布流不能只验静态矩形：旧待删除样式的position:relative可能覆盖绝对定位；effect清理时短暂移除容器height，会立即夹掉scrollY，即使同次layout effect随后恢复高度也已经晚了。后台刷新期间用!loading卸载整墙也会造成同类回顶。须在长页真实滚动后用鼠标删除／撤销，量卡片坐标、容器DOM身份与scrollY，并延迟GET覆盖刷新。容器和卡片尺寸、字体就绪均要重排；测大字号先等字体完成。减少动态仍可能保留0.01ms过渡，负向transform夹具至少等下一帧，不能同帧读到identity就误判检测无效。复验node .review/verify-notes-paper.mjs（隔离），node .review/probe-notes-paper-live.mjs（生产只读、发送前拦全部非GET/HEAD）；最终报告notes-paper-browser/live.txt。
+   - CSS网格定位必须核对真实父级 `display`：子项声明 `grid-column` 但父级仍为 flex 时该规则无效；成功／错误分支新增的同级 message／status 会成为额外 flex 项，挤压 `.settings-card-copy`，即使整页 `scrollWidth` 没溢出，copy仍可能为0px，标题逐字竖排。备份总览里的图标、copy和固定status同样有此模式，长状态在窄容器／20px根字号会把说明压窄。逐项量正常、空、长成功、长失败分支的父级display、copy实际宽度、Range.getClientRects()行盒和状态相对位置；容器足够宽时标题应一行，正文有可读宽度；将父级临时恢复旧flex做负向复现。数据ID、原件字节与无整页横溢都不能代替文本几何验收。复验 `node .review/verify-archive-upload-ui.mjs`、`node .review/probe-layout-collisions.mjs` 和只读 `node .review/archive-ui-integration/live-preview-probe.mjs`。
+   - 长按照片日期后，浏览器的兼容鼠标事件可能把焦点从菜单送回日期格：菜单打开前须以该日期格作为来源焦点，确保Escape/方向键仍有效。真实数据只读探针需覆盖照片格，不能仅用无照片隔离夹具推断；探针要在发送前拦截所有标记/记录写入，背景观看心跳若被模拟应单独计数，不声称“没有非GET尝试”。复验node .review/probe-calendar-hold-live.mjs。
+   - 日历长按须与原点击/横滑/纵向滚动分开：移动、多指、pointercancel、离页/切视图取消定时器，松手兼容click和随后contextmenu不能再开当天或重复菜单；菜单内下一次真实点击不能被残留的手势抑制吞掉。2026-10-14最新要求：周期按钮每次打开默认今天、贴日期格上方，长按仍用按下的日期；打开后点其他日期切换目标，日期切换和异步返回按原目标保存、按当前目标回显。原fitness事件不能因移动端day-edit只支持三种kind而丢入口。用visualViewport宽高/offset及实际client尺寸核对浮层；输入聚焦后innerHeight/innerWidth可能是放大的布局视口，反向夹具应确保真的超出可视区域，不能因浏览器自动平移就误认检测失效。复验node .review/verify-cycle-popover.mjs（隔离），报告.review/cycle-popover-browser.txt:1。
+   - 日期旁的非模态小浮窗不能复用右键菜单“消费外侧点击”的默认行为：点日期应一次切换目标，点其他页面控件应一次关闭并执行操作；滚动/visualViewport变化重新贴住日期，不增加日历排版高度。首次定位在layout effect完成，但隐藏初始浮窗会导致自动focus失败，需真验打开时焦点和换日期后Escape。收起习惯的新建编辑入口时必须保留可达的管理位置；习惯保存刷新共用config不能清掉未保存周期参数，随后存参数也不能复活旧习惯名称/丢掉新习惯。2026-10-14最新要求：快捷列表最多5项加“更多设置”，自然高度完整显示且无内部滚动；不能用overflow:hidden或隐藏滚动条冒充，必须量scrollHeight===clientHeight/scrollTop0与每行真实边界，覆盖长名称、13个已存习惯、260px/大字号/短视口与busy/错误。增加自然高度后要真验触发按钮仍命中自身：六行菜单曾覆盖周期按钮，CDP点按钮实际命中亲密标记；上方空位的判据须排除工具栏区域，不能只看屏幕顶部还有空间。多余项只是快捷入口不显示，不能截断保存配置。更多设置鼠标/触摸/键盘均须跳到周期设置、不误写标记；分隔线净距>=8px。复验node .review/verify-cycle-five.mjs与node .review/probe-cycle-five-live.mjs（后者只读拦所有写入）。
+   - 操作菜单的通用hover/focus选择器（包括`:is`/`:not`计入的特异性）可能覆盖已勾选状态，须量真实颜色与disabled，不以class存在代替。全禁用菜单和异步保存后焦点掉到body仍须能Escape；关闭后归还来源且不抢新弹窗焦点。pointerdown.preventDefault不会可靠取消随后click，外侧收起须消费同次手势；内部滚动不能被窗口scroll监听误关闭，长列表End须把焦点项滚进菜单内部。子菜单按实际尺寸夹进视口，覆盖260px、大字号与长自定义名称。复验`node .review/verify-device-font-menu.mjs`（隔离）、`.review/device-font-menu-browser.txt:1`。
    - 任务收起先卸载全文会闪成单行，须保留正文直到裁切结束；字体是否变化要量family/size/weight/line-height/letter-spacing/color，不能把颜色变淡猜成字体被替换。对这种需带动后续布局的局部折叠，允许DESIGN.md明确的240ms单卡原生高度动画，其他装饰继续优先transform/opacity；验证中间高度、无文字缩放、失败不假完成、快速反向、初次加载不播放、减少动态和结束后动画/固定高度/观察器释放。ResizeObserver回调同步写布局会触发undelivered notifications，收尾放到一次requestAnimationFrame并可取消。真实点击收起中的全文按钮应命中可见首行，不能点其被裁掉的几何中心；后续行位移按document坐标(top+scrollY)对账，避免浏览器滚动锚定假绿。复验node .review/verify-task-fold.mjs（隔离随机端口/data，无截图）。
    - 手机拖动入口使用 pointer capture 时，触摸拖动可能不产生兼容 click，旧的“抑制下一次 click”标记不能吞掉新手势；静止触摸 pointerup 也可能没有兼容 click，需验证实际点按能打开、pointercancel 不打开、拖动不误开、下一次点按可用。不能用鼠标拖动和程序 dispatchEvent(click) 代替这组真实CDP触摸断言。
    - 手机悬浮入口与返回顶部的避让要量实际方向和逐帧净距：返回顶部占下方，AI 管家向上让出一个身位，桌面保持原布局。计算位移须用未变换的布局位置（如 offsetTop），不能把上次 translate 后的矩形再次当基准；临时避让不写入拖动位置。跨 React 元素的 class 与内联变量不同步时，CSS transition-delay 可能在动画已启动后才变化；延迟和目标位移应同批更新。覆盖出现/消失、拖动释放、刷新恢复、左右换位、900/901px 断点及 reduced-motion；动画结束后再量最终净距，同时逐帧检查出现过程。复验 node .review/verify-mobile-assistant-20261012.mjs（随机端口/独立数据，不截图）。
@@ -108,6 +133,9 @@
    - 内联 `!important` 会打死任何选择器（`MentionBox` 给 textarea 写了
      `min-height: 0px !important`，CSS 里的 `min-height` 全是死代码）
 3. **状态与并发**
+   - 从搜索结果打开原先隐藏的AI管家时，`setTimeout(...focus,0)`不代表聊天恢复完成：textarea在initializing/pending时disabled，聚焦请求会静默丢失。用明确的一次性focus请求等输入可用后消费，关闭/账户scope变化时取消；普通AI导航打开事件不应抢输入焦点。复验node .review/verify-library-ai-hint.mjs（隔离API，含500ms恢复延迟、隐藏开关、0/1/2/3项、桌面/窄屏、草稿保留和自动写请求0）。
+    - 任务 PATCH 后整表失效/全行 busy 会引起大量重复渲染：已确认且未筛选的当前查询可接入返回记录并安静重验，筛选/日历仍校验成员归属；页面级筛选（如任务“未完成”，即使searchActive=false）也属于筛选：完成/取消成功须立即移出当前候选，侧栏恢复或全部中的撤销须经当前query重读重新入列；延迟／失败 GET 期间不能把done/cancelled作为未完成成员保留或可操作，query切换后旧PATCH响应不得过滤新页，也不能把不符合query的记录写回缓存。同步合并 ref 防止两条并发状态互相覆盖，过期请求/切换查询/账户不得回灌。React.memo 还会被每次新建的 Context value、回调和上层整包 props 绕过；完整记录值相同才复用，稳定入口通过提交后的最新回调调用，不能为了省渲染藏掉更新。复验 node .review/verify-task-performance-ui.mjs（延迟后台 GET、两条并发、状态筛选、当前删除入口，隔离）及 node .review/verify-tasks-page-ui.mjs（页面筛选成员归属与延迟/失败 GET，报告 .review/tasks-ui-browser-core.txt；隔离）。
+   - Vite 入口每次求值都 createRoot 会遗留旧应用监听器：真实三次热更新前后量 window resize 等监听器和重复根警告，而非只刷新新页面。已复现5->20，import.meta.hot.data复用同一root后5->5并保留草稿。复验 node .review/verify-task-hmr.mjs after（独立API/Vite；before是修复前反向证据）。日期/时间热路径重复构造Intl格式器、天气展示反复遍历全行政表/建Set也要沿整页重渲染采样；格式与时区不变，地名索引保持原扫描的首个同名匹配。性能对照明确动态设置和CPU节流，不能将系统prefers-reduced-motion导致的动画消失当作性能改善。
    - 原地删除撤销须沿软删回执、过期校验、恢复、列表重拉、刷新与账户切换整条链检查。服务器绝对时间不能直接减客户端时钟；覆盖客户端快两分钟、剩余时长校准、独立计时与临界传输。DELETE/restore 丢失响应后重试须幂等且不延长原期限，恢复同一 ID 而非复制新记录；原卡片快照按账户/查询隔离，并在隐私过滤之前合并。复验 `node .review/verify-photo-only-undo.mjs`，只用其随机端口/独立 data/assets，禁止往3011/5199造夹具。
    - 上传失败/等待的验收图片不能与预置上传共用内容哈希，否则客户端去重缓存会绕过真正的上传请求，形成假绿；空正文校验要联查已完成照片、最后一张删除、日历空摘要与删除预览。显式列出测试文件的 npm 脚本必须加入新测试，不能只看总命令退出0；检查 `apps/api/package.json` 与实际测试数量。
    - 清屏不能只断言聊天消息为0：拟写卡片、手动编辑区和结果操作也须收起，刷新与普通回复不得恢复旧草稿；清屏前保存未提交编辑，保留会话绑定和revision，历史继续应恢复内容，清屏失败不得伪装成功。检查旧版仅批次聊天的首次清屏与后续新草稿，不能靠解绑或删除历史实现空屏。隔离复验：`LIFEOS_AHIST_QA_SCREEN_ONLY=1 node .review/verify-assistant-history-reliable-20261010.mjs`。
@@ -246,7 +274,7 @@
 - 正式页的stable滚动条槽可能使document.clientWidth仍含预留空间；随文档滚动的背景应量页面内容和main-column实际边缘，不能沿用fixed视口或设备宽度。设置蒙版验收要从正式入口进行，测试页专用预览参数可能刻意覆盖持久设置；不要据此误改正式显示规则。
 - 手动生成不能相信浏览器旧计数：后端必须重新筛选照片、校验门槛并防并发；生成中删除或私密化必须放弃发布。显式手动操作与自动查看冻结分开，跨月份/账号的迟到响应不能换掉当前画面。检查新设置分区是否被 `:first-of-type` 按标签类型误判为首块，导致分隔线与留白失效；量真实边线净距，不只查 CSS 声明。
 - 搜 `background|montage|preview|dueAt|viewing|isPrivate`：派生拼图会把多张内容合成独立文件，不能只检查原图删除。删除、私密、隐藏预置或来源版本改变后，检查旧拼图 URL、304 分支、已加载画面与测试试样是否一起失效。
-- 定时生成与启用分开验：查看期间到期应推迟；解码中用户返回应停止后续处理；生成完成不能替换正在看的月份，只在下次进入选新版本。用持久化任务与模拟上海03:30验证重启续接、月底、历史补图、五天无变化不重做，不能为了验时钟在生产强制生成。
+- 定时生成已按主人2026-10-15决定搁置：先验默认关闭、不排队、旧任务取消、重启/跨档/改外观不生成，以及现有图/手动/隐私撤回仍有效。保留算法的隔离用例显式启用后，定时生成与启用分开验：查看期间到期应推迟；解码中用户返回应停止后续处理；生成完成不能替换正在看的月份，只在下次进入选新版本。用持久化任务与模拟上海00:00验证9/15/21逐档、同夜合并、重启续接、旧03:30迁移、未打开日历也能排入任务；同档内新增/五天经过/月底不重做。手动立即生成按当前数量的完整档位，超过60张仍可扩展；默认蒙版96%，旧配置保留用户外观并丢弃maxPhotos。不能为了验时钟在生产造记录或改系统时间。
 - CDP 对 iframe 内节点只返回布尔/数字/字符串，不直接序列化 DOM；背景范围以真实 fixed 视口探针量，考虑滚动条与移动布局视口，不能把 innerWidth 或设备配置尺寸直接当绘制宽度。暖缓存允许零请求或304，不强求必须有网络请求。
 
 **补充模式：人物头像与图片生命周期（2026-10-12）**
@@ -258,6 +286,21 @@
 （2026-10-13地图选择补充：嵌在地点详情中的原生dialog，其React合成onCancel/onClose也会关闭父层。子层须拦截两种事件，Escape只关闭地图选择，关闭按钮和Escape均将焦点归还入口；用实际嵌套React组件和真实CDP按键验，不用DOM dispatch代替。跨地图链接须分别验证经纬度顺序、GCJ02标记、无坐标地址回退，不能把高德POI ID当百度UID。复验node .review/verify-place-map-ui.mjs，自带隔离实例。）
 
 （2026-10-13弹窗样式补充：组件CSS先加载时，同权重的全局.modal-dialog会覆盖专用宽度；顶层dialog仍处于React/DOM原祖先，地点列表的后加载a规则也可覆盖内部链接颜色。专用弹窗规则应明确限定组件作用域并保证优先级；验收量实际弹窗宽度、同排按钮几何与最终颜色，不能只验不溢出或CSS源码有width。复验node .review/verify-map-compact-ui.mjs，自带隔离实例。）
+
+- **登录组件与真实入口分叉**：不能按组件名找到LoginGate就认定覆盖账号登录，主入口可按accountMode实际转到WelcomeGate，未调用的参数分支不等于线上界面。查 `rg -n 'LoginGate|WelcomeGate|accountMode|authState.required' apps/web/src/main.tsx apps/web/src/dialogs.tsx apps/web/src/WelcomeGate.tsx`，从真实鉴权条件分别进入账号／单密码，再核对实际CSS导入次序；局部新类只能挂到目标阶段，邀请码／注册／天气引导不因共享容器被误改。复验 `.review/probe-login-integrated.mjs`（真实主入口、所有API本地拦截）和 `.review/verify-login-refresh.mjs`（真实组件、安全预览），不要向生产提交测试账号。
+
+**补充模式：AI发送状态与结构化回复（2026-10-15）**
+- 持久pending不能直接当错误状态；查正常请求、失败与刷新恢复是否共用条件，是否同时渲染通用error与pendingError。正常延迟只应一处等待反馈、0警告／0重试入口，失败结束进度并只显示一次恢复；耗时可真实计时，不伪造百分比或检索阶段。复验node .review/verify-chat-feedback.mjs，只用其随机端口／独立data。
+- retryable=false须结合turnStatus：running表示不得另起生成，同编号仍可接回；interrupted／failed且不可重放才终止恢复，completed先清pending。必须覆盖刷新期间旧请求仍运行、同编号join只有一次provider调用、明确拒绝不能被running覆盖。
+- 仅提示词要求JSON不等于API格式约束。查response_format、空content／finish_reason=length、action/reply/plan全校验及修复次数；格式修复只能在任何方案／记录副作用前做一次，保留已有方案与同一消息ID。provider明确拒绝JSON模式时才兼容回落；禁止循环补括号、从任意正文抓对象、执行模型返回commit/undo、把无key本地规则模式改坏；已配置聊天服务故障应明确失败、同编号重试，不能冒充本地成功。只记录结束原因与长度，禁止日志落正文、推理原文或key。
+
+**补充模式：显式停止与迟到写入（2026-10-16）**
+- 中止浏览器观察连接不等于取消持久任务。查显式stop是否贯通上游请求、格式修复和每个异步等待后的落盘；即使服务忽略AbortSignal也不得保存迟到plan、ui或重复写入。覆盖首token前、流式中、修复中、电影匹配中、完成瞬间、刷新重接及停止后继续发送。只保存可读正文并标明停止，不把半截JSON／方案当成功。
+- 格式失败须区分上游空答／截断／传输终止标记／JSON语法／业务schema，日志只记固定结构字段和字数。修复应看到被拒答复及校验类别、一次为限；无key仍规则可用，已配置服务故障不能伪成功。附件夹具不得依赖未mock网络失败回退而假绿。
+
+**补充模式：Demo版本与双方案比较（2026-10-16）**
+- 核对用户打开的是正式页面、当前独立Demo还是旧综合对比；不要把聊天功能已进产品误称整套手机布局已落地。比较模式切换要保留正文／照片，保存位置等已确认部分保持一致，未选方案不能写成定案。隐藏工具后复核网格最小宽度和窄屏换行；新增演示控件后实测头部高度，不能沿用固定视口扣减。
+- Vite会把CSS请求包装成JS模块、给JS附源码映射并归一换行，直接将HTTP响应与原文件逐字比对会制造“版本不是最新”的假警报。核对直接CSS（?direct）与原始内容、实际计算样式、按钮位置和运行状态，不以包装后的响应体长度推定缓存问题。
 
 ### 第 2 轮 · 按轴扩张（同类但形态不同）
 

@@ -85,7 +85,7 @@ export function RecordSearch({ query, filters, entities, open, onOpenChange, onA
   const choices = matches.slice(0, limit);
   const matchKey = matches.map(entity => entity.id).join(",");
   useLayoutEffect(() => { setCursor(0); }, [input, matchKey]);
-  const suggestionsOpen = focused && Boolean(term) && !filterOpen;
+  const suggestionsOpen = focused && choices.length > 0 && !filterOpen;
   const popup = useRef<HTMLDivElement>(null);
   const [above, setAbove] = useState(false);
   useLayoutEffect(() => {
@@ -149,8 +149,7 @@ export function RecordSearch({ query, filters, entities, open, onOpenChange, onA
           <button ref={filterButton} className={`record-search-icon record-search-filter ${filterOpen || filterCount ? "is-active" : ""}`} type="button" aria-label="筛选记录" aria-haspopup="dialog" aria-expanded={filterOpen} aria-controls={`${id}-filters`} onClick={() => { if (!editing && input.trim() !== query) commit(input); setDraft(filters); setFilterOpen(!filterOpen); setFocused(false); if (editing) setInput(query); setEditing(null); }}><SlidersHorizontal size={16} aria-hidden="true" />{filterCount ? <span className="record-search-badge">{filterCount}</span> : null}</button>
         </div>
         {suggestionsOpen ? <div ref={popup} className={`record-search-suggestions record-search-popup ${above ? "is-above" : ""}`}>
-          <p className="record-search-hint">{editing ? "点选或回车以替换条件" : "正在搜索全部内容，回车或点选可限定人物或地点"}</p>
-          {choices.length ? <div role="listbox" id={`${id}-choices`} aria-label="匹配的人物与地点">{choices.map((entity, index) => <button className="record-search-choice" role="option" aria-selected={cursor === index} id={`${id}-choice-${index}`} key={entity.id} type="button" aria-label={`限定${entity.type === "person" ? "人物" : "地点"} ${entity.name}`} onMouseDown={event => event.preventDefault()} onClick={() => choose(entity)}>{entity.type === "person" ? <UserRound size={15} aria-hidden="true" /> : <MapPin size={15} aria-hidden="true" />}<span>{entity.name}</span><small>{entity.type === "person" ? "人物" : "地点"}</small></button>)}</div> : <p className="record-search-hint">没有匹配的人物或地点，仍可按文字查找记录。</p>}
+          <div role="listbox" id={`${id}-choices`} aria-label="匹配的人物与地点">{choices.map((entity, index) => <button className="record-search-choice" role="option" aria-selected={cursor === index} id={`${id}-choice-${index}`} key={entity.id} type="button" aria-label={`限定${entity.type === "person" ? "人物" : "地点"} ${entity.name}`} onMouseDown={event => event.preventDefault()} onClick={() => choose(entity)}>{entity.type === "person" ? <UserRound size={15} aria-hidden="true" /> : <MapPin size={15} aria-hidden="true" />}<span>{entity.name}</span><small>{entity.type === "person" ? "人物" : "地点"}</small></button>)}</div>
           {matches.length > choices.length ? <button className="record-filter-link" type="button" onClick={() => setLimit(value => value + 6)}>再显示 {Math.min(6, matches.length - choices.length)} 项</button> : null}
         </div> : null}
         {filterOpen ? <div ref={popup} className={`record-search-panel record-search-popup ${above ? "is-above" : ""}`} id={`${id}-filters`} role="dialog" aria-label="筛选记录">

@@ -1,6 +1,7 @@
 import { assertValidTextEntityDecisions, type AssetLink, type TextEntityDecision } from "@lifeos/core";
 import type { ComposerKind } from "./app-types";
 import type { AuthState } from "./api";
+import { scopedKey } from "./storage-scope.ts";
 
 const PREFIX = "lifeos.composerDraft.v1.";
 const MAX_CONTENT = 200_000;
@@ -24,7 +25,7 @@ export function composerDraftScope(authResolved: boolean, auth: AuthState): stri
 
 function key(scope: string): string {
   if (scope !== "legacy" && !/^account:[a-z0-9-]+$/i.test(scope)) throw new Error("草稿账号范围无效");
-  return PREFIX + scope;
+  return scopedKey(PREFIX + scope);
 }
 
 function shotsOf(value: unknown): readonly AssetLink[] {

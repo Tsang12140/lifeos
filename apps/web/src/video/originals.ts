@@ -1,7 +1,8 @@
 import { VIDEO_LIMITS } from "@lifeos/core";
+import { scopedKey } from "../storage-scope";
 
 type Original = { key: string; scope: string; assetId: string; file: File; savedAt: number };
-const database = "lifeos-video-originals-v1";
+const database = scopedKey("lifeos-video-originals-v1");
 const keyFor = (scope: string, assetId: string) => JSON.stringify([scope, assetId]);
 function connect(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

@@ -1,3 +1,7 @@
+// The entire monthly photo wall is shelved until the owner explicitly revives it.
+// This does not affect photos within individual calendar dates.
+export const PHOTO_WALL_ENABLED = false;
+
 export interface PhotoWallPreferences {
   layout: "rows" | "masonry" | "scattered";
   veil: number;
@@ -6,16 +10,22 @@ export interface PhotoWallPreferences {
   gap: number;
   tilt: number;
   seed: number;
-  maxPhotos: number;
+}
+export const PHOTO_WALL_MIN_PHOTOS = 9;
+export const PHOTO_WALL_PHOTOS_PER_TIER = 6;
+export function photoWallPhotoTier(count: number): number {
+  return Number.isSafeInteger(count) && count >= PHOTO_WALL_MIN_PHOTOS
+    ? PHOTO_WALL_MIN_PHOTOS + Math.floor((count - PHOTO_WALL_MIN_PHOTOS) / PHOTO_WALL_PHOTOS_PER_TIER) * PHOTO_WALL_PHOTOS_PER_TIER : 0;
 }
 export const PHOTO_WALL_DEFAULTS: Readonly<PhotoWallPreferences> = Object.freeze({
-  layout: "rows", veil: 92, shadow: 60, border: 0, gap: 0, tilt: 0, seed: 1, maxPhotos: 12,
+  layout: "rows", veil: 96, shadow: 60, border: 0, gap: 0, tilt: 0, seed: 1,
 });
-export const PHOTO_WALL_LIMITS = { veil: [0, 100], shadow: [0, 60], border: [0, 16], gap: [0, 32], tilt: [0, 8], seed: [1, 9999], maxPhotos: [12, 60] } as const;
+export const PHOTO_WALL_LIMITS = { veil: [0, 100], shadow: [0, 60], border: [0, 16], gap: [0, 32], tilt: [0, 8], seed: [1, 9999] } as const;
 export function photoWallPreferences(input: unknown): PhotoWallPreferences {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw Error("照片墙参数格式不正确");
   const value = input as Record<string, unknown>;
-  if (Object.keys(value).some(key => !Object.hasOwn(PHOTO_WALL_DEFAULTS, key))) throw Error("包含不支持的照片墙参数");
+  // Old saved settings included a photo cap. Discard it while retaining the user's appearance settings.
+  if (Object.keys(value).some(key => key !== "maxPhotos" && !Object.hasOwn(PHOTO_WALL_DEFAULTS, key))) throw Error("包含不支持的照片墙参数");
   if (typeof value.layout !== "string" || !["rows", "masonry", "scattered"].includes(value.layout)) throw Error("照片墙排法不正确");
   for (const [key, [min, max]] of Object.entries(PHOTO_WALL_LIMITS)) {
     const number = value[key];

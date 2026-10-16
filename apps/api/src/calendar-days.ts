@@ -11,7 +11,7 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 export const calendarToday = (now = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now);
 /** The namespace prevents an identical asset id in another tenant from sharing a private cached URL. */
 export function calendarAssetVersion(namespace: string, asset: Asset, localStamp?: string): string {
-  return hash([namespace, asset.id, asset.storageRefs, localStamp]);
+  return hash([namespace, asset.id, asset.storageRefs, localStamp, ...(asset.displayRotation ? [asset.displayRotation] : [])]);
 }
 export function nextCalendarMidnight(now: Date): number {
   const day = calendarToday(now);

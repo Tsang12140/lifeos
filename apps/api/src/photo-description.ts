@@ -1,19 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import sharp from "sharp";
 import type { ApiConfig } from "./config.js";
 import type { ThumbnailCache, ThumbnailWidth } from "./derived-thumbs.js";
 import type { RecordView, SqliteRecordRepository } from "./repository.js";
 import { resolveAssetOriginal } from "./asset-static.js";
 import { readRuntimeAiConfig } from "./ai-config.js";
 import { askDeepSeek } from "./assistant.js";
+import { OCR_TEXT_MAX_CHARS, type PhotoTextRecognizer } from "./tencent-ocr.js";
+import { createPhotoTextChain, parseOcrActions, type PhotoTextChain } from "./photo-text-chain.js";
+import { isPhotoTextCapabilityEnabled, type PhotoTextCapability } from "./photo-text-config.js";
 import { nowInstant } from "./field-validate.js";
 
 /**
- * Photo descriptions — one machine-written line per photo, so that a picture the
- * owner never typed a word about ("sent a coffee photo, said nothing") is still
- * findable later.
+ * Photos turned into text — one machine-written record per picture, so that an image the
+ * owner never typed a word about ("sent a coffee photo, said nothing") is still findable
+ * later. Two families live here, and they answer different questions:
  *
- * Five rules shape this module, and each one answers something the owner asked for:
+ *   · the **caption** passes ask a vision model *what is this a photo of* and get one
+ *     summarising sentence back;
+ *   · the **text** pass runs OCR and gets *what does it say*, verbatim.
+ *
+ * Six rules shape this module, and each one answers something the owner asked for:
  *
  *   · **Derived, never theirs.** The sentence lands in `aiDerived`; `body` is never
  *     touched. A wrong guess must stay distinguishable from what she wrote.
@@ -21,33 +29,46 @@ import { nowInstant } from "./field-validate.js";
  *     which is the same value the thumbnail cache is already filed under — so one
  *     photo appearing in three records is read once and shared, and re-running the
  *     pass costs nothing for pictures already done.
- *   · **Cheap by default.** Thinking is off for the ordinary passes and the 1200px
- *     thumbnail is sent instead of the original: the answer is one short sentence, not a
- *     reasoning exercise, and the thumbnail keeps bytes off the wire. The one pass that
- *     does think exists to be priced, not to be the default.
- *   · **Private records are never sent.** That is the owner's red line.
+ *   · **Cheap by default.** Thinking is off for the ordinary passes and a thumbnail is
+ *     sent instead of the original: the answer is one short sentence, not a reasoning
+ *     exercise. The one caption pass that does think exists to be priced, not to be the
+ *     default. The OCR pass is cheaper still — it costs no model tokens at all.
+ *   · **Private records are never sent.** That is the owner's red line, and it covers
+ *     both families: the OCR pass leaves through the same door as the caption pass.
  *   · **A pass is labelled.** Several passes are kept for comparison (see `variant`), so
- *     the same picture can carry a bare caption, a context-aware one and a reasoning one
- *     without any overwriting another, and without re-paying for work already done.
+ *     the same picture can carry a bare caption, a context-aware one, a reasoning one
+ *     and a transcription without any overwriting another.
+ *   · **Reading is not summarising.** OCR output is stored with a type of its own
+ *     (`photo-ocr`) rather than folded into a caption: a transcription that got truncated
+ *     to one tidy line would be worse than useless for search, which is what it is for.
  */
 
 /** 1200 is the widest thumbnail that still reaches the model's per-image token cap; anything larger is paid for and thrown away. */
 export const PHOTO_DESCRIPTION_WIDTH: ThumbnailWidth = 1200;
+/**
+ * OCR reads pixels, not meaning: small print needs resolution, and the service advises
+ * at least 600×800. 2048 is the largest derived width that already exists (it was built
+ * for the opened-photo preview), so this costs no new cache entry — and a 2048px JPEG is
+ * still around a megabyte, an order of magnitude under the service's 10 MB limit.
+ */
+export const PHOTO_OCR_WIDTH: ThumbnailWidth = 2048;
 export const PHOTO_DESCRIPTION_PROVIDER = "lifeos-photo";
 const PHOTO_DESCRIPTION_VALUE_TYPE = "photo-description";
+/** The value type the OCR pass writes. Kept apart so the two families never overwrite each other. */
+const PHOTO_OCR_VALUE_TYPE = "photo-ocr";
 /** A first pass is meant to be looked at, not to drain a month's budget in one click. */
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 500;
 const CONCURRENCY = 4;
 
 /**
- * Which pass produced a description. Three passes are kept so the owner can price the
- * same picture three ways (cheap / mid / high) before deciding which one is worth paying
- * for, and so a later pass over an already-captioned library finds work instead of
- * finding everything "already done".
+ * Which pass produced an entry. Passes are kept side by side so the owner can price the
+ * same picture several ways (cheap / mid / high / verbatim) before deciding which ones are
+ * worth keeping, and so a later pass over an already-captioned library finds work instead
+ * of finding everything "already done".
  *
- *   · `plain`            — the picture on its own. Cheapest, and the baseline the owner
- *                          reads first when judging whether the sentences are worth it.
+ *   · `plain`            — the picture on its own. Cheapest caption, and the baseline the
+ *                          owner reads first when judging whether the sentences are worth it.
  *   · `context`          — the picture plus the text of its record, so the model can tell
  *                          what the entry was *about* (which picture "图二" refers to,
  *                          which detail she was pointing at).
@@ -55,23 +76,46 @@ const CONCURRENCY = 4;
  *                          exists to be *measured*, not because reasoning is expected to
  *                          help: the answer is one short sentence, and reasoning tokens
  *                          bill at the output rate.
+ *   · `ocr`              — not a caption at all: the words printed *in* the picture, copied
+ *                          out by OCR. It is a pass like the others so that it shares their
+ *                          machinery (keying, skip-if-done, privacy, forced re-runs) while
+ *                          storing a type of its own.
  */
-export type PhotoDescriptionVariant = "plain" | "context" | "context-thinking";
-export const PHOTO_DESCRIPTION_VARIANTS: readonly PhotoDescriptionVariant[] = ["plain", "context", "context-thinking"];
+export type PhotoDescriptionVariant = "plain" | "context" | "context-thinking" | "ocr";
+export const PHOTO_DESCRIPTION_VARIANTS: readonly PhotoDescriptionVariant[] = ["plain", "context", "context-thinking", "ocr"];
 
-/** Passes that hand the record's own words to the model. `plain` never sees them. */
-function seesBackground(variant: PhotoDescriptionVariant): boolean {
-  return variant !== "plain";
+/** The OCR pass, as opposed to the caption passes. */
+function isTextPass(variant: PhotoDescriptionVariant): boolean {
+  return variant === "ocr";
 }
 
-/** Passes that let the model reason before it answers. Only the high-cost pass does. */
+/**
+ * Which settings switch governs a pass. All three caption variants share one — to the owner
+ * they are one feature at three price tags, not three features — and the text pass has its
+ * own.
+ */
+export function capabilityFor(variant: PhotoDescriptionVariant): PhotoTextCapability {
+  return isTextPass(variant) ? "ocr" : "caption";
+}
+
+/** The value type an entry of this pass is filed under. */
+function valueTypeFor(variant: PhotoDescriptionVariant): string {
+  return isTextPass(variant) ? PHOTO_OCR_VALUE_TYPE : PHOTO_DESCRIPTION_VALUE_TYPE;
+}
+
+/** Caption passes that hand the record's own words to the model. `plain` never sees them, and neither does OCR. */
+function seesBackground(variant: PhotoDescriptionVariant): boolean {
+  return variant === "context" || variant === "context-thinking";
+}
+
+/** Passes that let the model reason before it answers. Only the high-cost caption pass does. */
 function thinks(variant: PhotoDescriptionVariant): boolean {
   return variant === "context-thinking";
 }
 
 /** Narrows a stored `variant` field back to a known pass. Anything else reads as `plain`. */
 function parseVariant(raw: unknown): PhotoDescriptionVariant {
-  return raw === "context" || raw === "context-thinking" ? raw : "plain";
+  return raw === "context" || raw === "context-thinking" || raw === "ocr" ? raw : "plain";
 }
 
 export const PHOTO_DESCRIPTION_SYSTEM = [
@@ -139,6 +183,8 @@ export interface PhotoDescriptionRunOptions {
   readonly force?: boolean;
   /** Injectable so a test can exercise the whole pass without touching the network. */
   readonly describe?: PhotoDescriber;
+  /** Injectable OCR, for the same reason. Unset means "use the configured provider, if any". */
+  readonly recognize?: PhotoTextRecognizer;
 }
 
 export interface PhotoDescriptionSample {
@@ -153,8 +199,20 @@ export interface PhotoDescriptionRun {
   readonly photos: number;
   readonly described: number;
   readonly alreadyDescribed: number;
-  /** Pictures the model saw but could not name. Left blank on purpose rather than guessed at. */
+  /**
+   * Pictures that were looked at and produced no text: a caption pass that could not name
+   * what it saw, or an OCR pass that found no words printed in the picture. The OCR case
+   * leaves an **empty marker** behind; the caption case leaves nothing, because "the model
+   * had no words" is not the claim "this picture has none".
+   */
   readonly noDescription: number;
+  /**
+   * Photos the recogniser was asked about but could not answer at all — a rate limit, a
+   * timeout, a spent package, no credentials configured. **Nothing is written for these**,
+   * so the next run tries them again; the count exists so that a pass which quietly read
+   * nothing is visible, instead of looking like a library with no words in it.
+   */
+  readonly unread: number;
   /** Photos whose file could not be read (missing local copy, remote-only pool object). */
   readonly unreadable: number;
   /** Records skipped because they are private; their photos were never sent. */
@@ -165,6 +223,18 @@ export interface PhotoDescriptionRun {
   readonly variant: PhotoDescriptionVariant;
   readonly written: boolean;
   readonly samples: readonly PhotoDescriptionSample[];
+  /**
+   * The OCR engines that actually produced text this run, in order of first use. With a
+   * downgrade chain the configured preference and this list can differ, and a fallback
+   * quietly changes what the library will be able to find later — so it is reported.
+   */
+  readonly engines?: readonly string[];
+  /**
+   * The owner has switched this capability off, so the pass did nothing at all — no photo
+   * was re-encoded, no model was called. Distinct from a pass that ran and found no work:
+   * the counts are zero here because nothing was attempted, not because nothing was left.
+   */
+  readonly disabled?: boolean;
 }
 
 interface PhotoTarget {
@@ -195,6 +265,7 @@ function variantOf(value: object): PhotoDescriptionVariant {
 }
 
 function collectKnownDescriptions(records: readonly RecordView[], variant: PhotoDescriptionVariant): ReadonlySet<string> {
+  const wanted = valueTypeFor(variant);
   const known = new Set<string>();
   for (const record of records) {
     for (const item of record.aiDerived) {
@@ -202,7 +273,7 @@ function collectKnownDescriptions(records: readonly RecordView[], variant: Photo
       const value = item.value;
       if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
       const fields = value as Record<string, unknown>;
-      if (fields.type !== PHOTO_DESCRIPTION_VALUE_TYPE || typeof fields.key !== "string") continue;
+      if (fields.type !== wanted || typeof fields.key !== "string") continue;
       if (variantOf(value) !== variant) continue;
       known.add(fields.key);
     }
@@ -225,6 +296,17 @@ export function cleanPhotoDescription(raw: string | null): string {
   return text.replace(/\s+/g, " ").slice(0, 120);
 }
 
+/**
+ * The OCR pass is not a caption, so it is not squeezed into one line: every recognised
+ * line is kept, in the order it appeared, because search matches on substrings and the
+ * thing being searched for may well sit on line nine. Only the total length is capped.
+ */
+export function cleanOcrText(raw: string | null): string {
+  if (raw === null) return "";
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.join("\n").slice(0, OCR_TEXT_MAX_CHARS);
+}
+
 /** The record's own words, trimmed to the length the context pass is allowed to see. */
 function backgroundFor(record: RecordView): string | undefined {
   const text = (record.body.edited ?? record.body.original).trim();
@@ -240,7 +322,7 @@ function defaultDescriber(config: ApiConfig, variant: PhotoDescriptionVariant): 
   // whole reason to exist is to price what thinking adds — so it too ignores the global
   // setting, in the other direction.
   const effort = { ...runtime, thinking: thinks(variant) };
-  const system = variant === "plain" ? PHOTO_DESCRIPTION_SYSTEM : PHOTO_DESCRIPTION_SYSTEM_CONTEXT;
+  const system = seesBackground(variant) ? PHOTO_DESCRIPTION_SYSTEM_CONTEXT : PHOTO_DESCRIPTION_SYSTEM;
   return ({ imageDataUrl, background }) => {
     const prompt = background === undefined
       ? PHOTO_DESCRIPTION_PROMPT
@@ -250,7 +332,47 @@ function defaultDescriber(config: ApiConfig, variant: PhotoDescriptionVariant): 
 }
 
 /**
- * Reads every photo the records point at and files a one-line description for each
+ * The OCR recogniser in force. With no credentials configured this is a recogniser that
+ * answers `null` — the pass then runs and finds nothing, rather than failing, which is
+ * what keeps "OCR is switched off" from looking like "the library is broken".
+ *
+ * With credentials it is the **downgrade chain** (§11): the preferred action answers, and
+ * only a service-level refusal — the package is spent, the account is in arrears, the
+ * service was never opened — moves the pass to the next one. A blip (rate limit, timeout,
+ * one undecodable picture) skips that photo instead, because a demotion is permanent in
+ * practice: photos already read are skipped next time and would keep the worse engine's
+ * transcription for good.
+ *
+ * The chain is held per configuration, in process memory, not rebuilt per run. A pass
+ * that ran out of its package must not be forgotten between two clicks of the same
+ * button, or every batch would begin by failing once on the top tier. It forgets on the
+ * 1st of the month, when the free allowance is reissued.
+ */
+let sharedOcrChain: { readonly key: string; readonly chain: PhotoTextChain } | null = null;
+
+function recognizerFor(config: ApiConfig, variant: PhotoDescriptionVariant): PhotoTextRecognizer {
+  // `unread`, never `blank`. With no credentials there is nothing to ask, and answering
+  // "blank" here would file an empty marker for every photo in the library the first time
+  // the pass ran — permanently, since a filed marker is what makes the next run skip.
+  if (!isTextPass(variant) || config.tencentOcr === undefined) return async () => ({ kind: "unread" });
+  const { secretId, secretKey, region, actions } = config.tencentOcr;
+  const key = [secretId, region, actions].join("\u0000");
+  if (sharedOcrChain === null || sharedOcrChain.key !== key) {
+    sharedOcrChain = {
+      key,
+      chain: createPhotoTextChain({ credentials: { secretId, secretKey, region }, actions: parseOcrActions(actions) }),
+    };
+  }
+  return sharedOcrChain.chain.recognize;
+}
+
+/** What the chain did this month — "spent, fell back to X" is worth saying out loud. */
+export function ocrChainEvents(): readonly string[] {
+  return sharedOcrChain?.chain.events ?? [];
+}
+
+/**
+ * Reads every photo the records point at and files one line (or one transcription) for each
  * one that does not have it yet. Returns a report; writes only `aiDerived`.
  */
 export async function describePhotoLibrary(options: PhotoDescriptionRunOptions): Promise<PhotoDescriptionRun> {
@@ -261,6 +383,30 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
   // A limit of 0 is meaningful: it surveys the library without reading a picture,
   // which is what the read-only endpoint reports.
   const limit = Math.max(0, Math.min(options.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+
+  // A limit of 0 is the read-only survey the settings panel counts with, and that one keeps
+  // answering even when the capability is off — otherwise switching a feature off would also
+  // hide how much is left to do in it. Every other limit would read a picture, and a
+  // switched-off feature must not read one through *any* door: the panel's button, the
+  // save-time trigger, or a script. This is the last of those doors, and it is shut before
+  // the library is even scanned, so a refused pass costs nothing at all.
+  if (limit > 0 && !isPhotoTextCapabilityEnabled(config, capabilityFor(variant))) {
+    return {
+      photos: 0,
+      described: 0,
+      alreadyDescribed: 0,
+      noDescription: 0,
+      unread: 0,
+      unreadable: 0,
+      skippedPrivate: 0,
+      recordsUpdated: 0,
+      remaining: 0,
+      variant,
+      written: false,
+      samples: [],
+      disabled: true,
+    };
+  }
 
   const everyone = repository.list();
   const known = collectKnownDescriptions(everyone, variant);
@@ -277,7 +423,8 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
     }
     // Only the context passes are allowed to see the record's words. Handing them to the
     // plain pass too would quietly turn the passes into the same experiment, and the
-    // owner is paying to compare them.
+    // owner is paying to compare them. OCR is never given them: the words it reads come
+    // off the picture itself, and background text could only invite it to hallucinate.
     const background = seesBackground(variant) ? backgroundFor(record) : undefined;
     for (const ref of record.assetRefs) {
       const asset = repository.findAssetById(ref.assetId);
@@ -300,27 +447,76 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
   const queue = pending.slice(0, limit);
   const byId = new Map(everyone.map((record) => [record.id, record]));
   const describe = options.describe ?? defaultDescriber(config, variant);
+  const recognize = options.recognize ?? recognizerFor(config, variant);
+  const textPass = isTextPass(variant);
 
   const samples: PhotoDescriptionSample[] = [];
-  const additions = new Map<string, { readonly key: string; readonly assetId: string; readonly text: string }[]>();
+  const additions = new Map<string, { readonly key: string; readonly assetId: string; readonly text: string; readonly engine?: string }[]>();
   let described = 0;
   let noDescription = 0;
   let unreadable = 0;
+  let unread = 0;
+  /** Which engines answered, in first-use order — see `PhotoDescriptionRun.engines`. */
+  const engines: string[] = [];
 
-  const read = async (target: PhotoTarget): Promise<{ readonly target: PhotoTarget; readonly text: string; readonly unreadable: boolean }> => {
-    let imageDataUrl: string;
+  /**
+   * What one photo produced, in five outcomes rather than two. The pass treats them three
+   * different ways, and telling the middle two apart is the whole point:
+   *
+   *   · `text`     — a transcription (OCR) or a caption; filed as an entry;
+   *   · `blank`    — OCR read the picture and **there are no words in it**. Filed as an
+   *                  **empty marker**, so the next pass skips this picture instead of
+   *                  paying to be told the same nothing again. An empty transcription
+   *                  matches no search term — search is a substring test — so the marker
+   *                  cannot leak into results, and replacing the file re-keys the picture
+   *                  and earns it a fresh read;
+   *   · `nameless` — a caption pass looked and could not name the picture. Nothing is
+   *                  filed: "the model had no words" is not the claim "this picture has
+   *                  none", and only the latter is worth remembering;
+   *   · `unread`   — the picture was never read at all (a blip, a spent package, no
+   *                  credentials). Nothing is filed, so the next run picks it up again;
+   *   · `broken`   — the bytes could not even be produced (missing local copy).
+   */
+  type PhotoRead = {
+    readonly target: PhotoTarget;
+    readonly kind: "text" | "blank" | "nameless" | "unread" | "broken";
+    readonly text: string;
+    readonly engine?: string;
+  };
+
+  const read = async (target: PhotoTarget): Promise<PhotoRead> => {
+    let imageDataUrl = "";
+    let imageBytes: Buffer | undefined;
     try {
       const original = resolveAssetOriginal(config, repository, target.assetId);
-      const file = await thumbnails.ensure(original.reference, original.file, PHOTO_DESCRIPTION_WIDTH);
-      imageDataUrl = `data:image/webp;base64,${readFileSync(file).toString("base64")}`;
+      if (textPass) {
+        // The service reads PNG/JPG/JPEG/BMP and does not list WebP — and every derived
+        // thumbnail here *is* WebP — so the pixels are re-encoded before they leave.
+        const wide = await thumbnails.ensure(original.reference, original.file, PHOTO_OCR_WIDTH);
+        imageBytes = await sharp(wide).jpeg({ quality: 88 }).toBuffer();
+      } else {
+        const file = await thumbnails.ensure(original.reference, original.file, PHOTO_DESCRIPTION_WIDTH);
+        imageDataUrl = `data:image/webp;base64,${readFileSync(file).toString("base64")}`;
+      }
     } catch {
-      return { target, text: "", unreadable: true };
+      return { target, kind: "broken", text: "" };
     }
     try {
+      if (textPass) {
+        const outcome = await recognize({ image: imageBytes ?? Buffer.alloc(0), mime: "image/jpeg" });
+        // `engine` records the tier that actually answered. With a chain in place the
+        // configured preference and the engine used can differ, and that gap is precisely
+        // what a later reader needs in order to tell a full-precision pass from a fallback.
+        if (outcome.kind === "unread") return { target, kind: "unread", text: "" };
+        if (outcome.kind === "blank") return { target, kind: "blank", text: "", engine: outcome.engine };
+        return { target, kind: "text", text: cleanOcrText(outcome.text), engine: outcome.engine };
+      }
       const answer = await describe({ imageDataUrl, ...(target.background === undefined ? {} : { background: target.background }) });
-      return { target, text: cleanPhotoDescription(answer), unreadable: false };
+      const text = cleanPhotoDescription(answer);
+      return text === "" ? { target, kind: "nameless", text: "" } : { target, kind: "text", text };
     } catch {
-      return { target, text: "", unreadable: false };
+      // The model or the network let us down — that is "not read", never "no words here".
+      return { target, kind: "unread", text: "" };
     }
   };
 
@@ -328,26 +524,44 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
     const batch = queue.slice(start, start + CONCURRENCY);
     const results = await Promise.all(batch.map((target) => read(target)));
     for (const result of results) {
-      if (result.unreadable) {
+      if (result.kind === "broken") {
         unreadable += 1;
         continue;
       }
-      if (result.text === "") {
+      if (result.kind === "unread") {
+        unread += 1;
+        continue;
+      }
+      if (result.kind === "nameless") {
         noDescription += 1;
         continue;
       }
-      described += 1;
+      // `text` and `blank` are both answers and both get written; they differ only in
+      // whether there are words to keep.
+      if (result.kind === "blank") noDescription += 1;
+      else described += 1;
+      if (result.kind === "text" && result.engine !== undefined && !engines.includes(result.engine)) engines.push(result.engine);
       for (const recordId of result.target.recordIds) {
         const list = additions.get(recordId) ?? [];
-        list.push({ key: result.target.key, assetId: result.target.assetId, text: result.text });
+        list.push({
+          key: result.target.key,
+          assetId: result.target.assetId,
+          text: result.text,
+          ...(result.engine === undefined ? {} : { engine: result.engine }),
+        });
         additions.set(recordId, list);
-        samples.push({ recordId, assetId: result.target.assetId, key: result.target.key, text: result.text });
+        // `samples` is what the pass read; an empty marker has nothing to show, so it
+        // stays out of the samples while still being written to the record.
+        if (result.kind === "text") samples.push({ recordId, assetId: result.target.assetId, key: result.target.key, text: result.text });
       }
     }
   }
 
   let recordsUpdated = 0;
   if (!dryRun) {
+    // Every caption in this run comes from the same model, so it is read once rather than
+    // re-derived record by record.
+    const captionModel = readRuntimeAiConfig(config).model;
     for (const [recordId, items] of additions) {
       const record = byId.get(recordId);
       if (record === undefined) continue;
@@ -356,22 +570,34 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
         id: randomUUID(),
         kind: "summary" as const,
         provider: PHOTO_DESCRIPTION_PROVIDER,
-        model: readRuntimeAiConfig(config).model,
+        // An OCR transcription is not written by the language model and must not be
+        // labelled as if it were: the engine name is what tells a later reader which
+        // machinery read these words — and, with a downgrade chain in place, whether they
+        // came from the preferred engine or from a fallback.
+        model: textPass ? (item.engine ?? config.tencentOcr?.actions ?? "ocr") : captionModel,
         generatedAt,
         sourceRecordId: record.id,
         // The picture's own identity is what this description is a statement about:
         // replace the file and the old sentence stops matching its source.
         sourceRevision: item.key,
-        value: { type: PHOTO_DESCRIPTION_VALUE_TYPE, variant, key: item.key, assetId: item.assetId, width: PHOTO_DESCRIPTION_WIDTH, text: item.text },
+        value: {
+          type: valueTypeFor(variant),
+          variant,
+          key: item.key,
+          assetId: item.assetId,
+          width: textPass ? PHOTO_OCR_WIDTH : PHOTO_DESCRIPTION_WIDTH,
+          text: item.text,
+        },
       }));
       // A forced run replaces this pass's old sentence for every picture it re-read.
       // Appending instead would leave two versions of the same pass in one record, and a
       // later read would pick whichever happens to sit last.
+      const wanted = valueTypeFor(variant);
       const replaced = new Set(items.map((item) => item.key));
       const kept = force
         ? record.aiDerived.filter((entry) => {
           const value = entry.value as Record<string, unknown> | undefined;
-          if (value === undefined || value.type !== PHOTO_DESCRIPTION_VALUE_TYPE) return true;
+          if (value === undefined || value.type !== wanted) return true;
           if (variantOf(value) !== variant) return true;
           return !(typeof value.key === "string" && replaced.has(value.key));
         })
@@ -388,6 +614,7 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
     // A forced run has no notion of "already described": every target was re-read on purpose.
     alreadyDescribed: force ? 0 : targets.size - pending.length,
     noDescription,
+    unread,
     unreadable,
     skippedPrivate,
     recordsUpdated,
@@ -395,5 +622,6 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
     variant,
     written: !dryRun,
     samples,
+    ...(engines.length === 0 ? {} : { engines }),
   };
 }

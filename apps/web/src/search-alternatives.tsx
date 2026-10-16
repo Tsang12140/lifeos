@@ -3,6 +3,7 @@ import type { Entity } from "@lifeos/core";
 import { apiRequest, type RecordView } from "./api";
 import { errorMessage } from "./app-meta";
 import type { SearchFilters } from "./search-filters";
+import { SearchAssistantHint } from "./search-assistant-hint";
 import "./search-alternatives.css";
 
 interface Match { recordId: string; matched: number; total: number; missing: { entityId: string; entityType: string }[]; }
@@ -52,7 +53,7 @@ export function SearchAlternatives({ queryPath, filters, entities, privacyShown,
     entityIds: filters.entityIds.filter(id => !missing.some(item => item.entityId === id && item.entityType === "")),
   });
   const showHint = ready && (near ? page !== null && !loading && !error && page.total < 3 : exactCount !== null && exactCount < 3);
-  const hint = showHint ? <p className="search-assistant-hint">没找到想要的？<button type="button" onClick={onAskAssistant}>试试问 AI 管家</button><span>，记不清细节也可以。</span></p> : null;
+  const hint = showHint ? <SearchAssistantHint onAskAssistant={onAskAssistant} /> : null;
   return <div className="search-results-view">
     {available ? <div className="search-result-modes" role="group" aria-label="搜索结果范围">
       <button type="button" aria-pressed={!near} onClick={() => setNear(false)}>全部符合{ready && exactCount !== null ? ` ${exactCount}` : ""}</button>

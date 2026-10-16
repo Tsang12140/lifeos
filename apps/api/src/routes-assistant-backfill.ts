@@ -5,17 +5,42 @@ import { backfillMaterials, prepareBackfill, requireDraft, saveBackfillPlan, com
 import { extractMaterialText } from "./assistant-material.js";
 import { baseMediaType } from "./asset-static.js";
 import { chatBackfill } from "./assistant-conversation.js";
-import { chatBackfillWithHistory } from "./assistant-chat-history.js";
+import { chatBackfillWithHistory, stopAssistantChatTurn } from "./assistant-chat-history.js";
 import type { RouteHandler } from "./route-context.js";
 
 export const handleAssistantBackfillRoutes: RouteHandler = async (ctx, req, res, pathname) => {
   const { config, repository } = ctx;
+  if (pathname === "/api/ai/backfill/chat/stop" && req.method === "POST") {
+    requireJsonContentType(req);
+    setJson(res, 200, await stopAssistantChatTurn(repository, jsonObject(await readBody(req, config.bodyLimitBytes), "body")));
+    return true;
+  }
   if (pathname === "/api/ai/backfill/chat" && req.method === "POST") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, Math.max(config.bodyLimitBytes, 18 * 1024 * 1024)), "body");
-    hasOnlyKeys(input, ["message", "materials", "history", "batchId", "revision", "conversationId", "turnId", "privacyVisible"]);
+    hasOnlyKeys(input, ["message", "materials", "history", "batchId", "revision", "conversationId", "turnId", "privacyVisible", "effort"]);
     const durable = input.conversationId !== undefined || input.turnId !== undefined;
     if (durable && (input.conversationId === undefined || input.turnId === undefined)) throw new HttpError(400, "missing_turn_identity", "conversationId 和 turnId 必须一起提供");
+    if (durable && req.headers.accept?.includes("application/x-ndjson")) {
+      // No compression/proxy buffering; actions are sent only in the validated final event.
+      res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store, no-transform", "x-accel-buffering": "no" });
+      res.flushHeaders();
+      const emit = (event: { type: string; [key: string]: unknown }) => {
+        // Snapshots supersede older previews, so slow/disconnected readers must
+        // not accumulate an unbounded queue while the durable turn continues.
+        if (event.type === "reply" && res.writableLength > 64 * 1024) return;
+        if (!res.destroyed && !res.writableEnded) res.write(JSON.stringify(event) + "\n");
+      };
+      const heartbeat = setInterval(() => emit({ type: "ping" }), 10_000);
+      res.once("close", () => clearInterval(heartbeat));
+      try {
+        const answer = await chatBackfillWithHistory(config, repository, input, text => emit({ type: "reply", text }));
+        emit({ type: "done", answer });
+      } catch (error) {
+        emit({ type: "error", status: error instanceof HttpError ? error.status : 500, code: error instanceof HttpError ? error.code : "chat_failed", message: error instanceof HttpError ? error.message : "回复暂时未能完成，请重试" });
+      } finally { clearInterval(heartbeat); res.end(); }
+      return true;
+    }
     setJson(res, 200, await (durable ? chatBackfillWithHistory(config, repository, input) : chatBackfill(config, repository, input))); return true;
   }
   if (pathname === "/api/ai/backfill/material-text" && req.method === "POST") {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { apiRequest } from "./api";
-import { PHOTO_WALL_DEFAULTS, photoWallPreferences, type PhotoWallPreferences } from "@lifeos/core";
+import { PHOTO_WALL_ENABLED, PHOTO_WALL_DEFAULTS, photoWallPreferences, type PhotoWallPreferences } from "@lifeos/core";
 import "./calendar-background.css";
 
 interface Status { imageUrl: string | null; version: string | null; valid: boolean }
@@ -9,9 +9,13 @@ export const BACKGROUND_DEFAULT_VEIL = PHOTO_WALL_DEFAULTS.veil;
 export const BACKGROUND_DEFAULT_BLUR = 0;
 
 /** A mounted month owns its background snapshot. Revalidation stages changes for the next entry. */
-export function CalendarBackground({ scope, month, hideDemo, generation, enabled, viewing = enabled }: {
+interface CalendarBackgroundProps {
   scope: string; month: string; hideDemo: boolean; generation: number; enabled: boolean; viewing?: boolean;
-}) {
+}
+export function CalendarBackground(props: CalendarBackgroundProps) {
+  return PHOTO_WALL_ENABLED ? <ActiveCalendarBackground {...props} /> : null;
+}
+function ActiveCalendarBackground({ scope, month, hideDemo, generation, enabled, viewing = enabled }: CalendarBackgroundProps) {
   const key = `${scope}:${hideDemo}:${month}`;
   const entry = useRef<{ key: string; snapshot: Snapshot | null }>({ key: "", snapshot: null });
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);

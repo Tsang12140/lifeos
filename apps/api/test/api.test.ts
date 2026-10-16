@@ -161,6 +161,9 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
 import { readConfig, type ApiConfig } from "../src/config.js";
+import { createThumbnailCache } from "../src/derived-thumbs.js";
+import { describePhotoLibrary } from "../src/photo-description.js";
+import { buildTencentCanonicalRequest, buildTencentStringToSign, signTencentRequest } from "../src/tencent-ocr.js";
 import { createHttpServer } from "../src/server.js";
 import { IdentityStore } from "../src/identity-store.js";
 import { tenantConfigFor } from "../src/tenant-config.js";
@@ -320,6 +323,166 @@ test("capsule search requires every entity and ranks paged near matches without 
   }
 });
 
+test("record keyword search also matches stored photo descriptions", async t => {
+  const h = await startHarness();
+  let db: import("node:sqlite").DatabaseSync | undefined;
+  t.after(async () => { db?.close(); await h.stop(); });
+  const { DatabaseSync } = await import("node:sqlite");
+  const make = async (content: string) => {
+    const result = await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content, occurredAt: { kind: "instant", value: "2026-10-15T02:00:00Z" } }) });
+    equal(result.response.status, 201, JSON.stringify(result.body)); return result.body as RecordView;
+  };
+  // The body of `described` deliberately carries no brand: only its photo description does.
+  const described = await make("今天的日记正文，这里没有品牌名");
+  const other = await make("另一篇日记");
+  db = new DatabaseSync(h.app.config.databasePath);
+  const entry = (variant: string, text: string) => ({
+    id: `derived-${variant}`, kind: "summary", provider: "lifeos-photo", model: "test-model",
+    generatedAt: { kind: "instant", value: "2026-10-15T03:00:00Z" },
+    sourceRecordId: described.id, sourceRevision: "sha256:deadbeef",
+    value: { type: "photo-description", variant, key: "sha256:deadbeef", assetId: "asset-1", width: 1200, text },
+  });
+  const derived = [
+    // Two different passes on the same picture, each holding a word the other lacks:
+    // both must be reachable, proving every pass is indexed rather than just one.
+    entry("plain", "木桌上放着一杯星巴克纸杯，杯身印有“STARBUCKS”字样。"),
+    entry("context", "一只咖啡杯，杯身印有“大/热 馥芮白”等字样。"),
+    // A different aiDerived kind: its text must never leak into keyword search.
+    { id: "derived-other", kind: "classification", provider: "lifeos-assistant", model: "test", generatedAt: { kind: "instant", value: "2026-10-15T03:00:00Z" }, sourceRecordId: described.id, sourceRevision: "x", value: { type: "ai-assisted", batchId: "b1", evidence: "绝密标记词" } },
+  ];
+  db.prepare("UPDATE records SET ai_derived_json = ? WHERE id = ?").run(JSON.stringify(derived), described.id);
+
+  const ids = async (q: string) => {
+    const result = await request(h.base, `/api/records?q=${encodeURIComponent(q)}`);
+    equal(result.response.status, 200, q);
+    return (result.body as { items: RecordView[] }).items.map(r => r.id).sort();
+  };
+  deepEqual(await ids("馥芮白"), [described.id], "只写在 context 档描述里的词应能命中该记录");
+  deepEqual(await ids("STARBUCKS"), [described.id], "只写在 plain 档描述里的词同样应命中");
+  deepEqual(await ids("另一篇"), [other.id], "正文关键词搜索不受影响");
+  deepEqual(await ids("绝密标记词"), [], "非 photo-description 的 aiDerived 文字不得进入搜索");
+  deepEqual(await ids("库里根本不存在的词"), [], "无关词仍应零命中");
+});
+
+test("TC3-HMAC-SHA256 拼装与腾讯云公布示例逐字节一致", () => {
+  // 官方《签名方法 v3》公布了这一步的中间值，而下面两个哈希**不依赖 SecretKey** —— 密钥在
+  // 文档里是打码的，所以能复现的只有拼装。拼装恰恰是最容易写错的一环（空行、头的顺序），
+  // 也正是这里要钉死的东西：HMAC 链是标准算法，拼装不是。
+  const payload = "{\"Limit\": 1, \"Filters\": [{\"Values\": [\"\\u672a\\u547d\\u540d\"], \"Name\": \"instance-name\"}]}";
+  const payloadHash = "35e9c5b0e3ae67532d3c9f17ead6c90222632e5b1ff7f6e89887f1398934f064";
+  equal(createHash("sha256").update(payload, "utf8").digest("hex"), payloadHash, "请求正文哈希");
+  const canonicalRequest = buildTencentCanonicalRequest({
+    host: "cvm.tencentcloudapi.com",
+    payload,
+    extraSignedHeaders: [{ name: "x-tc-action", value: "describeinstances" }],
+  });
+  equal(canonicalRequest, [
+    "POST",
+    "/",
+    "",
+    "content-type:application/json; charset=utf-8",
+    "host:cvm.tencentcloudapi.com",
+    "x-tc-action:describeinstances",
+    "",
+    "content-type;host;x-tc-action",
+    payloadHash,
+  ].join("\n"), "规范请求串");
+  const canonicalHash = "7019a55be8395899b900fb5564e4200d984910f34794a27cb3fb7d10ff6a1e84";
+  equal(createHash("sha256").update(canonicalRequest, "utf8").digest("hex"), canonicalHash, "规范请求串哈希");
+  equal(buildTencentStringToSign({ canonicalRequest, timestamp: 1551113065, service: "cvm" }), [
+    "TC3-HMAC-SHA256",
+    "1551113065",
+    "2019-02-25/cvm/tc3_request",
+    canonicalHash,
+  ].join("\n"), "待签名字符串");
+  // 运行时只签 content-type 与 host（与官方 SDK 一致），头本身仍须成形。
+  match(
+    signTencentRequest({ secretId: "AKIDexample", secretKey: "secretexample", host: "ocr.tencentcloudapi.com", service: "ocr", timestamp: 1551113065, payload: "{}" }),
+    /^TC3-HMAC-SHA256 Credential=AKIDexample\/2019-02-25\/ocr\/tc3_request, SignedHeaders=content-type;host, Signature=[0-9a-f]{64}$/,
+  );
+});
+
+test("OCR pass 落库为 photo-ocr 且能被关键词搜索命中", async (t) => {
+  // 上传照片要先有 asset root；缩略图缓存按数据目录自建即可 —— 测试要的是「能解码原图」，
+  // 不必去借服务器内部实例（那个不在公开类型里）。
+  const photosRoot = mkdtempSync(join(tmpdir(), "lifeos-ocr-pass-"));
+  const h = await startHarness(undefined, 1024 * 1024, undefined, photosRoot);
+  t.after(async () => {
+    await h.stop(false);
+    // Windows 上 libvips（sharp）放开它读过的文件比函数返回晚一截 —— 实测要几百毫秒，
+    // 期间删目录会 EPERM。退让几轮再删；最后仍不行就放过：临时目录残留不该把测试判失败，
+    // 而且它本就是一次性目录。
+    for (const path of [h.root, photosRoot]) {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try { rmSync(path, { recursive: true, force: true }); break; }
+        catch { await new Promise((resolve) => setTimeout(resolve, 300)); }
+      }
+    }
+  });
+  const thumbnails = createThumbnailCache(h.app.config.dataDirectory);
+  const upload = await request(h.base, "/api/assets/uploads?name=page.png", { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(TINY_PNG) });
+  equal(upload.response.status, 201, JSON.stringify(upload.body));
+  const created = await request(h.base, "/api/records", {
+    method: "POST",
+    ...json({ kind: "journal", content: "今天拍了菜单，正文里没有那几个字", assetRefs: [{ assetId: (upload.body as Asset).id, role: "photo" }] }),
+  });
+  equal(created.response.status, 201, JSON.stringify(created.body));
+  const record = created.body as RecordView;
+
+  // 识别器是注入的：这个测试**绝不联网**，真实实现要的凭证测试里也不可能有。
+  // 返回值带 engine，是因为落库的 `model` 要记「实际作答的那一档」，而不是配置里的偏好。
+  const recognize = async () => ({ kind: "text" as const, text: "精品茶具\n扫码点餐", engine: "GeneralBasicOCR" });
+  const run = await describePhotoLibrary({ repository: h.app.repository, config: h.app.config, thumbnails, variant: "ocr", limit: 10, recognize });
+  equal(run.described, 1, JSON.stringify(run));
+
+  const stored = (await request(h.base, `/api/records/${record.id}`)).body as RecordView;
+  const entries = stored.aiDerived.filter((item) => (item.value as Record<string, unknown>).type === "photo-ocr");
+  equal(entries.length, 1, "OCR 文本落库为 photo-ocr 条目");
+  equal((entries[0]!.value as Record<string, unknown>).text, "精品茶具\n扫码点餐", "逐行保留，不压成一行");
+  equal((entries[0]!.value as Record<string, unknown>).width, 2048, "OCR 用 2048 档，不用 1200 档");
+  equal(entries[0]!.model, "GeneralBasicOCR", "model 记实际作答的引擎，而不是配置里的偏好");
+  // 正文里根本没有这个词 —— 命中只能来自 OCR 文本。
+  const found = await request(h.base, `/api/records?q=${encodeURIComponent("扫码点餐")}`);
+  deepEqual((found.body as { items: RecordView[] }).items.map((r) => r.id), [record.id], "只存在于 OCR 文本里的词应能命中该记录");
+
+  // 第二次跑不再为同一张照片花钱。
+  const again = await describePhotoLibrary({ repository: h.app.repository, config: h.app.config, thumbnails, variant: "ocr", limit: 10, recognize: async () => ({ kind: "text" as const, text: "别的字", engine: "GeneralBasicOCR" }) });
+  equal(again.described, 0, "已识别过的照片不重复识别");
+});
+
+test("私密记录的照片不送 OCR", async (t) => {
+  const photosRoot = mkdtempSync(join(tmpdir(), "lifeos-ocr-private-"));
+  const h = await startHarness(undefined, 1024 * 1024, undefined, photosRoot);
+  // 直连数据库的句柄必须先关，否则服务目录删不掉（Windows 把「文件被占用」报成 EPERM）。
+  let db: import("node:sqlite").DatabaseSync | undefined;
+  t.after(async () => {
+    db?.close();
+    await h.stop(false);
+    rmSync(photosRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    rmSync(h.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const thumbnails = createThumbnailCache(h.app.config.dataDirectory);
+  const upload = await request(h.base, "/api/assets/uploads?name=secret.png", { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(TINY_PNG) });
+  equal(upload.response.status, 201, JSON.stringify(upload.body));
+  const created = await request(h.base, "/api/records", {
+    method: "POST",
+    ...json({ kind: "journal", content: "私密内容", assetRefs: [{ assetId: (upload.body as Asset).id, role: "photo" }] }),
+  });
+  equal(created.response.status, 201, JSON.stringify(created.body));
+  const record = created.body as RecordView;
+  // 事后转私密也要挡住 —— 这正是「每天定时前先转私密」能成立的前提。
+  const { DatabaseSync } = await import("node:sqlite");
+  const sqlite = new DatabaseSync(h.app.config.databasePath);
+  db = sqlite;
+  sqlite.prepare("UPDATE records SET is_private = 1 WHERE id = ?").run(record.id);
+
+  let calls = 0;
+  const run = await describePhotoLibrary({ repository: h.app.repository, config: h.app.config, thumbnails, variant: "ocr", limit: 10, recognize: async () => { calls += 1; return { kind: "text" as const, text: "不该出现的字", engine: "GeneralBasicOCR" }; } });
+  equal(calls, 0, "私密记录的照片一个字都不许出服务器");
+  equal(run.skippedPrivate, 1);
+  equal(run.described, 0);
+});
+
 test("assistant conversation distinguishes questions, facts and current-message confirmation", async (t) => {
   const h = await startHarness(); t.after(() => h.stop());
   const chat = (body: object) => request(h.base, "/api/ai/backfill/chat", { method: "POST", ...json(body) });
@@ -356,7 +519,7 @@ test("assistant conversation forwards mixed requests, revises proposals and neve
   envelope = { action: "update_draft", reply: "日期改到9月23日，人物和地点保留。", plan: { ...plan, entries: plan.entries.map((e) => ({ ...e, date: "2026-09-23" })) } };
   result = await chat({ message: "日期改到2026-09-23，别的别动", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200); const changed = (result.body as BackfillChatAnswer).batch!; equal(changed.id, batch.id); equal(changed.revision, batch.revision + 1); equal(changed.plan.entries[0]!.date, "2026-09-23"); equal(changed.plan.objects.length, 2); batch = changed;
   const saved = batch.plan;
-  providerFailed = true; result = await chat({ message: "把地点改成新店", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200); equal((result.body as BackfillChatAnswer).action, "reply"); deepEqual((result.body as BackfillChatAnswer).batch!.plan, saved); providerFailed = false;
+  providerFailed = true; result = await chat({ message: "把地点改成新店", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 502); equal((result.body as { error: string }).error, "ai_service_unavailable"); deepEqual(h.app.repository.assistantBatch(batch.id)!.plan, saved); providerFailed = false;
   envelope = { action: "commit", reply: "模型试图声称已经写入", plan };
   equal((await chat({ message: "看看这个方案", batchId: batch.id, revision: batch.revision })).response.status, 400);
   equal(backfillItems((await request(h.base, "/api/records?backfill=ai")).body).length, 0);
@@ -430,7 +593,11 @@ test("assistant materials read text, PDF and Word, attach originals and expose r
   const content = "2026-09-22 去 #新地点 整理日记";
   const parsed = await request(h.base, "/api/ai/backfill/material-text", { method: "POST", headers: { "content-type": "text/plain" }, body: content }); equal(parsed.response.status, 200); equal((parsed.body as { text: string }).text, content);
   const file = await request(h.base, "/api/assets/materials?name=diary.txt", { method: "POST", headers: { "content-type": "text/plain" }, body: content }); equal(file.response.status, 201); equal((file.body as Asset).kind, "file");
-  const read = await fetch(`${h.base}/api/assets/${(file.body as Asset).id}/content`); equal(await read.text(), content); equal(read.headers.get("content-disposition"), "attachment");
+  const read = await fetch(`${h.base}/api/assets/${(file.body as Asset).id}/content`); equal(await read.text(), content);
+  const disposition = read.headers.get("content-disposition") ?? "";
+  ok(/^attachment(?:;|$)/.test(disposition));
+  const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  equal(encodedName ? decodeURIComponent(encodedName) : /filename="([^"]+)"/i.exec(disposition)?.[1], "diary.txt");
   const fail = await request(h.base, "/api/ai/backfill/material-text", { method: "POST", headers: { "content-type": "application/pdf" }, body: "not a PDF" }); equal(fail.response.status, 415);
   const zip = new JSZip();
   zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');

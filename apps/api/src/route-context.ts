@@ -3,6 +3,7 @@ import type { ApiConfig } from "./config.js";
 import type { SqliteRecordRepository } from "./repository.js";
 import type { BackupScheduler } from "./backup-scheduler.js";
 import type { WeatherArchiveScheduler } from "./weather-archive-scheduler.js";
+import type { PhotoTextTrigger } from "./photo-text-trigger.js";
 import type { createThumbnailCache } from "./derived-thumbs.js";
 import type { PoolConsumerBridge } from "./storage-pool.js";
 import type { StoragePoolStore } from "./storage-pool-store.js";
@@ -29,6 +30,11 @@ export interface RouteContext {
   readonly calendarTaskLabels: CalendarTaskLabels;
   readonly backupScheduler: BackupScheduler;
   readonly weatherArchiveScheduler: WeatherArchiveScheduler;
+  /**
+   * The "an entry was saved" nudge that reads the words off its photos behind the request.
+   * A route only ever *notifies* it; the decision of what to read is the pass's own.
+   */
+  readonly photoTextTrigger: PhotoTextTrigger;
   readonly thumbnails: ThumbnailCache;
   readonly poolBridge: PoolConsumerBridge;
   readonly poolStore: StoragePoolStore | null;

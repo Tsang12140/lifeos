@@ -88,7 +88,9 @@ export function buildRecord(input: JsonObject, repository: SqliteRecordRepositor
   });
   const note = input.note === undefined ? undefined : (() => {
     if (kind !== "note") throw new HttpError(400, "invalid_field", "note is only valid for note records");
-    return parseNoteDetails(input.note);
+    const details = parseNoteDetails(input.note);
+    if (details.folderId && !repository.notes.find(details.folderId)) throw new HttpError(400, "unknown_folder", "笔记文件夹不存在");
+    return details;
   })();
   const id = randomUUID();
   const explicitRefs = input.entityRefs === undefined ? ([] as const) : entityRefsField(input.entityRefs, repository);
@@ -111,6 +113,7 @@ export function buildRecord(input: JsonObject, repository: SqliteRecordRepositor
   if (kind === "task") return { ...common, kind: "task", task: { status: "todo", ...(dueAt === undefined ? {} : { dueAt }) } };
   if (dueAt !== undefined) throw new HttpError(400, "invalid_field", "dueAt is only valid for task records");
   const record = { ...common, kind } as TimelineRecord;
+  repository.notes.assertFolder(record);
   assertJournalDate(record);
   return record;
 }
@@ -154,6 +157,10 @@ export function patchRecord(
   if (input.content !== undefined) {
     const content = stringField(input.content, "content");
     record = { ...record, body: { ...record.body, edited: content, ...(record.body.entityMentions === undefined ? {} : { entityMentions: rebaseEntityDecisions(record.body.edited ?? record.body.original, content, record.body.entityMentions) }) } };
+    // A plain-text client must not leave a previous rich-text rendering on screen.
+    if(record.kind==="note"&&record.note?.html!==undefined&&!(input.note&&typeof input.note==="object"&&"html" in input.note)){
+      const {html:_html,...note}=record.note;record={...record,note};
+    }
   }
   if (input.entityMentions !== undefined) {
     const decisions = entityDecisionsField(input.entityMentions, record.body.edited ?? record.body.original, repository);
@@ -203,6 +210,7 @@ export function patchRecord(
     record = { ...record, assetRefs: assetRefsField(input.assetRefs, repository) };
   }
   record = { ...record, updatedAt: nowInstant() };
+  repository.notes.assertFolder(record);
   assertJournalDate(record);
   return { expectedRevision, record };
 }

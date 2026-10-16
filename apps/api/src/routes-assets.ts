@@ -69,26 +69,27 @@ import { MATERIAL_FORMATS } from "./assistant-material.js";
 import { handleVideoRoutes } from "./video-assets.js";
 
 /** Hash-less registered local files may be replaced outside the API; their stat also versions the URL. */
-export function assetThumbnailVersion(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset): string {
+export function assetThumbnailVersion(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset, namespace = ctx.config.databasePath): string {
   let stamp: string | undefined;
   if (asset.storageRefs.some(ref => ref.sourceId === "local" && ref.contentHash === undefined)) {
     try { const file = resolveAssetOriginal(ctx.config, ctx.repository, asset.id).file; const stat = statSync(file); stamp = stat.size + ":" + stat.mtimeMs + ":" + stat.ctimeMs; }
     catch { stamp = "missing"; }
   }
-  return calendarAssetVersion(ctx.config.databasePath, asset, stamp);
+  return calendarAssetVersion(namespace, asset, stamp);
 }
 
-export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width: import("./derived-thumbs.js").ThumbnailWidth): Promise<{ file: string; source: string; canary: boolean }> {
+export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width: import("./derived-thumbs.js").ThumbnailWidth, upright = false): Promise<{ file: string; source: string; canary: boolean }> {
   const { config, repository, thumbnails } = ctx;
   const asset = repository.findAssetById(id);
   if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
+  const rotation = upright ? 0 : asset.displayRotation ?? 0;
   const poolRead = assetPoolRead(ctx,asset);
   const poolReference = poolRead?.reference;
   let file: string;
   let source = "local-derived";
   if (poolReference !== undefined) {
     poolObjectFor(ctx, asset, poolReference, poolRead!.ledgerAssetId);
-    const cached = thumbnails.cached(poolReference, width);
+    const cached = thumbnails.cached(poolReference, width, rotation);
     if (cached !== null) { file = cached; source = "derived-cache"; }
     else {
       const mime = asset.mediaType ?? poolReference.mediaType ?? "";
@@ -98,7 +99,7 @@ export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width
       }
       const downloaded = await downloadPoolAsset(ctx, asset, poolReference, poolRead!.ledgerAssetId);
       try {
-        file = await thumbnails.ensure(poolReference, downloaded.file, width);
+        file = await thumbnails.ensure(poolReference, downloaded.file, width, rotation);
         source = "pool-derived";
       } catch {
         throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original");
@@ -109,13 +110,18 @@ export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width
     if (!THUMBNAILABLE_ASSET_EXTENSIONS.has(extname(original.file).toLowerCase())) {
       throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
     }
-    try { file = await thumbnails.ensure(original.reference, original.file, width); }
+    try { file = await thumbnails.ensure(original.reference, original.file, width, rotation); }
     catch { throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original"); }
   }
   return { file, source, canary: poolRead?.canary === true };
 }
 
 const photoInfoCache = new WeakMap<RouteContext["repository"], Map<string, Promise<Awaited<ReturnType<typeof readPhotoMetadata>>>>>();
+function downloadDisposition(asset: Asset): string {
+  if (asset.originalName && /^[\x20-\x7e]+$/.test(asset.originalName) && !/["\\]/.test(asset.originalName)) return contentDisposition(asset.originalName);
+  const name = encodeURIComponent(asset.originalName ?? "photo").replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${contentDisposition("photo")}; filename*=UTF-8''${name}`;
+}
 
 const ASSET_KINDS: readonly AssetKind[] = ["photo", "audio", "video", "file"];
 const ASSET_ROLES: readonly AssetRole[] = ["photo", "recording", "video", "attachment"];
@@ -491,6 +497,23 @@ export const handleAssetsRoutes: RouteHandler = async (
       return true;
     }
   }
+  const rotationMatch = /^\/api\/assets\/([^/]+)\/rotation$/.exec(pathname);
+  if (rotationMatch !== null && req.method === "PATCH") {
+    requireJsonContentType(req);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["rotation", "expectedRotation"]);
+    const valid = (v: unknown): v is 0 | 90 | 180 | 270 => typeof v === "number" && [0, 90, 180, 270].includes(v);
+    if (!valid(input.rotation) || !valid(input.expectedRotation)) throw new HttpError(400, "invalid_rotation", "照片旋转角度不正确");
+    // Re-read after body IO so concurrent direction changes cannot overwrite each other.
+    const asset = repository.findAssetById(decodeSegment(rotationMatch[1]!));
+    if (!asset || asset.kind !== "photo") throw new HttpError(404, "not_found", "照片不存在");
+    if ((asset.displayRotation ?? 0) !== input.expectedRotation) throw new HttpError(409, "rotation_changed", "照片方向已在别处更新，请重新打开后重试");
+    const updated: Asset = { ...asset, displayRotation: input.rotation };
+    repository.updateAsset(updated);
+    ctx.calendarDays.schedule();
+    setJson(res, 200, updated);
+    return true;
+  }
   const assetMatch = /^\/api\/assets\/([^/]+)$/.exec(pathname);
   if (assetMatch !== null && req.method === "GET") {
     const asset = repository.findAssetById(decodeSegment(assetMatch[1]!));
@@ -618,9 +641,9 @@ export const handleAssetsRoutes: RouteHandler = async (
         res.writeHead(200, {
           "content-type": mediaType,
           "content-length": String(downloaded.bytes),
-          "cache-control": poolRead.canary ? "no-store" : "private, max-age=300",
+          "cache-control": poolRead.canary || req.url?.startsWith("/api/public/notes/") ? "no-store" : "private, max-age=300",
           "x-lifeos-asset-source": "pool",
-          "content-disposition": asset.kind === "file" ? "attachment" : "inline",
+          "content-disposition": asset.kind === "file" || url.searchParams.get("download") === "1" ? downloadDisposition(asset) : "inline",
         });
         res.end(readFileSync(downloaded.file));
       } finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
@@ -630,9 +653,9 @@ export const handleAssetsRoutes: RouteHandler = async (
     res.writeHead(200, {
       "content-type": resolved.mediaType,
       "content-length": String(statSync(resolved.file).size),
-      "cache-control": "private, max-age=300",
+      "cache-control": req.url?.startsWith("/api/public/notes/") ? "no-store" : "private, max-age=300",
       "x-lifeos-asset-source": "local",
-      "content-disposition": asset.kind === "file" ? "attachment" : "inline",
+      "content-disposition": asset.kind === "file" || url.searchParams.get("download") === "1" ? downloadDisposition(asset) : "inline",
     });
     res.end(readFileSync(resolved.file));
     return true;
@@ -682,7 +705,7 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
     const version = url.searchParams.get("v");
     if (version !== null && version !== assetThumbnailVersion(ctx, asset)) throw new HttpError(409, "asset_version_changed", "照片已更新，请刷新日历");
-    const { file, source, canary } = await resolveAssetThumbnail(ctx, id, width);
+    const { file, source, canary } = await resolveAssetThumbnail(ctx, id, width, url.searchParams.get("upright") === "1");
     res.writeHead(200, {
       "content-type": `image/${THUMBNAIL_FORMAT}`,
       "content-length": String(statSync(file).size),

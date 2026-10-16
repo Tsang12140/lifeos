@@ -8,6 +8,7 @@ import { HabitIcon } from "./habit-icon";
 import type { CustomHabit } from "@lifeos/core";
 import { canEditDaySummary } from "@lifeos/core";
 import { calendarTasksForDate, calendarTaskStatus, calendarTaskText, useCalendarTaskLabels } from "./calendar-tasks";
+import { scopedKey } from "./storage-scope";
 import {
   useCallback,
   useEffect,
@@ -112,15 +113,17 @@ type CalendarDateArtPreferences = {
   readonly desktopLayout: CalendarDateArtLayout;
   readonly mobileLayout: CalendarDateArtLayout;
   readonly dateNumberScale: number;
+  readonly photoVeil: number;
 };
 
-const CALENDAR_DATE_ART_STORAGE_KEY = "lifeos.calendar.dateArt.v1";
+const CALENDAR_DATE_ART_STORAGE_KEY = scopedKey("lifeos.calendar.dateArt.v1");
 const DEFAULT_CALENDAR_DATE_ART_PREFERENCES: CalendarDateArtPreferences = {
   version: 1,
   scheme: "morandi",
   desktopLayout: "big",
   mobileLayout: "horizontal",
   dateNumberScale: 1.2,
+  photoVeil: 82,
 };
 const CALENDAR_DATE_ART_PALETTES: readonly {
   readonly key: CalendarDateArtPaletteKey;
@@ -155,6 +158,7 @@ function readCalendarDateArtPreferences(): CalendarDateArtPreferences {
     return {
       version: 1,
       dateNumberScale: typeof candidate.dateNumberScale === "number" && Number.isFinite(candidate.dateNumberScale) ? Math.min(1.8, Math.max(1, candidate.dateNumberScale)) : 1.2,
+      photoVeil: typeof candidate.photoVeil === "number" && Number.isFinite(candidate.photoVeil) ? Math.round(Math.min(100, Math.max(0, candidate.photoVeil))) : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.photoVeil,
       scheme: isCalendarDateArtPalette(candidate.scheme) ? candidate.scheme : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.scheme,
       desktopLayout: isCalendarDateArtLayout(candidate.desktopLayout) ? candidate.desktopLayout : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.desktopLayout,
       mobileLayout: isCalendarDateArtLayout(candidate.mobileLayout) ? candidate.mobileLayout : DEFAULT_CALENDAR_DATE_ART_PREFERENCES.mobileLayout,
@@ -406,6 +410,7 @@ export function CalendarSettingsPanel({ statusState, onStatusChange, onRetry, on
     <div className="dialog-body calendar-settings-dialog-body">
       <div id="calendar-settings-appearance" hidden={section !== "appearance"}>
       <label className="calendar-date-size-setting"><span>日期数字大小 <output>{Math.round(dateArtPreferences.dateNumberScale * 100)}%</output></span><input type="range" min="100" max="180" step="1" value={Math.round(dateArtPreferences.dateNumberScale * 100)} onChange={event => onDateArtChange({ dateNumberScale: Number(event.target.value) / 100 })} aria-label="日期数字大小" /></label>
+      <label className="calendar-date-size-setting"><span>日期格照片白蒙版 <output>{dateArtPreferences.photoVeil}%</output></span><input type="range" min="0" max="100" step="1" value={dateArtPreferences.photoVeil} onChange={event => onDateArtChange({ photoVeil: Number(event.target.value) })} aria-label="日期格照片白蒙版" data-date-photo-veil /></label>
       <CalendarDateArtSettings preferences={dateArtPreferences} onChange={onDateArtChange} />
       <CalendarBackgroundSettings key={`${backgroundScope}:${hideDemo}:${backgroundMonth}`} month={backgroundMonth} hideDemo={hideDemo} scope={backgroundScope} />
       </div>
@@ -458,7 +463,7 @@ interface MobileCycleDraft {
   readonly revision: string;
 }
 
-const MOBILE_CYCLE_WEATHER_KEY = "lifeos.calendar.show-cycle-weather";
+const MOBILE_CYCLE_WEATHER_KEY = scopedKey("lifeos.calendar.show-cycle-weather");
 
 function mobileCycleDraftForDate(date: string, module: CycleModuleResponse): MobileCycleDraft {
   const kinds = MOBILE_CYCLE_EVENT_KINDS.map((item) => item.kind).filter((kind) => module.events.some((event) => event.date === date && event.kind === kind));
@@ -607,6 +612,7 @@ export function CalendarView({ hideDemo = false, backgroundScope = "local", mode
   const selectedDateArtPalette = CALENDAR_DATE_ART_PALETTES.find((palette) => palette.key === dateArtPreferences.scheme) ?? CALENDAR_DATE_ART_PALETTES[0]!;
   const dateArtStyle = useMemo(() => ({
     "--calendar-date-number-scale": dateArtPreferences.dateNumberScale,
+    "--calendar-date-photo-veil": dateArtPreferences.photoVeil / 100,
     "--calendar-date-art-foreground": selectedDateArtPalette.foreground,
     "--calendar-date-art-tone-1": selectedDateArtPalette.colors[0],
     "--calendar-date-art-tone-2": selectedDateArtPalette.colors[1],
@@ -614,7 +620,7 @@ export function CalendarView({ hideDemo = false, backgroundScope = "local", mode
     "--calendar-date-art-tone-4": selectedDateArtPalette.colors[3],
     "--calendar-date-art-tone-5": selectedDateArtPalette.colors[4],
     "--calendar-date-art-tone-6": selectedDateArtPalette.colors[5],
-  } as CSSProperties), [selectedDateArtPalette, dateArtPreferences.dateNumberScale]);
+  } as CSSProperties), [selectedDateArtPalette, dateArtPreferences.dateNumberScale, dateArtPreferences.photoVeil]);
   const mobileCycleBusyRef = useRef(false);
   const mobileCycleDraftRef = useRef<MobileCycleDraft | null>(null);
   const mobileCycleOpenRef = useRef(false);

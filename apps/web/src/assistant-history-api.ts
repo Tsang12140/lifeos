@@ -7,7 +7,7 @@ import type {
   BackfillChatAnswer,
   BackfillMaterial,
 } from "@lifeos/core";
-import { apiRequest } from "./api";
+import { apiRequest, apiResponse, type AiGear, type ApiError } from "./api";
 
 export interface AssistantHistoryAttachment {
   readonly assetId: string;
@@ -91,6 +91,8 @@ export interface AssistantChatTurnRequest {
    * "you can look at them in the list" apart from "they are hidden from you too".
    */
   readonly privacyVisible?: boolean;
+  /** Answer gear chosen beside the composer for this conversation; absent = stored default. */
+  readonly effort?: AiGear;
 }
 
 export type AssistantChatTurnAnswer = BackfillChatAnswer & {
@@ -98,9 +100,43 @@ export type AssistantChatTurnAnswer = BackfillChatAnswer & {
   readonly turnId: string;
 };
 
-export function sendAssistantChatTurn(turn: AssistantChatTurnRequest): Promise<AssistantChatTurnAnswer> {
-  return apiRequest<AssistantChatTurnAnswer>("/api/ai/backfill/chat", {
+export async function sendAssistantChatTurn(turn: AssistantChatTurnRequest, onReply?: (text: string) => void): Promise<AssistantChatTurnAnswer> {
+  const response = await apiResponse("/api/ai/backfill/chat", {
     method: "POST",
+    headers: { Accept: "application/x-ndjson" },
     body: JSON.stringify(turn),
   });
+  // Older servers and providers that buffer remain usable during rolling updates.
+  if (!response.headers.get("content-type")?.includes("application/x-ndjson")) return await response.json() as AssistantChatTurnAnswer;
+  if (!response.body) throw new Error("回复连接中断，原消息已保留，请重试");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        const event = JSON.parse(line) as { type: string; text?: string; answer?: AssistantChatTurnAnswer; status?: number; code?: string; message?: string };
+        if (event.type === "reply" && typeof event.text === "string") onReply?.(event.text);
+        if (event.type === "done" && event.answer) return event.answer;
+        if (event.type === "error") {
+          const error = new Error(event.message ?? "回复未能完成，请重试") as ApiError;
+          Object.defineProperties(error, { status: { value: event.status }, code: { value: event.code } });
+          throw error;
+        }
+      }
+      if (chunk.done) break;
+      if (buffer.length > 2_000_000) throw new Error("回复内容异常，请重试");
+    }
+    throw new Error("回复连接中断，原消息已保留，请重试");
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+}
+
+/** Stop the durable server task rather than just its browser stream. */
+export function stopAssistantChatTurn(conversationId: string, turnId: string): Promise<{ readonly status: string }> {
+  return apiRequest("/api/ai/backfill/chat/stop", { method: "POST", body: JSON.stringify({ conversationId, turnId }) });
 }

@@ -25,4 +25,4 @@ export function assistantPlaceContext(repository: SqliteRecordRepository) {
   };
 }
 
-export const PLACE_ARCHIVE_RULE = "placeArchives 是地点收录档案：collectedAt 为系统首次收录时间，firstJournal 为首次关联日记，其 occurredAt 是事件日期，两者不能混淆；补写早年的日记不会改变首次收录。时间按 Asia/Shanghai 北京时间展示到秒。unrecorded 表示历史来源未记录，none 表示尚未关联日记，private/unavailable 不得猜测来源或正文。firstJournal.content 最多提供前1200字，不代表日记全文。";
+export const PLACE_ARCHIVE_RULE = "placeArchives 是地点收录档案：collectedAt 为系统首次收录时间，firstJournal 为首次关联日记，其 occurredAt 是事件日期，两者不能混淆；补写早年的日记不会改变首次收录。时间口径为 Asia/Shanghai。unrecorded 表示历史来源未记录，none 表示尚未关联日记，private/unavailable 不得猜测来源或正文。firstJournal.content 最多提供前1200字，不代表日记全文。";

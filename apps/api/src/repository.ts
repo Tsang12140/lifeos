@@ -1,3 +1,4 @@
+import { NotesStore } from "./notes-store.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -94,7 +95,7 @@ export interface ExportData {
   readonly records: readonly TimelineRecord[];
   readonly entities: readonly Entity[];
   readonly assets: readonly Asset[];
-  readonly modules?: { readonly cycleIntimacy?: CycleIntimacyModuleData };
+  readonly modules?: { readonly cycleIntimacy?: CycleIntimacyModuleData; readonly notes?: { readonly folders: readonly import("@lifeos/core").NoteFolder[] } };
 }
 
 /** Why a file landed in the orphan trash: the collector, or a manual delete. */
@@ -543,6 +544,7 @@ function preservePlaceCollection(entity: Entity, stored: Entity | null): Entity 
 
 export class SqliteRecordRepository {
   readonly #db: DatabaseSync;
+  public readonly notes: NotesStore;
 
   public portableSpace(): SpaceTables { return readSpaceTables(this.#db); }
   public restorePortableSpace(tables: SpaceTables, expected: string): void { replaceSpaceTables(this.#db, tables, expected); }
@@ -553,6 +555,7 @@ export class SqliteRecordRepository {
       enableForeignKeyConstraints: true,
       timeout: 5000,
     });
+    this.notes = new NotesStore(this.#db);
     this.#db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
@@ -1699,8 +1702,16 @@ export class SqliteRecordRepository {
     }
     if (query.q !== undefined && query.q.length > 0) {
       // instr() treats '%' and '_' literally, unlike LIKE, and keeps Chinese text intact.
-      where.push("(instr(coalesce(body_edited, body_original) || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0 OR EXISTS (SELECT 1 FROM json_each(entity_refs_json) ref JOIN entities entity ON entity.id = json_extract(ref.value, '$.entityId') WHERE instr(entity.value_json, ?) > 0))");
-      params.push(query.q, query.q);
+      // The third clause reaches the text derived from a picture: the AI's one-line
+      // caption and the raw characters OCR read off it. A keyword that survives only in
+      // what a photo looks like -- a brand, a seat number, an amount, a book title --
+      // used to be unfindable because this WHERE never read either.
+      // Every entry of both kinds counts, whichever pass produced it: the caption passes
+      // are three separate sentences about the same picture and OCR is a fourth reading
+      // of it, so folding them all in only widens recall, and search here is a boolean
+      // filter with no ranking to skew.
+      where.push("(instr(coalesce(body_edited, body_original) || char(10) || coalesce(json_extract(note_json, '$.title'), '') || char(10) || coalesce(json_extract(note_json, '$.source'), '') || char(10) || id, ?) > 0 OR EXISTS (SELECT 1 FROM json_each(entity_refs_json) ref JOIN entities entity ON entity.id = json_extract(ref.value, '$.entityId') WHERE instr(entity.value_json, ?) > 0) OR EXISTS (SELECT 1 FROM json_each(coalesce(ai_derived_json, '[]')) derived WHERE json_extract(derived.value, '$.value.type') IN ('photo-description', 'photo-ocr') AND instr(coalesce(json_extract(derived.value, '$.value.text'), ''), ?) > 0))");
+      params.push(query.q, query.q, query.q);
     }
     if (query.entityId !== undefined && query.entityId.length > 0) {
       // json_each keeps the match exact; a substring test would confuse person_1 with person_10.
@@ -1747,7 +1758,7 @@ export class SqliteRecordRepository {
   public update(record: TimelineRecord, expectedRevision: number): boolean {
     record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
-    return this.#withFirstPlaceJournal(record, () => { const result = this.#db.prepare(`
+    return this.#withNoteVersion(record, () => this.#withFirstPlaceJournal(record, () => { const result = this.#db.prepare(`
       UPDATE records SET
         kind = ?, body_json = ?, body_original = ?, body_edited = ?, created_at_json = ?, updated_at_json = ?,
         occurred_at_json = ?, weather_json = ?, entity_refs_json = ?, related_record_ids_json = ?, asset_refs_json = ?,
@@ -1775,7 +1786,19 @@ export class SqliteRecordRepository {
       record.id,
       expectedRevision,
     );
-    return Number(result.changes) === 1; });
+    return Number(result.changes) === 1; }));
+  }
+
+  #withNoteVersion(record: TimelineRecord, write: () => boolean): boolean {
+    if (record.kind !== "note") return write();
+    this.notes.assertFolder(record);
+    this.#db.exec("SAVEPOINT note_update");
+    try {
+      const previous = this.findById(record.id);
+      const saved = write();
+      if (saved && previous?.kind === "note" && (JSON.stringify(previous.note) !== JSON.stringify(record.note) || (previous.body.edited ?? previous.body.original) !== (record.body.edited ?? record.body.original))) this.notes.capture(previous);
+      this.#db.exec("RELEASE note_update"); return saved;
+    } catch (error) { this.#db.exec("ROLLBACK TO note_update; RELEASE note_update"); throw error; }
   }
 
   /** Association time is server save time, never the diary's backdated event time. */
@@ -1857,7 +1880,7 @@ export class SqliteRecordRepository {
       assertValidAsset(value);
       assets.push(value);
     }
-    return { records, entities, assets, modules: { cycleIntimacy: this.cycleIntimacyModule() } };
+    return { records, entities, assets, modules: { cycleIntimacy: this.cycleIntimacyModule(), notes: { folders: this.notes.list() } } };
   }
 
   public importData(data: ExportData): void {
@@ -1901,7 +1924,9 @@ export class SqliteRecordRepository {
           ai_derived_json, task_json, note_json, is_private, is_demo, is_backfill, revision, timeline_sort, deleted_at_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
       `);
+      this.notes.importFolders(data.modules?.notes?.folders ?? []);
       for (const record of data.records) {
+        this.notes.assertFolder(record);
         insertRecord.run(...recordInsertParams(record));
       }
       const insertEntity = this.#db.prepare("INSERT INTO entities (id, value_json, address) VALUES (?, ?, ?)");

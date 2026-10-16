@@ -1,3 +1,4 @@
+import type { PhotoPreviewHandler } from "./asset-preview-model";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import type { Asset, Entity } from "@lifeos/core";
@@ -33,7 +34,7 @@ export interface RecordPeekRequest {
   filters?: SearchFilters;
 }
 
-export function RecordPeekDialog({ request, assets, entities, includePrivate, hideDemo, onClose, onEnter, onEnterRecord, onPreview, onOpenEntity }: { request: RecordPeekRequest; assets: readonly Asset[]; entities: readonly Entity[]; includePrivate: boolean; hideDemo: boolean; onClose: () => void; onEnter: () => void; onEnterRecord: (record: RecordView) => void; onPreview: (ids: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
+export function RecordPeekDialog({ request, assets, entities, includePrivate, hideDemo, onClose, onEnter, onEnterRecord, onPreview, onOpenEntity }: { request: RecordPeekRequest; assets: readonly Asset[]; entities: readonly Entity[]; includePrivate: boolean; hideDemo: boolean; onClose: () => void; onEnter: () => void; onEnterRecord: (record: RecordView) => void; onPreview: PhotoPreviewHandler; onOpenEntity: (entity: Entity) => void }) {
   const [state, setState] = useState<{ request: RecordPeekRequest; items?: readonly RecordView[]; error?: string } | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
@@ -51,7 +52,7 @@ export function RecordPeekDialog({ request, assets, entities, includePrivate, hi
     {state?.request !== request ? <p role="status">正在读取记录…</p> : state.error ? <div><p role="alert">{state.error}</p><button type="button" className="secondary-button" onClick={() => setRetry(value => value + 1)}>重试</button></div> : items?.length === 0 ? <p className="muted">暂无可显示的关联记录</p> : <>
       <p className="record-peek-count">{items?.length} 条记录</p>
       <div className="timeline-list">{[...groups].map(([date, records]) => <section className="timeline-group" key={date}><h3 className="timeline-group-title">{displayDate(date)}</h3>{records.map(record => <div className="record-peek-entry" key={record.id}>
-        <TimelineItem record={record} assets={assets} entities={entities} movieEnabled={false} moviePromptHidden={true} onMovieAttachToRecord={noop} onMoviePromptSuppress={noop} onEdit={noop} onDelete={noop} onTaskStatus={noop} onPreviewAsset={onPreview} onOpenEntity={onOpenEntity} interactionDisabled={false} />
+        <TimelineItem record={record} assets={assets} entities={entities} movieEnabled={false} moviePromptHidden={true} onMovieAttachToRecord={noop} onMoviePromptSuppress={noop} onEdit={noop} onDelete={noop} onTaskStatus={noop} onPreviewAsset={(ids, index, owner) => onPreview(ids, index, owner, items ?? [])} onOpenEntity={onOpenEntity} interactionDisabled={false} />
         <div className="record-peek-jump"><button type="button" className="secondary-button" onClick={() => onEnterRecord(record)}>进入原记录</button></div>
       </div>)}</section>)}</div>
     </>}

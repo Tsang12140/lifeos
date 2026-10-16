@@ -1,3 +1,4 @@
+import type { PhotoPreviewHandler } from "./asset-preview-model";
 import { useEffect, useState } from "react";
 import { RecordPeekFrame } from "./record-peek";
 import type { Asset, Entity } from "@lifeos/core";
@@ -6,7 +7,7 @@ import { displayDate, USER_TIME_ZONE } from "./time";
 import { TimelineItem } from "./timeline";
 import { calendarTasksForDate, calendarTaskStatus } from "./calendar-tasks";
 
-export function CalendarDayDialog({ date, tasks, assets, entities, onClose, onEnterDay, onPreview, onOpenEntity }: { date: string; tasks: readonly RecordView[]; assets: readonly Asset[]; entities: readonly Entity[]; onClose: () => void; onEnterDay: () => void; onPreview: (ids: readonly string[], index: number) => void; onOpenEntity: (entity: Entity) => void }) {
+export function CalendarDayDialog({ date, tasks, assets, entities, onClose, onEnterDay, onPreview, onOpenEntity }: { date: string; tasks: readonly RecordView[]; assets: readonly Asset[]; entities: readonly Entity[]; onClose: () => void; onEnterDay: () => void; onPreview: PhotoPreviewHandler; onOpenEntity: (entity: Entity) => void }) {
   const [state, setState] = useState<{ date: string; records?: readonly RecordView[]; error?: string } | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {

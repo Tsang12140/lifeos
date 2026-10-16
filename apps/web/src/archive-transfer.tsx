@@ -22,28 +22,62 @@ export function ArchiveTransferCard() {
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const abort = useRef<AbortController | null>(null);
   const jobRef = useRef<Job | null>(null);
   const generation = useRef(0);
+  const busyRef = useRef(false);
+  const processVersion = useRef<number | null>(null);
+  const committing = useRef(false);
+  const fileDragDepth = useRef(0);
+  const [fileDragActive, setFileDragActive] = useState(false);
   jobRef.current = job;
+
+  function updateBusy(next: boolean) { busyRef.current = next; setBusy(next); }
+  function clearFileDrag() { fileDragDepth.current = 0; setFileDragActive(false); }
+  function discardJob() {
+    const current = jobRef.current;
+    jobRef.current = null; setJob(null);
+    if (current) void apiRequest(`/api/archive/jobs/${current.id}`, { method: "DELETE" }).catch(() => {});
+  }
+  function receiveFiles(files: readonly File[]) {
+    if (!files.length) return;
+    if (busyRef.current) return;
+    if (files.length !== 1) { setError("一次只能选择一个完整加密包，现有选择未更改。"); return; }
+    const next = files[0]!;
+    if (!/\.lifeos$/i.test(next.name)) { setError("请选择 .lifeos 完整加密包，现有选择未更改。"); return; }
+    if (next.size > 20 * 1024 ** 3) { setError("完整加密包不能超过 20 GB，现有选择未更改。"); return; }
+    generation.current++;
+    abort.current?.abort();
+    discardJob();
+    setFile(next); setPassword(""); setConfirmation(""); setReplaceConfirmed(false); setUploadProgress(null); setError(null);
+    clearFileDrag();
+  }
+  function clipboardFiles(clipboard: DataTransfer): File[] {
+    const files = Array.from(clipboard.files);
+    if (files.length) return files;
+    return Array.from(clipboard.items).filter(item => item.kind === "file").map(item => item.getAsFile()).filter((file): file is File => file !== null);
+  }
 
   useEffect(() => () => { generation.current++; abort.current?.abort(); const current = jobRef.current; if (current) void apiRequest(`/api/archive/jobs/${current.id}`, { method: "DELETE" }).catch(() => {}); }, []);
   useEffect(() => { const element = dialog.current; if (mode && element && !element.open) element.showModal(); if (!mode && element?.open) element.close(); }, [mode]);
 
   async function close() {
-    if (busy && job?.kind === "import" && job.phase === "ready") return;
+    if (busyRef.current && jobRef.current?.kind === "import" && jobRef.current.phase === "ready") return;
     generation.current++; abort.current?.abort();
-    const current = jobRef.current; jobRef.current = null; setJob(null);
-    if (current) void apiRequest(`/api/archive/jobs/${current.id}`, { method: "DELETE" }).catch(() => {});
-    setMode(null); setBusy(false); setPassword(""); setConfirmation(""); setFile(null); setError(null); setEstimate(null); setReplaceConfirmed(false); setUploadProgress(null);
+    processVersion.current = null; committing.current = false;
+    discardJob();
+    setMode(null); updateBusy(false); setPassword(""); setConfirmation(""); setFile(null); setError(null); setEstimate(null); setReplaceConfirmed(false); setUploadProgress(null); clearFileDrag();
+    if (fileInput.current) fileInput.current.value = "";
   }
   async function open(mode: "export" | "import") {
-    setMode(mode); setError(null); setMessage(null); setJob(null); setPassword(""); setConfirmation(""); setReplaceConfirmed(false); setFile(null);
+    setMode(mode); setError(null); setMessage(null); setEstimate(null); discardJob(); setPassword(""); setConfirmation(""); setReplaceConfirmed(false); setFile(null); setUploadProgress(null); clearFileDrag();
+    if (fileInput.current) fileInput.current.value = "";
     if (mode === "export") {
-      const version = ++generation.current; const controller = new AbortController(); abort.current = controller; setBusy(true);
+      const version = ++generation.current; const controller = new AbortController(); abort.current = controller; updateBusy(true);
       try { const next = await apiRequest<Estimate>("/api/archive/estimate", { signal: controller.signal }); if (generation.current === version) setEstimate(next); }
       catch (error) { if (generation.current === version) setError(error instanceof Error ? error.message : "无法读取完整包大小"); }
-      finally { if (generation.current === version) setBusy(false); }
+      finally { if (generation.current === version) updateBusy(false); }
     }
   }
   async function poll(initial: Job, version: number, signal: AbortSignal): Promise<void> {
@@ -57,8 +91,10 @@ export function ArchiveTransferCard() {
     if (next.phase === "failed") throw new Error(next.error ?? "完整包处理失败");
   }
   async function process() {
+    if (busyRef.current || processVersion.current !== null) return;
     const version = ++generation.current; const controller = new AbortController(); abort.current = controller;
-    setBusy(true); setError(null); setUploadProgress(null);
+    processVersion.current = version;
+    updateBusy(true); setError(null); setUploadProgress(null);
     try {
       let next: Job;
       if (jobRef.current) { await apiRequest(`/api/archive/jobs/${jobRef.current.id}`, { method: "DELETE" }); jobRef.current = null; setJob(null); }
@@ -74,17 +110,18 @@ export function ArchiveTransferCard() {
       if (version !== generation.current) { void apiRequest(`/api/archive/jobs/${next.id}`, { method: "DELETE" }).catch(() => {}); return; }
       await poll(next, version, controller.signal);
     } catch (error) { if (generation.current === version) setError(error instanceof Error ? error.message : "完整包处理失败"); }
-    finally { if (generation.current === version) { setBusy(false); setPassword(""); setConfirmation(""); } }
+    finally { if (processVersion.current === version) processVersion.current = null; if (generation.current === version) { updateBusy(false); setPassword(""); setConfirmation(""); } }
   }
   async function commit() {
-    if (!job || !replaceConfirmed) return;
-    setBusy(true); setError(null);
+    if (!job || !replaceConfirmed || busyRef.current || committing.current) return;
+    committing.current = true;
+    updateBusy(true); setError(null);
     try {
       await apiRequest("/api/archive/commit", { method: "POST", body: JSON.stringify({ id: job.id, replaceConfirmed: true }) });
-      jobRef.current = null; setJob(null); setMessage("完整包已导入。当前数据已自动备份，刷新页面查看恢复后的内容。"); setMode(null);
+      jobRef.current = null; setJob(null); setFile(null); setMessage("完整包已导入。当前数据已自动备份，刷新页面查看恢复后的内容。"); setMode(null);
       window.dispatchEvent(new Event("lifeos:archive-imported"));
     } catch (error) { setError(error instanceof Error ? error.message : "导入失败"); }
-    finally { setBusy(false); }
+    finally { committing.current = false; updateBusy(false); }
   }
   const ready = job?.phase === "ready" && job.kind === mode;
   const canProcess = password.length >= 10 && password.length <= 1024 && (mode === "import" ? !!file && file.size <= 20 * 1024 ** 3 : !!estimate && (estimate.requiresAccountPassword || password === confirmation));
@@ -93,14 +130,26 @@ export function ArchiveTransferCard() {
       <div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div>
       <div className="settings-card-copy"><strong>完整加密包</strong><small>包含当前空间的记录、原件、周期数据和小结。按需生成，直接下载到电脑。</small></div>
       <div className="archive-actions"><button className="primary-button" type="button" data-archive-open="export" onClick={() => void open("export")}><Download size={15} aria-hidden="true" /><span>下载完整加密包</span></button><button className="secondary-button" type="button" data-archive-open="import" onClick={() => void open("import")}><Upload size={15} aria-hidden="true" /><span>导入完整加密包</span></button></div>
-      {message ? <p className="archive-message" role="status">{message}<button className="secondary-button" type="button" onClick={() => window.location.reload()}>刷新页面</button></p> : null}
+      {message ? <p className="archive-message" role="status"><span className="archive-message-copy">{message}</span><button className="secondary-button" type="button" onClick={() => window.location.reload()}>刷新页面</button></p> : null}
     </section>
-    <dialog ref={dialog} className="modal-dialog archive-dialog" data-archive-dialog aria-labelledby="archive-title" onCancel={(event) => { event.preventDefault(); void close(); }}>
+    <dialog ref={dialog} className="modal-dialog archive-dialog" data-archive-dialog aria-labelledby="archive-title" onCancel={(event) => { event.preventDefault(); void close(); }} onPasteCapture={(event) => { if (mode !== "import" || ready) return; const files = clipboardFiles(event.clipboardData); if (!files.length) return; event.preventDefault(); event.stopPropagation(); if (!busyRef.current) receiveFiles(files); }}>
       <div className="dialog-header"><h2 id="archive-title">{mode === "export" ? "下载完整加密包" : "导入完整加密包"}</h2><button className="icon-button compact-icon-button" type="button" aria-label="关闭完整包窗口" disabled={busy && ready} onClick={() => void close()}><X size={17} aria-hidden="true" /></button></div>
       <div className="archive-dialog-body">
         <p>完整包仅包含当前空间，不包含账号登录会话或服务密钥。密码改动后，旧下载包仍需当时的密码。</p>
         {mode === "export" && estimate ? <div className="archive-size" data-archive-estimate><strong>预计约 {archiveBytes(estimate.estimatedBytes)}</strong><span>原件合计 {archiveBytes(estimate.originalBytes)}</span><span>{countText(estimate.counts)}</span><span>生成后直接下载，不新增对象存储副本。</span>{estimate.cloudReadBytes ? <span>需从对象存储读取 {archiveBytes(estimate.cloudReadBytes)} 原件，会计入下载流量。</span> : null}<span>生成期间临时使用服务器磁盘，15 分钟后自动清理。</span></div> : null}
-        {mode === "import" && !ready ? <label className="archive-field"><span>选择完整加密包</span><input data-archive-file type="file" accept=".lifeos,application/octet-stream" disabled={busy} onChange={(event) => { setFile(event.target.files?.[0] ?? null); setError(null); }} />{file ? <small>{file.name}　{archiveBytes(file.size)}</small> : null}</label> : null}
+        {mode === "import" && !ready ? <div className="archive-field" data-archive-file-field>
+          <span>选择完整加密包</span>
+          <button className={`archive-file-drop${fileDragActive ? " is-dragging" : ""}${file ? " has-file" : ""}`} data-archive-file-drop type="button" disabled={busy} aria-describedby="archive-file-help" onClick={() => fileInput.current?.click()}
+            onDragEnter={(event) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); event.stopPropagation(); fileDragDepth.current++; if (!busyRef.current) setFileDragActive(true); }}
+            onDragOver={(event) => { const types = Array.from(event.dataTransfer.types); if (!types.includes("Files") && !types.includes("text/uri-list")) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = types.includes("Files") && !busyRef.current ? "copy" : "none"; }}
+            onDragLeave={(event) => { event.stopPropagation(); fileDragDepth.current = Math.max(0, fileDragDepth.current - 1); if (!fileDragDepth.current) setFileDragActive(false); }}
+            onDrop={(event) => { const types = Array.from(event.dataTransfer.types); const files = Array.from(event.dataTransfer.files); if (!files.length && !types.includes("text/uri-list")) return; event.preventDefault(); event.stopPropagation(); clearFileDrag(); if (busyRef.current) return; if (!files.length) { setError("请拖入实际的 .lifeos 文件，不接受网页链接。"); return; } receiveFiles(files); }}>
+            <span className="archive-file-drop-icon"><Upload size={19} aria-hidden="true" /></span>
+            <span className="archive-file-drop-copy"><strong>{file ? "已选择完整加密包" : "点击选择，或拖入一个 .lifeos 文件"}</strong><small id="archive-file-help">也可粘贴剪贴板中的实际文件</small></span>
+            {file ? <span className="archive-file-selection"><span className="archive-file-name" title={file.name}>{file.name}</span><small>{archiveBytes(file.size)}</small></span> : null}
+          </button>
+          <input ref={fileInput} className="visually-hidden" data-archive-file type="file" accept=".lifeos" aria-label="选择完整加密包文件" tabIndex={-1} disabled={busy} onChange={(event) => { receiveFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ""; }} />
+        </div> : null}
         {!ready ? <><label className="archive-field"><span>{mode === "export" ? estimate?.requiresAccountPassword ? "当前账号密码" : "设置加密包密码（至少10个字符）" : "生成这份包时的密码"}</span><input data-archive-password type="password" autoComplete={mode === "export" && !estimate?.requiresAccountPassword ? "new-password" : "current-password"} value={password} disabled={busy} maxLength={1024} onChange={(event) => setPassword(event.target.value)} /></label>{mode === "export" && estimate && !estimate.requiresAccountPassword ? <label className="archive-field"><span>再输入一次包密码</span><input data-archive-password-confirm type="password" autoComplete="new-password" value={confirmation} disabled={busy} maxLength={1024} onChange={(event) => setConfirmation(event.target.value)} /></label> : null}</> : null}
         {busy ? <p className="archive-working" role="status"><LoaderCircle className="spin" size={16} aria-hidden="true" />{estimate === null && mode === "export" && !job ? "读取内容与大小…" : mode === "export" ? "生成完整加密包…" : ready ? "备份当前数据并导入…" : uploadProgress ? `上传 ${uploadProgress}，随后解密校验…` : "解密并校验完整包…"}</p> : null}
         {ready && job ? <div className="archive-size" data-archive-ready><strong>{mode === "export" ? "实际文件大小" : "文件大小"} {archiveBytes(job.bytes ?? 0)}</strong>{job.counts ? <span>{countText(job.counts)}</span> : null}{mode === "export" ? <span>文件已加密，15 分钟内可下载。请妥善保管包密码。</span> : <><span>已通过解密和原件校验。</span>{job.targetCounts ? <span>当前空间：{countText(job.targetCounts)}</span> : null}<label className="archive-replace"><input data-archive-replace type="checkbox" checked={replaceConfirmed} disabled={busy} onChange={(event) => setReplaceConfirmed(event.target.checked)} /><span>我确认用这份完整包替换当前空间。替换前自动备份当前数据库，原有照片文件保留。</span></label></>}</div> : null}

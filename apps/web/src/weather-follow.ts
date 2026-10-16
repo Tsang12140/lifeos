@@ -2,6 +2,7 @@ import { rememberDevicePoint } from "./place-search-options";
 import { useEffect } from "react";
 import { apiRequest } from "./api";
 import type { WeatherConfigStatus } from "./weather";
+import { scopedKey } from "./storage-scope";
 
 const FOLLOW_KEY_PREFIX = "lifeos.weather.follow-location.";
 const FOLLOW_CHANGED = "lifeos-weather-follow-changed";
@@ -9,14 +10,14 @@ const MIN_LOCATION_INTERVAL_MS = 15 * 60 * 1000;
 const MIN_MOVEMENT_DEGREES_SQUARED = 0.0064; // Roughly eight kilometres; the server resolves a city, not a street.
 
 export function weatherFollowEnabled(tenantId: string): boolean {
-  try { return window.localStorage.getItem(`${FOLLOW_KEY_PREFIX}${tenantId}`) === "1"; }
+  try { return window.localStorage.getItem(scopedKey(`${FOLLOW_KEY_PREFIX}${tenantId}`)) === "1"; }
   catch { return false; }
 }
 
 export function setWeatherFollowEnabled(tenantId: string, enabled: boolean): void {
   try {
-    if (enabled) window.localStorage.setItem(`${FOLLOW_KEY_PREFIX}${tenantId}`, "1");
-    else window.localStorage.removeItem(`${FOLLOW_KEY_PREFIX}${tenantId}`);
+    if (enabled) window.localStorage.setItem(scopedKey(`${FOLLOW_KEY_PREFIX}${tenantId}`), "1");
+    else window.localStorage.removeItem(scopedKey(`${FOLLOW_KEY_PREFIX}${tenantId}`));
   } catch { /* Storage may be unavailable; the manual city remains usable. */ }
   window.dispatchEvent(new Event(FOLLOW_CHANGED));
 }

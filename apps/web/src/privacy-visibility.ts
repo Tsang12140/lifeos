@@ -16,8 +16,11 @@
  * private records to any authenticated client; what this protects is the owner's
  * attention and what ends up in the assistant's context — not the bytes.
  */
-export const PRIVACY_VISIBLE_KEY = "lifeos.privacy.visible.v1";
-export const PRIVACY_SESSION_GRANT_KEY = "lifeos.privacy.session-grant.v1";
+import { scopedKey } from "./storage-scope.ts";
+
+/** Both keys carry the card's name: the privacy switch must not follow the browser. */
+export const PRIVACY_VISIBLE_KEY = scopedKey("lifeos.privacy.visible.v1");
+export const PRIVACY_SESSION_GRANT_KEY = scopedKey("lifeos.privacy.session-grant.v1");
 
 export interface PrivacyStorage {
   getItem(key: string): string | null;

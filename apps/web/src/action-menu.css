@@ -1,0 +1,72 @@
+/* Action menus share one neutral surface. Compound cycle rows keep their two targets. */
+:is(.calendar-summary-menu, .calendar-summary-submenu, .mention-context-menu, .ai-assistant-menu) {
+  gap: 2px;
+  width: max-content;
+  min-width: min(180px, calc(100vw - 16px));
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid var(--control-line, var(--line));
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--control-float-shadow, var(--shadow-soft));
+}
+:is(.calendar-summary-menu, .mention-context-menu, .ai-assistant-menu) button {
+  min-width: 0;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+:is(.calendar-summary-menu, .mention-context-menu, .ai-assistant-menu) button > span { min-width: 0; overflow-wrap: anywhere; }
+:is(.calendar-summary-menu, .mention-context-menu, .ai-assistant-menu) button:not(.calendar-summary-checkbox):is(:hover, :focus-visible, .is-open):not(:disabled):not([aria-disabled="true"]) {
+  color: var(--ink);
+  background: var(--chip);
+}
+:is(.calendar-summary-menu, .mention-context-menu, .ai-assistant-menu) button:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: -2px;
+}
+:is(.calendar-summary-menu, .mention-context-menu, .ai-assistant-menu) button:is(:disabled, [aria-disabled="true"]) {
+  color: var(--muted);
+  background: transparent;
+  cursor: default;
+}
+:is(.calendar-summary-menu, .ai-assistant-menu) button:not(.calendar-summary-checkbox) > svg:not(.calendar-summary-caret) {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+.mention-context-menu .mention-context-label { font-size: inherit; font-weight: 400; }
+.calendar-summary-menu .calendar-summary-submenu { top: -7px; min-width: min(180px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; }
+.calendar-summary-menu .calendar-summary-checkbox {
+  margin-left: 10px;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+.calendar-summary-menu .calendar-summary-checkbox.is-checked {
+  color: var(--surface);
+  border-color: var(--ink-soft);
+  background: var(--ink-soft);
+}
+.calendar-summary-menu .calendar-summary-checkbox.is-checked:is(:hover, :focus-visible) {
+  color: var(--surface);
+  background: var(--ink);
+}
+.calendar-summary-menu .calendar-summary-cycle-label { padding: 6px 10px 6px 8px; min-width: 0; min-height: 34px; overflow-wrap: anywhere; }
+.action-menu-separator {
+  height: 1px;
+  margin: 8px 10px;
+  background: var(--line);
+}
+@media (pointer: coarse) {
+  :is(.calendar-summary-menu, .mention-context-menu, .ai-assistant-menu) button:not(.calendar-summary-checkbox) { min-height: 40px; }
+}

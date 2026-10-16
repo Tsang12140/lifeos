@@ -8,6 +8,25 @@ export const AI_REASONING_EFFORTS = ["low", "high", "max"] as const;
 export type AiReasoningEffort = (typeof AI_REASONING_EFFORTS)[number];
 export type AiPresetId = "quick" | "reflect" | "review" | "custom";
 
+/**
+ * The owner-facing answer gear (2026-10-15 定案): one dial that folds the
+ * thinking toggle and the reasoning effort into four plain choices. "direct"
+ * answers without thinking; the other three map straight onto the provider's
+ * reasoning_effort values. 管家对话默认 high（认真想）；批量归集固定 low。
+ */
+export const AI_GEARS = ["direct", "low", "high", "max"] as const;
+export type AiGear = (typeof AI_GEARS)[number];
+export function isAiGear(value: unknown): value is AiGear {
+  return typeof value === "string" && (AI_GEARS as readonly string[]).includes(value);
+}
+export function defaultAiGear(runtime: RuntimeAiConfig): AiGear {
+  return runtime.thinking ? runtime.reasoningEffort ?? "high" : "direct";
+}
+export function runtimeWithGear(runtime: RuntimeAiConfig, gear: AiGear): RuntimeAiConfig {
+  const { reasoningEffort: _dropped, ...rest } = runtime;
+  return gear === "direct" ? { ...rest, thinking: false } : { ...rest, thinking: true, reasoningEffort: gear };
+}
+
 export interface RuntimeAiConfig {
   readonly enabled: boolean;
   readonly provider: "deepseek";

@@ -1,0 +1,52 @@
+.app-shell[data-view="tasks"] .main-column { background: transparent; }
+.task-page-heading { display:flex;align-items:center;gap:8px;margin:0 0 12px;color:var(--ink); }
+.task-page-heading h1 { margin:0;font-size:18px;line-height:28px; }
+.task-create-teaser {
+  display: block;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 8px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--control-tray);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.task-create-teaser-input {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 44px;
+  padding: 8px 13px;
+  border: 1px solid var(--control-line);
+  border-radius: 20px;
+  background: #fff;
+  color: var(--control-muted);
+  box-shadow: 0 5px 12px rgb(24 36 61 / .045);
+  transition: border-color 180ms cubic-bezier(.2, 0, 0, 1), box-shadow 180ms cubic-bezier(.2, 0, 0, 1);
+}
+.task-create-teaser:hover .task-create-teaser-input { border-color: #bcc3ca; }
+.task-create-teaser:focus-visible { outline: none; }
+.task-create-teaser:focus-visible .task-create-teaser-input { border-color: #9aa6b2; box-shadow: 0 0 0 2px rgb(100 115 130 / .12), 0 5px 18px rgb(24 36 61 / .04); }
+.task-create-teaser-copy { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.task-create-teaser-label { color: var(--control-muted); font-size: .82rem; line-height: 1.3; }
+.task-create-teaser-summary { overflow: hidden; color: var(--ink); font-size: .88rem; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.task-page-status { display: block; margin: 0 0 18px; }
+.task-page-status .entities-tabs { width: max-content; max-width: 100%; }
+.task-composer-retained[hidden] { display: none !important; }
+.app-shell[data-view="tasks"] .composer.composer-kind-task { border-color: #e7e9eb; background: var(--control-tray); color: var(--ink); }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .composer-entry { border-color: var(--control-line); background: #fff; }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .composer-entry:focus-within { border-color: #9aa6b2; box-shadow: 0 0 0 2px rgb(100 115 130 / .09), 0 5px 18px rgb(24 36 61 / .04); }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .composer-input { color: var(--ink); }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .composer-input::placeholder { color: var(--muted); opacity: 1; }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .kind-switcher { display: none; }
+.app-shell[data-view="tasks"] .composer.composer-kind-task :is(.composer-inline-save,.composer-desktop-save) { border-color: var(--control-ink); background: var(--control-ink); color: #fff; }
+.app-shell[data-view="tasks"] .composer.composer-kind-task :is(.composer-inline-save,.composer-desktop-save):disabled { border-color: #e6e8ea; background: #e6e8ea; color: #7c858e; opacity: 1; }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .shot-tile-add > button { border-color: var(--control-line); color: var(--control-muted); }
+.app-shell[data-view="tasks"] .composer.composer-kind-task :is(.composer-footer,.mention-review-reminder) { color: var(--control-muted); }
+.app-shell[data-view="tasks"] .composer.composer-kind-task .composer-toolbar { min-height: 28px; }
+.task-create-teaser:focus:not(:focus-visible) { outline: none; }
+@media (prefers-reduced-motion: reduce) {
+  .task-create-teaser-input { transition: none; }
+}

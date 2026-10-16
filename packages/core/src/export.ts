@@ -1,3 +1,4 @@
+import { assertNoteFolders, type NoteFolder } from "./notes.js";
 import {
   assertValidAsset,
   assertValidCycleIntimacyModuleData,
@@ -24,6 +25,7 @@ export interface ExportBundleV1 {
   readonly assets: readonly Asset[];
   /** Optional so existing v1 exports stay importable. */
   readonly modules?: {
+    readonly notes?: { readonly folders: readonly NoteFolder[] };
     readonly cycleIntimacy?: CycleIntimacyModuleData;
   };
 }
@@ -87,6 +89,10 @@ export function assertValidExportBundle(value: unknown): asserts value is Export
       throw new Error("export.modules must be an object");
     }
     const modules = candidate.modules as Record<string, unknown>;
+    if (modules.notes !== undefined) {
+      if (!modules.notes || typeof modules.notes !== "object") throw new Error("笔记资料库数据无效");
+      assertNoteFolders((modules.notes as { folders?: unknown }).folders);
+    }
     if (modules.cycleIntimacy !== undefined) assertValidCycleIntimacyModuleData(modules.cycleIntimacy, "export.modules.cycleIntimacy");
   }
 }
@@ -201,6 +207,7 @@ export function exportRecordMarkdown(record: TimelineRecord, options: MarkdownEx
     `isBackfill: ${yamlValue(record.isBackfill ?? false)}`,
     `weather: ${yamlValue(record.weather ?? null)}`,
     `task: ${yamlValue(record.kind === "task" ? record.task : null)}`,
+    `note: ${yamlValue(record.kind === "note" ? record.note ?? null : null)}`,
     `entityRefs: ${yamlValue(record.entityRefs)}`,
     ...(record.body.entityMentions === undefined ? [] : [`entityMentions: ${yamlValue(record.body.entityMentions)}`]),
     `relatedRecordIds: ${yamlValue(record.relatedRecordIds)}`,

@@ -47,7 +47,7 @@
 :root {
   color: #18243d;
   background: #eef2f7;
-  --lifeos-ui-font: "LifeOS MiSans", "MiSans", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --lifeos-ui-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-family: var(--lifeos-ui-font);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -121,9 +121,11 @@ body {
    就不再继承 `body` 的 `user-select:none`，不显式禁一遍，界面文字会变成可选中的。
    输入控件仍由下面那条 `input, textarea, …` 规则单独放回来。 */
 .calendar-day-dialog,
+.calendar-settings-dialog,
 .record-delete-dialog,
 .asset-preview,
 .assistant-history-dialog,
+.assistant-share-dialog,
 .place-card-dialog,
 .place-map-dialog,
 .place-map-view-dialog {
@@ -155,6 +157,7 @@ select,
    ⚠️ 只放值那一层 `strong`，**不放 `.settings-ai-effective-item` 这个容器**：容器里还有
    标签（`<span>当前模型</span>`）与其它节点，放容器等于把界面文字也一起放回来。 */
 .timeline-text,
+.assistant-share-choice-copy,
 .record-delete-dialog .confirm-preview,
 .original-block,
 .note-card-excerpt,
@@ -6227,6 +6230,19 @@ button.relation-chip {
   }
 }
 
+@container settings-page (max-width: 360px) {
+  .settings-backup-overview {
+    display: grid;
+    grid-template-columns: 37px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .settings-backup-overview > .settings-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
 /* Dual backup status and calendar stay compact, but keep the two destinations
    visually separate so a local success is never mistaken for a cloud success. */
 .settings-backup-dual {
@@ -9172,6 +9188,11 @@ button.mention-review-context { cursor: pointer; }
   background: linear-gradient(180deg, rgb(255 255 255 / 0.92) 0%, rgb(255 255 255 / 0.82) 55%, rgb(255 255 255 / 0.68) 100%);
 }
 
+.calendar-section .month-cell-art:not(.month-cell-date-art) > .month-cell-veil,
+.calendar-section .week-card-art:not(.week-card-date-art) > .week-card-veil {
+  background: rgb(255 255 255 / var(--calendar-date-photo-veil, 0.82));
+}
+
 .month-cell-head,
 .month-day-summary {
   position: relative;
@@ -10649,6 +10670,60 @@ button.mention-review-context { cursor: pointer; }
   line-height: 1.6;
 }
 
+/* 两个能力的开关行：名字 + 状态 + 开关。
+   状态用整块底色而不是小圆点 —— 「缺少密钥」和「已关闭」都要一眼看出来，
+   而这两个用文字说都要多读半秒。 */
+.photo-text-capabilities {
+  display: grid;
+  gap: 8px;
+}
+
+.photo-text-capability {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.photo-text-capability-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.photo-text-capability-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  font-weight: 640;
+}
+
+.photo-text-capability-copy small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.photo-text-state {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.photo-text-state.is-ready { color: #2f7d5f; background: #e6f4ec; }
+.photo-text-state.is-switched-off { color: #79828f; background: #eceff4; }
+.photo-text-state.is-no-credential { color: #96631a; background: #fbf0da; }
+.photo-text-state.is-unknown { color: #9aa3b0; background: #f2f4f7; }
+
 .settings-asset-trash-group {
   display: grid;
   gap: 6px;
@@ -11249,10 +11324,16 @@ button.mention-review-context { cursor: pointer; }
   display: grid;
   gap: 22px;
   margin-top: 42px;
+  min-width: 0;
+  padding: 24px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--chip) 65%, var(--surface-soft));
 }
 
 .notes-library-heading {
   align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
   margin: 0;
 }
 
@@ -11274,7 +11355,7 @@ button.mention-review-context { cursor: pointer; }
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  padding-bottom: 4px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -11289,39 +11370,60 @@ button.mention-review-context { cursor: pointer; }
 }
 
 .notes-filter-tab {
-  min-height: 36px;
+  min-height: 34px;
   padding: 0 14px;
   font-size: 0.78rem;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .notes-filter-tab:hover,
 .notes-filter-tab.is-active {
-  border-color: #aabafa;
-  color: var(--primary);
-  background: var(--primary-soft);
+  border-color: var(--line-strong);
+  color: var(--ink-soft);
+  background: var(--surface);
 }
 
 .notes-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 20px;
+  position: relative;
+  min-width: 0;
+}
+
+.notes-grid.is-masonry { display: block; }
+.notes-grid.is-masonry > .note-card { position: absolute; width: var(--note-card-width); }
+
+.note-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 22px;
+  width: 30px;
+  height: 3px;
+  background: var(--chip-ink);
+  opacity: .28;
+  pointer-events: none;
 }
 
 .note-card {
   display: grid;
+  position: relative;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgb(255 255 255 / 0.86);
-  box-shadow: 0 5px 14px rgb(24 36 61 / 0.04);
+  border: 1px solid color-mix(in srgb, var(--line) 45%, var(--chip));
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: 0 2px 4px rgb(24 36 61 / .025), 0 7px 14px rgb(24 36 61 / .025);
 }
+
+.note-card[data-note-format="quote"] { background: color-mix(in srgb, var(--surface) 70%, var(--chip)); }
+.note-card[data-note-format="fragment"] { background: color-mix(in srgb, var(--surface) 96%, var(--chip)); }
 
 .note-card-main {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   min-width: 0;
-  padding: 17px 17px 12px;
+  padding: 22px 22px 12px;
   border: 0;
   color: inherit;
   background: transparent;
@@ -11330,6 +11432,7 @@ button.mention-review-context { cursor: pointer; }
 }
 
 .note-card-main:hover .note-card-excerpt { color: var(--ink); }
+.note-card-main:focus-visible { outline: 1px solid var(--muted); outline-offset: -4px; box-shadow: none; }
 
 .note-card-meta {
   display: flex;
@@ -11341,62 +11444,74 @@ button.mention-review-context { cursor: pointer; }
 }
 
 .note-format-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   width: fit-content;
-  padding: 4px 8px;
-  border-radius: 7px;
-  color: var(--ink-soft);
-  background: #eaf0f8;
+  color: var(--muted);
   font-size: 0.68rem;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .note-card h2 {
   margin: 0;
   overflow: hidden;
   color: var(--ink);
-  font-size: 1.06rem;
+  font-size: 1.125rem;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.5;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .note-card-excerpt {
   display: -webkit-box;
-  min-height: 3.15em;
   margin: 0;
   overflow: hidden;
-  color: var(--ink-soft);
-  font-size: 0.88rem;
-  line-height: 1.58;
+  color: #4d5869;
+  font-size: .875rem;
+  line-height: 1.9;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 9;
 }
+
+.note-card[data-note-format="quote"] .note-card-excerpt { font-size: 1rem; line-height: 1.95; }
 
 .note-card-source {
   margin: 0;
-  overflow: hidden;
   color: var(--muted);
   font-size: 0.74rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
 }
 
 .note-card-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 0 14px 12px;
+  gap: 6px;
+  padding: 0 14px 14px;
+  flex-wrap: wrap;
 }
 
 .note-card-actions .text-button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-height: 30px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 7px;
   margin: 0;
-  font-size: 0.72rem;
+  font-size: .75rem;
+  font-weight: 400;
+  line-height: 1.4;
 }
+
+.note-card-actions .text-button:hover { background: var(--chip); }
 
 .note-card-delete { color: var(--danger); }
 
@@ -11450,6 +11565,7 @@ button.mention-review-context { cursor: pointer; }
 
 @media (max-width: 700px) {
   .notes-grid { grid-template-columns: minmax(0, 1fr); }
+  .notes-library { padding: 16px; }
 }
 
 @media (max-width: 390px) {
@@ -12668,3 +12784,60 @@ dialog.asset-preview.has-photo-information { grid-template-columns: minmax(0, 1f
 .record-photo-cell > video { display: block; width: 100%; height: 100%; object-fit: cover; }
 .record-video-play { position: absolute; inset: 50% auto auto 50%; display: grid; place-items: center; width: 38px; height: 38px; transform: translate(-50%, -50%); border-radius: 50%; color: #fff; background: rgb(0 0 0 / .48); }
 .record-video-duration { position: absolute; right: 6px; bottom: 5px; padding: 1px 4px; border-radius: 4px; color: #fff; background: rgb(0 0 0 / .62); font-size: 11px; line-height: 1.3; }
+
+.startup-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  color: #18243d;
+  background: #eef2f7;
+}
+
+.startup-content {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.startup-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  color: #18243d;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: .015em;
+  line-height: 1;
+}
+
+.startup-brand-mark {
+  display: block;
+  flex: none;
+  width: 40px;
+  height: 40px;
+}
+
+.startup-feedback {
+  position: absolute;
+  top: calc(100% + 20px);
+  left: 50%;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: calc(100vw - 48px);
+  transform: translateX(-50%);
+  color: #5d6b82;
+  font-size: .9rem;
+  text-align: center;
+}
+
+.startup-feedback p {
+  margin: 0;
+}

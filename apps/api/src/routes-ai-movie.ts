@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   AI_REASONING_EFFORTS,
+  AI_GEARS,
   publicAiConfig,
   saveRuntimeAiConfig,
   testRuntimeAiConfig,
@@ -185,9 +186,10 @@ export const handleAiMovieRoutes: RouteHandler = async (
   if (pathname === "/api/ai/assistant" && req.method === "POST") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["message", "history", "pageUrl"]);
+    hasOnlyKeys(input, ["message", "history", "pageUrl", "effort"]);
     const message = stringField(input.message, "message", { nonEmpty: true });
     if (message.length > 2000) throw new HttpError(400, "invalid_field", "message is too long");
+    const effort = input.effort === undefined ? undefined : enumField(input.effort, AI_GEARS, "effort");
     const historyRaw = input.history === undefined ? [] : input.history;
     if (!Array.isArray(historyRaw)) throw new HttpError(400, "invalid_field", "history must be an array");
     const history: AssistantHistoryItem[] = historyRaw.slice(-8).map((item, index) => {
@@ -198,7 +200,7 @@ export const handleAiMovieRoutes: RouteHandler = async (
       return { role, text: text.slice(0, 1200) };
     });
     const pageUrl = input.pageUrl === undefined ? undefined : stringField(input.pageUrl, "pageUrl").slice(0, 500);
-    setJson(res, 200, await answerLifeosAssistant(config, repository, { message, history, ...(pageUrl === undefined ? {} : { pageUrl }) }));
+    setJson(res, 200, await answerLifeosAssistant(config, repository, { message, history, ...(pageUrl === undefined ? {} : { pageUrl }), ...(effort === undefined ? {} : { effort }) }));
     return true;
   }
   if (pathname === "/api/weather/status" && req.method === "GET") {

@@ -1,25 +1,32 @@
 import { backfillItemState, backfillEntryTime, backfillEntryReady, calendarToday } from "@lifeos/core";
 import { useActionMenu } from "./action-menu";
+import { AssistantReplyProgress } from "./assistant-reply-progress";
+import { ReasoningIcon } from "./reasoning-icon";
 import type { AssetLink } from "@lifeos/core";
 import type { ComposerProps } from "./composer";
 import { ShotDropZone, type ShotDropZoneHandle } from "./shot-drop-zone";
 import { usePhotoInput } from "./photo-input";
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
+import { Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Eraser, Film, History, LoaderCircle, MessageSquarePlus, Plus, Settings2, Check, ChevronDown } from "lucide-react";
+import { Eraser, Film, History, LoaderCircle, MessageSquarePlus, Plus, Settings2, Check, ChevronDown, ArrowDown, Square, RotateCw } from "lucide-react";
 import type { Asset, BackfillBatch, BackfillChatMessage, BackfillEntry, BackfillMaterial, BackfillObject, Entity, UiClarify, UiCommand, UiTurnPlan } from "@lifeos/core";
 import { AI_GEARS, apiRequest, gearLabel, type ApiError, type AiGear } from "./api";
+import { scopedKey } from "./storage-scope";
 import {
   clearAssistantConversation,
   loadAssistantConversation,
   loadCurrentConversation,
   sendAssistantChatTurn,
+  stopAssistantChatTurn,
   startAssistantConversation,
   type AssistantArchiveMessage,
   type AssistantHistoryAttachment,
 } from "./assistant-history-api";
 import { assistantMessageLengthError, clearPendingAssistantTurn, pendingTurnRecoveryStatus, readPendingAssistantTurn, writePendingAssistantTurn, type PendingAssistantMaterial, type PendingAssistantTurn } from "./assistant-pending-turn";
 import { AssistantHistoryDialog } from "./assistant-history-dialog";
+import { AssistantShareDialog, type AssistantShareRequest } from "./assistant-share-dialog";
+import { AssistantMessageTime, useAssistantMessageInfo } from "./assistant-message-info";
+import { assistantMessageTime, assistantTimeDivider } from "./assistant-message-time";
 import { AssistantMessageActions } from "./assistant-message-actions";
 import { clampFixedMenuPosition } from "./menu-position";
 import { AssetPreview, assetContentUrl } from "./timeline";
@@ -45,6 +52,7 @@ interface MenuState {
 }
 interface BackfillChatViewMessage extends BackfillChatMessage {
   readonly id?: string;
+  readonly seq?: number;
   /** Compiled interface commands that came with this reply. */
   readonly ui?: UiTurnPlan;
   readonly at?: string;
@@ -104,12 +112,16 @@ interface AssistantBackfillProps {
 export function AssistantBackfill({ photoInput, scope, configured, defaultGear, onChanged, onViewRecords, onOpenEntity, onOpenSettings, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false, focusRequested = false, onFocusHandled, ref }: AssistantBackfillProps) {
   const [batch, setBatch] = useState<BackfillBatch | null>(null);
   const [batches, setBatches] = useState<readonly BackfillBatch[]>([]);
-  const [shots, setShots] = useState<readonly AssetLink[]>(() => { try { return JSON.parse(sessionStorage.getItem('lifeos.assistant.photos:'+scope) ?? '[]'); } catch { return []; } });
+  const [shots, setShots] = useState<readonly AssetLink[]>(() => { try { return JSON.parse(sessionStorage.getItem(scopedKey('lifeos.assistant.photos:'+scope)) ?? '[]'); } catch { return []; } });
   const [photoState, setPhotoState] = useState<"active" | "failed" | null>(null);
   const shotRef = useRef<ShotDropZoneHandle>(null);
+  const [photoToolbarTarget, setPhotoToolbarTarget] = useState<HTMLDivElement | null>(null);
   const busyRef = useRef(false);
-  const [input, setInput] = useState(() => { try { return sessionStorage.getItem(`lifeos.backfill.input:${scope}`) ?? ""; } catch { return ""; } });
+  const [input, setInput] = useState(() => { try { return sessionStorage.getItem(scopedKey(`lifeos.backfill.input:${scope}`)) ?? ""; } catch { return ""; } });
   const [chat, setChat] = useState<readonly BackfillChatViewMessage[]>([]);
+  const [shareRequest, setShareRequest] = useState<AssistantShareRequest | null>(null);
+  const { openMessageInfo, messageInfo, closeMessageInfo } = useAssistantMessageInfo();
+  useLayoutEffect(() => { setShareRequest(null); closeMessageInfo(); }, [scope]);
   // The conversation this panel is appending to. Null until the first save
   // creates one, so the archive stays empty for someone who never chats.
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -128,11 +140,21 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   const [pendingError, setPendingError] = useState("");
   const [assetPreview, setAssetPreview] = useState<{ readonly id: string; readonly asset: Asset } | null>(null);
   const [loadRetry, setLoadRetry] = useState(0);
-  const storageKey = `lifeos.backfill.edit:${scope}`;
+  const storageKey = scopedKey(`lifeos.backfill.edit:${scope}`);
   const active = useRef(true);
   const loadGeneration = useRef(0);
   const detailGeneration = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState("");
+  const [streamReply, setStreamReply] = useState("");
+  const [hasMoreBelow, setHasMoreBelow] = useState(false);
+  const readingTurnRef = useRef<string | null>(null);
+  const readingConversationRef = useRef<string | null>(null);
+  const readingPositionRef = useRef(0);
+  const readMoreRef = useRef(false);
+  const scrollInitializedRef = useRef<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // The archive id, kept in a ref as well so two quick sends cannot each open
   // their own conversation before the first id has landed in state.
@@ -166,7 +188,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const toChatMessage = (item: AssistantArchiveMessage): BackfillChatViewMessage => ({
-    role: item.role, text: item.text, id: item.id, at: item.at,
+    role: item.role, text: item.text, id: item.id, seq: item.seq, at: item.at,
     // The archive stores the compiled plan with the reply, so reloading a
     // conversation redraws its clarify/offer buttons instead of dropping them.
     ...(item.ui === undefined ? {} : { ui: item.ui }),
@@ -240,8 +262,9 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     const element = gearMenuRef.current;
     if (element === null || gearMenu === null) return;
     const rect = element.getBoundingClientRect();
-    const next = clampFixedMenuPosition(gearMenu.x, gearMenu.y, rect.width, rect.height, window.innerWidth, window.innerHeight);
-    if (next.x !== gearMenu.x || next.y !== gearMenu.y) setGearMenu({ ...gearMenu, ...next });
+    const next = clampFixedMenuPosition(gearMenu.x, gearMenu.y - rect.height, rect.width, rect.height, window.innerWidth, window.innerHeight);
+    element.style.left = `${next.x}px`;
+    element.style.top = `${next.y}px`;
   }, [gearMenu]);
   useEffect(() => {
     active.current = true;
@@ -314,10 +337,47 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     };
   }, [scope, storageKey, loadRetry]);
   useEffect(() => { if (batch && dirty) { try { sessionStorage.setItem(storageKey, JSON.stringify(batch)); } catch { /* explicit save remains available */ } } }, [batch, dirty, storageKey]);
-  useEffect(() => { try { sessionStorage.setItem(`lifeos.backfill.input:${scope}`, input); } catch { /* optional */ } }, [input, scope]);
+  useEffect(() => { try { sessionStorage.setItem(scopedKey(`lifeos.backfill.input:${scope}`), input); } catch { /* optional */ } }, [input, scope]);
   useEffect(() => { const field = composerRef.current; if (field) { field.style.height = "32px"; field.style.height = `${Math.min(80, Math.max(32, field.scrollHeight))}px`; } }, [input]);
-  useEffect(() => { if (!reviewOpen && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [chat, busy, reviewOpen]);
-  useEffect(() => { try { sessionStorage.setItem("lifeos.assistant.photos:"+scope, JSON.stringify(shots)); } catch { /* optional */ } }, [shots, scope]);
+  // During a reply keep the question at the top; never chase its growing tail.
+  const updateReadingPosition = () => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    readingPositionRef.current = scroller.scrollTop;
+    setHasMoreBelow(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 12);
+  };
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || reviewOpen) return;
+    if (readingConversationRef.current !== conversationId) readingTurnRef.current = null;
+    if (readingTurnRef.current) {
+      const question = [...scroller.querySelectorAll<HTMLElement>('[data-message-role="user"]')].find(e => e.dataset.turnId === readingTurnRef.current);
+      if (question && !readMoreRef.current) {
+        const top = question.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - (parseFloat(getComputedStyle(scroller).paddingTop) || 0);
+        // The browser clamps until enough answer exists; once aligned it stays put.
+        scroller.scrollTop = Math.max(0, top);
+      } else scroller.scrollTop = readingPositionRef.current;
+    } else if (!initializing && scrollInitializedRef.current !== conversationId) {
+      scroller.scrollTop = scroller.scrollHeight;
+      scrollInitializedRef.current = conversationId;
+    }
+    updateReadingPosition();
+  }, [chat, streamReply, pendingTurn, busy, reviewOpen, initializing, conversationId]);
+  useEffect(() => {
+    const scroller = scrollRef.current, content = contentRef.current;
+    if (!scroller || !content) return;
+    const observer = new ResizeObserver(updateReadingPosition);
+    observer.observe(scroller); observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+  const readFurther = () => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    readMoreRef.current = true;
+    scroller.scrollTop += Math.max(80, scroller.clientHeight * .75);
+    updateReadingPosition();
+  };
+  useEffect(() => { try { sessionStorage.setItem(scopedKey("lifeos.assistant.photos:"+scope), JSON.stringify(shots)); } catch { /* optional */ } }, [shots, scope]);
   const { draggingFiles, handlers: photoHandlers } = usePhotoInput(shotRef, Boolean(busy) || initializing || pendingTurn !== null);
   const remember = (next: BackfillBatch) => { if (!active.current) return; setBatch(next); setBatches((current) => [next, ...current.filter((item) => item.id !== next.id)]); setDirty(false); if (next.entityIds?.length) void apiRequest<{ items: Entity[] }>("/api/entities").then((result) => { if (active.current) setEntities(result.items); }).catch(() => { /* exact object links remain readable */ }); try { sessionStorage.removeItem(storageKey); } catch { /* optional */ } };
   const save = async (): Promise<BackfillBatch> => {
@@ -346,6 +406,11 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   });
   const submitPendingTurn = async (turn: PendingAssistantTurn) => {
     setPendingError("");
+    setStopError("");
+    setStreamReply("");
+    readingTurnRef.current = turn.turnId;
+    readingConversationRef.current = turn.conversationId;
+    readMoreRef.current = false;
     try {
       const materials: BackfillMaterial[] = turn.materials.map((item) => ({ ...item }));
       const result = await sendAssistantChatTurn({
@@ -357,8 +422,9 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         materials: await withImages(materials),
         privacyVisible,
         effort: gear,
-      });
+      }, text => { if (active.current && pendingRef.current?.turnId === turn.turnId) setStreamReply(text); });
       if (!active.current) return;
+      setStreamReply("");
       if (result.conversationId !== turn.conversationId || result.turnId !== turn.turnId) throw new Error("服务器返回的消息编号不匹配，本条仍保留待确认");
       const userMessage = userMessageFromPending(turn);
       const assistantMessage: BackfillChatViewMessage = { role: "assistant", text: result.reply, id: `${turn.turnId}:assistant`, at: new Date().toISOString(), ...(result.ui === undefined ? {} : { ui: result.ui }) };
@@ -373,7 +439,6 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         bindConversationBatch(result.batch.id);
       }
       if (result.action === "commit" || result.action === "undo") onChanged();
-      if (input.trim() === turn.message) setInput("");
       conversationRef.current = turn.conversationId; setConversationId(turn.conversationId);
       clearPendingAssistantTurn(scope, window.sessionStorage); updatePending(null);
       // Hydrate stable server ids, sequence numbers and attachment metadata. A
@@ -389,6 +454,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       }).catch(() => { /* local confirmed messages remain visible */ });
     } catch (e) {
       if (!active.current) throw e;
+      setStreamReply("");
       const status = (e as ApiError).status;
       if (status === 409 || status === 400 || status === 404 || status === 413) {
         const blocked = { ...turn, retryBlocked: true };
@@ -398,10 +464,18 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
           ? `${message(e)}。服务器拒绝了同编号重放；本条已保留。为避免重复写入，请保留记录并新建对话。`
           : `${message(e)}。这条请求未被接受，不能用相同内容自动重试；请保留记录并新建对话后检查原文。`);
       } else {
-        setPendingError(`${message(e)}。发送结果尚未确认，重试会沿用同一消息编号。`);
+        setPendingError(message(e));
       }
       throw e;
     }
+  };
+  const stopReply = async () => {
+    const turn = pendingRef.current;
+    if (!turn || stopping) return;
+    setStopping(true); setStopError("");
+    try { await stopAssistantChatTurn(turn.conversationId, turn.turnId); }
+    catch { if (active.current && pendingRef.current?.turnId === turn.turnId) setStopError("暂时没能停止，请再点一次。"); }
+    finally { if (active.current) setStopping(false); }
   };
   const retryPendingTurn = () => {
     const pending = pendingRef.current;
@@ -441,6 +515,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     try { writePendingAssistantTurn(scope, turn, window.sessionStorage); }
     catch { throw new Error("浏览器暂时无法保存待确认消息，尚未发送；请检查会话存储后重试"); }
     updatePending(turn);
+    if (raw === input) setInput("");
     await submitPendingTurn(turn);
   });
   const send = () => sendText(input);
@@ -455,17 +530,19 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   const defer = (key: string, deferred: boolean) => execute(deferred ? "正在暂存" : "正在恢复", async () => {
     const current = await save(); const next = await apiRequest<BackfillBatch>("/api/ai/backfill/"+current.id+"/review", { method:"POST", body:JSON.stringify({revision:current.revision,key,deferred}) }); remember(next);
   });
+  const replying = busy === "正在回复" || busy === "正在重试消息";
   const disabled = Boolean(busy) || initializing;
   const chatBlocked = disabled || pendingTurn !== null;
   useEffect(() => {
     if (!focusRequested || chatBlocked || !composerRef.current) return;
-    composerRef.current.focus();
+    composerRef.current.focus({ preventScroll: true });
     if (document.activeElement === composerRef.current) onFocusHandled?.();
   }, [focusRequested, chatBlocked, onFocusHandled]);
   const pendingVisible = pendingTurn !== null && pendingTurn.conversationId === conversationId;
+  const pendingRecoveryVisible = pendingVisible && !replying && !initializing;
   const pendingArchiveMessage = pendingVisible ? chat.find((item) => item.turnId === pendingTurn.turnId) : undefined;
   const pendingAlreadyInArchive = pendingArchiveMessage !== undefined;
-  const pendingRetryBlocked = pendingTurn?.retryBlocked === true || pendingArchiveMessage?.retryable === false || pendingArchiveMessage?.turnStatus === "interrupted";
+  const pendingRetryBlocked = pendingTurn?.retryBlocked === true || (pendingArchiveMessage?.retryable === false && pendingArchiveMessage?.turnStatus !== "running") || pendingArchiveMessage?.turnStatus === "interrupted";
   const displayedChat = pendingVisible && !pendingAlreadyInArchive ? [...chat, userMessageFromPending(pendingTurn)] : chat;
   const preserveAndStartNew = () => {
     const pending = pendingRef.current;
@@ -496,10 +573,15 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   // Cleared cards stay hidden across reloads. A newly updated draft can appear
   // again; ordinary conversation replies must not resurrect the old cards.
   const showBatch = batch !== null && (clearedAt === null || Date.parse(batch.updatedAt) > Date.parse(clearedAt));
+  const shareConversation = (index: number) => setShareRequest({ conversationId, initialIndex: index, messages: chat.map((message, i) => ({ ...message, id: message.id ?? "live:" + i })) });
   return <div className="assistant-backfill" aria-busy={disabled} onContextMenu={(event) => { if ((event.target as HTMLElement).closest("textarea, input, select, [contenteditable]") !== null) return; event.preventDefault(); openMenu(event.clientX, event.clientY); }}>
-    <div className="backfill-workspace-scroll" ref={scrollRef}>
-      <div className="backfill-workspace-content">
-      <div className="backfill-conversation" role="log" aria-label="和AI管家的对话" aria-live="polite">{displayedChat.length === 0 ? <p className="backfill-chat-copy ai-assistant-message backfill-intro">你好，想聊什么？也可以把资料和要求一起发来，我来帮你补记。</p> : null}{displayedChat.map((m, i) => <div className={`ai-message-row backfill-chat-message is-${m.role}`} aria-label={m.role === "user" ? "我" : "AI管家"} data-message-role={m.role} key={m.id ?? `${m.role}:${m.at ?? i}:${i}`}><div className={`backfill-chat-copy ${m.role === "user" ? "ai-user-message" : "ai-assistant-message"}`}><p>{m.text}</p>{m.role === "assistant" && m.ui?.offers?.length ? <div className="backfill-operation-group backfill-ui-offers">{m.ui.offers.map((offer, offerIndex) => <button className="secondary-button" type="button" key={`${offer.label}:${offerIndex}`} onClick={() => onUiCommand(offer.command)}>{offer.label}</button>)}</div> : null}{m.role === "assistant" && m.ui?.clarify ? <UiClarifyPrompt clarify={m.ui.clarify} onPick={(text) => { setInput(""); sendText(text); }} /> : null}{m.attachments?.length ? <div className="backfill-chat-attachments" aria-label="消息附件">{m.attachments.map((attachment) => <button type="button" key={attachment.assetId} onClick={() => void openAttachment(attachment.assetId)}>{attachment.name}</button>)}</div> : null}{m.at ? <time dateTime={m.at}>{new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(new Date(m.at))}</time> : null}</div>{m.role === "assistant" ? <AssistantMessageActions content={m.text} /> : null}</div>)}</div>
+    <div className="backfill-reading-area">
+    <div className="backfill-workspace-scroll" ref={scrollRef} onScroll={updateReadingPosition} onWheel={() => { readMoreRef.current = true; }} onTouchStart={() => { readMoreRef.current = true; }} onPointerDown={() => { readMoreRef.current = true; }} onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) readMoreRef.current = true; }} tabIndex={0} aria-label="对话内容">
+      <div className="backfill-workspace-content" ref={contentRef}>
+      <div className="backfill-conversation" role="log" aria-label="和AI管家的对话" aria-live="polite">{displayedChat.length === 0 ? <p className="backfill-chat-copy ai-assistant-message backfill-intro">你好，想聊什么？也可以把资料和要求一起发来，我来帮你补记。</p> : null}{displayedChat.map((m, i) => <Fragment key={m.id ?? `${m.role}:${m.at ?? i}:${i}`} >{assistantTimeDivider(displayedChat[i - 1]?.at, m.at) ? <p className="assistant-time-divider">{assistantMessageTime(m.at)}</p> : null}<div onContextMenu={event => { if (chat[i]) openMessageInfo(event, m.at, m.text, () => shareConversation(i)); }} className={`ai-message-row backfill-chat-message is-${m.role}`} aria-label={m.role === "user" ? "我" : "AI管家"} data-message-role={m.role} data-turn-id={m.turnId} key={m.id ?? `${m.role}:${m.at ?? i}:${i}`}><div className={`backfill-chat-copy ${m.role === "user" ? "ai-user-message" : "ai-assistant-message"}`}><p>{m.text}</p>{m.role === "assistant" && m.ui?.offers?.length ? <div className="backfill-operation-group backfill-ui-offers">{m.ui.offers.map((offer, offerIndex) => <button className="secondary-button" type="button" key={`${offer.label}:${offerIndex}`} onClick={() => onUiCommand(offer.command)}>{offer.label}</button>)}</div> : null}{m.role === "assistant" && m.ui?.clarify ? <UiClarifyPrompt clarify={m.ui.clarify} onPick={(text) => { setInput(""); sendText(text); }} /> : null}{m.attachments?.length ? <div className="backfill-chat-attachments" aria-label="消息附件">{m.attachments.map((attachment) => <button type="button" key={attachment.assetId} onClick={() => void openAttachment(attachment.assetId)}>{attachment.name}</button>)}</div> : null}</div><div className="assistant-message-meta">{m.role === "assistant" ? <AssistantMessageActions content={m.text} onShare={() => shareConversation(i)} /> : null}<AssistantMessageTime at={m.at} /></div></div></Fragment>)}</div>
+      {replying && streamReply ? <div className="ai-message-row backfill-chat-message is-assistant is-streaming" data-message-role="assistant" aria-label="AI管家正在回复"><div className="backfill-chat-copy ai-assistant-message"><p>{streamReply}</p></div></div> : null}
+      {replying && !streamReply ? <AssistantReplyProgress thinking={gear !== "direct"} /> : null}
+      {pendingRecoveryVisible ? <div className="ai-message-row backfill-chat-message is-assistant backfill-reply-failure" data-message-role="assistant" aria-label="AI管家"><div className="backfill-chat-copy ai-assistant-message"><p role="status">{pendingRetryBlocked ? pendingError : pendingError ? "这次回复没能完成。点下方重试，我再来一次。" : "上次回复还没完成，可以接着重试。"}</p></div><div className="assistant-message-actions">{pendingRetryBlocked ? <button className="secondary-button" type="button" disabled={disabled} onClick={preserveAndStartNew}>保留记录并新建对话</button> : <button className="assistant-message-actions__copy" type="button" aria-label="重试这条消息" title="重试这条消息" disabled={disabled} onClick={retryPendingTurn}><RotateCw size={14} aria-hidden="true" /></button>}</div></div> : null}
       {showBatch && batch ? <section className="backfill-plan-preview" aria-label="当前拟写方案"><strong>{batch.status==="undone" ? "已撤销的内容" : "拟写内容"}</strong>
         {batch.plan.entries.map(e => { const state=backfillItemState(batch,e.key); return <article className={"backfill-confirm-card is-"+state} data-confirm-key={e.key} data-confirm-state={state} key={e.key}><div className="backfill-card-heading"><DraftDateTime entry={e} generatedAt={batch.createdAt} editable={draft&&state!=="committed"&&!disabled} onChange={patch=>changeEntry(e.key,patch)} /></div>{state==="deferred" ? <details><summary>查看暂存内容</summary><p className="backfill-preview-copy">{e.content}</p><div className="backfill-preview-photos">{e.assetIds.map(id=><img key={id} src={"/api/assets/"+encodeURIComponent(id)+"/thumbnail?w=400"} alt="拟写照片" />)}</div></details> : <><p className="backfill-preview-copy">{e.content}</p><div className="backfill-preview-photos">{e.assetIds.map(id=><img key={id} src={"/api/assets/"+encodeURIComponent(id)+"/thumbnail?w=400"} alt="拟写照片" />)}</div></>}{e.questions ? <p className="backfill-warning">{e.questions}</p> : null}{actionButtons(e.key,backfillEntryReady(e)&&e.entityKeys.every(key=>batch.plan.objects.some(o=>o.key===key&&o.selected&&!o.questions.trim())))}</article>; })}
         {(batch.plan.actions??[]).map(a=><article className={"backfill-confirm-card is-"+backfillItemState(batch,a.key)} data-confirm-key={a.key} data-confirm-state={backfillItemState(batch,a.key)} key={a.key}><div className="backfill-card-heading"><strong>{a.date||"日期未定"}</strong><span>{a.type==="cycle" ? "周期标记" : "习惯标记"}</span></div><p className="backfill-preview-copy">{a.marked ? "标记" : "移除"}{a.type==="cycle" ? ({period_start:"经期开始",period_end:"经期结束",intimacy:"亲密",fitness:"运动"}[a.cycleKind!]) : a.name}</p>{a.questions ? <p className="backfill-warning">{a.questions}</p> : null}{actionButtons(a.key,a.selected&&!a.questions.trim()&&Boolean(a.date))}</article>)}
@@ -546,20 +628,24 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       {showBatch && Boolean(batch?.recordIds?.length) && batch?.status !== "undone" ? <div className="backfill-operation-group backfill-result-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => onViewRecords(batch?.recordIds ?? [])}>查看辅记</button></div> : null}
       </div>
     </div>
+    {hasMoreBelow ? <button className="backfill-read-more" type="button" aria-label="向下阅读更多内容" title="向下阅读更多内容" onClick={readFurther}><ArrowDown size={19} aria-hidden="true" /></button> : null}
+    </div>
     <div className={"backfill-workspace-footer "+(draggingFiles ? "is-dragging" : "")} {...photoHandlers}>
       {initializing ? <p role="status">正在恢复聊天和草稿…</p> : null}
-      {error ? <p className="backfill-warning" role="alert">{error}{initializing ? <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={retryCurrentLoad}>重试恢复会话</button> : null}</p> : null}{notice ? <p role="status">{notice}</p> : null}
-      {pendingVisible ? <div className="backfill-pending-turn" role={pendingError ? "alert" : "status"}><p>{pendingError || "这条消息的发送结果尚未确认。重试会复用同一消息编号。"}</p>{pendingRetryBlocked ? <button className="secondary-button" type="button" disabled={disabled} onClick={preserveAndStartNew}>保留记录并新建对话</button> : <button className="secondary-button" type="button" disabled={disabled} onClick={retryPendingTurn}>重试这条消息</button>}</div> : null}
-      {busy ? <p role="status"><LoaderCircle size={14} className="spin" />{busy}…</p> : null}
+      {error && !(pendingRecoveryVisible && pendingError) ? <p className="backfill-warning" role="alert">{error}{initializing ? <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={retryCurrentLoad}>重试恢复会话</button> : null}</p> : null}{notice ? <p role="status">{notice}</p> : null}
+
+      {stopError ? <p role="status">{stopError}</p> : null}
+      {busy && !replying ? <p role="status"><LoaderCircle size={14} className="spin" />{busy}…</p> : null}
       {!configured ? <p className="backfill-mode">当前使用本地模式。<button className="ai-configure-link" type="button" onClick={onOpenSettings}>配置 AI</button>后可理解更完整的要求。</p> : null}
       {privacyRequest === null ? null : <div className="backfill-privacy-request" role="alert"><p>{privacyRequest.reason}</p><div className="backfill-operation-group"><button className="primary-button" type="button" onClick={() => onPrivacyDecision("once")}>本次允许</button><button className="secondary-button" type="button" onClick={() => onPrivacyDecision("session")}>本次会话允许</button><button className="secondary-button" type="button" onClick={() => onPrivacyDecision("never")}>不用了</button></div></div>}
       <form className="ai-assistant-composer backfill-chat-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <textarea ref={composerRef} aria-label="发给AI管家的消息" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (!chatBlocked && photoState === null) void send(); } }} rows={1} disabled={chatBlocked} />
         <div className="backfill-input-actions">
-          <ShotDropZone ref={shotRef} scopeKey={"assistant:"+scope} numbered addOutsideStrip disabled={chatBlocked} shots={shots} onShotsChange={setShots} onUpload={photoInput.onUploadShot} onNotify={photoInput.onNotify} onCleared={photoInput.onShotsCleared} onSubmissionState={(_scope,state)=>setPhotoState(state)} />
+          <ShotDropZone ref={shotRef} toolbarTarget={photoToolbarTarget} toolbarLabel="照片" scopeKey={"assistant:"+scope} numbered addOutsideStrip disabled={chatBlocked} shots={shots} onShotsChange={setShots} onUpload={photoInput.onUploadShot} onNotify={photoInput.onNotify} onCleared={photoInput.onShotsCleared} onSubmissionState={(_scope,state)=>setPhotoState(state)} />
+          <div className="backfill-photo-slot" ref={setPhotoToolbarTarget} />
           <div className="backfill-operation-group">
-            <button className="secondary-button ai-gear-button" type="button" aria-haspopup="menu" aria-expanded={gearMenu !== null} disabled={chatBlocked} title="回答档位" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setGearMenu({ x: rect.left, y: rect.top - 6 }); }}><span>{gearLabel(gear)}</span><ChevronDown size={14} aria-hidden="true" /></button>
-            <button className="primary-button ai-send-button" type="submit" disabled={chatBlocked || photoState !== null || (!input.trim() && !shots.length)}>发送</button>
+            <button className="secondary-button ai-gear-button" type="button" aria-label={`思考强度：${gearLabel(gear)}`} aria-haspopup="menu" aria-expanded={gearMenu !== null} disabled={chatBlocked} title="思考强度" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setGearMenu({ x: rect.left, y: rect.top - 8 }); }}><ReasoningIcon /><span>{gearLabel(gear)}</span><ChevronDown size={14} aria-hidden="true" /></button>
+            {replying ? <button className="primary-button ai-send-button ai-stop-button" type="button" aria-label={stopping ? "正在停止回答" : "停止回答"} title="停止回答" disabled={stopping || pendingTurn === null} onClick={() => void stopReply()}><Square size={14} fill="currentColor" aria-hidden="true" /></button> : <button className="primary-button ai-send-button" type="submit" disabled={chatBlocked || photoState !== null || (!input.trim() && !shots.length)}>发送</button>}
           </div>
         </div>
       </form>
@@ -571,9 +657,11 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         <button type="button" role="menuitem" onClick={() => { setMenu(null); setHistoryOpen(true); }}><History size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">聊天记录</span></button>
         <button type="button" role="menuitem" onClick={() => { setMenu(null); onOpenSettings(); }}><Settings2 size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">AI 设置</span></button>
     </div>, document.body)}
-    {gearMenu === null ? null : createPortal(<div ref={gearMenuRef} className="ai-assistant-menu ai-gear-menu" role="menu" aria-label="回答档位" style={{ left: gearMenu.x, top: gearMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
-        {AI_GEARS.map((option) => <button type="button" role="menuitemradio" aria-checked={gear === option.id} key={option.id} onClick={() => { setGearMenu(null); pickGear(option.id); }}><span className="ai-gear-check" aria-hidden="true">{gear === option.id ? <Check size={14} /> : null}</span><span className="ai-assistant-menu-label">{option.label}<small>{option.detail}</small></span></button>)}
+    {gearMenu === null ? null : createPortal(<div ref={gearMenuRef} className="ai-assistant-menu ai-gear-menu" role="menu" aria-label="思考强度" style={{ left: gearMenu.x, top: gearMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+        {AI_GEARS.map((option) => <button type="button" role="menuitemradio" aria-checked={gear === option.id} key={option.id} onClick={() => { setGearMenu(null); pickGear(option.id); }}><span className="ai-gear-check" aria-hidden="true">{gear === option.id ? <Check size={14} /> : null}</span><span className="ai-assistant-menu-label">{option.label}</span></button>)}
     </div>, document.body)}
+    {messageInfo}
+    {shareRequest ? <AssistantShareDialog request={shareRequest} onClose={() => setShareRequest(null)} /> : null}
     <AssistantHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} actionsDisabled={disabled || pendingTurn !== null} onOpenAttachment={(id) => void openAttachment(id)} onContinue={(detail) => {
       detailGeneration.current++;
       conversationRef.current = detail.id; setConversationId(detail.id);

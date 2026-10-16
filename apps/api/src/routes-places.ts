@@ -62,6 +62,23 @@ export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname, 
     const counts = new Map<string, { city: string; count: number; recent: number; last: string }>();
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
     const cutoff = Date.now() - 30 * 86400000;
+    // The chooser needs all eligible records, independently of the displayed
+    // day, search or task view. No separate usage counter is persisted.
+    const includePrivate = url.searchParams.get("includePrivate") === "1";
+    const hideDemo = url.searchParams.get("hideDemo") === "1";
+    const lastMention = new Map<string, number>();
+    for (const record of ctx.repository.list()) {
+      if ((!includePrivate && record.isPrivate) || (hideDemo && record.isDemo)) continue;
+      const time = record.occurredAt ?? record.createdAt;
+      const day = time.kind === "instant" ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(time.value)) : time.value.substring(0, 10);
+      if (day > today) continue;
+      const timestamp = Date.parse(time.value) || 0;
+      for (const ref of record.entityRefs) {
+        if (ref.entityType !== "place" || !places.has(ref.entityId)) continue;
+        lastMention.set(ref.entityId, Math.max(lastMention.get(ref.entityId) ?? 0, timestamp));
+      }
+    }
+    const recentPlaceIds = [...lastMention].sort((a, b) => b[1] - a[1]).map(([id]) => id);
     for (const record of ctx.repository.list({ kind: "journal" })) {
       if (record.isPrivate || record.isDemo) continue;
       const time = record.occurredAt ?? record.createdAt;
@@ -76,7 +93,7 @@ export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname, 
       for (const city of cities) { const item = counts.get(city) ?? { city, count: 0, recent: 0, last: "" }; item.count++; if (Date.parse(date) >= cutoff) item.recent++; if (date > item.last) item.last = date; counts.set(city, item); }
     }
     const items = [...counts.values()];
-    setJson(res, 200, { frequent: items.sort((a, b) => b.count - a.count || b.last.localeCompare(a.last)).slice(0, 6).map(item => item.city), recent: items.filter(item => item.recent).sort((a, b) => b.recent - a.recent || b.last.localeCompare(a.last)).slice(0, 6).map(item => item.city) }); return true;
+    setJson(res, 200, { frequent: items.sort((a, b) => b.count - a.count || b.last.localeCompare(a.last)).slice(0, 6).map(item => item.city), recent: items.filter(item => item.recent).sort((a, b) => b.recent - a.recent || b.last.localeCompare(a.last)).slice(0, 6).map(item => item.city), recentPlaceIds }); return true;
   }
   if (pathname !== "/api/places/search" || req.method !== "POST") return false;
   requireJsonContentType(req);

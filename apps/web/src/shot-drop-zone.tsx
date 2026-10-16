@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import { AssetPreview, assetContentUrl, type PreviewImage } from "./timeline";
-import { Eraser, LoaderCircle, Plus, RotateCw, X } from "lucide-react";
+import { Eraser, LoaderCircle, Plus, Image as PhotoIcon, RotateCw, X } from "lucide-react";
 import type { Asset, AssetLink } from "@lifeos/core";
 import { apiRequest } from "./api";
 import type { ApiUploadProgress } from "./api";
@@ -56,6 +56,9 @@ interface ShotDropZoneProps {
   readonly numbered?: boolean;
   /** Keeps the add-photo control visible beside a horizontally scrolling strip. */
   readonly addOutsideStrip?: boolean;
+  /** Responsive toolbar entrance shares this component's picker and upload limit. */
+  readonly toolbarTarget?: HTMLElement | null;
+  readonly toolbarLabel?: string;
   readonly disabled?: boolean;
   readonly shots: readonly AssetLink[];
   readonly assets?: readonly Asset[];
@@ -95,7 +98,7 @@ interface ShotBatchProgress {
   readonly total: number;
 }
 
-export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ scopeKey, numbered = false, addOutsideStrip = false, disabled = false, shots, assets = [], onShotsChange, onUpload, onUploadVideo, onNotify, onCleared, onBusyChange, onSubmissionState }, ref) {
+export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(function ShotDropZone({ scopeKey, numbered = false, addOutsideStrip = false, toolbarTarget, toolbarLabel, disabled = false, shots, assets = [], onShotsChange, onUpload, onUploadVideo, onNotify, onCleared, onBusyChange, onSubmissionState }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<readonly PendingShot[]>([]);
   const pendingRef = useRef<readonly PendingShot[]>([]);
@@ -126,6 +129,15 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
   const [previewAssets, setPreviewAssets] = useState<readonly Asset[]>([]);
   const closePreview = useCallback(() => setPreview(null), []);
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const closeTaskComposerPreview = (event: Event) => {
+      const origin = event.target;
+      if (origin instanceof Node && stripRef.current !== null && origin.contains(stripRef.current)) closePreview();
+    };
+    document.addEventListener("lifeos:task-composer-collapse", closeTaskComposerPreview);
+    return () => document.removeEventListener("lifeos:task-composer-collapse", closeTaskComposerPreview);
+  }, [closePreview]);
 
   useEffect(() => { if (!preview) return; const urls = preview.ownedUrls; return () => { for (const url of urls) URL.revokeObjectURL(url); }; }, [preview?.ownedUrls]);
   const previewAssetId = preview?.images[preview.index]?.id;
@@ -612,6 +624,7 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
           </div> : null}
     </div>
     {fileInput}
+    {toolbarTarget ? createPortal(<button className="icon-button compact-icon-button composer-photo-trigger" type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label={onUploadVideo ? "添加照片或视频" : "添加照片"} title={onUploadVideo ? "添加照片或视频" : "添加照片"}><PhotoIcon size={18} strokeWidth={1.8} aria-hidden="true" />{toolbarLabel ? <span>{toolbarLabel}</span> : null}</button>, toolbarTarget) : null}
     {preview ? createPortal(<AssetPreview assetIds={preview.images.map(image => image.id)} images={preview.images} index={preview.index} assets={previewAssets} onClose={closePreview} onIndexChange={index => setPreview(current => current ? { ...current, index } : null)} />, document.body) : null}
   </div>;
 });

@@ -1,11 +1,12 @@
 import test from "node:test";
-import { equal, ok, deepEqual, rejects } from "node:assert/strict";
+import { equal, ok, deepEqual, rejects, throws } from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import type { IncomingMessage } from "node:http";
 import { ArchiveService } from "../src/archive-service.js";
 import { StoragePoolStore } from "../src/storage-pool-store.js";
@@ -31,6 +32,57 @@ async function json(base: string, path: string, body?: unknown) { const response
 async function ready(base: string, id: string) { for (let i = 0; i < 200; i++) { const { value } = await json(base, `/api/archive/jobs/${id}`); if (value.phase !== "working") return value; await new Promise(r => setTimeout(r, 30)); } throw Error("job timeout"); }
 async function upload(base: string, bytes: Buffer, password: string) { const response = await fetch(base + "/api/archive/uploads", { method: "POST", headers: { "content-type": "application/octet-stream" }, body: bytes }); equal(response.status, 201); const uploaded = await response.json() as any; const { response: start } = await json(base, "/api/archive/import", { id: uploaded.id, password }); equal(start.status, 202); return await ready(base, uploaded.id); }
 
+function useMigratedRecordOrder(h: Awaited<ReturnType<typeof harness>>): void {
+  const db = new DatabaseSync(join(h.config.dataDirectory, "lifeos.sqlite"));
+  try {
+    const columns = db.prepare("PRAGMA table_info(records)").all();
+    const appended = ["is_private", "is_demo", "is_backfill", "weather_json", "note_json"];
+    const ordered = [...columns.filter(column => !appended.includes(String(column.name))), ...appended.map(name => columns.find(column => column.name === name)!)];
+    const names = ordered.map(column => String(column.name)).join(",");
+    const definitions = ordered.map(column => `${column.name} ${column.type}${column.pk ? " PRIMARY KEY" : ""}${column.notnull ? " NOT NULL" : ""}${column.dflt_value === null ? "" : ` DEFAULT ${column.dflt_value}`}`).join(",");
+    db.exec(`BEGIN; CREATE TABLE migrated_records (${definitions}) STRICT; INSERT INTO migrated_records (${names}) SELECT ${names} FROM records; DROP TABLE records; ALTER TABLE migrated_records RENAME TO records; COMMIT;`);
+  } finally { db.close(); }
+}
+
+test("full archive imports between fresh and migrated column orders without mixing fields or weakening CAS", async (t) => {
+  for (const migratedSource of [false, true]) {
+    const source = await harness(), target = await harness(); t.after(source.stop); t.after(target.stop);
+    useMigratedRecordOrder(migratedSource ? source : target);
+    const { value: record } = await json(source.base, "/api/records", { kind: "journal", content: "跨数据库历史导入", isPrivate: true });
+    await json(target.base, "/api/records", { kind: "journal", content: "替换前内容" });
+    const { value: started } = await json(source.base, "/api/archive/export", { password: "archive-test-password" });
+    equal((await ready(source.base, started.id)).phase, "ready");
+    const encrypted = Buffer.from(await (await fetch(source.base + `/api/archive/jobs/${started.id}/download`)).arrayBuffer());
+    const prepared = await upload(target.base, encrypted, "archive-test-password"); equal(prepared.phase, "ready", prepared.error);
+    const committed = await json(target.base, "/api/archive/commit", { id: prepared.id, replaceConfirmed: true }); equal(committed.response.status, 200, JSON.stringify(committed.value));
+    deepEqual(target.app.repository.exportData().records, source.app.repository.exportData().records);
+    equal(target.app.repository.findById(record.id)!.isPrivate, true);
+    ok(existsSync(join(target.config.dataDirectory, "backups", committed.value.backup)));
+
+    const stale = spaceFingerprint(target.app.repository.portableSpace());
+    await json(target.base, "/api/records", { kind: "journal", content: "并发改动必须保留" });
+    const before = spaceFingerprint(target.app.repository.portableSpace());
+    throws(() => target.app.repository.restorePortableSpace(source.app.repository.portableSpace(), stale), /当前空间已发生变化/);
+    equal(spaceFingerprint(target.app.repository.portableSpace()), before);
+    await fetch(source.base + `/api/archive/jobs/${started.id}`, { method: "DELETE" });
+  }
+});
+
+test("portable import still rejects duplicate, unknown and missing column names before changing data", async (t) => {
+  const h = await harness(); t.after(h.stop);
+  await json(h.base, "/api/records", { kind: "journal", content: "不被无效清单覆盖" });
+  const before = spaceFingerprint(h.app.repository.portableSpace());
+  for (const mutation of ["duplicate", "unknown", "missing"]) {
+    const tables = structuredClone(h.app.repository.portableSpace());
+    const columns = [...tables.records.columns];
+    if (mutation === "missing") columns.pop();
+    else columns[0] = mutation === "duplicate" ? columns[1]! : "unexpected_column";
+    tables.records = { ...tables.records, columns };
+    throws(() => h.app.repository.restorePortableSpace(tables, before), /数据版本不兼容/);
+    equal(spaceFingerprint(h.app.repository.portableSpace()), before);
+  }
+});
+
 test("backup month range survives more than 100 recent runs and honors Shanghai midnight", async (t) => {
   const h = await harness(); t.after(h.stop);
   h.app.repository.recordBackupRun({ provider: "local", kind: "manual", status: "success", startedAt: "2026-08-31T16:00:00.000Z" });
@@ -41,6 +93,7 @@ test("backup month range survives more than 100 recent runs and honors Shanghai 
 
 test("full encrypted archive round trip includes originals, deleted/private records, manual summaries and safe replacement", async (t) => {
   const source = await harness(); const target = await harness(); t.after(source.stop); t.after(target.stop);
+  useMigratedRecordOrder(target);
   const bytes = Buffer.from("fixture original bytes with no shared server path");
   writeFileSync(join(source.dir, "assets", "photo.jpg"), bytes);
   source.app.repository.insertAsset({ id: "photo", kind: "photo", mediaType: "image/jpeg", sizeBytes: bytes.length, storageRefs: [{ sourceId: "local", sourceRef: "photo.jpg", contentHash: { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") } }] });

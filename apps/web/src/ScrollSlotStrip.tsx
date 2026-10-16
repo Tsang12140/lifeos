@@ -49,7 +49,15 @@ export function ScrollSlotStrip({ className, children, scrollKey, activeIndex = 
     if (strip === null) return undefined;
     // A genuine relayout (the field narrows on a phone) can move the slots out
     // from under the pointer, so the pin is re-applied rather than trusted.
+    let lastHeight = strip.clientHeight;
     const pin = () => {
+      if (strip.clientHeight !== lastHeight) {
+        lastHeight = strip.clientHeight;
+        const selected = strip.querySelector(".is-selected");
+        if (selected instanceof HTMLElement && activeIndex < 0) {
+          strip.scrollTop = selected.offsetTop - strip.clientHeight / 2 + selected.offsetHeight / 2;
+        }
+      }
       if (strip.scrollWidth <= strip.clientWidth) return;
       const slot = activeIndex >= 0 ? strip.children[activeIndex] : strip.querySelector(".is-selected");
       if (!(slot instanceof HTMLElement)) return;

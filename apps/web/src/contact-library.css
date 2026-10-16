@@ -1,19 +1,11 @@
 .contacts-controls { display: grid; gap: 12px; min-width: 0; }
-.contacts-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.contacts-modes { display: flex; flex-wrap: wrap; gap: 8px; }
-.contacts-modes > button { min-height: 40px; }
-.contacts-search { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; color: var(--muted); }
-.contacts-search input { width: 100%; min-width: 0; min-height: 40px; }
-.contacts-description, .contacts-rules p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.6; }
-.contacts-rules { color: var(--muted); font-size: 0.78rem; }
-.contacts-rules summary { width: fit-content; cursor: pointer; }
-.contacts-rules[open] { display: grid; gap: 10px; }
-.contacts-threshold { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
-.contacts-threshold input { width: 80px; min-height: 40px; }
+.entities-library-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; position: relative; min-width: 0; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.entities-library-toolbar .entities-tabs { flex: 0 0 auto; margin: 0; padding: 0; border: 0; }
+.entities-library-toolbar .library-search { flex-shrink: 0; margin-left: auto; }
+.library-search .record-filter-option { white-space: normal; overflow-wrap: anywhere; height: auto; }
+.contacts-description { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.6; }
 .contacts-error { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .contacts-error p { margin: 0; }
-@media (max-width: 480px) {
-  .contacts-toolbar { align-items: stretch; }
-  .contacts-modes { flex: 1 1 100%; }
-  .contacts-modes > button { flex: 1; }
+@media (max-width: 600px) {
+  .entities-library-toolbar .record-search-sheet { top: calc(100% + 8px); }
 }

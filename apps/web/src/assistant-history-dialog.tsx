@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   groupConversationsByDay,
@@ -6,6 +6,9 @@ import {
   type AssistantConversationSummary,
 } from "@lifeos/core";
 import { History, Search, X } from "lucide-react";
+import { AssistantShareDialog, type AssistantShareRequest } from "./assistant-share-dialog";
+import { AssistantMessageTime, useAssistantMessageInfo } from "./assistant-message-info";
+import { assistantMessageTime, assistantTimeDivider } from "./assistant-message-time";
 import { AssistantMessageActions } from "./assistant-message-actions";
 import { AssistantHistoryRangePicker } from "./assistant-history-range";
 import {
@@ -19,7 +22,7 @@ import {
 import { assetContentUrl } from "./timeline";
 import { isBackdropDismiss } from "./dialog-dismiss";
 
-const MESSAGE_TIME = new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" });
+
 
 function mergeOlderMessages(older: readonly AssistantArchiveMessage[], newer: readonly AssistantArchiveMessage[]): readonly AssistantArchiveMessage[] {
   const byId = new Map<string, AssistantArchiveMessage>();
@@ -35,6 +38,9 @@ export function AssistantHistoryDialog({ open, onClose, onContinue, onOpenAttach
   readonly onOpenAttachment: (assetId: string) => void;
   readonly actionsDisabled?: boolean;
 }) {
+  const [shareRequest, setShareRequest] = useState<AssistantShareRequest | null>(null);
+  const { openMessageInfo, messageInfo, closeMessageInfo } = useAssistantMessageInfo();
+  useLayoutEffect(() => { if (!open) { setShareRequest(null); closeMessageInfo(); } }, [open]);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const threadScrollRef = useRef<HTMLElement>(null);
   const listGeneration = useRef(0);
@@ -167,8 +173,9 @@ export function AssistantHistoryDialog({ open, onClose, onContinue, onOpenAttach
 
   if (!open) return createPortal(<dialog ref={dialogRef} className="modal-dialog assistant-history-dialog" />, document.body);
   const interactionsBlocked = continuing;
+  const shareConversation = (index: number) => { if (selected) setShareRequest({ conversationId: selected.id, messages: selected.messages, initialIndex: index }); };
   const requestClose = () => { if (continuing) return; setRangePickerOpen(false); detailGeneration.current++; onClose(); };
-  return createPortal(<dialog ref={dialogRef} className="modal-dialog assistant-history-dialog" aria-label="AI 管家聊天记录" onKeyDownCapture={(event) => {
+  return createPortal(<><dialog ref={dialogRef} className="modal-dialog assistant-history-dialog" aria-label="AI 管家聊天记录" onKeyDownCapture={(event) => {
     if (event.key !== "Escape" || !rangePickerOpen) return;
     event.preventDefault(); event.stopPropagation();
     setRangePickerOpen(false);
@@ -237,18 +244,17 @@ export function AssistantHistoryDialog({ open, onClose, onContinue, onOpenAttach
             </header>
             {selected.hasMore ? <button className="secondary-button assistant-history-load-older" type="button" disabled={interactionsBlocked || loadingOlderMessages} onClick={() => void loadEarlierMessages()}>{loadingOlderMessages ? "正在加载更早消息…" : "加载更早消息"}</button> : null}
             <div className="assistant-history-messages">
-              {selected.messages.map((message) => <div className={`ai-message-row assistant-history-message is-${message.role}`} key={message.id}>
+              {selected.messages.map((message, index) => <Fragment key={message.id}>{assistantTimeDivider(selected.messages[index - 1]?.at, message.at) ? <p className="assistant-time-divider">{assistantMessageTime(message.at)}</p> : null}<div onContextMenu={event => openMessageInfo(event, message.at, message.text, () => shareConversation(index))} className={`ai-message-row assistant-history-message is-${message.role}`} key={message.id}>
                 <div className="assistant-history-message-content">
                   <p className="assistant-history-message-copy">{splitHistoryMatches(message.text, applied).map((segment, position) => segment.match ? <mark key={position}>{segment.text}</mark> : <span key={position}>{segment.text}</span>)}</p>
                   {message.attachments?.length ? <div className="assistant-history-attachments" aria-label="消息附件">{message.attachments.map((attachment) => <a key={attachment.assetId} href={assetContentUrl(attachment.assetId)} onClick={(event) => { event.preventDefault(); onOpenAttachment(attachment.assetId); }}>{attachment.name}</a>)}</div> : null}
-                  {message.role === "assistant" ? <AssistantMessageActions content={message.text} /> : null}
-                  <time className="assistant-history-message-time" dateTime={message.at}>{MESSAGE_TIME.format(new Date(message.at))}</time>
+                  <div className="assistant-message-meta">{message.role === "assistant" ? <AssistantMessageActions content={message.text} onShare={() => shareConversation(index)} /> : null}<AssistantMessageTime at={message.at} /></div>
                 </div>
-              </div>)}
+              </div></Fragment>)}
             </div>
           </>}
       </article>
     </div>
     <div className="dialog-footer"><button className="secondary-button" type="button" disabled={continuing} onClick={requestClose}>关闭</button></div>
-  </dialog>, document.body);
+  </dialog>{messageInfo}{shareRequest ? <AssistantShareDialog request={shareRequest} onClose={() => setShareRequest(null)} /> : null}</>, document.body);
 }

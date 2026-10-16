@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { PHOTO_WALL_DEFAULTS, photoWallPreferences, type PhotoWallPreferences } from "@lifeos/core";
+import { PHOTO_WALL_ENABLED, PHOTO_WALL_DEFAULTS, photoWallPreferences, type PhotoWallPreferences } from "@lifeos/core";
 import { apiRequest } from "./api";
 import { errorMessage } from "./app-meta";
 import "./calendar-background.css";
 
-interface BackgroundStatus { count: number; minPhotos: number; imageUrl: string | null; version: string | null }
+interface BackgroundStatus { count: number; minPhotos: number; tierPhotos: number; nextTier: number; automaticGeneration: boolean; imageUrl: string | null; version: string | null }
 const sliders = [
   ["veil", "白蒙版", 0, 100, 1, "%"], ["shadow", "阴影", 0, 60, 1, "%"],
   ["border", "白边", 0, 16, 1, "px"], ["gap", "间距", 0, 32, 1, "px"],
-  ["tilt", "倾斜", 0, 8, .5, "°"], ["maxPhotos", "拼贴照片上限", 12, 60, 1, "张"],
+  ["tilt", "倾斜", 0, 8, .5, "°"],
   ["seed", "排布", 1, 9999, 1, ""],
 ] as const;
 
-export function CalendarBackgroundSettings({ month, hideDemo, scope }: { month: string; hideDemo: boolean; scope: string }) {
+interface CalendarBackgroundSettingsProps { month: string; hideDemo: boolean; scope: string }
+export function CalendarBackgroundSettings(props: CalendarBackgroundSettingsProps) {
+  return PHOTO_WALL_ENABLED ? <ActiveCalendarBackgroundSettings {...props} /> : null;
+}
+function ActiveCalendarBackgroundSettings({ month, hideDemo, scope }: CalendarBackgroundSettingsProps) {
   const [status, setStatus] = useState<BackgroundStatus | null>(null);
   const [draft, setDraft] = useState<PhotoWallPreferences | null>(null), [saved, setSaved] = useState<PhotoWallPreferences | null>(null);
   const [busy, setBusy] = useState<"save" | "generate" | null>(null);
@@ -65,7 +69,7 @@ export function CalendarBackgroundSettings({ month, hideDemo, scope }: { month: 
         if (active.signal.aborted) return;
         setStatus(next); setMessage("背景已生成并启用");
         window.dispatchEvent(new CustomEvent("lifeos:background-generated", { detail: { month, hideDemo, scope, ...next } }));
-      } else setMessage("外观已保存，拼贴调整将在后台更新时生效，也可立即生成");
+      } else setMessage("外观已保存，拼贴调整可通过立即生成生效");
     } catch (cause) {
       if (!active.signal.aborted) {
         await check(active.signal);
@@ -79,6 +83,7 @@ export function CalendarBackgroundSettings({ month, hideDemo, scope }: { month: 
   return <section className="calendar-settings-block calendar-background-settings" aria-labelledby="calendar-background-settings-title">
     <p className="eyebrow" id="calendar-background-settings-title">月历照片背景</p>
     <p className="settings-ai-note" data-background-count>{month.replace("-", " 年 ")} 月{status ? `有 ${status.count} 张有效照片，至少需要 ${status.minPhotos} 张。` : error ? "照片数量暂不可用。" : "正在确认照片数量。"}</p>
+    {status ? <p className="settings-ai-note" data-background-tier>{status.tierPhotos ? `当前档位拼 ${status.tierPhotos} 张；下一档 ${status.nextTier} 张，还差 ${status.nextTier - status.count} 张。` : `再有 ${status.minPhotos - status.count} 张有效照片即可生成。`}{status.automaticGeneration ? "跨档后在午夜自动更新。" : "定时生成已停用，已有背景继续保留。"}立即生成按当前档位取图。</p> : null}
     <div className="calendar-background-controls">
       <label>排法<select data-background-field="layout" value={draft?.layout ?? PHOTO_WALL_DEFAULTS.layout} disabled={!!busy || !draft} onChange={e => setDraft(current => current ? { ...current, layout: e.target.value as PhotoWallPreferences["layout"] } : current)}><option value="rows">齐边拼贴</option><option value="masonry">错落照片墙</option><option value="scattered">散落相纸</option></select></label>
       {sliders.map(([key, label, min, max, step, unit]) => <label key={key}><span>{label}<output>{draft?.[key] ?? PHOTO_WALL_DEFAULTS[key]}{unit}</output></span><input type="range" data-background-field={key} aria-label={label} min={min} max={max} step={step} value={draft?.[key] ?? PHOTO_WALL_DEFAULTS[key]} disabled={!!busy || !draft || (key === "tilt" && draft.layout !== "scattered")} onChange={e => setDraft(current => current ? { ...current, [key]: Number(e.target.value) } : current)} /></label>)}

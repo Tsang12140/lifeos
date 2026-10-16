@@ -10,6 +10,7 @@ import { createThumbnailCache } from "../src/derived-thumbs.js";
 import { buildRecord } from "../src/record-builders.js";
 import { SqliteRecordRepository } from "../src/repository.js";
 import { cleanPhotoDescription, describePhotoLibrary } from "../src/photo-description.js";
+import { saveRuntimePhotoTextConfig } from "../src/photo-text-config.js";
 
 /**
  * These tests never touch the network. The describer is injected, so the whole pass —
@@ -68,9 +69,25 @@ function journalWithPhoto(repository: SqliteRecordRepository, content: string, a
   return buildRecord({ kind: "journal", content, occurredAt: { kind: "instant", value: "2026-10-15T00:00:00.000Z" }, assetRefs: [{ assetId, role: "photo" }] }, repository);
 }
 
+/**
+ * Removes a fixture directory, tolerating a lag that is an artefact of the platform rather
+ * than of the code under test: on Windows libvips (sharp) lets go of the files it decoded
+ * slightly after the call that used them returns, so an immediate `rmSync` can raise EPERM.
+ * Node's own `maxRetries` backs off and retries exactly that error. If it still will not go,
+ * the directory is left behind — it is a throwaway temp dir, and a leftover must never be
+ * the thing that turns a passing test red.
+ */
+function cleanupFixture(root: string): void {
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    // Leftover temp directory; harmless, and not evidence about the pass.
+  }
+}
+
 test("a photo shared by two records is read once and written to both", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
 
   const first = journalWithPhoto(fx.repository, "今天喝了一杯");
   const second = journalWithPhoto(fx.repository, "同一张图又发了一次");
@@ -110,7 +127,7 @@ test("a photo shared by two records is read once and written to both", async (t)
 
 test("a second pass costs nothing: the same picture is never read twice", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   fx.repository.insert(journalWithPhoto(fx.repository, "今天喝了一杯"));
 
   const run = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails };
@@ -133,7 +150,7 @@ test("a second pass costs nothing: the same picture is never read twice", async 
 
 test("dryRun reads the photograph but writes nothing", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   fx.repository.insert(journalWithPhoto(fx.repository, "今天喝了一杯"));
 
   const run = await describePhotoLibrary({
@@ -152,7 +169,7 @@ test("dryRun reads the photograph but writes nothing", async (t) => {
 
 test("a private record's photo is never sent anywhere", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   fx.repository.insert(buildRecord({ kind: "journal", content: "私密的一杯", occurredAt: { kind: "instant", value: "2026-10-15T00:00:00.000Z" }, isPrivate: true, assetRefs: [{ assetId: "asset_photo", role: "photo" }] }, fx.repository));
 
   const run = await describePhotoLibrary({
@@ -171,7 +188,7 @@ test("a private record's photo is never sent anywhere", async (t) => {
 
 test("limit bounds one pass and reports what is left", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   for (const [index, name] of ["b", "c", "d"].entries()) {
     const bytes = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 10 * index, g: 60, b: 90 } } }).jpeg().toBuffer();
     writeFileSync(join(fx.root, "assets", "uploads", `${name}.jpg`), bytes);
@@ -199,7 +216,7 @@ test("limit bounds one pass and reports what is left", async (t) => {
 
 test("limit 0 surveys without reading a picture", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   fx.repository.insert(journalWithPhoto(fx.repository, "今天喝了一杯"));
 
   const run = await describePhotoLibrary({
@@ -229,7 +246,7 @@ test("cleanPhotoDescription drops fences, bullets and refusals", () => {
 
 test("kinds keeps screenshots filed as tasks out of the pass", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
 
   // 第二张图挂在一条 task 上，代表「截图那类」；本轮只应处理 journal 的那一张。
   const bytes = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 20, g: 200, b: 20 } } }).jpeg().toBuffer();
@@ -263,7 +280,7 @@ test("kinds keeps screenshots filed as tasks out of the pass", async (t) => {
 
 test("the context pass re-reads an already-captioned photo and hands the record's own words over", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   const journal = journalWithPhoto(fx.repository, "今天用的是浅烘豆，奶泡还是没打起来");
   fx.repository.insert(journal);
 
@@ -321,7 +338,7 @@ test("the context pass re-reads an already-captioned photo and hands the record'
 
 test("高成本档 = 中成本档 ＋ 思考，且与中成本档各自记账", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   const journal = journalWithPhoto(fx.repository, "今天用的是浅烘豆，奶泡还是没打起来");
   fx.repository.insert(journal);
 
@@ -366,7 +383,7 @@ test("高成本档 = 中成本档 ＋ 思考，且与中成本档各自记账", 
 
 test("强制重跑会替换同档位的旧描述，而不是堆成两条", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   const journal = journalWithPhoto(fx.repository, "今天喝了一杯");
   fx.repository.insert(journal);
 
@@ -405,7 +422,7 @@ test("强制重跑会替换同档位的旧描述，而不是堆成两条", async
 
 test("强制重跑只换自己那一档，别的档位一字不动", async (t) => {
   const fx = await makeFixture();
-  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  t.after(() => cleanupFixture(fx.root));
   const journal = journalWithPhoto(fx.repository, "今天用的是浅烘豆");
   fx.repository.insert(journal);
 
@@ -420,4 +437,170 @@ test("强制重跑只换自己那一档，别的档位一字不动", async (t) =
   assert.equal(stored.aiDerived.length, 2, "强制只作用于本档位，不应增加或减少条目");
   assert.equal(byVariant.get("plain"), "便宜档描述", "别的档位不得被碰");
   assert.equal(byVariant.get("context"), "中档描述·第二版", "本档位应被换成新的一条");
+});
+
+test("an OCR pass that finds no words files an empty marker, and the next run skips it", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "拍了张没有字的照片"));
+
+  const run = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, variant: "ocr" as const };
+  let calls = 0;
+  const first = await describePhotoLibrary({
+    ...run,
+    recognize: async () => {
+      calls += 1;
+      return { kind: "blank" as const, engine: "GeneralBasicOCR" };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(first.described, 0, "没有文本就不该算「读到了字」");
+  assert.equal(first.noDescription, 1);
+  assert.equal(first.unread, 0, "服务回答了「没有字」，这不是「没问成」");
+
+  const stored = fx.repository.list()[0]!;
+  const entries = stored.aiDerived.filter((item) => (item.value as Record<string, unknown>).type === "photo-ocr");
+  assert.equal(entries.length, 1, "空标记必须落库 —— 否则这张图每点一次都会被重问一遍");
+  assert.equal((entries[0]!.value as Record<string, unknown>).text, "");
+  assert.equal(entries[0]!.model, "GeneralBasicOCR", "标记要记下是哪一档确认的");
+
+  // 第二次：不注入 recognize，直接把「再调用」判成失败。
+  const again = await describePhotoLibrary({
+    ...run,
+    recognize: async () => {
+      throw new Error("已标记为「没有字」的照片不该被再次识别");
+    },
+  });
+  assert.equal(again.alreadyDescribed, 1, "空标记也算「这张问过了」");
+  assert.equal(again.noDescription, 0, "它不该再进待办");
+  assert.equal(again.described, 0);
+});
+
+test("an empty marker matches no search term", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "干净正文，没有关键词"));
+
+  await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    variant: "ocr",
+    recognize: async () => ({ kind: "blank" as const, engine: "GeneralBasicOCR" }),
+  });
+
+  // 搜索是子串匹配：空文本命中不了任何词，所以标记不会把记录塞进别人的结果里。
+  assert.deepEqual(fx.repository.list({ q: "拿铁" }), [], "空标记不得命中任何关键词");
+  assert.deepEqual(fx.repository.list({ q: "zzz" }), []);
+  assert.equal(fx.repository.list({ q: "干净正文" }).length, 1, "正文本身照旧能搜到");
+});
+
+test("a recogniser that could not answer writes nothing and is retried next run", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "那次网络断了"));
+
+  const run = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, variant: "ocr" as const };
+  const first = await describePhotoLibrary({ ...run, recognize: async () => ({ kind: "unread" as const }) });
+  assert.equal(first.unread, 1);
+  assert.equal(first.noDescription, 0, "「没问成」不是「图里没有字」");
+  assert.equal(first.recordsUpdated, 0, "没问成就不该写任何条目");
+  assert.equal(fx.repository.list()[0]!.aiDerived.length, 0);
+
+  // 没有标记挡路，下一轮自然会重问这张。
+  let calls = 0;
+  const second = await describePhotoLibrary({
+    ...run,
+    recognize: async () => {
+      calls += 1;
+      return { kind: "text" as const, text: "补上的字", engine: "GeneralBasicOCR" };
+    },
+  });
+  assert.equal(calls, 1, "上一轮没问成，这一轮必须重问");
+  assert.equal(second.described, 1);
+});
+
+test("with no OCR credentials nothing is marked — the library is never called wordless", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "还没配 key 的时候"));
+
+  // 不注入 recognize，配置里也没有 tencentOcr：这正是「OCR 还没开」的样子。
+  const run = await describePhotoLibrary({ repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, variant: "ocr" });
+  assert.equal(run.unread, 1, "没凭证 = 没问成");
+  assert.equal(run.noDescription, 0, "绝不能读成「这张图没有字」");
+  assert.equal(run.recordsUpdated, 0);
+  assert.equal(fx.repository.list()[0]!.aiDerived.length, 0, "否则第一次跑就会把全库标记成没有字，且永久跳过");
+});
+
+test("a caption pass that cannot name the picture still writes nothing", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "一张看不出是什么的图"));
+
+  const run = await describePhotoLibrary({ repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, describe: async () => "NONE" });
+  assert.equal(run.noDescription, 1);
+  assert.equal(run.unread, 0, "模型答了，只是答不出");
+  assert.equal(run.recordsUpdated, 0, "「模型说不出」不等于「这张图没有字」，不落标记");
+  assert.equal(fx.repository.list()[0]!.aiDerived.length, 0);
+});
+
+test("关掉一个能力之后，任何调用方都读不到这张照片", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "这张照片不该被送去识别"));
+
+  saveRuntimePhotoTextConfig(fx.config, { ocr: false, caption: false });
+
+  let ocrAsked = 0;
+  let captionAsked = 0;
+  const ocr = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    variant: "ocr",
+    recognize: async () => { ocrAsked += 1; return { kind: "text" as const, text: "不该出现", engine: "GeneralBasicOCR" }; },
+  });
+  const caption = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    describe: async () => { captionAsked += 1; return "不该出现"; },
+  });
+
+  // `disabled` and not merely `described: 0`: "nothing was attempted" must stay tellable
+  // apart from "attempted and found nothing", or a switched-off feature reads as a bug.
+  assert.equal(ocr.disabled, true);
+  assert.equal(caption.disabled, true);
+  assert.equal(ocrAsked, 0, "关掉之后一次请求都不许发");
+  assert.equal(captionAsked, 0);
+  assert.equal(fx.repository.list()[0]!.aiDerived.length, 0, "也不许留下任何东西");
+
+  // The read-only survey still answers: switching a feature off must not also hide how much
+  // is waiting inside it, which is exactly what she needs to decide about switching it back.
+  const survey = await describePhotoLibrary({ repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, variant: "ocr", limit: 0, dryRun: true });
+  assert.equal(survey.disabled, undefined);
+  assert.equal(survey.photos, 1);
+  assert.equal(survey.remaining, 1);
+});
+
+test("force re-reads a picture that was marked wordless", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  fx.repository.insert(journalWithPhoto(fx.repository, "换引擎之后想再问一次"));
+
+  const run = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, variant: "ocr" as const };
+  await describePhotoLibrary({ ...run, recognize: async () => ({ kind: "blank" as const, engine: "GeneralBasicOCR" }) });
+
+  const forced = await describePhotoLibrary({
+    ...run,
+    force: true,
+    recognize: async () => ({ kind: "text" as const, text: "现在读出了字", engine: "GeneralAccurateOCR" }),
+  });
+  assert.equal(forced.described, 1, "强制重跑要能覆盖空标记，换引擎后才有补救的路");
+  const stored = fx.repository.list()[0]!;
+  const entries = stored.aiDerived.filter((item) => (item.value as Record<string, unknown>).type === "photo-ocr");
+  assert.equal(entries.length, 1, "旧的空标记应被替换，不得堆成两条");
+  assert.equal((entries[0]!.value as Record<string, unknown>).text, "现在读出了字");
+  assert.equal(entries[0]!.model, "GeneralAccurateOCR");
 });

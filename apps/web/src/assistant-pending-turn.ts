@@ -32,6 +32,9 @@ export function pendingTurnRecoveryStatus(turn: PendingAssistantTurn, messages: 
   const userMessage = messages.find((message) => message.role === "user" && message.turnId === turn.turnId);
   if (userMessage?.turnStatus === "completed") return "completed";
   if (turn.retryBlocked) return "blocked";
+  // Running turns reject a second generation, but same-ID retry joins the
+  // existing operation. retryable=false only blocks a terminal failed turn.
+  if (userMessage?.turnStatus === "running") return "retry";
   if (userMessage?.turnStatus === "interrupted" || userMessage?.retryable === false) return "blocked";
   return "retry";
 }

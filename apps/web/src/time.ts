@@ -3,6 +3,17 @@ import { createDateOnly, createInstant, createLocalDateTime, type LifeTime } fro
 export const FALLBACK_TIME_ZONE = "Asia/Shanghai";
 export const USER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || FALLBACK_TIME_ZONE;
 
+// Reuse ICU formatters: constructing them for every record on each render is
+// substantially more expensive than formatting another value with one.
+const dateFormatter = new Intl.DateTimeFormat("en-US", { timeZone: USER_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+const clockFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: USER_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23", hour12: false });
+const inputFormatter = new Intl.DateTimeFormat("en-US", { timeZone: USER_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", hour12: false });
+const nowFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: USER_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const displayFormatter = new Intl.DateTimeFormat("zh-CN", { weekday: "long", month: "long", day: "numeric", timeZone: USER_TIME_ZONE });
+const shortFormatter = new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", timeZone: USER_TIME_ZONE });
+const dayFormatter = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", timeZone: USER_TIME_ZONE });
+const weekdayFormatter = new Intl.DateTimeFormat("zh-CN", { weekday: "short", timeZone: USER_TIME_ZONE });
+
 function partsToObject(parts: Intl.DateTimeFormatPart[]): Record<string, string> {
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
@@ -12,12 +23,7 @@ function validDateKey(value: string): boolean {
 }
 
 export function localDateToday(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: USER_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
+  const parts = dateFormatter.formatToParts(new Date());
   const values = partsToObject(parts);
   return `${values.year ?? "1970"}-${values.month ?? "01"}-${values.day ?? "01"}`;
 }
@@ -34,33 +40,19 @@ export function shiftDate(value: string, offset: number): string {
 
 export function displayDate(value: string): string {
   if (!validDateKey(value)) return "选择日期";
-  return new Intl.DateTimeFormat("zh-CN", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    timeZone: USER_TIME_ZONE,
-  }).format(new Date(`${value}T12:00:00`));
+  return displayFormatter.format(new Date(`${value}T12:00:00`));
 }
 
 export function shortDate(value: string): string {
   if (!validDateKey(value)) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    timeZone: USER_TIME_ZONE,
-  }).format(new Date(`${value}T12:00:00`));
+  return shortFormatter.format(new Date(`${value}T12:00:00`));
 }
 
 function dateKeyFromInstant(value: string): string | undefined {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
   const values = partsToObject(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: USER_TIME_ZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(date),
+    dateFormatter.formatToParts(date),
   );
   return values.year && values.month && values.day ? `${values.year}-${values.month}-${values.day}` : undefined;
 }
@@ -69,13 +61,7 @@ function timeFromInstant(value: string): string | undefined {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
   const values = partsToObject(
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone: USER_TIME_ZONE,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-      hour12: false,
-    }).formatToParts(date),
+    clockFormatter.formatToParts(date),
   );
   return values.hour && values.minute ? `${values.hour}:${values.minute}` : undefined;
 }
@@ -84,16 +70,7 @@ function dateTimeLocalFromInstant(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   const values = partsToObject(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: USER_TIME_ZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-      hour12: false,
-    }).formatToParts(date),
+    inputFormatter.formatToParts(date),
   );
   if (!values.year || !values.month || !values.day || !values.hour || !values.minute) return "";
   return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
@@ -152,15 +129,7 @@ export function dateKeyForRecord(occurredAt: LifeTime | undefined, createdAt: Li
 /** The current local wall-clock minute, ready for a datetime-local input. */
 export function localNowInput(): string {
   const values = partsToObject(
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone: USER_TIME_ZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date()),
+    nowFormatter.formatToParts(new Date()),
   );
   return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
 }
@@ -213,11 +182,7 @@ export function monthGridDates(value: string): readonly string[] {
  */
 export function dayLabel(value: string): string {
   if (!validDateKey(value)) return "选日期";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "long",
-    day: "numeric",
-    timeZone: USER_TIME_ZONE,
-  }).format(new Date(`${value}T12:00:00`));
+  return dayFormatter.format(new Date(`${value}T12:00:00`));
 }
 
 export function monthTitle(value: string): string {
@@ -236,7 +201,7 @@ export function shiftMonth(value: string, offset: number): string {
 
 export function weekdayShort(value: string): string {
   if (!validDateKey(value)) return "—";
-  return new Intl.DateTimeFormat("zh-CN", { weekday: "short", timeZone: USER_TIME_ZONE }).format(new Date(`${value}T12:00:00`));
+  return weekdayFormatter.format(new Date(`${value}T12:00:00`));
 }
 
 /**

@@ -1,4 +1,5 @@
 import { DiaryNavIcon } from "./diary-nav-icon";
+import { deviceUiFont } from "./ui-font";
 import {
   BookOpen,
   BriefcaseBusiness,
@@ -34,13 +35,14 @@ import type {
 import type { MovieEntity, RecordView, TaskRecordView } from "./api";
 import type { AppView, ComposerKind, SettingsPageId, UiFontId } from "./app-types";
 import { shortDate } from "./time";
+import { scopedKey } from "./storage-scope";
 
 export const DEMO_ID_PREFIX = "demo-";
-export const DEMO_HIDDEN_STORAGE_KEY = "lifeos.hideDemo";
-export const MOVIE_PROMPT_HIDDEN_STORAGE_KEY = "lifeos.moviePromptHidden";
-export const AI_ASSISTANT_VISIBLE_STORAGE_KEY = "lifeos.ai.assistant-visible";
-export const COMPOSER_SHOTS_STORAGE_KEY = "lifeos.composerShots";
-export const UI_FONT_STORAGE_KEY = "lifeos.uiFont";
+export const DEMO_HIDDEN_STORAGE_KEY = scopedKey("lifeos.hideDemo");
+export const MOVIE_PROMPT_HIDDEN_STORAGE_KEY = scopedKey("lifeos.moviePromptHidden");
+export const AI_ASSISTANT_VISIBLE_STORAGE_KEY = scopedKey("lifeos.ai.assistant-visible");
+export const COMPOSER_SHOTS_STORAGE_KEY = scopedKey("lifeos.composerShots");
+export const UI_FONT_STORAGE_KEY = scopedKey("lifeos.uiFont");
 /** A name typed by this user is normally Chinese; a token like `@a1b2` is not. */
 export const CJK_PATTERN = /[㐀-鿿]/;
 export const MAX_IMPLICIT_CJK_MENTION_NAME_LENGTH = 6;
@@ -54,7 +56,7 @@ export const SETTINGS_PAGE_GROUPS: readonly {
   { id: "account", label: "账户", pages: [{ id: "account/session", label: "账户与会话" }, { id: "account/storage", label: "存储与额度" }] },
   { id: "data", label: "数据", pages: [{ id: "data/import-export", label: "导入与导出" }, { id: "data/backup", label: "备份与恢复" }, { id: "data/demo", label: "演示数据" }, { id: "data/photos", label: "照片存储" }] },
   { id: "appearance", label: "外观", pages: [{ id: "appearance/interface", label: "界面" }] },
-  { id: "integrations", label: "服务集成", pages: [{ id: "integrations/weather", label: "天气" }, { id: "integrations/ai", label: "AI 助手" }, { id: "integrations/movie", label: "观影" }] },
+  { id: "integrations", label: "服务集成", pages: [{ id: "integrations/weather", label: "天气" }, { id: "integrations/ai", label: "AI 助手" }, { id: "integrations/movie", label: "观影" }, { id: "integrations/photo-text", label: "照片文字" }] },
   { id: "private", label: "私密模块", pages: [{ id: "private/cycle", label: "周期与亲密" }] },
   { id: "about", label: "关于", pages: [{ id: "about", label: "LifeOS" }] },
 ];
@@ -74,8 +76,8 @@ export function settingsHash(page: SettingsPageId): string {
 
 export function readAssistantVisibility(): boolean {
   try {
-    if (window.localStorage.getItem("lifeos.ai.backfill-introduced") !== "1") {
-      window.localStorage.setItem("lifeos.ai.backfill-introduced", "1");
+    if (window.localStorage.getItem(scopedKey("lifeos.ai.backfill-introduced")) !== "1") {
+      window.localStorage.setItem(scopedKey("lifeos.ai.backfill-introduced"), "1");
       window.localStorage.setItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY, "1");
     }
     return window.localStorage.getItem(AI_ASSISTANT_VISIBLE_STORAGE_KEY) !== "0";
@@ -117,7 +119,7 @@ export function readComposerShotsDraft(): readonly AssetLink[] {
 }
 
 export const UI_FONT_OPTIONS: readonly { id: UiFontId; label: string; stack: string }[] = [
-  { id: "misans", label: "MiSans", stack: '"LifeOS MiSans", "MiSans", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+  { id: "auto", label: "自动（跟随设备）", stack: deviceUiFont() },
 ];
 
 export function isUiFontId(value: string | null): value is UiFontId {
@@ -126,7 +128,8 @@ export function isUiFontId(value: string | null): value is UiFontId {
 
 export function readUiFont(): UiFontId {
   const stored = window.localStorage.getItem(UI_FONT_STORAGE_KEY);
-  return isUiFontId(stored) ? stored : "misans";
+  // The old sole option was automatically persisted, so it is not a manual preference.
+  return isUiFontId(stored) ? stored : "auto";
 }
 
 export const COMPOSER_META: Record<ComposerKind, { label: string; icon: LucideIcon }> = {

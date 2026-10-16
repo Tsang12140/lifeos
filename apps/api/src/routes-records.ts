@@ -290,6 +290,10 @@ export const handleRecordsRoutes: RouteHandler = async (
     const view = repository.findById(record.id);
     if (view === null) throw new Error("Inserted record could not be read back");
     setJson(res, 201, view);
+    // An entry carrying pictures just landed: read the words off them, behind this
+    // response rather than inside it. Whether there is anything worth reading is not
+    // decided here — a pass with no new photos costs nothing and says nothing.
+    if (view.assetRefs.length > 0) ctx.photoTextTrigger.notify();
     return true;
   }
   const restoreMatch = /^\/api\/records\/([^/]+)\/restore$/.exec(pathname);
@@ -354,6 +358,9 @@ export const handleRecordsRoutes: RouteHandler = async (
     const updated = repository.findById(id);
     if (updated === null) throw new Error("Updated record could not be read back");
     setJson(res, 200, updated);
+    // Photos are usually attached to an entry that already exists — one at a time, over
+    // several saves. Each save nudges; the trigger collapses the burst (see PhotoTextTrigger).
+    if (updated.assetRefs.length > 0) ctx.photoTextTrigger.notify();
     return true;
   }
   if (pathname === "/api/export" && req.method === "GET") {

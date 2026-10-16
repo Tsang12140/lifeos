@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { assertValidTimelineRecord } from "@lifeos/core";
 import { apiRequest, type ApiError, type RecordView } from "./api";
+import { scopedKey } from "./storage-scope";
 import "./record-deletion.css";
 
 interface Receipt { revision: number; undoUntil: string; remainingMs: number }
@@ -12,7 +13,7 @@ export const useRecordDeletion = (id: string) => useContext(RecordDeletionContex
 
 function readPending(scope: string): readonly PendingRecordDeletion[] {
   try {
-    const entries: unknown = JSON.parse(sessionStorage.getItem(prefix + scope) ?? "[]");
+    const entries: unknown = JSON.parse(sessionStorage.getItem(scopedKey(prefix + scope)) ?? "[]");
     if (!Array.isArray(entries) || entries.length > 100) return EMPTY;
     return entries.flatMap((entry: PendingRecordDeletion) => {
       assertValidTimelineRecord(entry.record);
@@ -29,15 +30,15 @@ export function useRecordDeletions(scope: string | null, callbacks: { onFinished
   scopeRef.current = scope; callbacksRef.current = callbacks;
   useEffect(() => { scopeRef.current = scope; return () => { scopeRef.current = null; }; }, [scope]);
   const entries = state.scope === scope ? state.entries : EMPTY;
-  const publish = (owner: string, next: readonly PendingRecordDeletion[]) => {
+  const publish = useCallback((owner: string, next: readonly PendingRecordDeletion[]) => {
     if (scopeRef.current !== owner) return;
     stateRef.current = { scope: owner, entries: next }; setState(stateRef.current);
     try {
       const durable = next.filter(entry => entry.receipt);
-      if (durable.length) sessionStorage.setItem(prefix + owner, JSON.stringify(durable));
-      else sessionStorage.removeItem(prefix + owner);
+      if (durable.length) sessionStorage.setItem(scopedKey(prefix + owner), JSON.stringify(durable));
+      else sessionStorage.removeItem(scopedKey(prefix + owner));
     } catch { /* In-memory undo still works if session storage is unavailable. */ }
-  };
+  }, []);
   useEffect(() => { if (scope) publish(scope, readPending(scope)); else { stateRef.current = { scope: null, entries: EMPTY }; setState(stateRef.current); } }, [scope]);
   useEffect(() => {
     if (!scope) return;
@@ -52,13 +53,13 @@ export function useRecordDeletions(scope: string | null, callbacks: { onFinished
     }, Math.max(0, Math.min(...waiting.map(entry => entry.deadline!)) - Date.now()) + 5);
     return () => clearTimeout(timer);
   }, [entries, scope]);
-  const requestWithRetry = async <T,>(owner: string, path: string, init: RequestInit): Promise<T> => {
+  const requestWithRetry = useCallback(async <T,>(owner: string, path: string, init: RequestInit): Promise<T> => {
     try { return await apiRequest<T>(path, init); }
     catch (error) {
       if (scopeRef.current !== owner || ((error as ApiError).status !== undefined && (error as ApiError).status! < 500)) throw error;
       return apiRequest<T>(path, init);
     }
-  };
+  }, []);
   const start = async (record: RecordView, query: string, index: number): Promise<boolean> => {
     const owner = scopeRef.current;
     if (!owner || stateRef.current.entries.some(entry => entry.record.id === record.id)) return false;
@@ -75,7 +76,7 @@ export function useRecordDeletions(scope: string | null, callbacks: { onFinished
       throw error;
     }
   };
-  const undo = async (id: string) => {
+  const undo = useCallback(async (id: string) => {
     const owner = scopeRef.current, entry = stateRef.current.entries.find(item => item.record.id === id);
     if (!owner || !entry?.receipt || entry.phase !== "undoable" || entry.deadline! <= Date.now()) return;
     publish(owner, stateRef.current.entries.map(item => item === entry ? { ...entry, phase: "restoring" } : item));
@@ -89,7 +90,7 @@ export function useRecordDeletions(scope: string | null, callbacks: { onFinished
       publish(owner, stateRef.current.entries.map(item => item.record.id === id ? { ...entry, phase: "undoable" } : item));
       callbacksRef.current.onError((error as Error).message || "撤销失败，请重试");
     }
-  };
+  }, [publish, requestWithRetry]);
   const retain = (records: readonly RecordView[] | null, query: string): readonly RecordView[] | null => {
     if (!records) return records;
     const next = [...records];

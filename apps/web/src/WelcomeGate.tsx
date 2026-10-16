@@ -6,6 +6,7 @@ import { locateWeatherDevice, setWeatherFollowEnabled } from "./weather-follow";
 import type { WeatherConfigStatus } from "./weather";
 import type { WeatherLocationOption } from "./weather-location-types";
 import "./welcome.css";
+import { LoginCardBrand, LoginIntro } from "./login-intro";
 
 type Stage = "login" | "invite" | "create" | "weather";
 
@@ -127,20 +128,26 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
     finally { setBusy(false); }
   };
 
-  return <main className="welcome-screen"><div className="welcome-shell">
+  const isLogin = stage === "login";
+  return <main className={`welcome-screen${isLogin ? " welcome-login-screen" : ""}`}>{isLogin ? <LoginIntro /> : null}<div className={`welcome-shell${isLogin ? " welcome-login-shell" : ""}`}>
     <div className="welcome-brand" aria-label="LifeOS"><img className="welcome-brand-mark" src="/favicon.svg?v=2" alt="" /><span>LifeOS</span></div>
-    <section className="welcome-panel" aria-labelledby="welcome-title">
+    <section className={`welcome-panel${isLogin ? " welcome-login-panel" : ""}`} aria-labelledby="welcome-title">
+      {isLogin ? <LoginCardBrand /> : null}
       <div className="welcome-step-icon" aria-hidden="true">{stage === "weather" ? <CloudSun size={24} /> : stage === "login" ? <LockKeyhole size={24} /> : <KeyRound size={24} />}</div>
       <p className="welcome-eyebrow">{stage === "weather" ? "最后一步，天气" : stage === "login" ? "你的私人空间" : "受邀加入"}</p>
       <h1 id="welcome-title">{stage === "login" ? "欢迎回来" : stage === "invite" ? "输入邀请码" : stage === "create" ? "创建你的空间" : "天气位置"}</h1>
-      <p className="welcome-intro">{stage === "login" ? "登录后，继续记录自己的生活。" : stage === "invite" ? "邀请码由管理员发放，只能用于创建一个独立空间。" : stage === "create" ? "设置自己的账号和密码。你的记录与其他空间互不相通。" : "选择定位，或固定一个城市。"}</p>
+      {!isLogin ? <p className="welcome-intro">{stage === "invite" ? "邀请码由管理员发放，只能用于创建一个独立空间。" : stage === "create" ? "设置自己的账号和密码。你的记录与其他空间互不相通。" : "选择定位，或固定一个城市。"}</p> : null}
 
-      {stage === "login" ? <form className="welcome-form" onSubmit={(event) => { event.preventDefault(); onLogin(username, password); }}>
+      {stage === "login" ? <form className="welcome-form welcome-login-form" aria-busy={loginLoading || undefined} onSubmit={(event) => { event.preventDefault(); onLogin(username, password); }}>
+        <div className="login-fields">
         <label><span>账号</span><input name="username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
         <WelcomePasswordField id="welcome-login-password" label="密码" value={password} onChange={setPassword} autoComplete="current-password" />
+        </div>
         {loginError ? <p className="welcome-error" role="alert">{loginError}</p> : null}
-        <button className="primary-button welcome-main-action" type="submit" disabled={loginLoading || !username.trim() || !password}>{loginLoading ? <LoaderCircle className="spin" size={17} /> : <ArrowRight size={17} />}<span>{loginLoading ? "登录中…" : "进入 LifeOS"}</span></button>
-        <button className="welcome-text-action" type="button" onClick={() => switchTo("invite")}>第一次来？使用邀请码创建空间</button>
+        <div className="welcome-login-actions">
+          <button className="primary-button welcome-main-action" type="submit" aria-busy={loginLoading || undefined} disabled={loginLoading || !username.trim() || !password}>{loginLoading ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : null}<span>{loginLoading ? "登录中…" : "进入 LifeOS"}</span></button>
+          <button className="welcome-login-invite-action" type="button" onClick={() => switchTo("invite")}>使用邀请码</button>
+        </div>
       </form> : null}
 
       {stage === "invite" ? <form className="welcome-form" onSubmit={(event) => void checkInvite(event)}>
@@ -168,6 +175,6 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
         <button className="welcome-text-action" type="button" onClick={onFinished} disabled={busy}>稍后再选</button>
       </div> : null}
     </section>
-    <p className="welcome-footnote">每个账号拥有独立的记录、照片和设置。</p>
+    {!isLogin ? <p className="welcome-footnote">每个账号拥有独立的记录、照片和设置。</p> : null}
   </div></main>;
 }

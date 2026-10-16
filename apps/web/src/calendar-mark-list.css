@@ -1,0 +1,34 @@
+.calendar-cycle-popover { position: fixed; z-index: 62; width: 176px; overflow: visible; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); }
+.calendar-cycle-popover .habit-panel-heading, .calendar-cycle-popover .habit-row > .icon-button { display: none; }
+.cycle-entry-compact .cycle-mobile-entry { margin: 0; padding: 0; border: 0; background: transparent; }
+.cycle-entry-compact .cycle-mobile-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.cycle-entry-compact .cycle-mobile-action { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-width: 0; min-height: 40px; height: auto; margin: 0; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-soft); font: inherit; font-size: .875rem; font-weight: 400; line-height: 1.4; text-align: left; white-space: normal; }
+.cycle-entry-compact .cycle-mobile-action.is-selected { color: var(--ink-soft); background: transparent; box-shadow: none; }
+.cycle-entry-compact .cycle-mobile-action:is(:hover,:focus-visible) { background: var(--chip); color: var(--ink); }
+.cycle-entry-compact .cycle-mobile-action:focus-visible { outline: 1px solid var(--muted); outline-offset: -2px; }
+.cycle-entry-compact button:focus-visible { box-shadow: none; }
+.cycle-entry-compact .cycle-mobile-action:disabled { color: var(--muted); cursor: default; }
+.cycle-entry-compact .cycle-mobile-checkbox { display: grid; place-items: center; width: 16px; height: 16px; flex: none; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); }
+.cycle-entry-compact .cycle-mobile-action.is-selected .cycle-mobile-checkbox { background: var(--ink-soft); border-color: var(--ink-soft); color: white; }
+.cycle-entry-compact .cycle-mobile-action-icon { width: 16px; height: 16px; flex: none; color: currentColor; }
+.cycle-entry-compact .cycle-mobile-action-label { min-width: 0; overflow-wrap: anywhere; }
+.custom-habit-panel.is-compact { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 0; }
+.custom-habit-panel.is-compact .habit-panel-heading { order: 2; padding: 8px 0 0; }
+.custom-habit-panel.is-compact .habit-list { order: 1; display: grid; grid-template-columns: minmax(0,1fr); gap: 2px; margin: 2px 0 0; }
+.custom-habit-panel.is-compact .habit-row { display: flex; align-items: center; gap: 0; padding: 0; border: 0; }
+.custom-habit-panel.is-compact .habit-mark-button { flex: 1; height: auto; min-height: 40px; margin: 0; padding: 8px 10px; border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; font: inherit; font-size: .875rem; line-height: 1.4; text-align: left; }
+.custom-habit-panel.is-compact .habit-mark-button:is(:hover,:focus-visible) { background: var(--chip); }
+.custom-habit-panel.is-compact .habit-mark-button:focus-visible { outline: 1px solid var(--muted); outline-offset: -2px; }
+.custom-habit-panel.is-compact .habit-check { width: 16px; height: 16px; flex: none; border-radius: 4px; }
+.custom-habit-panel.is-compact .is-marked .habit-check { background: var(--ink-soft); border-color: var(--ink-soft); color: white; }
+.custom-habit-panel.is-compact .habit-mark-button > svg { width: 16px; height: 16px; flex: none; }
+.custom-habit-panel.is-compact .habit-empty { display: none; }
+.calendar-hold-menu { position: fixed; z-index: 62; width: min(192px,calc(100vw - 16px)); overflow: visible; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-soft); }
+.calendar-hold-menu .custom-habit-panel.is-compact .habit-panel-heading { display: none; }
+.calendar-hold-menu .habit-row > .icon-button { display: none; }
+.month-cell, .week-card { -webkit-touch-callout: none; }
+.calendar-cycle-popover.cycle-entry-compact :is(.cycle-mobile-action,.habit-mark-button) { min-height: 34px; padding: 6px 8px; font-size: .8125rem; gap: 6px; }
+@media (pointer: coarse) { .calendar-cycle-popover.cycle-entry-compact :is(.cycle-mobile-action,.habit-mark-button) { min-height: 40px; } }
+.cycle-more-settings-group { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.cycle-checkbox-slot { width: 16px; height: 16px; flex: none; }
+:is(.calendar-cycle-popover,.calendar-hold-menu) :is(.cycle-mobile-action-label,.habit-mark-button > span:last-child) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

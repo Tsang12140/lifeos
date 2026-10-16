@@ -78,6 +78,24 @@ export interface ApiConfig {
   };
   /** Optional TMDb key used only by the opt-in movie module. */
   readonly tmdbApiKey?: string;
+  /**
+   * Tencent Cloud OCR credentials for the photo text pass. Absent means the feature is
+   * simply off — the photo pass still runs, it just has no words to read. Grouped into one
+   * object rather than spread across four fields because the pair only makes sense together:
+   * half a credential must never look like a configured integration.
+   */
+  readonly tencentOcr?: {
+    readonly secretId: string;
+    readonly secretKey: string;
+    /** Must be a mainland region — an overseas one bills internationally and ignores a domestic package. */
+    readonly region: string;
+    /**
+     * Comma-separated action names, most preferred first — the downgrade chain (§11) walks
+     * them in order. Raw here and validated when the chain is built (see `parseOcrActions`),
+     * because an unknown name must degrade to the free tier rather than stop the pass.
+     */
+    readonly actions: string;
+  };
   /** Per-tenant key material derived from the identity database's stable master secret. */
   readonly tenantConfigSecrets?: Partial<Record<"ai" | "weather" | "movie" | "backup", string>>;
   /** Extra object-storage path segment used by non-owner spaces. */
@@ -180,6 +198,20 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const qweatherApiKey = env.QWEATHER_KEY?.trim();
   const amapApiKey = env.LIFEOS_AMAP_API_KEY?.trim();
   const tmdbApiKey = (env.LIFEOS_TMDB_API_KEY?.trim() || env.TMDB_API_KEY?.trim()) || undefined;
+  // Both halves or nothing: a lone SecretId cannot be signed with, and leaving it half-set
+  // would let the deployment look configured while every call fails.
+  const tencentSecretId = env.LIFEOS_TENCENT_SECRET_ID?.trim() || "";
+  const tencentSecretKey = env.LIFEOS_TENCENT_SECRET_KEY?.trim() || "";
+  const tencentOcr = tencentSecretId !== "" && tencentSecretKey !== ""
+    ? {
+        secretId: tencentSecretId,
+        secretKey: tencentSecretKey,
+        region: env.LIFEOS_TENCENT_OCR_REGION?.trim() || "ap-guangzhou",
+        // The plural name is the intended one now that a chain exists; the singular is
+        // still read so an existing deployment keeps working untouched.
+        actions: env.LIFEOS_TENCENT_OCR_ACTIONS?.trim() || env.LIFEOS_TENCENT_OCR_ACTION?.trim() || "GeneralBasicOCR",
+      }
+    : undefined;
   const backupDirectory = resolve(env.LIFEOS_BACKUP_DIR?.trim() || env.BACKUP_DIR?.trim() || `${dataDirectory}/backups`);
   const backupBucket = env.BACKUP_S3_BUCKET?.trim() || "";
   const backupAccessKeyId = env.BACKUP_S3_ACCESS_KEY_ID?.trim() || "";
@@ -223,6 +255,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     ...(env.QWEATHER_CITY?.trim() ? { qweatherCity: env.QWEATHER_CITY.trim() } : {}),
     qweatherHost: (env.QWEATHER_HOST?.trim() || DEFAULT_QWEATHER_HOST).replace(/^https?:\/\//, "").replace(/\/+$/, ""),
     ...(tmdbApiKey === undefined || tmdbApiKey === "" ? {} : { tmdbApiKey }),
+    ...(tencentOcr === undefined ? {} : { tencentOcr }),
   };
 }
 

@@ -96,6 +96,12 @@ test("server-owned turn status clears completed work and blocks unsafe interrupt
     { role: "user", turnId: "turn-a", turnStatus: "failed", retryable: true },
   ]), "retry");
   assert.equal(pendingTurnRecoveryStatus({ ...turn, retryBlocked: true }, []), "blocked");
+  assert.equal(pendingTurnRecoveryStatus(turn, [
+    { role: "user", turnId: "turn-a", turnStatus: "running", retryable: false },
+  ]), "retry", "a same-ID retry joins a still-running request after reload");
+  assert.equal(pendingTurnRecoveryStatus({ ...turn, retryBlocked: true }, [
+    { role: "user", turnId: "turn-a", turnStatus: "running", retryable: false },
+  ]), "blocked", "explicit local rejection is never bypassed");
 });
 
 test("chat length validation matches the trimmed durable endpoint boundary", () => {

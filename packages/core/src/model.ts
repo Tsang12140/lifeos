@@ -279,6 +279,8 @@ export interface Asset {
   readonly originalName?: string;
   readonly sizeBytes?: number;
   readonly photoMetadata?: PhotoMetadata;
+  /** Clockwise display adjustment after EXIF orientation; original bytes/hash stay immutable. */
+  readonly displayRotation?: 0 | 90 | 180 | 270;
   /** Describes the validated cloud copy. Device originals are never part of an asset/export. */
   readonly videoMetadata?: VideoMetadata;
   readonly createdAt?: InstantTime;
@@ -426,13 +428,17 @@ export interface EventRecord extends TimelineRecordBase {
   readonly kind: "event";
 }
 
-export type NoteFormat = "article" | "fragment" | "quote";
+export type NoteFormat = "note" | "article" | "fragment" | "quote";
 
 export interface NoteDetails {
   readonly format: NoteFormat;
-  /** Only article notes may carry a title. */
+  /** Legacy formats stay readable; new notes use a unified editor. */
   readonly title?: string;
-  /** Only quote notes may carry a source. */
+  readonly html?: string;
+  readonly folderId?: string;
+  readonly starred?: boolean;
+  readonly pinned?: boolean;
+  /** Optional provenance is independent of presentation. */
   readonly source?: string;
 }
 
@@ -710,22 +716,25 @@ function validateWeatherAttachment(value: unknown): void {
 
 export function assertValidNoteDetails(value: unknown, name = "record.note"): asserts value is NoteDetails {
   const note = objectValue(value, name);
-  const allowed = new Set(["format", "title", "source"]);
+  const allowed = new Set(["format", "title", "source", "html", "folderId", "starred", "pinned"]);
   for (const key of Object.keys(note)) {
     if (!allowed.has(key)) throw new Error(`${name}.${key} is not supported`);
   }
-  const format = enumValue(note.format, ["article", "fragment", "quote"], `${name}.format`);
+  const format = enumValue(note.format, ["note", "article", "fragment", "quote"], `${name}.format`);
   if (note.title !== undefined) {
     const title = stringValue(note.title, `${name}.title`);
     if (title.length > 300) throw new Error(`${name}.title must be at most 300 characters`);
-    if (format !== "article") throw new Error(`${name}.title is only allowed for article notes`);
+    if (format !== "article" && format !== "note") throw new Error(`${name}.title is only allowed for article or unified notes`);
     if (title.trim().length === 0) throw new Error(`${name}.title must not be empty`);
   }
   if (note.source !== undefined) {
     const source = stringValue(note.source, `${name}.source`);
     if (source.length > 1_000) throw new Error(`${name}.source must be at most 1000 characters`);
-    if (format !== "quote") throw new Error(`${name}.source is only allowed for quote notes`);
+    if (format !== "quote" && format !== "note") throw new Error(`${name}.source is only allowed for quote or unified notes`);
   }
+  if (note.html !== undefined && (typeof note.html !== "string" || note.html.length > 2_000_000)) throw new Error(`${name}.html is invalid or too large`);
+  if (note.folderId !== undefined) { nonEmptyStringValue(note.folderId, `${name}.folderId`); if (String(note.folderId).length > 512) throw new Error(`${name}.folderId is too long`); }
+  for (const key of ["starred", "pinned"]) if (note[key] !== undefined && typeof note[key] !== "boolean") throw new Error(`${name}.${key} must be boolean`);
   if (format === "article" && (typeof note.title !== "string" || note.title.trim().length === 0)) {
     throw new Error(`${name}.title must not be empty for article notes`);
   }
@@ -1008,6 +1017,7 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
   if (asset.purpose !== undefined && (asset.purpose !== "avatar" || asset.kind !== "photo")) throw new Error("Invalid avatar asset");
   optionalStringValue(asset.mediaType, "asset.mediaType");
   optionalStringValue(asset.originalName, "asset.originalName");
+  if (asset.displayRotation !== undefined && (asset.kind !== "photo" || ![0, 90, 180, 270].includes(asset.displayRotation as number))) throw new Error("Invalid photo display rotation");
   if (asset.kind === "video" || asset.videoMetadata !== undefined) {
     const meta = objectValue(asset.videoMetadata, "asset.videoMetadata");
     if (asset.kind !== "video" || meta.version !== 1 || asset.mediaType !== "video/mp4") throw new Error("Invalid video asset");

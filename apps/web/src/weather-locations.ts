@@ -56,6 +56,31 @@ interface RawLocationData {
 
 const catalog = data as unknown as RawLocationData;
 
+type LocationDescription = { readonly province: string; readonly city: string; readonly district: string | null };
+let descriptions: { byId: Map<string, LocationDescription>; byExactName: Map<string, LocationDescription> } | undefined;
+function locationDescriptions() {
+  if (descriptions) return descriptions;
+  const byId = new Map<string, LocationDescription>(), byExactName = new Map<string, LocationDescription>();
+  const remember = (map: Map<string, LocationDescription>, key: string, value: LocationDescription) => {
+    // The old catalog scan returns the first match, including ambiguous aliases.
+    if (!map.has(key)) map.set(key, value);
+  };
+  for (const province of catalog.provinces) for (const city of province.cities) {
+    const bareCity = city.name.replace(/(特别行政区|自治区|省|市)$/u, "");
+    const cityDescription = { province: province.name, city: city.name, district: null };
+    remember(byId, city.id, cityDescription);
+    for (const name of [city.name, bareCity]) remember(byExactName, name, cityDescription);
+    for (const district of city.districts) {
+      const description = { province: province.name, city: city.name, district: district.name };
+      const bareDistrict = district.name.replace(/(特别行政区|自治区|省|市|区|县)$/u, "");
+      remember(byId, district.id, description);
+      for (const name of [district.name, bareDistrict, `${city.name}${district.name}`, `${city.name}${bareDistrict}`, `${city.name}${bareDistrict}区`, `${bareCity}${district.name}`, `${bareCity}${bareDistrict}`, `${bareCity}${bareDistrict}区`]) remember(byExactName, name, description);
+    }
+  }
+  descriptions = { byId, byExactName };
+  return descriptions;
+}
+
 export interface WeatherLocationCatalogMeta {
   readonly source: string;
   readonly sourceUrl: string;
@@ -172,14 +197,7 @@ export function describeWeatherLocation(locationId: string): {
 } | null {
   const id = locationId.trim();
   if (id === "") return null;
-  for (const province of catalog.provinces) {
-    for (const city of province.cities) {
-      if (city.id === id) return { province: province.name, city: city.name, district: null };
-      const district = city.districts.find((candidate) => candidate.id === id);
-      if (district !== undefined) return { province: province.name, city: city.name, district: district.name };
-    }
-  }
-  return null;
+  return locationDescriptions().byId.get(id) ?? null;
 }
 
 /**
@@ -215,28 +233,7 @@ function describeWeatherLocationByExactName(name: string): {
 } | null {
   const needle = name.trim();
   if (needle === "") return null;
-  for (const province of catalog.provinces) {
-    for (const city of province.cities) {
-      const bareCity = city.name.replace(/(特别行政区|自治区|省|市)$/u, "");
-      const cityNames = new Set([city.name, bareCity]);
-      if (cityNames.has(needle)) return { province: province.name, city: city.name, district: null };
-      for (const district of city.districts) {
-        const bareDistrict = district.name.replace(/(特别行政区|自治区|省|市|区|县)$/u, "");
-        const districtNames = new Set([
-          district.name,
-          bareDistrict,
-          `${city.name}${district.name}`,
-          `${city.name}${bareDistrict}`,
-          `${city.name}${bareDistrict}区`,
-          `${bareCity}${district.name}`,
-          `${bareCity}${bareDistrict}`,
-          `${bareCity}${bareDistrict}区`,
-        ]);
-        if (districtNames.has(needle)) return { province: province.name, city: city.name, district: district.name };
-      }
-    }
-  }
-  return null;
+  return locationDescriptions().byExactName.get(needle) ?? null;
 }
 
 /**
