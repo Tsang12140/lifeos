@@ -244,11 +244,11 @@ test("cleanPhotoDescription drops fences, bullets and refusals", () => {
   assert.equal(cleanPhotoDescription(null), "");
 });
 
-test("kinds keeps screenshots filed as tasks out of the pass", async (t) => {
+test("kinds narrows the pass only when a caller asks for it", async (t) => {
   const fx = await makeFixture();
   t.after(() => cleanupFixture(fx.root));
 
-  // 第二张图挂在一条 task 上，代表「截图那类」；本轮只应处理 journal 的那一张。
+  // 第二张图挂在一条 task 上。`kinds: ["journal"]` 是**调用方显式要的窄范围**，不是默认策略。
   const bytes = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 20, g: 200, b: 20 } } }).jpeg().toBuffer();
   writeFileSync(join(fx.root, "assets", "uploads", "task.jpg"), bytes);
   fx.repository.insertAsset({
@@ -271,10 +271,43 @@ test("kinds keeps screenshots filed as tasks out of the pass", async (t) => {
     describe: async () => "一杯拿铁",
   });
 
-  assert.equal(run.photos, 1, "task 的截图不应进入本轮清点");
+  assert.equal(run.photos, 1, "显式限 journal 时，task 的截图不应进入本轮清点");
   assert.equal(run.described, 1);
   assert.equal(run.recordsUpdated, 1);
-  assert.equal(fx.repository.findById(task.id)!.aiDerived.length, 0, "task 记录不得被写入");
+  assert.equal(fx.repository.findById(task.id)!.aiDerived.length, 0, "被范围排除的 task 记录不得被写入");
+  assert.equal(fx.repository.findById(journal.id)!.aiDerived.length, 1);
+});
+
+test("task photos are captioned by default — no kinds means every record kind", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+
+  // 主人 2026-10-19 的决定：任务照片和日记照片一样进「AI 描述」档。
+  // 这里锁的是**默认行为**——不传 `kinds`，两类都应被清点并被写入。
+  const bytes = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 20, g: 200, b: 20 } } }).jpeg().toBuffer();
+  writeFileSync(join(fx.root, "assets", "uploads", "task-default.jpg"), bytes);
+  fx.repository.insertAsset({
+    id: "asset_task_default",
+    kind: "photo",
+    mediaType: "image/jpeg",
+    storageRefs: [{ sourceId: "local", sourceRef: "uploads/task-default.jpg", mediaType: "image/jpeg", contentHash: { algorithm: "sha256", value: "c".repeat(64) } }],
+  } as Asset);
+
+  const journal = journalWithPhoto(fx.repository, "今天喝了一杯");
+  const task = buildRecord({ kind: "task", content: "把截图也记下来", occurredAt: { kind: "instant", value: "2026-10-15T00:00:00.000Z" }, assetRefs: [{ assetId: "asset_task_default", role: "photo" }] }, fx.repository);
+  fx.repository.insert(journal);
+  fx.repository.insert(task);
+
+  const run = await describePhotoLibrary({
+    repository: fx.repository,
+    config: fx.config,
+    thumbnails: fx.thumbnails,
+    describe: async () => "一张手机截图",
+  });
+
+  assert.equal(run.photos, 2, "默认应同时清点日记与任务两类照片");
+  assert.equal(run.described, 2);
+  assert.equal(fx.repository.findById(task.id)!.aiDerived.length, 1, "任务照片必须和日记照片一样拿到描述");
   assert.equal(fx.repository.findById(journal.id)!.aiDerived.length, 1);
 });
 

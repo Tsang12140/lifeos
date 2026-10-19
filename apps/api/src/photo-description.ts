@@ -164,9 +164,12 @@ export interface PhotoDescriptionRunOptions {
   /** Restrict the pass to a single record — used when checking one entry by hand. */
   readonly recordId?: string;
   /**
-   * Restrict the pass to these record kinds. Journals only, say, leaving the screenshots
-   * that were filed as tasks alone — a screenshot of one's own UI is not a memory worth
-   * paying a vision model to caption.
+   * Restrict the pass to these record kinds. This is an **optional scope, not the default
+   * policy**: with no `kinds`, every record kind is read — task photos included, because
+   * the owner asked for them to be captioned like any other picture (2026-10-19). The
+   * filter stays for "measure one kind" runs; it must never be read back as "screenshots
+   * are not memories". Whether a screenshot captions well is a quality question, not a
+   * reason to leave it out of the library silently.
    */
   readonly kinds?: readonly string[];
   /** Which pass this is. Defaults to `plain`; see `PhotoDescriptionVariant`. */
