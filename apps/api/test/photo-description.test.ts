@@ -7,7 +7,7 @@ import sharp from "sharp";
 import type { Asset } from "@lifeos/core";
 import type { ApiConfig } from "../src/config.js";
 import { createThumbnailCache } from "../src/derived-thumbs.js";
-import { buildRecord } from "../src/record-builders.js";
+import { buildRecord, patchRecord } from "../src/record-builders.js";
 import { SqliteRecordRepository } from "../src/repository.js";
 import { cleanPhotoDescription, describePhotoLibrary } from "../src/photo-description.js";
 import { saveRuntimePhotoTextConfig } from "../src/photo-text-config.js";
@@ -123,6 +123,77 @@ test("a photo shared by two records is read once and written to both", async (t)
   const other = fx.repository.findById(second.id);
   assert.ok(other !== null);
   assert.equal(other.aiDerived.length, 1);
+});
+
+test("OCR and captions do not invalidate a desktop draft after a phone photo save", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  const phone = journalWithPhoto(fx.repository, "");
+  fx.repository.insert(phone);
+  const desktop = fx.repository.findById(phone.id)!;
+  const options = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails };
+  await describePhotoLibrary({ ...options, variant: "ocr", recognize: async () => ({ kind: "text", text: "照片上的字", engine: "test" }) });
+  await describePhotoLibrary({ ...options, describe: async () => "第一版图片描述" });
+  await describePhotoLibrary({ ...options, force: true, describe: async () => "第二版图片描述" });
+  const enriched = fx.repository.findById(phone.id)!;
+  assert.equal(enriched.revision, desktop.revision, "三次后台写入都不能制造编辑冲突");
+  assert.deepEqual({ ...enriched, aiDerived: [] }, desktop, "后台只可更新派生数据");
+  assert.equal(enriched.aiDerived.length, 2);
+  const patch = patchRecord(enriched, { revision: desktop.revision, content: "电脑补上的文字", assetRefs: desktop.assetRefs }, fx.repository);
+  assert.equal(fx.repository.update(patch.record, patch.expectedRevision), true);
+  const saved = fx.repository.findById(phone.id)!;
+  assert.equal(saved.body.edited, "电脑补上的文字");
+  assert.deepEqual(saved.assetRefs, desktop.assetRefs);
+  assert.deepEqual(saved.aiDerived, enriched.aiDerived, "保存正文时不能抹掉后台结果");
+  assert.equal(saved.revision, desktop.revision + 1);
+  assert.equal(fx.repository.update(patch.record, patch.expectedRevision), false, "真正的旧版本修改仍须拒绝");
+});
+
+test("overlapping OCR and caption passes preserve each other's results", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  const record = journalWithPhoto(fx.repository, "同时处理");
+  fx.repository.insert(record);
+  const options = { repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails };
+  let finish!: (text: string) => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const slow = describePhotoLibrary({ ...options, describe: () => new Promise<string>(resolve => { finish = resolve; started(); }) });
+  await ready;
+  await describePhotoLibrary({ ...options, variant: "ocr", recognize: async () => ({ kind: "text", text: "识字结果", engine: "test" }) });
+  finish("图片描述");
+  assert.equal((await slow).recordsUpdated, 1);
+  assert.equal(fx.repository.findById(record.id)!.aiDerived.length, 2);
+  assert.equal(fx.repository.findById(record.id)!.revision, 1);
+});
+
+test("enrichment finishing after a user edit or deletion cannot write stale data", async (t) => {
+  const fx = await makeFixture();
+  t.after(() => cleanupFixture(fx.root));
+  for (const deleted of [false, true]) {
+    const record = journalWithPhoto(fx.repository, "处理前");
+    fx.repository.insert(record);
+    const run = await describePhotoLibrary({
+      repository: fx.repository, config: fx.config, thumbnails: fx.thumbnails, recordId: record.id,
+      describe: async () => {
+        const current = fx.repository.findById(record.id)!;
+        if (deleted) assert.equal(fx.repository.softDelete(record.id, current.revision, JSON.stringify({ kind: "instant", value: new Date().toISOString() })), true);
+        else {
+          const patch = patchRecord(current, { revision: current.revision, content: "处理时新写的文字", assetRefs: [] }, fx.repository);
+          assert.equal(fx.repository.update(patch.record, patch.expectedRevision), true);
+        }
+        return "已经过期的图片描述";
+      },
+    });
+    assert.equal(run.recordsUpdated, 0);
+    const latest = fx.repository.findById(record.id);
+    if (deleted) assert.equal(latest, null);
+    else {
+      assert.equal(latest!.body.edited, "处理时新写的文字");
+      assert.deepEqual(latest!.assetRefs, []);
+      assert.deepEqual(latest!.aiDerived, []);
+    }
+  }
 });
 
 test("a second pass costs nothing: the same picture is never read twice", async (t) => {

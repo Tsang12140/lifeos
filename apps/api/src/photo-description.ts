@@ -566,8 +566,10 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
     // re-derived record by record.
     const captionModel = readRuntimeAiConfig(config).model;
     for (const [recordId, items] of additions) {
-      const record = byId.get(recordId);
-      if (record === undefined) continue;
+      // Merge with other enrichment passes that finished while this one awaited
+      // the provider. If the owner edited/deleted the record, discard stale work.
+      const record = repository.findById(recordId);
+      if (record === null || record.revision !== byId.get(recordId)?.revision) continue;
       const generatedAt = nowInstant();
       const aiDerived = items.map((item) => ({
         id: randomUUID(),
@@ -605,7 +607,7 @@ export async function describePhotoLibrary(options: PhotoDescriptionRunOptions):
           return !(typeof value.key === "string" && replaced.has(value.key));
         })
         : record.aiDerived;
-      if (repository.update({ ...record, aiDerived: [...kept, ...aiDerived] }, record.revision)) recordsUpdated += 1;
+      if (repository.updateAiDerived(record.id, [...kept, ...aiDerived], record.revision)) recordsUpdated += 1;
     }
   } else {
     recordsUpdated = additions.size;

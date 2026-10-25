@@ -2239,6 +2239,18 @@ export class SqliteRecordRepository {
     return Number(result.changes) === 1; }));
   }
 
+  /** Background enrichment is cache data, not an edit of the owner's record. */
+  public updateAiDerived(id: string, aiDerived: TimelineRecord["aiDerived"], expectedRevision: number): boolean {
+    const current = this.findById(id);
+    if (current === null || current.revision !== expectedRevision) return false;
+    assertValidTimelineRecord({ ...current, aiDerived });
+    const result = this.#db.prepare(`
+      UPDATE records SET ai_derived_json = ?
+      WHERE id = ? AND revision = ? AND deleted_at_json IS NULL
+    `).run(JSON.stringify(aiDerived), id, expectedRevision);
+    return Number(result.changes) === 1;
+  }
+
   #withNoteVersion(record: TimelineRecord, write: () => boolean): boolean {
     if (record.kind !== "note") return write();
     this.notes.assertFolder(record);
