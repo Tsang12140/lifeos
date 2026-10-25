@@ -318,14 +318,15 @@ export function AssistantBackfill({ privateAccessUntil, pageContext, photoInput,
    * 不弹提示（主人 2026-10-23：「不用额外提示，直接显示新的那个就行了」）：
    * 屏幕本来就变成空的欢迎页，再说一句「已清空」只是多余的噪音。
    *
-   * `nextBatch` 只给初始化路径用：草稿属于方案，不属于对话，翻篇时不该跟着消失。
+   * 旧方案仍保存在批次与原对话里；新段必须同时解除屏幕上的方案和发送绑定，
+   * 不能把“保留旧方案”实现成将它重新塞回空欢迎页。
    */
-  const startFreshConversationWhenIdle = (nextBatch: BackfillBatch | null = null, nextDirty = false): void => {
+  const startFreshConversationWhenIdle = (): void => {
     loadGeneration.current++; detailGeneration.current++;
     conversationRef.current = null;
     bindConversationBatch(null);
     setConversationId(null);
-    setClearedAt(null); setChat([]); setBatch(nextBatch); setDirty(nextDirty);
+    setClearedAt(null); setChat([]); setBatch(null); setDirty(false);
     resetGearToDefault(); setReviewOpen(false);
     setNotice("");
   };
@@ -371,13 +372,15 @@ export function AssistantBackfill({ privateAccessUntil, pageContext, photoInput,
       } catch { /* optional local edit recovery */ }
       // 打开时先判一次闲置：浏览器关了一晚再打开，组件是重新挂载的，
       // 只靠下面那个每分钟的定时器，会先把旧对话画出来再闪一下换掉。
-      // 有未确认消息时一律不翻篇 —— 那条原文还等着重试。
-      if (pending === null && archived !== null && assistantIdleResetDue({
+      // 与轮询路径一样保留未发正文/照片和当前方案的本机未保存修改。
+      // 旧方案的存在本身不阻止翻篇，也不能让它黏到新段的首条消息上。
+      if (pending === null && !input.trim() && shots.length === 0 && archived !== null
+        && !(recoveredDraft && chosen?.id === archived.batchId) && assistantIdleResetDue({
         lastMessageAt: archived.messages.at(-1)?.at,
         visibleMessageCount: archived.messages.length,
         now: Date.now(),
       })) {
-        startFreshConversationWhenIdle(chosen, recoveredDraft);
+        startFreshConversationWhenIdle();
         setInitializing(false);
         setLoadFailed(false);
         return;
