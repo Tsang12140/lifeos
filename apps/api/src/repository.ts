@@ -1,11 +1,13 @@
 import { NotesStore } from "./notes-store.js";
+import { appLockRequests, appRecordReadable, appTargetLocked, requireAppRecord, requireAppTarget } from './app-lock-context.js';
+import { JournalMemoryStore } from "./journal-memory-store.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
 import { nameVocabulary, planNameHistory, snapshotMentions } from "./entity-name-history.js";
 import { HttpError } from "./http-kit.js";
-import { readSpaceTables, replaceSpaceTables, type SpaceTables } from "./portable-space.js";
+import { deleteSpaceRows, mergeSpaceTables, readSpaceTables, replaceSpaceTables, SPACE_TABLES, type SpaceTables } from "./portable-space.js";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, type BackupRetention } from "./backup-retention.js";
 import {
   assertValidAsset,
@@ -15,9 +17,11 @@ import {
   type ContactActivity,
   type ContactActivitySource,
   assertValidTimelineRecord,
+  isDreamRecord,
   entitySearchTerms,
   normalizeEntitySearchTerm,
   periodEndSpan,
+  periodTransferGroups,
   type Asset,
   type AssetKind,
   type AssistantHistoryAttachment,
@@ -429,8 +433,10 @@ export interface AssistantMessageRow {
   /** The compiled interface commands this reply carried, if any. */
   readonly ui?: UiTurnPlan;
   readonly turnId?: string;
+  readonly draftBatchId?: string;
   readonly turnStatus?: "running" | "failed" | "interrupted" | "completed";
   readonly retryable?: boolean;
+  readonly delivery?: import("@lifeos/core").AssistantReplyDelivery;
 }
 
 export interface AssistantConversationCursor {
@@ -467,10 +473,108 @@ export interface AssistantChatTurnRow {
   readonly batchRevision: number | null;
 }
 
+/**
+ * Failure-only assistant diagnostics. Append-only: retrying a turn writes a new
+ * row instead of overwriting the previous reason, so "the same question failed
+ * three times" stays three rows. `stage` is the only human-facing grouping and
+ * each value maps to a different thing the owner can do about it:
+ * `connection` = retry, `format` = the prompt/model needs work,
+ * `service` = the provider or the credentials need attention.
+ */
+export type AssistantAttemptStage = "connection" | "format" | "service";
+
+/**
+ * Which AI feature produced the failure. Both live in one table so the owner
+ * has a single place to copy from: `chat` = AI 管家的一轮对话, `summary` =
+ * 日历里由 AI 生成的那一天小结。 The two have different remedies, which is
+ * exactly why they must be readable side by side rather than in two screens.
+ */
+export type AssistantAttemptSource = "chat" | "summary";
+
+export interface AssistantAttemptRow {
+  readonly id: string;
+  readonly source: AssistantAttemptSource;
+  readonly conversationId: string;
+  readonly turnId: string;
+  readonly attempt: number;
+  readonly stage: AssistantAttemptStage;
+  readonly errorCode: string;
+  readonly errorDetail: string;
+  readonly httpStatus: number | null;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly receivedChars: number;
+  readonly rawChars: number;
+  readonly rawTruncated: boolean;
+  readonly rawText: string | null;
+  /** The question this turn was answering, joined from the transcript. Never duplicated into the log table. */
+  readonly userText: string | null;
+  /** What a non-chat attempt was working on (the days, the surface). Null for chat rows. */
+  readonly subject: string | null;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
+}
+
+export interface RecordAssistantAttemptInput {
+  readonly id: string;
+  /** Defaults to `chat`: every pre-existing writer is the assistant's own turn. */
+  readonly source?: AssistantAttemptSource;
+  readonly conversationId: string;
+  readonly turnId: string;
+  readonly attempt: number;
+  readonly stage: AssistantAttemptStage;
+  readonly errorCode: string;
+  readonly errorDetail: string;
+  readonly httpStatus: number | null;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly receivedChars: number;
+  readonly rawChars: number;
+  readonly rawTruncated: boolean;
+  readonly rawText: string | null;
+  readonly subject?: string | null;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
+}
+
 export interface AssistantMessagePage {
   readonly items: readonly AssistantMessageRow[];
   readonly hasMore: boolean;
   readonly nextBeforeSeq: number | null;
+}
+
+/** One repeated failure, folded for the owner's attention list. */
+export interface AssistantAttemptDigestRow {
+  readonly source: AssistantAttemptSource;
+  readonly stage: AssistantAttemptStage;
+  readonly errorCode: string;
+  readonly count: number;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  readonly lastDetail: string;
+  readonly lastHttpStatus: number | null;
+  readonly lastModel: string | null;
+  readonly lastSubject: string | null;
+}
+
+/** A day whose summary has used up its automatic retries and now waits for the owner. */
+export interface StuckDaySummary {
+  readonly date: string;
+  readonly provider: string;
+  readonly model: string | null;
+  readonly retryCount: number;
+  readonly generatedAt: string;
+  readonly text: string;
+}
+
+export interface DaySummaryAttention {
+  readonly stuck: readonly StuckDaySummary[];
+  /** Days still inside their backoff window — nothing to do, but worth counting. */
+  readonly retrying: number;
+  /** Every day currently showing the offline rule, including ones never tried. */
+  readonly fallbackTotal: number;
 }
 
 export interface BeginAssistantChatTurnInput {
@@ -536,6 +640,39 @@ function assistantChatTurnRow(row: Record<string, unknown>): AssistantChatTurnRo
   };
 }
 
+function assistantAttemptRow(row: Record<string, unknown>): AssistantAttemptRow {
+  const stage = textColumn(row, "stage");
+  if (stage !== "connection" && stage !== "format" && stage !== "service") {
+    throw new Error("SQLite assistant attempt stage is invalid");
+  }
+  const source = textColumn(row, "source");
+  if (source !== "chat" && source !== "summary") {
+    throw new Error("SQLite assistant attempt source is invalid");
+  }
+  return {
+    id: textColumn(row, "id"),
+    source,
+    conversationId: textColumn(row, "conversation_id"),
+    turnId: textColumn(row, "turn_id"),
+    attempt: numberColumn(row, "attempt"),
+    stage,
+    errorCode: textColumn(row, "error_code"),
+    errorDetail: textColumn(row, "error_detail"),
+    httpStatus: row.http_status === null ? null : numberColumn(row, "http_status"),
+    model: nullableTextColumn(row, "model"),
+    effort: nullableTextColumn(row, "effort"),
+    receivedChars: numberColumn(row, "received_chars"),
+    rawChars: numberColumn(row, "raw_chars"),
+    rawTruncated: booleanColumn(row, "raw_truncated"),
+    rawText: nullableTextColumn(row, "raw_text"),
+    userText: row.user_text === undefined ? null : nullableTextColumn(row, "user_text"),
+    subject: row.subject === undefined ? null : nullableTextColumn(row, "subject"),
+    startedAt: textColumn(row, "started_at"),
+    finishedAt: textColumn(row, "finished_at"),
+    durationMs: numberColumn(row, "duration_ms"),
+  };
+}
+
 function preservePlaceCollection(entity: Entity, stored: Entity | null): Entity {
   if (entity.type !== "place" || stored?.type !== "place") return entity;
   const { createdAt: _time, collectionHistory: _history, ...edited } = entity;
@@ -545,9 +682,12 @@ function preservePlaceCollection(entity: Entity, stored: Entity | null): Entity 
 export class SqliteRecordRepository {
   readonly #db: DatabaseSync;
   public readonly notes: NotesStore;
+  public readonly journalMemory: JournalMemoryStore;
 
   public portableSpace(): SpaceTables { return readSpaceTables(this.#db); }
   public restorePortableSpace(tables: SpaceTables, expected: string): void { replaceSpaceTables(this.#db, tables, expected); }
+  public mergePortableSpace(tables: SpaceTables, expected: string): void { mergeSpaceTables(this.#db, tables, expected); }
+  public deletePortableRows(keys: Partial<Record<(typeof SPACE_TABLES)[number], readonly string[]>>): void { deleteSpaceRows(this.#db, keys); }
 
   public constructor(databasePath: string) {
     if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
@@ -634,6 +774,35 @@ export class SqliteRecordRepository {
         PRIMARY KEY(conversation_id, turn_id)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS assistant_chat_turns_status_idx ON assistant_chat_turns (conversation_id, status);
+      -- Failure-only assistant diagnostics. Append-only by design: a retry writes
+      -- a new row, so the previous reason survives. Raw model output is kept
+      -- verbatim (head+tail past 64k) because this table is read by an AI, not by
+      -- a person. Pruned on write and at boot — see assistant-attempt-log.ts.
+      CREATE TABLE IF NOT EXISTS assistant_turn_attempts (
+        id TEXT PRIMARY KEY NOT NULL,
+        -- 'chat' = AI 管家的一轮对话，'summary' = 日历里 AI 生成的小结。
+        -- 两种失败共用一张表，主人才有一个地方可复制；旧库由后面的 ALTER 补列。
+        source TEXT NOT NULL DEFAULT 'chat',
+        conversation_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        stage TEXT NOT NULL CHECK(stage IN ('connection', 'format', 'service')),
+        error_code TEXT NOT NULL,
+        error_detail TEXT NOT NULL,
+        http_status INTEGER,
+        model TEXT,
+        effort TEXT,
+        received_chars INTEGER NOT NULL DEFAULT 0,
+        raw_chars INTEGER NOT NULL DEFAULT 0,
+        raw_truncated INTEGER NOT NULL DEFAULT 0,
+        raw_text TEXT,
+        subject TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS assistant_turn_attempts_time_idx ON assistant_turn_attempts (finished_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS assistant_turn_attempts_turn_idx ON assistant_turn_attempts (conversation_id, turn_id, attempt);
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY NOT NULL,
         value_json TEXT NOT NULL,
@@ -800,6 +969,35 @@ export class SqliteRecordRepository {
         PRIMARY KEY(conversation_id, turn_id)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS assistant_chat_turns_status_idx ON assistant_chat_turns (conversation_id, status);
+      -- Failure-only assistant diagnostics. Append-only by design: a retry writes
+      -- a new row, so the previous reason survives. Raw model output is kept
+      -- verbatim (head+tail past 64k) because this table is read by an AI, not by
+      -- a person. Pruned on write and at boot — see assistant-attempt-log.ts.
+      CREATE TABLE IF NOT EXISTS assistant_turn_attempts (
+        id TEXT PRIMARY KEY NOT NULL,
+        -- 'chat' = AI 管家的一轮对话，'summary' = 日历里 AI 生成的小结。
+        -- 两种失败共用一张表，主人才有一个地方可复制；旧库由后面的 ALTER 补列。
+        source TEXT NOT NULL DEFAULT 'chat',
+        conversation_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        stage TEXT NOT NULL CHECK(stage IN ('connection', 'format', 'service')),
+        error_code TEXT NOT NULL,
+        error_detail TEXT NOT NULL,
+        http_status INTEGER,
+        model TEXT,
+        effort TEXT,
+        received_chars INTEGER NOT NULL DEFAULT 0,
+        raw_chars INTEGER NOT NULL DEFAULT 0,
+        raw_truncated INTEGER NOT NULL DEFAULT 0,
+        raw_text TEXT,
+        subject TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS assistant_turn_attempts_time_idx ON assistant_turn_attempts (finished_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS assistant_turn_attempts_turn_idx ON assistant_turn_attempts (conversation_id, turn_id, attempt);
     `);
     let assistantTurnColumns = this.#db.prepare("PRAGMA table_info(assistant_chat_turns)").all() as readonly Record<string, unknown>[];
     if (!assistantTurnColumns.some((column) => column.name === "batch_id")) {
@@ -818,6 +1016,15 @@ export class SqliteRecordRepository {
     if (!assistantTurnColumns.some((column) => column.name === "bound_batch_revision")) {
       this.#db.exec("ALTER TABLE assistant_chat_turns ADD COLUMN bound_batch_revision INTEGER");
       this.#db.exec("UPDATE assistant_chat_turns SET bound_batch_revision = batch_revision");
+    }
+    // 2026-10-20: 小结的 AI 失败也写进这张表（见 assistant-attempt-log.ts），
+    // 于是「AI 调用记录」一页里能同时看到对话与小结。老库只有对话行 ⇒ 默认 'chat'。
+    const assistantAttemptColumns = this.#db.prepare("PRAGMA table_info(assistant_turn_attempts)").all() as readonly Record<string, unknown>[];
+    if (!assistantAttemptColumns.some((column) => column.name === "source")) {
+      this.#db.exec("ALTER TABLE assistant_turn_attempts ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'");
+    }
+    if (!assistantAttemptColumns.some((column) => column.name === "subject")) {
+      this.#db.exec("ALTER TABLE assistant_turn_attempts ADD COLUMN subject TEXT");
     }
     const recordColumns = this.#db.prepare("PRAGMA table_info(records)").all() as readonly Record<string, unknown>[];
     if (!recordColumns.some((column) => column.name === "is_private")) {
@@ -875,6 +1082,8 @@ export class SqliteRecordRepository {
       this.#db.exec(`ALTER TABLE backup_retention ADD COLUMN trash_days INTEGER NOT NULL DEFAULT ${DEFAULT_BACKUP_RETENTION.trashDays}`);
     }
     this.#migrateLegacyDemoLabels();
+    this.journalMemory = new JournalMemoryStore(this.#db);
+    this.#db.exec("CREATE TABLE IF NOT EXISTS page_preferences (id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT");
   }
 
   /**
@@ -1090,6 +1299,7 @@ export class SqliteRecordRepository {
 
   /** Data for the optional private calendar overlay, kept outside free-form notes. */
   public cycleIntimacyModule(): CycleIntimacyModuleData {
+    if (appTargetLocked('cycle')) return { config: { enabled: false, cycleLength: 28, periodLength: 5, habits: [] }, events: [] };
     const row = this.#db.prepare("SELECT config_json FROM cycle_intimacy_module WHERE id = 1").get() as Record<string, unknown> | undefined;
     const config = row === undefined
       ? DEFAULT_CYCLE_INTIMACY_CONFIG
@@ -1220,18 +1430,97 @@ export class SqliteRecordRepository {
 
   public writeCycleIntimacyConfig(config: CycleIntimacyModuleConfig): CycleIntimacyModuleData {
     const existing = this.cycleIntimacyModule();
-    assertValidCycleIntimacyModuleData({ config, events: existing.events });
-    this.#db.prepare(`
-      INSERT INTO cycle_intimacy_module (id, config_json) VALUES (1, ?)
-      ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json
-    `).run(JSON.stringify(config));
+    const currentKey = existing.config.subjectId ?? "self";
+    const nextKey = config.subjectId ?? "self";
+    const otherSubjects = { ...(existing.config.otherSubjects ?? {}) };
+    let nextEvents = existing.events;
+    let nextConfig = config;
+    if (nextKey !== currentKey) {
+      otherSubjects[currentKey] = {
+        cycleLength: existing.config.cycleLength,
+        periodLength: existing.config.periodLength,
+        ...(existing.config.anchorStart ? { anchorStart: existing.config.anchorStart } : {}),
+        events: existing.events,
+      };
+      const target = otherSubjects[nextKey];
+      delete otherSubjects[nextKey];
+      nextEvents = target?.events ?? [];
+      const { anchorStart: _oldAnchor, ...configWithoutAnchor } = config;
+      nextConfig = {
+        ...configWithoutAnchor,
+        cycleLength: target?.cycleLength ?? DEFAULT_CYCLE_INTIMACY_CONFIG.cycleLength,
+        periodLength: target?.periodLength ?? DEFAULT_CYCLE_INTIMACY_CONFIG.periodLength,
+        ...(target?.anchorStart ? { anchorStart: target.anchorStart } : {}),
+        otherSubjects,
+      };
+    }
+    assertValidCycleIntimacyModuleData({ config: nextConfig, events: nextEvents });
+    if (nextKey !== currentKey) this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      if (nextKey !== currentKey) {
+        this.#db.prepare("DELETE FROM cycle_intimacy_events").run();
+        const insert = this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)");
+        for (const event of nextEvents) insert.run(event.id, event.date, event.kind);
+      }
+      this.#db.prepare(`
+        INSERT INTO cycle_intimacy_module (id, config_json) VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json
+      `).run(JSON.stringify(nextConfig));
+      if (nextKey !== currentKey) this.#db.exec("COMMIT");
+    } catch (error) {
+      if (nextKey !== currentKey) this.#db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.cycleIntimacyModule();
+  }
+
+  /** Move complete recorded runs to another person, then show that person's cycle. */
+  public transferCyclePeriods(groupKeys: readonly string[], targetSubjectId?: string): CycleIntimacyModuleData {
+    const current = this.cycleIntimacyModule();
+    const sourceKey = current.config.subjectId ?? "self";
+    const targetKey = targetSubjectId ?? "self";
+    if (sourceKey === targetKey || groupKeys.length === 0 || new Set(groupKeys).size !== groupKeys.length) throw new Error("请选择要转移的经期及不同的当事人");
+    const groups = periodTransferGroups(current.events);
+    const chosen = groups.filter(group => groupKeys.includes(group.key));
+    if (chosen.length !== groupKeys.length) throw new Error("待转移经期已改变，请重新加载");
+    const moving = new Set(chosen.flatMap(group => group.eventIds));
+    const transferred = current.events.filter(event => moving.has(event.id));
+    const remaining = current.events.filter(event => !moving.has(event.id));
+    const otherSubjects = { ...(current.config.otherSubjects ?? {}) };
+    const target = otherSubjects[targetKey];
+    otherSubjects[sourceKey] = {
+      cycleLength: current.config.cycleLength,
+      periodLength: current.config.periodLength,
+      ...(current.config.anchorStart ? { anchorStart: current.config.anchorStart } : {}),
+      events: remaining,
+    };
+    delete otherSubjects[targetKey];
+    const events = [...(target?.events ?? []), ...transferred].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+    const { anchorStart: _oldAnchor, subjectId: _oldSubject, ...base } = current.config;
+    const config: CycleIntimacyModuleConfig = {
+      ...base,
+      ...(targetSubjectId ? { subjectId: targetSubjectId } : {}),
+      cycleLength: target?.cycleLength ?? DEFAULT_CYCLE_INTIMACY_CONFIG.cycleLength,
+      periodLength: target?.periodLength ?? DEFAULT_CYCLE_INTIMACY_CONFIG.periodLength,
+      ...(target?.anchorStart ? { anchorStart: target.anchorStart } : {}),
+      otherSubjects,
+    };
+    assertValidCycleIntimacyModuleData({ config, events });
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.replaceCycleIntimacyModule({ config, events });
+      this.#db.exec("COMMIT");
+    } catch (error) { this.#db.exec("ROLLBACK"); throw error; }
     return this.cycleIntimacyModule();
   }
 
   /** The caller owns the transaction; used by reviewed assistant actions and guarded undo. */
   public replaceCycleIntimacyModule(module: CycleIntimacyModuleData): void {
     assertValidCycleIntimacyModuleData(module);
-    this.writeCycleIntimacyConfig(module.config);
+    this.#db.prepare(`
+      INSERT INTO cycle_intimacy_module (id, config_json) VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json
+    `).run(JSON.stringify(module.config));
     this.#db.prepare("DELETE FROM cycle_intimacy_events").run();
     const insert = this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)");
     for (const event of module.events) insert.run(event.id, event.date, event.kind);
@@ -1272,7 +1561,9 @@ export class SqliteRecordRepository {
 
   public findById(id: string, includeDeleted = false): RecordView | null {
     const row = this.#db.prepare(`SELECT * FROM records WHERE id = ?${includeDeleted ? "" : " AND deleted_at_json IS NULL"}`).get(id);
-    return row === undefined ? null : rowToView(readRecordRow(row));
+    if (row === undefined) return null;
+    const record = rowToView(readRecordRow(row));
+    return appRecordReadable(record) ? record : null;
   }
 
   public getWeatherDeviceLocation(deviceId: string): WeatherDeviceLocation | null {
@@ -1552,7 +1843,7 @@ export class SqliteRecordRepository {
     if (options.afterSeq !== undefined) { where.push("m.seq > ?"); params.push(options.afterSeq); }
     params.push(options.limit + 1);
     const rows = this.#db.prepare(`
-      SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, m.seq, m.attachments_json, m.ui_json, m.turn_id, t.status AS turn_status, t.retryable AS turn_retryable
+      SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, m.seq, m.attachments_json, m.ui_json, m.turn_id, t.status AS turn_status, t.retryable AS turn_retryable, t.result_json AS turn_result, t.bound_batch_id AS turn_bound_batch_id
       FROM assistant_messages m
       LEFT JOIN assistant_chat_turns t ON t.conversation_id = m.conversation_id AND t.turn_id = m.turn_id
       WHERE ${where.join(" AND ")}
@@ -1569,7 +1860,7 @@ export class SqliteRecordRepository {
 
   public assistantMessages(conversationId: string, since: string | null, limit: number): readonly AssistantMessageRow[] {
     const rows = this.#db.prepare(`
-      SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, m.seq, m.attachments_json, m.ui_json, m.turn_id, t.status AS turn_status, t.retryable AS turn_retryable
+      SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, m.seq, m.attachments_json, m.ui_json, m.turn_id, t.status AS turn_status, t.retryable AS turn_retryable, t.result_json AS turn_result, t.bound_batch_id AS turn_bound_batch_id
       FROM assistant_messages m
       LEFT JOIN assistant_chat_turns t ON t.conversation_id = m.conversation_id AND t.turn_id = m.turn_id
       WHERE m.conversation_id = ? AND (? IS NULL OR m.created_at > ?)
@@ -1587,14 +1878,18 @@ export class SqliteRecordRepository {
     const turnId = nullableTextColumn(row, "turn_id");
     const turnStatus = nullableTextColumn(row, "turn_status");
     const turnRetryable = row.turn_retryable === null || row.turn_retryable === undefined ? null : booleanColumn(row, "turn_retryable");
+    const result = typeof row.turn_result === "string" ? parseJson<{ action?: string; batch?: { id?: string }; delivery?: import("@lifeos/core").AssistantReplyDelivery }>(row.turn_result, "assistant turn result") : null;
+    const delivery = result?.delivery;
     return {
       id: textColumn(row, "id"), conversationId: textColumn(row, "conversation_id"), seq: numberColumn(row, "seq"),
       role: textColumn(row, "role") === "user" ? "user" : "assistant", text: textColumn(row, "text"), createdAt: textColumn(row, "created_at"),
       attachments: attachments as readonly AssistantHistoryAttachment[],
       ...(ui === null ? {} : { ui: ui as UiTurnPlan }),
       ...(turnId === null ? {} : { turnId }),
+      ...(textColumn(row, "role") === "assistant" && result?.action === "draft" && result.batch?.id && row.turn_bound_batch_id !== result.batch.id ? { draftBatchId: result.batch.id } : {}),
       ...(turnStatus === null ? {} : { turnStatus: turnStatus as AssistantChatTurnStatus }),
       ...(turnRetryable === null ? {} : { retryable: turnRetryable }),
+      ...(textColumn(row, "role") === "assistant" && delivery ? { delivery } : {}),
     } as AssistantMessageRow;
   }
 
@@ -1634,6 +1929,29 @@ export class SqliteRecordRepository {
       .run(retryable ? 1 : 0, errorCode.slice(0, 100), at, conversationId, turnId);
   }
 
+  /** Retain a body-only partial result; no commands, sources or batches are attached. */
+  public retainAssistantChatPartial(conversationId: string, turnId: string, text: string, at: string): void {
+    this.atomic(() => {
+      const turn = this.assistantChatTurn(conversationId, turnId), conversation = this.assistantConversation(conversationId);
+      if (!turn || turn.status !== "running" || !conversation) return;
+      const answer = { reply: text, action: "reply", mode: "ai", delivery: { status: "incomplete", issue: "format" } };
+      if (turn.userMessageSeq > conversation.clearSeq) this.#storeAssistantTurnReply(conversationId, turnId, answer, at);
+      this.#db.prepare("UPDATE assistant_chat_turns SET result_json = ?, updated_at = ? WHERE conversation_id = ? AND turn_id = ? AND status = 'running'").run(JSON.stringify(answer), at, conversationId, turnId);
+      this.#db.prepare("UPDATE assistant_conversations SET updated_at = ? WHERE id = ?").run(at, conversationId);
+    });
+  }
+
+  #storeAssistantTurnReply(conversationId: string, turnId: string, answer: { reply: string; ui?: unknown }, at: string): void {
+    const existing = this.#db.prepare("SELECT id FROM assistant_messages WHERE conversation_id = ? AND turn_id = ? AND role = 'assistant' LIMIT 1").get(conversationId, turnId);
+    const ui = answer.ui === undefined ? null : JSON.stringify(answer.ui);
+    if (existing) {
+      this.#db.prepare("UPDATE assistant_messages SET text = ?, created_at = ?, ui_json = ? WHERE id = ?").run(answer.reply, at, ui, String(existing.id));
+      return;
+    }
+    const row = this.#db.prepare("SELECT coalesce(max(seq), 0) AS seq FROM assistant_messages WHERE conversation_id = ?").get(conversationId) as Record<string, unknown>;
+    this.#db.prepare("INSERT INTO assistant_messages(id, conversation_id, role, text, created_at, seq, attachments_json, turn_id, ui_json) VALUES(?, ?, 'assistant', ?, ?, ?, '[]', ?, ?)").run(randomUUID(), conversationId, answer.reply, at, numberColumn(row, "seq") + 1, turnId, ui);
+  }
+
   public interruptAssistantChatTurn(conversationId: string, turnId: string, at: string): void {
     this.#db.prepare("UPDATE assistant_chat_turns SET status = 'interrupted', retryable = 0, error_code = 'turn_interrupted', updated_at = ? WHERE conversation_id = ? AND turn_id = ? AND status = 'running'")
       .run(at, conversationId, turnId);
@@ -1646,11 +1964,7 @@ export class SqliteRecordRepository {
       const conversation = this.assistantConversation(conversationId);
       if (conversation === null) return false;
       if (turn.userMessageSeq > conversation.clearSeq) {
-        const seqRow = this.#db.prepare("SELECT coalesce(max(seq), 0) AS seq FROM assistant_messages WHERE conversation_id = ?").get(conversationId) as Record<string, unknown>;
-        const seq = numberColumn(seqRow, "seq") + 1;
-        const ui = (answer as { readonly ui?: unknown }).ui;
-        this.#db.prepare("INSERT INTO assistant_messages(id, conversation_id, role, text, created_at, seq, attachments_json, turn_id, ui_json) VALUES(?, ?, 'assistant', ?, ?, ?, '[]', ?, ?)")
-          .run(randomUUID(), conversationId, (answer as { reply: string }).reply, at, seq, turnId, ui === undefined ? null : JSON.stringify(ui));
+        this.#storeAssistantTurnReply(conversationId, turnId, answer as { reply: string; ui?: unknown }, at);
       }
       this.#db.prepare("UPDATE assistant_conversations SET updated_at = ?, batch_id = coalesce(?, batch_id) WHERE id = ?").run(at, batchId, conversationId);
       this.#db.prepare("UPDATE assistant_chat_turns SET status = 'completed', result_json = ?, batch_id = coalesce(?, batch_id), batch_revision = coalesce(?, batch_revision), retryable = 0, error_code = NULL, updated_at = ? WHERE conversation_id = ? AND turn_id = ?")
@@ -1659,9 +1973,135 @@ export class SqliteRecordRepository {
     });
   }
 
+  /**
+   * Append-only: a retry writes a new row rather than clearing the previous one.
+   * Only ever called for a failure — a successful turn leaves no trace here.
+   */
+  public recordAssistantAttempt(input: RecordAssistantAttemptInput): void {
+    this.#db.prepare(`
+      INSERT INTO assistant_turn_attempts(id, source, conversation_id, turn_id, attempt, stage, error_code, error_detail, http_status, model, effort, received_chars, raw_chars, raw_truncated, raw_text, subject, started_at, finished_at, duration_ms)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.id, input.source ?? "chat", input.conversationId, input.turnId, input.attempt, input.stage,
+      input.errorCode.slice(0, 120), input.errorDetail.slice(0, 600), input.httpStatus,
+      input.model, input.effort, input.receivedChars, input.rawChars, input.rawTruncated ? 1 : 0,
+      input.rawText, input.subject ?? null, input.startedAt, input.finishedAt, input.durationMs,
+    );
+  }
+
+  public assistantAttempts(options: { readonly since?: string; readonly stage?: AssistantAttemptStage; readonly source?: AssistantAttemptSource; readonly limit: number }): readonly AssistantAttemptRow[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (options.since !== undefined) { where.push("a.finished_at >= ?"); params.push(options.since); }
+    if (options.stage !== undefined) { where.push("a.stage = ?"); params.push(options.stage); }
+    if (options.source !== undefined) { where.push("a.source = ?"); params.push(options.source); }
+    params.push(options.limit);
+    const rows = this.#db.prepare(
+      `SELECT a.*, (SELECT m.text FROM assistant_messages m WHERE m.conversation_id = a.conversation_id AND m.turn_id = a.turn_id AND m.role = 'user' ORDER BY m.seq LIMIT 1) AS user_text
+       FROM assistant_turn_attempts a${where.length === 0 ? "" : ` WHERE ${where.join(" AND ")}`} ORDER BY a.finished_at DESC, a.id DESC LIMIT ?`,
+    ).all(...params) as readonly Record<string, unknown>[];
+    return rows.map(assistantAttemptRow);
+  }
+
+  public assistantAttemptCounts(since: string): Readonly<Record<AssistantAttemptStage, number>> {
+    const rows = this.#db.prepare("SELECT stage, count(*) AS total FROM assistant_turn_attempts WHERE finished_at >= ? GROUP BY stage").all(since) as readonly Record<string, unknown>[];
+    const counts: Record<AssistantAttemptStage, number> = { connection: 0, format: 0, service: 0 };
+    for (const row of rows) {
+      const stage = textColumn(row, "stage");
+      if (stage === "connection" || stage === "format" || stage === "service") counts[stage] = Number(numberColumn(row, "total"));
+    }
+    return counts;
+  }
+
+  /** Per-source totals over the same window, so the page can say 对话 N / 小结 M. */
+  public assistantAttemptSourceCounts(since: string): Readonly<Record<AssistantAttemptSource, number>> {
+    const rows = this.#db.prepare("SELECT source, count(*) AS total FROM assistant_turn_attempts WHERE finished_at >= ? GROUP BY source").all(since) as readonly Record<string, unknown>[];
+    const counts: Record<AssistantAttemptSource, number> = { chat: 0, summary: 0 };
+    for (const row of rows) {
+      const source = textColumn(row, "source");
+      if (source === "chat" || source === "summary") counts[source] = Number(numberColumn(row, "total"));
+    }
+    return counts;
+  }
+
+  /**
+   * Failures folded by (source, stage, error code) — the shape an "emergency
+   * to-do list" needs: how many times, first and last, and what the model or the
+   * network actually said the last time. Raw bodies are deliberately not read
+   * here; the panel links to the log page for those.
+   */
+  public assistantAttemptDigest(since: string, limit: number): readonly AssistantAttemptDigestRow[] {
+    const groups = this.#db.prepare(
+      `SELECT source, stage, error_code, count(*) AS total, min(finished_at) AS first_at, max(finished_at) AS last_at
+       FROM assistant_turn_attempts WHERE finished_at >= ?
+       GROUP BY source, stage, error_code ORDER BY last_at DESC LIMIT ?`,
+    ).all(since, limit) as readonly Record<string, unknown>[];
+    const latest = this.#db.prepare(
+      `SELECT error_detail, http_status, model, subject FROM assistant_turn_attempts
+       WHERE source = ? AND stage = ? AND error_code = ? AND finished_at >= ?
+       ORDER BY finished_at DESC, id DESC LIMIT 1`,
+    );
+    return groups.flatMap((row) => {
+      const source = textColumn(row, "source");
+      const stage = textColumn(row, "stage");
+      if (source !== "chat" && source !== "summary") return [];
+      if (stage !== "connection" && stage !== "format" && stage !== "service") return [];
+      const errorCode = textColumn(row, "error_code");
+      const newest = latest.get(source, stage, errorCode, since) as Record<string, unknown> | undefined;
+      return [{
+        source,
+        stage,
+        errorCode,
+        count: Number(numberColumn(row, "total")),
+        firstAt: textColumn(row, "first_at"),
+        lastAt: textColumn(row, "last_at"),
+        lastDetail: newest === undefined ? "" : textColumn(newest, "error_detail"),
+        lastHttpStatus: newest === undefined || newest.http_status === null ? null : numberColumn(newest, "http_status"),
+        lastModel: newest === undefined ? null : nullableTextColumn(newest, "model"),
+        lastSubject: newest === undefined ? null : nullableTextColumn(newest, "subject"),
+      }];
+    });
+  }
+
+  /**
+   * What the calendar's summaries look like right now, in the three states that
+   * matter to an owner: given up on, still retrying, and merely offline.
+   *
+   * `day_summaries` is small (one row per day that has records) and the question
+   * is "is anything stuck", so a scan is cheaper to reason about than JSON SQL.
+   */
+  public daySummaryAttention(maxAttempts: number): DaySummaryAttention {
+    const rows = this.#db.prepare("SELECT value_json FROM day_summaries").all() as readonly Record<string, unknown>[];
+    const stuck: StuckDaySummary[] = [];
+    let retrying = 0;
+    let fallbackTotal = 0;
+    for (const row of rows) {
+      let summary: DaySummary;
+      try { summary = parseJson<DaySummary>(textColumn(row, "value_json"), "day_summaries.value_json"); } catch { continue; }
+      if (summary.status !== "fallback") continue;
+      fallbackTotal += 1;
+      const attempts = summary.retryCount ?? 0;
+      if (attempts === 0) continue;
+      if (attempts >= maxAttempts) stuck.push({ date: summary.date, provider: summary.provider, model: summary.model ?? null, retryCount: attempts, generatedAt: summary.generatedAt.value, text: summary.text });
+      else retrying += 1;
+    }
+    stuck.sort((left, right) => (left.date < right.date ? 1 : left.date > right.date ? -1 : 0));
+    return { stuck, retrying, fallbackTotal };
+  }
+
+  /** Retention. Called on write and at boot — deliberately no timer of its own. */
+  public pruneAssistantAttempts(before: string): number {
+    return Number(this.#db.prepare("DELETE FROM assistant_turn_attempts WHERE finished_at < ?").run(before).changes);
+  }
+
+  public clearAssistantAttempts(): number {
+    return Number(this.#db.prepare("DELETE FROM assistant_turn_attempts").run().changes);
+  }
+
   public deleteAssistantConversation(id: string): void {
     this.atomic(() => {
       this.#db.prepare("DELETE FROM assistant_chat_turns WHERE conversation_id = ?").run(id);
+      this.#db.prepare("DELETE FROM assistant_turn_attempts WHERE conversation_id = ?").run(id);
       this.#db.prepare("DELETE FROM assistant_messages WHERE conversation_id = ?").run(id);
       this.#db.prepare("DELETE FROM assistant_conversations WHERE id = ?").run(id);
       this.#db.prepare("UPDATE assistant_history_state SET current_conversation_id = NULL WHERE id = 1 AND current_conversation_id = ?").run(id);
@@ -1723,7 +2163,15 @@ export class SqliteRecordRepository {
       params.push(query.assetId);
     }
     const sql = `SELECT * FROM records WHERE ${where.join(" AND ")} ORDER BY timeline_sort DESC, created_at_json DESC, id DESC`;
-    return this.#db.prepare(sql).all(...params).map((row) => rowToView(readRecordRow(row)));
+    return this.#db.prepare(sql).all(...params).map((row) => rowToView(readRecordRow(row))).filter(appRecordReadable);
+  }
+
+  public dreamsEnabled(): boolean {
+    return this.#db.prepare("SELECT enabled FROM page_preferences WHERE id = 'dreams'").get()?.enabled === 1;
+  }
+
+  public setDreamsEnabled(enabled: boolean): void {
+    this.#db.prepare("INSERT INTO page_preferences (id, enabled) VALUES ('dreams', ?) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled").run(enabled ? 1 : 0);
   }
 
   /**
@@ -1744,6 +2192,7 @@ export class SqliteRecordRepository {
   }
 
   public insert(record: TimelineRecord): void {
+    requireAppRecord(record);
     record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
     this.#withFirstPlaceJournal(record, () => { this.#db.prepare(`
@@ -1756,6 +2205,7 @@ export class SqliteRecordRepository {
   }
 
   public update(record: TimelineRecord, expectedRevision: number): boolean {
+    requireAppRecord(record);
     record = snapshotMentions(record, this.listEntities());
     assertValidTimelineRecord(record);
     return this.#withNoteVersion(record, () => this.#withFirstPlaceJournal(record, () => { const result = this.#db.prepare(`
@@ -1803,7 +2253,7 @@ export class SqliteRecordRepository {
 
   /** Association time is server save time, never the diary's backdated event time. */
   #withFirstPlaceJournal(record: TimelineRecord, write: () => boolean): boolean {
-    if (record.kind !== "journal") return write();
+    if (record.kind !== "journal" || isDreamRecord(record)) return write();
     this.#db.exec("SAVEPOINT first_place_journal");
     try {
       const saved = write();
@@ -1813,7 +2263,7 @@ export class SqliteRecordRepository {
   }
 
   #captureFirstPlaceJournal(record: TimelineRecord): void {
-    if (record.kind !== "journal") return;
+    if (record.kind !== "journal" || isDreamRecord(record)) return;
     for (const id of new Set(record.entityRefs.filter(ref => ref.entityType === "place").map(ref => ref.entityId))) {
       const place = this.findEntityById(id);
       if (place?.type !== "place" || !place.collectionHistory || place.collectionHistory.firstJournal) continue;
@@ -1830,7 +2280,7 @@ export class SqliteRecordRepository {
     const first = place.collectionHistory.firstJournal;
     if (!first) return { ...base, firstJournalStatus: "none" };
     const record = this.findById(first.recordId);
-    if (!record || record.kind !== "journal" || !record.entityRefs.some(ref => ref.entityType === "place" && ref.entityId === id)) return { ...base, firstJournalStatus: "unavailable" };
+    if (!record || record.kind !== "journal" || isDreamRecord(record) || !record.entityRefs.some(ref => ref.entityType === "place" && ref.entityId === id)) return { ...base, firstJournalStatus: "unavailable" };
     if (record.isPrivate && !includePrivate) return { ...base, firstJournalStatus: "private" };
     return { ...base, firstJournalStatus: "available", firstJournal: { id: record.id, linkedAt: first.linkedAt, createdAt: record.createdAt, ...(record.occurredAt ? { occurredAt: record.occurredAt } : {}), content: record.body.edited ?? record.body.original } };
   }
@@ -1951,7 +2401,7 @@ export class SqliteRecordRepository {
   /** Complete live-record projection, independent of timeline pagination and selected date. */
   public contactActivity(hideDemo = false, includePrivate = false, now = new Date()): readonly ContactActivity[] {
     const rows = this.#db.prepare(`SELECT id, created_at_json, occurred_at_json, entity_refs_json FROM records
-      WHERE deleted_at_json IS NULL AND (? = 0 OR is_demo = 0) AND (? = 1 OR is_private = 0)`)
+      WHERE deleted_at_json IS NULL AND coalesce(json_extract(body_json, '$.nature'), '') != 'dream' AND (? = 0 OR is_demo = 0) AND (? = 1 OR is_private = 0)`)
       .all(hideDemo ? 1 : 0, includePrivate ? 1 : 0);
     const sources: ContactActivitySource[] = rows.map(row => ({
       id: textColumn(row, "id"),
@@ -1963,6 +2413,7 @@ export class SqliteRecordRepository {
   }
 
   public listEntities(query: EntityListQuery = {}): readonly Entity[] {
+    if (appTargetLocked('entities')) return [];
     const items: Entity[] = [];
     const needle = query.q === undefined ? undefined : normalizeEntitySearchTerm(query.q);
     for (const row of this.#db.prepare("SELECT value_json, address FROM entities").all()) {
@@ -1978,12 +2429,14 @@ export class SqliteRecordRepository {
   }
 
   public findEntityById(id: string): Entity | null {
+    if (appTargetLocked('entities')) return null;
     const row = this.#db.prepare("SELECT value_json, address FROM entities WHERE id = ?").get(id);
     if (row === undefined) return null;
     return entityFromRow(row);
   }
 
   public insertEntity(entity: Entity): void {
+    requireAppTarget('entities');
     assertValidEntity(entity);
     this.#withNameHistory(entity, () => {
       this.#db.prepare("INSERT INTO entities (id, value_json, address) VALUES (?, ?, ?)").run(entity.id, JSON.stringify(entity), entityAddress(entity));
@@ -1991,6 +2444,7 @@ export class SqliteRecordRepository {
   }
 
   public updateEntity(entity: Entity): boolean {
+    requireAppTarget('entities');
     const stored = this.findEntityById(entity.id);
     entity = preservePlaceCollection(entity, stored);
     assertValidEntity(entity);
@@ -2073,7 +2527,7 @@ export class SqliteRecordRepository {
       const value = parseJson<unknown>(textColumn(row, "value_json"), "assets.value_json");
       assertValidAsset(value);
       if (query.kind !== undefined && value.kind !== query.kind) continue;
-      items.push(value);
+      if (this.#appAssetReadable(value.id)) items.push(value);
     }
     return items.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   }
@@ -2114,11 +2568,24 @@ export class SqliteRecordRepository {
   }
 
   public findAssetById(id: string): Asset | null {
+    if (!this.#appAssetReadable(id)) return null;
     const row = this.#db.prepare("SELECT value_json FROM assets WHERE id = ?").get(id);
     if (row === undefined) return null;
     const value = parseJson<unknown>(textColumn(row, "value_json"), "assets.value_json");
     assertValidAsset(value);
     return value;
+  }
+
+  #appAssetReadable(id: string): boolean {
+    if (!appLockRequests.getStore()?.protected) return true;
+    const records = this.assetReferenceRecordIds(id);
+    if (records.length && !records.some(recordId => this.findById(recordId) !== null)) return false;
+    if (appTargetLocked('entities') && this.avatarReferenceEntityIds(id).length) return false;
+    if (appTargetLocked('assistant')) {
+      if (this.#db.prepare("SELECT 1 FROM assistant_messages, json_each(assistant_messages.attachments_json) item WHERE json_extract(item.value, '$.assetId') = ? LIMIT 1").get(id)) return false;
+      if (this.assistantBatches().some(batch => batch.materials.some(m => m.assetId === id) || batch.plan.entries.some(e => e.assetIds.includes(id)))) return false;
+    }
+    return true;
   }
 
   public insertAsset(asset: Asset): void {
@@ -2233,6 +2700,7 @@ export class SqliteRecordRepository {
    * longer matches is recomputed rather than served.
    */
   public readDaySummary(date: string): DaySummary | null {
+    if (appTargetLocked('calendar') || appTargetLocked('tasks') || appTargetLocked('dreams') || appTargetLocked('notes') || appTargetLocked('privacy-display')) return null;
     const row = this.#db.prepare("SELECT value_json FROM day_summaries WHERE date = ?").get(date);
     if (row === undefined) return null;
     return parseJson<DaySummary>(textColumn(row, "value_json"), "day_summaries.value_json");

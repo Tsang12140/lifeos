@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LifeOS 私密入口的五种方向</title>
+<style>
+@font-face{font-family:LifeOS;src:local('MiSans Regular'),local('MiSans-Regular');font-weight:100 449;font-display:swap}
+@font-face{font-family:LifeOS;src:local('MiSans Medium'),local('MiSans-Medium');font-weight:450 549;font-display:swap}
+@font-face{font-family:LifeOS;src:local('MiSans Semibold'),local('MiSans-Semibold');font-weight:550 669;font-display:swap}
+@font-face{font-family:LifeOS;src:local('MiSans Bold'),local('MiSans-Bold');font-weight:670 799;font-display:swap}
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#41484f;background:#f2f3f2;font-synthesis:none;--ink:#41484f;--nav:#5d6b82;--soft:#f1f1ee;--line:#dce0e4;--sidebar:#fafcff}
+*{box-sizing:border-box}body{margin:0;user-select:none}button{font:inherit;color:inherit;cursor:pointer;border:0;background:transparent}button:focus-visible{outline:2px solid #69717a;outline-offset:3px}button,input{touch-action:manipulation}svg{display:block;flex:none;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.symbols{position:absolute;width:0;height:0;overflow:hidden}[hidden]{display:none!important}
+.page{max-width:1640px;margin:auto;padding:42px 32px 32px}.masthead{display:flex;justify-content:space-between;align-items:flex-start;gap:28px;padding-bottom:28px;border-bottom:1px solid #d9ddda}.eyebrow{font-size:11px;letter-spacing:.12em;color:#7a807d}.masthead h1{margin:12px 0 10px;font-size:27px;line-height:1.35;font-weight:550;letter-spacing:-.035em}.intro{margin:0;color:#737b78;font-size:13px;line-height:1.8}.brand{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:620;white-space:nowrap}.brand svg{width:24px;height:24px;stroke-width:1.6}.demo-label{font-size:10px;line-height:24px;padding:0 9px;border:1px solid #d5dbd7;border-radius:5px;color:#737b78;font-weight:400}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:26px 0 22px}.toolbar-label{font-size:12px;color:#737b78}.state-picker{display:flex;gap:3px;padding:3px;background:#e6e9e6;border-radius:9px}.state-picker button{min-height:34px;min-width:66px;padding:6px 12px;border-radius:6px;font-size:12px;line-height:20px}.state-picker button[aria-pressed=true]{background:#fff;box-shadow:0 1px 3px #25352a12}.toolbar-help{margin-left:auto;color:#858b87;font-size:12px;line-height:1.7}
+.variants{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;align-items:start}.variant{min-width:0}.variant-head{display:flex;align-items:baseline;gap:9px;padding:0 2px 14px}.letter{font-size:11px;color:#8b938e;line-height:21px}.variant-head h2{font-size:15px;font-weight:550;margin:0;letter-spacing:-.02em}.stage{display:flex;justify-content:center;background:#e8ece9;border:1px solid #d9dfda;border-radius:12px;padding:12px 0;overflow:hidden}.sidebar{flex:none;display:flex;flex-direction:column;width:224px;height:392px;padding:24px 18px 18px;background:var(--sidebar);box-shadow:0 8px 20px #27352c07;border:1px solid #dfe5e8;border-radius:7px}.mini-brand{display:flex;align-items:center;gap:9px;padding:0 10px;font-weight:650;font-size:15px}.mini-brand svg{width:23px;height:23px}.nav{display:grid;gap:4px;margin-top:29px}.nav-row{display:flex;align-items:center;gap:12px;height:44px;padding:0 12px;border-radius:10px;color:var(--nav);font-size:14px;font-weight:620;line-height:20px;white-space:nowrap}.nav-row.current{background:#edf0f1;color:#41484f}.nav-row .nav-icon{width:18px;height:18px}.footer{margin-top:auto;display:grid;gap:4px}.privacy-row{display:flex;align-items:center;width:100%;height:44px;border-radius:10px;padding:0 12px;gap:8px;color:var(--nav);font-size:14px;font-weight:620;line-height:20px;white-space:nowrap;text-align:left}.privacy-row:hover{background:#eff1f0}.privacy-row>.nav-icon{margin-right:4px}.privacy-label{flex:1;min-width:0}.state-mark{display:inline-flex;flex:none;align-items:center;justify-content:center;width:44px;height:24px;border-radius:7px;font-size:11px;line-height:16px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:0}.state-mark.infinity{font-size:22px;line-height:20px;font-family:system-ui,sans-serif;font-weight:400}.variant[data-state=off] .state-mark{font-size:11px}.variant[data-state=off] .eye-open{display:none}.variant:not([data-state=off]) .eye-closed{display:none}
+/* A: keep the familiar navigation row; contain the status in a small button. */
+.design-a .state-mark{background:#e9ecee;color:#69717a}.design-a:not([data-state=off]) .state-mark{background:var(--ink);color:#fff}
+/* B: typography carries the state; no new filled control shape. */
+.design-b .state-mark{width:38px;color:#8a9299}.design-b:not([data-state=off]) .state-mark{color:var(--ink)}.design-b:not([data-state=off]) .privacy-label{color:var(--ink)}.design-b .privacy-row:hover .state-mark{text-decoration:underline;text-underline-offset:5px;text-decoration-thickness:1px}
+/* C: use the navigation row itself as the selected surface. */
+.design-c:not([data-state=off]) .privacy-row{background:#e9eeec;color:#414f48}.design-c:not([data-state=off]) .privacy-row:hover{background:#e1e8e3}.design-c .state-mark{width:34px;color:inherit}.design-c[data-state=off] .state-mark{color:#8a9299}
+/* D: the timer lives in the spare half of a physical switch. */
+.design-d .track{display:flex;position:relative;align-items:center;flex:none;width:54px;height:26px;border-radius:999px;background:#d9dee2;color:#7d858b;font-size:10px;font-weight:500;line-height:16px}.design-d .thumb{position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #00000014;transition:transform .16s}.design-d .track-text{position:absolute;left:3px;width:26px;text-align:center}.design-d[data-state=off] .track-text{left:25px}.design-d:not([data-state=off]) .track{background:var(--ink);color:#fff}.design-d:not([data-state=off]) .thumb{transform:translateX(28px)}.design-d[data-state=always] .track-text{font-family:system-ui,sans-serif;font-size:21px;transform:translateY(-2px)}
+.design-d:not([data-state=always]) .track-text{font-weight:700}
+/* E: expose the three choices directly at one fixed position. */
+.design-e .privacy-row{gap:8px;padding-right:6px}.design-e .privacy-label{flex:none;margin-right:auto}.design-e .segments{flex:none;display:flex;align-items:center;width:88px;height:40px;gap:2px}.design-e .segments button{display:flex;align-items:center;justify-content:center;width:28px;height:40px;padding:0;border-radius:7px;font-size:10px;font-weight:500;line-height:16px}.design-e .segments button span{display:flex;align-items:center;justify-content:center;width:28px;height:24px;border-radius:6px}.design-e .segments button[data-mode=always] span{font:400 21px/20px system-ui,sans-serif}.design-e .segments button[aria-pressed=true] span{background:#e6e9e8;color:var(--ink)}.design-e:not([data-state=off]) .segments button[aria-pressed=true] span{background:var(--ink);color:#fff}.design-e .segments button:hover span{box-shadow:inset 0 0 0 1px #c7ceca}.design-e .privacy-row:hover{background:transparent}
+.caption{padding:14px 3px 0;min-height:76px}.caption p{margin:0;color:#737b78;font-size:12px;line-height:1.8}.card-tools{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}.adjust{min-height:34px;padding:4px 0;color:#5c6861;font-size:12px;line-height:20px;text-decoration:underline;text-decoration-color:#b5beb7;text-underline-offset:4px}.status{font-size:11px;color:#8a918c;line-height:18px}.page-foot{margin-top:24px;padding-top:18px;border-top:1px solid #d9ddda;color:#858b87;font-size:11px;line-height:1.8}
+.mode-popover{position:fixed;z-index:10;width:220px;margin:0;padding:12px;border:1px solid #dce0e4;border-radius:12px;background:#fff;box-shadow:0 7px 24px #1a202c14;color:var(--ink)}.mode-popover p{font-size:12px;line-height:20px;color:#707780;margin:0 0 8px}.mode-options{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.mode-options button{height:34px;border-radius:7px;font-size:12px;line-height:20px}.mode-options button[aria-pressed=true]{background:#f0f2ef}.mode-options button:hover{background:#e8ece7}.mode-options button[data-value=always]{font-size:21px}.mode-popover::backdrop{background:transparent}
+.long-term{display:flex;align-items:center;gap:8px;min-height:34px;font-size:13px;line-height:20px;cursor:pointer}.long-term input{appearance:none;display:grid;place-items:center;width:15px;height:15px;margin:0;border:1px solid #aeb7bf;border-radius:4px;background:#fff;cursor:pointer}.long-term input:checked{border-color:var(--ink);background:var(--ink)}.long-term input:checked::after{content:'';width:7px;height:4px;margin-top:-2px;border-left:1.5px solid #fff;border-bottom:1.5px solid #fff;transform:rotate(-45deg)}
+.mode-popover:has(.long-term:not([hidden])){width:max-content;max-width:calc(100vw - 16px);padding:8px 10px;border-radius:10px}.mode-popover:has(.long-term:not([hidden])) p{line-height:18px;margin-bottom:4px}.long-term{gap:6px;min-height:26px;font-size:12px;line-height:18px}
+@media(pointer:coarse){.long-term{min-height:40px}}
+@media(max-width:1250px){.variants{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:30px}.page{max-width:1040px}.toolbar-help{margin-left:0}.stage{padding-block:18px}}
+@media(max-width:850px){.variants{grid-template-columns:repeat(2,minmax(0,1fr))}.page{padding:28px 20px}.masthead{gap:16px}.masthead h1{font-size:24px}.brand{align-self:flex-start}.demo-label{display:none}}
+@media(max-width:560px){.variants{grid-template-columns:minmax(0,1fr)}.page{padding:24px 16px}.masthead{display:block}.brand{margin-bottom:22px}.masthead-copy{display:contents}.masthead h1{font-size:23px}.stage{justify-content:center;padding:18px}.sidebar{height:342px}.toolbar-help{width:100%}.caption{min-height:0}.variant-head{padding-top:8px}}
+@media(prefers-reduced-motion:reduce){.design-d .thumb{transition:none}}
+</style>
+</head>
+<body>
+<svg class="symbols" aria-hidden="true"><defs>
+<symbol id="i-brand" viewBox="0 0 24 24"><path d="M5 4v16h15M10 4v11h10M15 4v6h5"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M10.6 5.1 12 5c6.4 0 10 7 10 7a19 19 0 0 1-3 3.8M6.3 6.3A21 21 0 0 0 2 12s3.6 7 10 7a11 11 0 0 0 5.7-1.6M10 10a3 3 0 0 0 4 4"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="m9.5 3-.6 2.2-1.7 1-2.2-.6-2 3.4 1.6 1.6v2.1L3 14.4l2 3.4 2.2-.6 1.7 1 .6 2.2h4l.6-2.2 1.7-1 2.2.6 2-3.4-1.6-1.7v-2.1L20 9l-2-3.4-2.2.6-1.7-1L13.5 3Z"/><circle cx="11.5" cy="11.7" r="3.1"/></symbol>
+<symbol id="i-journal" viewBox="0 0 24 24"><path d="M5 4h14v17H5zM8 2v4M16 2v4M8 10h8M8 14h5"/></symbol>
+<symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18M8 14h1M14 14h1M8 17h1"/></symbol>
+<symbol id="i-task" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m7 12 3 3 7-7"/></symbol>
+</defs></svg>
+<main class="page">
+<header class="masthead"><div class="masthead-copy"><div class="eyebrow">LIFEOS / PRIVACY CONTROLS</div><h1>让私密入口回到侧栏里</h1><p class="intro">五种方向，同一套字号、图标与间距。看看哪一种放在「设置」旁边最自然。</p></div><div class="brand"><svg aria-hidden="true"><use href="#i-brand"/></svg>LifeOS<span class="demo-label">设计讨论 Demo</span></div></header>
+<div class="toolbar"><span class="toolbar-label">五版一起切换</span><div class="state-picker" role="group" aria-label="统一预览状态"><button type="button" data-all="off" aria-pressed="false">关闭</button><button type="button" data-all="day" aria-pressed="true">24H</button><button type="button" data-all="always" aria-pressed="false" aria-label="全部设为常开">∞ 常开</button></div><span class="toolbar-help">点入口单独开关，点「调整时长」试选模式。</span></div>
+<section class="variants" aria-label="五种私密入口设计"></section>
+<footer class="page-foot">所有状态只在这个 Demo 中模拟。选定方向后，再确定正式界面中的时长操作方式。</footer>
+</main>
+<dialog class="mode-popover" aria-label="调整开启时长"><p id="mode-hint">24小时内将保持打开</p><div class="mode-options" role="group" aria-label="开启模式"><button type="button" data-value="off" aria-pressed="false">关闭</button><button type="button" data-value="day" aria-pressed="true">24H</button><button type="button" data-value="always" aria-pressed="false" aria-label="常开">∞</button></div><label class="long-term" hidden><input type="checkbox"><span>长期开启</span></label></dialog>
+<script>
+(()=>{
+ 'use strict';
+ if(/win/i.test(navigator.userAgentData?.platform||navigator.platform||''))document.documentElement.style.fontFamily='LifeOS,system-ui,"Microsoft YaHei",sans-serif';
+ const root=document.querySelector('.variants'),picker=document.querySelector('.state-picker'),popover=document.querySelector('.mode-popover');
+ const directions=[
+  {id:'a',name:'小状态按钮',description:'刚才讨论的版本。导航保持原样，24H／∞ 收进右侧的小按钮。'},
+  {id:'b',name:'无底色文字',description:'去掉控件底色，用眼睛图标和时长文字表达状态，视觉最轻。'},
+  {id:'c',name:'整行选中',description:'借用导航的选中方式。开启时整行淡灰，时长融入同一块背景。'},
+  {id:'d',name:'带时长的滑块',description:'保留物理开关的手感，把 24H／∞ 放进轨道，不在外面挂文字。'},
+  {id:'e',name:'三档直接选',description:'关、24H、∞ 同时可见，直接选择。信息最明确，右侧也更密一些。'}
+ ];
+ const states=new Map(directions.map(d=>[d.id,'day']));let active=null,returnFocus=null,bubbleTimer;
+ const icon=(id,extra='')=>`<svg class="nav-icon ${extra}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
+ const eye=()=>icon('eye','eye-open')+icon('eye-off','eye-closed');
+ const nav=(id,label,current=false)=>`<div class="nav-row ${current?'current':''}">${icon(id)}<span>${label}</span></div>`;
+ for(const d of directions){
+  const card=document.createElement('article');card.className=`variant design-${d.id}`;card.dataset.id=d.id;card.dataset.state='day';card.setAttribute('aria-labelledby',`title-${d.id}`);
+  const control=d.id==='e'?`<div class="privacy-row">${eye()}<span class="privacy-label">私密</span><div class="segments" role="group" aria-label="私密显示模式">${[['off','关'],['day','24H'],['always','∞']].map(([value,label])=>`<button type="button" data-mode="${value}" aria-pressed="${value==='day'}" aria-label="${value==='off'?'关闭私密显示':value==='day'?'显示私密24小时':'常开私密显示'}"><span>${label}</span></button>`).join('')}</div></div>`:`<button type="button" class="privacy-row toggle" role="switch" aria-checked="true" aria-label="显示私密">${eye()}<span class="privacy-label">显示私密</span>${d.id==='d'?'<span class="track" aria-hidden="true"><span class="track-text">24H</span><span class="thumb"></span></span>':'<span class="state-mark" aria-hidden="true">24H</span>'}</button>`;
+  card.innerHTML=`<header class="variant-head"><span class="letter">${d.id.toUpperCase()}</span><h2 id="title-${d.id}">${d.name}</h2></header><div class="stage"><aside class="sidebar" aria-label="${d.name}侧栏预览"><div class="mini-brand"><svg aria-hidden="true"><use href="#i-brand"/></svg>LifeOS</div><div class="nav">${nav('journal','日记',true)}${nav('calendar','日历')}${nav('task','任务')}</div><div class="footer">${control}${nav('settings','设置')}</div></aside></div><div class="caption"><p>${d.description}</p><div class="card-tools"><button type="button" class="adjust" aria-haspopup="dialog" aria-expanded="false">调整时长</button><span class="status" aria-live="polite">24小时内保持打开</span></div></div>`;
+  root.append(card);
+ }
+ function syncPicker(){const values=[...states.values()];picker.querySelectorAll('[data-all]').forEach(b=>b.setAttribute('aria-pressed',String(values.every(v=>v===b.dataset.all))));}
+ function render(id,value){
+  states.set(id,value);const card=root.querySelector(`[data-id="${id}"]`),on=value!=='off',text=value==='off'?'关':value==='day'?'24H':'∞';card.dataset.state=value;
+  const toggle=card.querySelector('.toggle');if(toggle){toggle.setAttribute('aria-checked',String(on));toggle.setAttribute('aria-label',`显示私密，${value==='off'?'已关闭':value==='day'?'开启24小时':'常开'}`);}
+  const mark=card.querySelector('.state-mark,.track-text');if(mark){mark.textContent=text;mark.classList.toggle('infinity',value==='always');}
+  card.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===value)));
+  card.querySelector('.status').textContent=value==='off'?'私密内容已隐藏':value==='day'?'24小时内保持打开':'保持打开，直到手动关闭';syncPicker();
+  if(active==='d'&&id==='d'){document.querySelector('#mode-hint').textContent=value==='always'?'将保持打开，直到手动关闭':'24小时内将保持打开';popover.querySelector('.long-term input').checked=value==='always';}
+ }
+ function close(){clearTimeout(bubbleTimer);if(!popover.open)return;popover.close();root.querySelectorAll('.adjust').forEach(b=>b.setAttribute('aria-expanded','false'));returnFocus?.focus({preventScroll:true});active=null;}
+ function open(id,trigger){
+  close();active=id;returnFocus=trigger;trigger.setAttribute('aria-expanded','true');const state=states.get(id);document.querySelector('#mode-hint').textContent=state==='off'?'选择开启时长':state==='day'?'24小时内将保持打开':'将保持打开，直到手动关闭';popover.querySelectorAll('[data-value]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.value===state)));
+  popover.querySelector('.mode-options').hidden=id==='d';popover.querySelector('.long-term').hidden=id!=='d';popover.querySelector('.long-term input').checked=state==='always';
+  if(id==='d')popover.show();else popover.showModal();const r=trigger.getBoundingClientRect(),b=popover.getBoundingClientRect();popover.style.left=Math.max(8,Math.min(innerWidth-b.width-8,r.left))+'px';popover.style.top=(r.top-b.height-8>=8?r.top-b.height-8:Math.max(8,Math.min(innerHeight-b.height-8,r.bottom+8)))+'px';if(id==='d'){trigger.focus({preventScroll:true});bubbleTimer=setTimeout(close,12_000);}else popover.querySelector(`[data-value="${state}"]`).focus({preventScroll:true});
+ }
+ root.addEventListener('click',event=>{const card=event.target.closest('.variant');if(!card)return;const id=card.dataset.id,toggle=event.target.closest('.toggle');if(toggle){render(id,states.get(id)==='off'?'day':'off');if(id==='d'){if(states.get(id)==='off')close();else open(id,toggle);}}const mode=event.target.closest('[data-mode]');if(mode)render(id,mode.dataset.mode);const adjust=event.target.closest('.adjust');if(adjust)open(id,adjust);});
+ picker.addEventListener('click',event=>{const b=event.target.closest('[data-all]');if(!b)return;close();for(const d of directions)render(d.id,b.dataset.all);});
+ popover.querySelector('.long-term input').addEventListener('change',event=>render('d',event.target.checked?'always':'day'));
+ document.addEventListener('pointerdown',event=>{if(active==='d'&&!popover.contains(event.target)&&!returnFocus?.contains(event.target))close();},true);
+ document.addEventListener('keydown',event=>{if(active==='d'&&event.key==='Escape'){event.preventDefault();close();}});
+ popover.addEventListener('click',event=>{const b=event.target.closest('[data-value]');if(b){render(active,b.dataset.value);close();return;}const r=popover.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)close();});
+ popover.addEventListener('cancel',event=>{event.preventDefault();close();});window.addEventListener('resize',close);document.addEventListener('scroll',close,true);
+})();
+</script>
+</body>
+</html>

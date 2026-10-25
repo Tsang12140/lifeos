@@ -8,6 +8,7 @@ import sharp from "sharp";
 import type { Asset, Entity, ExportBundleV1 } from "@lifeos/core";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 test("avatars normalise, remain protected without diary records, and round trip through exports", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-contact-avatar-"));
@@ -15,7 +16,7 @@ test("avatars normalise, remain protected without diary records, and round trip 
   process.env.LIFEOS_STORAGE_POOL_ENABLED = "0";
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups") });
   const { server, app } = createHttpServer(config);
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); if (previous === undefined) delete process.env.LIFEOS_STORAGE_POOL_ENABLED; else process.env.LIFEOS_STORAGE_POOL_ENABLED = previous; assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
@@ -100,7 +101,7 @@ test("avatar object storage uses quotas, authenticated access and cached reads w
   const vars = { LIFEOS_STORAGE_POOL_ENABLED: "1", LIFEOS_POOL_LOCAL_PRIMARY: "1", LIFEOS_POOL_CONSUMER: "2", LIFEOS_POOL_PHP_BINARY: process.execPath, LIFEOS_POOL_WORKER_PATH: workerPath, LIFEOS_LOG_DIR: join(root, "logs") };
   const previous = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]])); Object.assign(process.env, vars);
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_ACCOUNT_MODE: "1", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_PASSWORD: "isolated-avatar-password", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.dnbox.cn" });
-  const { server } = createHttpServer(config); server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const { server } = createHttpServer(config); await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep)); rmSync(root, { recursive: true, force: true }); });
   let cookie = "";

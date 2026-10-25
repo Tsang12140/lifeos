@@ -222,7 +222,7 @@ export function buildAsset(input: JsonObject, id: string, storageRefs: readonly 
  */
 export function withEntityEdits(
   entity: Entity,
-  edits: { readonly name?: string; readonly aliases?: readonly string[]; readonly description?: string; readonly isImportant?: boolean; readonly avatarAssetId?: string | null; readonly role?: PlaceRole | null; readonly period?: PlacePeriod | null; readonly address?: string | null } & Partial<Record<"phone" | "city" | "province" | "district" | "amapId" | "photoUrl", string | null>> & Partial<Record<"longitude" | "latitude", number | null>>,
+  edits: { readonly name?: string; readonly aliases?: readonly string[]; readonly description?: string; readonly isImportant?: boolean; readonly avatarAssetId?: string | null; readonly role?: PlaceRole | null; readonly period?: PlacePeriod | null; readonly address?: string | null } & Partial<Record<"phone" | "wechat" | "residence" | "city" | "province" | "district" | "amapId" | "photoUrl", string | null>> & Partial<Record<"longitude" | "latitude", number | null>>,
 ): Entity {
   const candidate: Record<string, unknown> = {
     ...entity,
@@ -234,7 +234,7 @@ export function withEntityEdits(
   if (entity.type === "person" && edits.name !== undefined && edits.name !== entity.name) {
     candidate.aliases = [...new Set([...(edits.aliases ?? entity.aliases ?? []), entity.name])].filter(alias => alias !== edits.name);
   }
-  for (const field of ["role", "period", "address", "avatarAssetId", "phone", "city", "province", "district", "longitude", "latitude", "amapId", "photoUrl"] as const) {
+  for (const field of ["role", "period", "address", "avatarAssetId", "phone", "wechat", "residence", "city", "province", "district", "longitude", "latitude", "amapId", "photoUrl"] as const) {
     const value = edits[field];
     if (value === null) delete candidate[field];
     else if (value !== undefined) candidate[field] = value;

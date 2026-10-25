@@ -1,0 +1,49 @@
+/* Actions and password inputs use the confirmed settings-service-forms rules. */
+.app-lock-dialog { width:320px;max-width:calc(100vw - 32px);padding:20px;border:1px solid var(--control-line);border-radius:12px;background:var(--surface);color:var(--control-ink);box-shadow:var(--control-float-shadow); }
+.app-lock-dialog::backdrop { background:#18202b36; }
+.app-lock-dialog h2 { margin:0 0 14px;font-size:16px;font-weight:500;line-height:24px; }
+.app-lock-dialog-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px; }
+.app-lock-dialog-heading h2 { min-width:0;margin:0; }
+.app-lock-close { flex:0 0 auto;display:grid;place-items:center;width:34px;height:34px;min-height:34px;margin:0;padding:0;border:0;border-radius:999px;background:transparent;color:var(--control-muted);box-shadow:none; }
+.app-lock-close:disabled { opacity:.52; }
+.app-lock-close:focus { outline:2px solid var(--control-muted);outline-offset:2px; }
+.app-lock-pin-dialog .app-lock-pin-field { margin:0 auto; }
+.app-lock-pin-field { width:200px;max-width:100%; }
+.app-lock-pin { position:relative;max-width:100%; }
+.app-lock-pin-slots { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px; }
+.app-lock-pin-slot { display:flex;align-items:center;justify-content:center;height:48px;min-width:0;border:1px solid var(--control-line);border-radius:10px;background:var(--surface);color:var(--control-ink);font-size:20px;font-weight:500;line-height:1; }
+.app-lock-pin-slot.is-filled { border-color:var(--control-muted); }
+.app-lock-pin:focus-within .app-lock-pin-slot.is-current { border-color:var(--control-muted);box-shadow:0 0 0 2px rgb(99 107 116 / .12); }
+.app-lock-pin.is-invalid .app-lock-pin-slot { border-color:var(--danger); }
+.app-lock-pin.is-disabled { opacity:.52; }
+.app-lock-pin > input { position:absolute;inset:0;z-index:1;width:100%;height:100%;min-height:0;min-width:0;margin:0;padding:0;border:0;opacity:0;caret-color:transparent;font-size:16px;cursor:text; }
+.app-lock-pin-error { display:block;margin-top:6px;color:var(--danger);font-size:12px;line-height:18px; }
+.app-lock-feedback { min-height:20px;margin:8px 0 0;color:var(--control-muted);font-size:12px;line-height:20px; }
+.app-lock-feedback[role="alert"] { color:var(--danger); }
+.app-lock-password { display:flex;align-items:center;position:relative;width:100%; }
+.app-lock-password input { width:100%;min-width:0; }
+.app-lock-password > button { position:absolute;right:2px;display:grid;place-items:center;width:36px;height:36px;margin:0;padding:0;border:0;border-radius:999px;background:transparent;color:var(--control-muted); }
+.app-lock-help { margin:10px 0;color:var(--control-muted);font-size:12px;font-weight:400;line-height:19px;overflow-wrap:anywhere; }
+.app-lock-actions { display:flex;align-items:stretch;justify-content:flex-end;flex-wrap:wrap;gap:8px;padding-top:8px; }
+.settings-card.app-lock-settings { display:grid;grid-template-columns:36px minmax(0,1fr);gap:12px;border-color:var(--control-line);box-shadow:none; }
+.app-lock-settings > .settings-card-icon { color:var(--control-ink);background:var(--control-tray); }
+.app-lock-settings > .settings-card-copy { min-width:0; }
+.app-lock-settings .settings-card-copy strong { font-size:14px;font-weight:500; }
+.app-lock-settings .settings-card-copy small { color:var(--control-muted); }
+.app-lock-settings > form { grid-column:1 / -1;min-width:0; }
+.app-lock-settings .app-lock-actions { margin-top:16px; }
+.app-lock-settings fieldset { margin:0 0 16px;padding:0;border:0; }
+.app-lock-settings legend { margin-bottom:8px;font-size:14px;font-weight:400; }
+.app-lock-targets { display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 14px; }
+.app-lock-targets label { display:flex;align-items:center;gap:8px;min-height:34px;font-size:14px;font-weight:400; }
+.app-lock-targets input { appearance:none;flex:0 0 auto;display:grid;place-items:center;width:15px;height:15px;min-height:0;padding:0;margin:0;border:1px solid var(--control-muted);border-radius:4px;background:var(--surface);box-shadow:none; }
+.app-lock-targets input:checked { background:var(--control-ink);border-color:var(--control-ink); }
+.app-lock-targets input:checked::after { content:'';width:7px;height:4px;margin-top:-2px;border-left:1.5px solid white;border-bottom:1.5px solid white;transform:rotate(-45deg); }
+.app-lock-fields { display:grid;gap:10px;max-width:360px; }
+.app-lock-targets input:disabled { opacity:.52; }
+.app-lock-fields > div > span { display:block;margin-bottom:4px;font-size:13px;color:var(--control-muted); }
+.app-lock-placeholder { display:flex;align-items:center;justify-content:center;gap:8px;min-height:80px;padding:16px; }
+:is(.app-lock-dialog,.app-lock-settings,.app-lock-placeholder) button:focus-visible,
+.app-lock-targets input:focus-visible { outline:2px solid var(--control-muted);outline-offset:2px; }
+@media (hover:hover) and (pointer:fine) { .app-lock-password > button:hover:not(:disabled),.app-lock-close:hover:not(:disabled) { background:var(--control-tray); } }
+@media (pointer:coarse) { .app-lock-targets label { min-height:40px; } }

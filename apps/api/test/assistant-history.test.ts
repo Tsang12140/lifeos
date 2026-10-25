@@ -8,21 +8,12 @@ import { DatabaseSync } from "node:sqlite";
 import { createHttpServer } from "../src/server.js";
 import { SqliteRecordRepository } from "../src/repository.js";
 import { chatBackfillWithHistory } from "../src/assistant-chat-history.js";
+import { recordSummaryAttemptFailure } from "../src/assistant-attempt-log.js";
 import { HttpError } from "../src/http-kit.js";
 import { ASSISTANT_PERSONA } from "../src/assistant-persona.js";
+import { ASSISTANT_IDENTITY_CONTEXT } from "../src/assistant-identity.js";
 import type { AssistantConversationDetail, AssistantHistoryCurrent, AssistantHistoryPage, BackfillBatch, UiTurnPlan } from "@lifeos/core";
-
-// fetch() refuses a short list of ports, so retry until the OS hands us one it
-// will actually connect to.
-const FORBIDDEN_PORTS = new Set([
-  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 79,
-  80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
-  98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113,
-  119, 123, 135, 139, 143, 179, 389, 427, 465, 512, 513, 514, 515, 548,
-  554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
-  2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
-  6697, 10080,
-]);
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 const shanghaiDay = (value: string | number | Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(value));
 
@@ -48,14 +39,7 @@ async function fixture(options: { readonly mockAi?: boolean } = {}) {
     ...(options.mockAi ? { deepseekApiKey: "test-only-key" } : {}),
   } as const;
   const { server } = createHttpServer(config);
-  let port = 0;
-  for (let attempt = 0; attempt < 8 && port === 0; attempt += 1) {
-    await new Promise<void>((resolve) => { server.listen(0, config.host, resolve); });
-    const address = server.address();
-    if (address !== null && typeof address !== "string" && !FORBIDDEN_PORTS.has(address.port)) port = address.port;
-    else await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-  if (port === 0) throw new Error("could not bind a fetchable port");
+  const port = await listenOnFetchablePort(server, config.host);
   const base = `http://${config.host}:${port}`;
   const call = async (path: string, init: RequestInit = {}) => {
     const response = await fetch(`${base}${path}`, init);
@@ -212,9 +196,14 @@ test("streamed chat previews arrive before completion; reconnect shares generati
   const error = await conflict.next(); assert.equal(error.type, 'error'); assert.equal(error.status, 409);
   assert.equal(provider.calls.length, 1);
   const system = ((provider.calls[0] as { messages: { content: string }[] }).messages[0]!).content;
-  assert.ok(system.startsWith(ASSISTANT_PERSONA + '\n\n【输出协议与操作规则】'));
+  assert.ok(system.startsWith(ASSISTANT_PERSONA + '\n\n' + ASSISTANT_IDENTITY_CONTEXT + '\n\n【输出协议与操作规则】'));
   assert.ok(ASSISTANT_PERSONA.length <= 350, 'shared voice remains a short set of principles');
-  assert.ok(system.includes('对话口吻用于reply；拟写记录的正文、评价原话和plan字段保持原意与事实'));
+  // 2026-10-16: a previous slimming pass deleted the only executable length
+  // budget and kept just abstract principles, so pin them against a silent drop.
+  assert.ok(ASSISTANT_PERSONA.includes('没被要求展开时默认两三句') && ASSISTANT_PERSONA.includes('不逐条排比'), 'executable length budget and evidence discipline stay in the shared voice');
+  assert.ok(system.includes('对话口吻用于聊天正文；拟写记录的正文、评价原话和plan字段保持原意与事实'));
+  assert.ok(system.includes('直接用空行分隔段落') && system.includes('一条回答一般0至2处') && system.includes('不输出HTML'), 'reply formatting is explicit without changing record content');
+  assert.ok(system.includes('普通聊天只输出正文，不要求JSON') && system.includes('lifeos'), 'body is independent from optional structured metadata');
   finish();
   for (const client of [first, second]) {
     assert.deepEqual(await client.next(), { type: 'reply', text: '先说重点，细节再聊' });
@@ -230,7 +219,8 @@ test("chat and read-only assistant share one voice while retaining route-specifi
   const app = await fixture({ mockAi: true }); t.after(app.close);
   const reply = "1. 先看这条。\n2. 再看那条。";
   const provider = installMockProvider(t, n => n === 1 ? JSON.stringify({ action: "reply", reply }) : "周三（10月14日）。");
-  const record = await app.post('/api/records', { kind: 'journal', content: '虚构资料：吃了一碗面。', occurredAt: { kind: 'date', value: '2026-10-14' } });
+  const sourceText = '我和同事一起看书。同事说“我喜欢这句”，书中写着“他收起了信”。';
+  const record = await app.post('/api/records', { kind: 'journal', content: sourceText, occurredAt: { kind: 'date', value: '2026-10-14' } });
   assert.equal(record.status, 201);
   const created = await app.post('/api/ai/assistant/history/new', {});
   const conversationId = (created.body as { conversationId: string }).conversationId;
@@ -245,18 +235,21 @@ test("chat and read-only assistant share one voice while retaining route-specifi
     const system = packet.messages[0]!.content;
     assert.ok(system.startsWith(ASSISTANT_PERSONA));
     assert.equal(system.split('【对话口吻】').length, 2, 'one shared voice, not stacked identities');
+    assert.equal(system.split(ASSISTANT_IDENTITY_CONTEXT).length, 2, 'both routes carry the same relationship context exactly once');
     assert.ok(!system.includes('展示到秒') && !system.includes('也不要编号'));
   }
   const full = packets[0]!.messages[0]!.content, readonly = packets[1]!.messages[0]!.content;
   assert.ok(full.includes('写入与撤销由应用核验当前用户明确确认后执行'));
   assert.ok(full.includes('committedKeys') && full.includes('仅使用所给附件ID'));
   assert.ok(readonly.includes('你是只读助手') && readonly.includes('隐私记录已经被过滤'));
-  const material = JSON.parse(packets[0]!.messages.at(-1)!.content) as { existingRecords: { date: string }[] };
+  const material = JSON.parse(packets[0]!.messages.at(-1)!.content) as { existingRecords: { date: string }[]; recentRecords: { content: string }[] };
+  assert.equal(material.recentRecords[0]!.content, sourceText, 'relationship context does not rewrite narrators or quotations in source text');
+  assert.ok(readonly.includes(sourceText), 'read-only route receives the unchanged multi-speaker source too');
   assert.match(material.existingRecords[0]!.date, /2026-10-14.*周三/, 'weekday context remains available for factual answers');
   assert.equal(((await app.call('/api/records')).body as { items: unknown[] }).items.length, 1, 'neither reply creates extra records');
 });
 
-test("streamed unsafe actions clear preview and never commit a record", async t => {
+test("streamed unsafe actions retain readable body and never commit a record", async t => {
   const app = await fixture({ mockAi: true }); t.after(app.close);
   const provider = installMockProvider(t, () => {
     const content = JSON.stringify({ reply: '不能信任的写入宣称', action: 'commit' });
@@ -267,11 +260,14 @@ test("streamed unsafe actions clear preview and never commit a record", async t 
   const previews: string[] = [];
   const store = app.openStore();
   try {
-    await assert.rejects(chatBackfillWithHistory(app.config, store, { conversationId, turnId: 'unsafe-stream', message: '看看上周', materials: [] }, text => previews.push(text)), { code: 'unsafe_ai_action' });
-    assert.equal(previews.at(-1), '');
+    const answer = await chatBackfillWithHistory(app.config, store, { conversationId, turnId: 'unsafe-stream', message: '看看上周', materials: [] }, text => previews.push(text));
+    assert.equal(answer.reply, '不能信任的写入宣称');
+    assert.equal(answer.action, 'reply');
+    assert.equal(answer.delivery?.issue, 'operation');
+    assert.notEqual(previews.at(-1), '');
     assert.equal(provider.calls.length, 1);
     assert.equal(store.list().length, 0);
-    assert.equal((await app.detail(conversationId)).messages.length, 1);
+    assert.equal((await app.detail(conversationId)).messages.length, 2);
   } finally { store.close(); }
 });
 
@@ -723,7 +719,7 @@ test("failed chat remains visible, can retry safely, and cannot overlap another 
   let releaseSecond!: () => void;
   const secondProviderGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
   const mock = installMockProvider(t, async (call) => {
-    if (call <= 2) return "not-json"; // The first turn also exhausts its one format repair.
+    if (call <= 2) return "{\"reply\":"; // The first turn also exhausts its one format repair.
     if (call === 3) { secondProviderResolve(); await secondProviderGate; }
     return JSON.stringify({ action: "reply", reply: `回复-${call}` });
   });
@@ -853,17 +849,17 @@ test("clearing while a turn is running hides its late reply and a new current su
 
 test("structured assistant repairs malformed generation once and completes one durable turn", async (t) => {
   const f = await fixture({ mockAi: true }); t.after(() => f.close());
-  const mock = installMockProvider(t, call => call === 1 ? "not-json" : JSON.stringify({ action: "reply", reply: "修复后的回答" }));
+  const mock = installMockProvider(t, call => call === 1 ? "{\"reply\":" : JSON.stringify({ action: "reply", reply: "修复后的回答" }));
   const id = ((await f.post("/api/ai/assistant/history/new", {})).body as { conversationId: string }).conversationId;
   const body = { conversationId: id, turnId: crypto.randomUUID(), message: "上周有什么好喝的？", materials: [], batchId: null, revision: null };
   const result = await f.post("/api/ai/backfill/chat", body);
   assert.equal(result.status, 200, JSON.stringify(result.body));
   assert.equal(mock.calls.length, 2);
   const repairedPacket = mock.calls[1] as { messages: { role: string; content: string }[] };
-  assert.match(repairedPacket.messages[0]!.content, /JSON语法不完整/);
-  assert.ok(repairedPacket.messages.some(item => item.role === "assistant" && item.content === "not-json"), "repair sees the rejected response instead of blindly regenerating");
+  assert.match(repairedPacket.messages[0]!.content, /直接用普通文字回答/);
+  assert.ok(repairedPacket.messages.some(item => item.role === "assistant" && item.content === "{\"reply\":"), "repair sees the rejected response instead of blindly regenerating");
   for (const request of mock.calls as { response_format?: unknown; max_tokens?: number }[]) {
-    assert.deepEqual(request.response_format, { type: "json_object" });
+    assert.equal(request.response_format, undefined);
     assert.ok(request.max_tokens! >= 8192);
   }
   const messages = (await f.detail(id)).messages;
@@ -873,7 +869,7 @@ test("structured assistant repairs malformed generation once and completes one d
   assert.equal(mock.calls.length, 2, "completed turn replay is cached");
 });
 
-test("unrepairable AI schema preserves held draft and remains safely retryable", async (t) => {
+test("invalid plan preserves held draft exactly and delivers its body without regeneration", async (t) => {
   const f = await fixture({ mockAi: true }); t.after(() => f.close());
   const store = f.openStore(); const held = draftBatch("held-format");
   store.saveAssistantBatch(held); store.close();
@@ -881,15 +877,15 @@ test("unrepairable AI schema preserves held draft and remains safely retryable",
   const id = ((await f.post("/api/ai/assistant/history/new", { batchId: held.id })).body as { conversationId: string }).conversationId;
   const body = { conversationId: id, turnId: crypto.randomUUID(), message: "请先讨论一下这份方案", materials: [], batchId: held.id, revision: held.revision };
   const failed = await f.post("/api/ai/backfill/chat", body);
-  assert.equal(failed.status, 502, JSON.stringify(failed.body));
-  assert.equal((failed.body as { error: string }).error, "invalid_ai_reply");
-  assert.equal(mock.calls.length, 2);
+  assert.equal(failed.status, 200, JSON.stringify(failed.body));
+  assert.equal((failed.body as { delivery: { issue: string } }).delivery.issue, "operation");
+  assert.equal(mock.calls.length, 1);
   const after = f.openStore();
   assert.deepEqual(after.assistantBatch(held.id), held, "neither failed generation mutates the existing plan");
   assert.equal(after.list().length, 0, "format recovery performs no record writes"); after.close();
-  assert.equal((await f.detail(id)).messages[0]!.retryable, true);
+  assert.equal((await f.detail(id)).messages[0]!.turnStatus, "completed");
   assert.equal((await f.post("/api/ai/backfill/chat", body)).status, 200);
-  assert.equal(mock.calls.length, 3);
+  assert.equal(mock.calls.length, 1);
   assert.equal((await f.detail(id)).messages.length, 2, "manual retry reuses original user message");
 });
 
@@ -897,10 +893,10 @@ test("structured assistant handles empty, truncated, fenced and unsupported JSON
   const valid = JSON.stringify({ action: "reply", reply: "完整回答" });
   const cases: { name: string; first: MockAssistantReply; calls: number; status?: number; fallback?: boolean }[] = [
     { name: "empty content", first: { content: "", finish_reason: "stop" }, calls: 2 },
-    { name: "length finish never accepted as a complete response", first: { content: valid, finish_reason: "length" }, calls: 2 },
+    { name: "length finish retains a partial without automatic regeneration", first: { content: valid, finish_reason: "length" }, calls: 1, status: 502 },
     { name: "fenced complete JSON", first: "  ```json\n" + valid + "\n```  ", calls: 1 },
-    { name: "missing action is an upstream schema error", first: JSON.stringify({ reply: "missing action" }), calls: 2 },
-    { name: "explicit JSON-mode rejection gets one compatible fallback", first: { status: 400, error: "response_format json_object is unsupported" }, calls: 2, fallback: true },
+    { name: "missing action preserves body as read-only reply", first: JSON.stringify({ reply: "missing action" }), calls: 1 },
+    { name: "HTTP400 without a requested JSON constraint is a service failure", first: { status: 400, error: "response_format json_object is unsupported" }, calls: 1, status: 502 },
     { name: "configured provider outage is a visible retryable failure", first: { status: 503, error: "unavailable" }, calls: 1, status: 502 },
   ];
   for (const scenario of cases) await t.test(scenario.name, async t => {
@@ -912,4 +908,63 @@ test("structured assistant handles empty, truncated, fenced and unsupported JSON
     assert.equal(mock.calls.length, scenario.calls);
     if (scenario.fallback) assert.equal((mock.calls[1] as { response_format?: unknown }).response_format, undefined);
   });
+});
+
+/*
+ * 2026-10-20：主人的要求是「AI 小结的日志和 AI 对话的日志撮合到一块」。
+ * 数据层同表（source 列）已经由 assistant-attempt-log.test.ts 覆盖，这里只钉住
+ * 对外那一个端点：两类失败一起返回、`source` 只筛不丢、计数不随筛选变。
+ */
+test("the attempt log serves chat and summary failures together, filtered by source", async (t) => {
+  const f = await fixture();
+  t.after(() => f.close());
+  const previousLogDirectory = process.env.LIFEOS_LOG_DIR;
+  process.env.LIFEOS_LOG_DIR = join(f.root, "logs");
+  t.after(() => {
+    if (previousLogDirectory === undefined) delete process.env.LIFEOS_LOG_DIR;
+    else process.env.LIFEOS_LOG_DIR = previousLogDirectory;
+  });
+
+  const now = new Date();
+  const store = f.openStore();
+  try {
+    store.recordAssistantAttempt({
+      id: "chat-1", conversationId: "c1", turnId: "t1", attempt: 1, stage: "format",
+      errorCode: "ai_json_syntax", errorDetail: "断在第 3 字", httpStatus: null,
+      model: "deepseek-flash", effort: "direct", receivedChars: 3, rawChars: 3, rawTruncated: false, rawText: "abc",
+      startedAt: new Date(now.getTime() - 1000).toISOString(), finishedAt: now.toISOString(), durationMs: 1000,
+    });
+    recordSummaryAttemptFailure(
+      store,
+      "calendar_regenerate",
+      { provider: "deepseek", model: "deepseek-flash", dates: ["2026-10-19"], reason: "timeout" },
+      new Date(now.getTime() - 500),
+    );
+  } finally { store.close(); }
+
+  type LogBody = {
+    readonly counts: Readonly<Record<"connection" | "format" | "service" | "total", number>>;
+    readonly sources: Readonly<Record<"chat" | "summary", number>>;
+    readonly attempts: readonly { readonly source: string; readonly subject: string | null; readonly errorCode: string }[];
+  };
+  const all = (await f.call("/api/ai/assistant/log")).body as LogBody;
+  assert.equal(all.attempts.length, 2, "一个端点同时给出两种失败");
+  assert.deepEqual({ ...all.counts }, { connection: 1, format: 1, service: 0, total: 2 });
+  assert.deepEqual({ ...all.sources }, { chat: 1, summary: 1 });
+  assert.ok(all.attempts.some((attempt) => attempt.source === "summary" && attempt.subject?.includes("手动重新生成")), JSON.stringify(all.attempts));
+
+  const onlySummary = (await f.call("/api/ai/assistant/log?source=summary")).body as LogBody;
+  assert.equal(onlySummary.attempts.length, 1);
+  assert.equal(onlySummary.attempts[0]!.source, "summary");
+  assert.equal(onlySummary.attempts[0]!.errorCode, "day_summary_timeout");
+  assert.deepEqual({ ...onlySummary.sources }, { chat: 1, summary: 1 }, "筛选条上的数字是这个窗口的总量，不跟着筛选自己变");
+
+  const onlyChat = (await f.call("/api/ai/assistant/log?source=chat")).body as LogBody;
+  assert.equal(onlyChat.attempts.length, 1);
+  assert.equal(onlyChat.attempts[0]!.source, "chat");
+
+  const both = (await f.call("/api/ai/assistant/log?source=summary&stage=format")).body as LogBody;
+  assert.equal(both.attempts.length, 0, "来源与失败原因叠加生效");
+
+  assert.equal((await f.call("/api/ai/assistant/log?source=all")).status, 400, "认不出的来源要拒绝，而不是悄悄当成全部");
 });

@@ -8,6 +8,7 @@ import type { createThumbnailCache } from "./derived-thumbs.js";
 import type { PoolConsumerBridge } from "./storage-pool.js";
 import type { StoragePoolStore } from "./storage-pool-store.js";
 import type { PoolTransition } from "./pool-transition.js";
+import type { AssistantWelcomeStore } from "./assistant-welcome-store.js";
 
 export interface PoolPreflight {
   readonly storageFreeBytes: number;
@@ -40,11 +41,13 @@ export interface RouteContext {
   readonly poolStore: StoragePoolStore | null;
   readonly poolAccountId: string;
   readonly poolAdmin: boolean;
+  readonly welcomeStore: AssistantWelcomeStore;
   readonly poolPreflight: () => Promise<PoolPreflight>;
   readonly poolTransition?: PoolTransition | null;
   readonly loginFailures: Map<string, { failures: number; blockedUntil: number; lastFailureAt: number }>;
   readonly authenticated: (req: IncomingMessage) => boolean;
   readonly requireAuth: (req: IncomingMessage) => void;
+  readonly appLock?: import('./app-lock-context.js').AppLockRequest;
   readonly checkRequestSecurity: (req: IncomingMessage) => void;
 }
 

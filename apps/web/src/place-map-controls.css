@@ -1,0 +1,54 @@
+.place-map-dialog .place-map-row > .place-map-provider,
+.place-map-view-dialog .place-map-tools > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 40px;
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--control-muted);
+  font: inherit;
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+  box-shadow: none;
+  transform: none;
+  transition: background-color 180ms cubic-bezier(.2,0,0,1), color 180ms cubic-bezier(.2,0,0,1);
+}
+.place-map-dialog .place-map-row { min-width: 0; }
+.place-map-dialog .place-map-body { align-items: stretch; }
+.place-map-dialog .place-map-help { gap: 0 8px; }
+.place-map-dialog .place-map-help > a {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 34px; padding: 6px 0; margin: 0;
+  color: var(--control-muted); font-size: .75rem; line-height: 20px;
+}
+.place-map-view-dialog .place-map-tools { align-items: stretch; }
+.place-map-view-dialog .place-map-tools > :is([aria-label="缩小地图"], [aria-label="放大地图"]) {
+  flex: 0 0 40px; width: 40px; padding: 0;
+}
+.place-map-view-dialog .place-map-tools > button:disabled { opacity: .52; cursor: not-allowed; }
+:is(.place-map-dialog, .place-map-view-dialog) :is(button, a, .place-map-canvas):focus-visible {
+  outline: 2px solid var(--control-muted); outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .place-map-dialog .place-map-provider:hover,
+  .place-map-view-dialog .place-map-tools > button:hover:not(:disabled) { background: var(--control-tray); }
+}
+@media (pointer: coarse) {
+  .place-map-dialog .place-map-help > a { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .place-map-dialog .place-map-provider,
+  .place-map-view-dialog .place-map-tools > button { transition: none !important; }
+}

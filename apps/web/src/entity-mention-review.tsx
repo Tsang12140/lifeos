@@ -5,6 +5,7 @@ import { groupMentionContexts, type MentionContextGroup } from "./entity-mention
 import { MentionCheckIcon } from "./entity-mention-check-icon";
 import { layoutMentionContexts } from "./entity-mention-layout";
 import "./entity-mention-context.css";
+import { ContactMentionAvatar } from "./contact-avatar";
 
 function optionLabel(entity: Entity): string {
   const detail = entity.type === "place" && entity.address ? entity.address : entity.description || (entity.aliases ?? []).join("、");
@@ -105,7 +106,7 @@ export function EntityMentionReview({ text, candidates, decisions, preferredEnti
       <input type="checkbox" checked={checked} disabled={!target} aria-label={`标记第 ${index + 1} 处 ${candidate.text.replace(/^[@#]/u, "")}`} onChange={(event) => setChoices((current) => new Map(current).set(id, event.target.checked ? target : ""))} />
       <span className="mention-review-circle"><Check size={14} strokeWidth={3} aria-hidden="true" /></span>
       <strong>{candidate.text.replace(/^[@#]/u, "")}</strong>
-      {types.includes("person") ? <User className="mention-review-type-icon" size={15} strokeWidth={1.9} aria-hidden="true" /> : null}
+      {types.includes("person") ? entity?.type === "person" ? <ContactMentionAvatar entity={entity} /> : <User className="mention-review-type-icon" size={15} strokeWidth={1.9} aria-hidden="true" /> : null}
       {types.includes("place") ? <MapPin className="mention-review-type-icon" size={15} strokeWidth={1.9} aria-hidden="true" /> : null}
     </label>;
   };

@@ -1,4 +1,6 @@
 import { handleNotesRoutes } from "./routes-notes.js";
+import { AppLock } from './app-lock.js';
+import { appLockRepository } from './app-lock-context.js';
 import { handleNoteShareRoutes, handlePublicNoteRoutes, publicNoteSpace } from "./routes-note-shares.js";
 import { CalendarDays } from "./calendar-days.js";
 import { CalendarBackgrounds } from "./calendar-backgrounds.js";
@@ -64,7 +66,7 @@ import {
 } from "@lifeos/core";
 import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
-import { IdentityStore, type AccountIdentity, type PublicAccount } from "./identity-store.js";
+import { IdentityStore, normalizeAccountUsername, type AccountIdentity, type PublicAccount } from "./identity-store.js";
 import { tenantConfigFor, tenantDirectoryFor, type SharedIntegrations } from "./tenant-config.js";
 import { HttpError, backupHttpError, setJson, setEmpty } from "./http-kit.js";
 import {
@@ -155,6 +157,7 @@ import { selectDayObservations } from "./weather-selection.js";
 import { listWeatherProfiles, publicWeatherConfig, readRuntimeWeatherConfig, readWeatherProfile, saveRuntimeWeatherConfig, saveWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
 import { WeatherArchiveScheduler, WEATHER_ARCHIVE_TIME_ZONE } from "./weather-archive-scheduler.js";
 import { publicMovieConfig, readRuntimeMovieConfig, saveRuntimeMovieConfig } from "./movie-config.js";
+import { readAmapConfig } from "./amap-location.js";
 import { MovieModuleError, resolveMovies, testMovieConfig, type MovieCandidate } from "./movie.js";
 import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, createThumbnailCache, parseThumbnailWidth } from "./derived-thumbs.js";
 import { handleBackupRoutes } from "./routes-backup.js";
@@ -167,6 +170,10 @@ import { handleAiMovieRoutes } from "./routes-ai-movie.js";
 import { handleAssistantBackfillRoutes } from "./routes-assistant-backfill.js";
 import { handlePhotoDescriptionRoutes } from "./routes-photo-description.js";
 import { handleAssistantHistoryRoutes } from "./routes-assistant-history.js";
+import { AssistantWelcomeStore } from "./assistant-welcome-store.js";
+import { handleAssistantWelcomeRoutes } from "./routes-assistant-welcome.js";
+import { handleAdminAttentionRoutes } from "./routes-admin-attention.js";
+import { pruneAssistantAttemptsOnceADay, recordSummaryAttemptFailure } from "./assistant-attempt-log.js";
 import { handleWeatherRoutes } from "./routes-weather.js";
 import { handleModulesRoutes } from "./routes-modules.js";
 import { summaryPayload, collectSummarisableRecords } from "./summary-routes.js";
@@ -176,6 +183,7 @@ import { readBody, requireJsonContentType, readRawBody } from "./http-body.js";
 import { PoolConsumerBridge, StoragePoolError } from "./storage-pool.js";
 import { StoragePoolStore } from "./storage-pool-store.js";
 import { PoolTransition } from "./pool-transition.js";
+import { JournalMemoryIndexer } from "./journal-memory.js";
 
 const SESSION_COOKIE = "lifeos_session";
 const WEATHER_DEVICE_COOKIE = "lifeos_weather_device";
@@ -186,6 +194,12 @@ const ACCOUNT_PEER_FAILURE_LIMIT = 30;
 const ACCOUNT_PEER_WINDOW_MS = 60_000;
 const ACCOUNT_LOGIN_MAX_GLOBAL_IN_FLIGHT = 8;
 const ACCOUNT_LOGIN_MAX_PEER_IN_FLIGHT = 2;
+/**
+ * 后台预生成每次最多补 40 天（两批）。刷新会把「所有有日记的日子」整体送进来，
+ * 不设上限的话第一次接上 Key 就是几十次连发，而且会把这期间打开的月视图排在后面。
+ * 已经补好的日子下一轮就不在待办里，所以按天推进不会卡住。
+ */
+const SCHEDULER_SUMMARY_MAX_STALE = 40;
 interface LoginFailureBucket { readonly failures: number; readonly blockedUntil: number; readonly lastFailureAt: number; }
 
 function pruneLoginFailures(failures: Map<string, LoginFailureBucket>, now: number, ttlMs = LOGIN_FAILURE_TTL_MS): void {
@@ -357,9 +371,13 @@ interface PoolServices {
   readonly admin: boolean;
   readonly preflight: () => Promise<PoolPreflight>;
   readonly transition?: PoolTransition | null;
+  readonly welcomeStore: AssistantWelcomeStore;
 }
 
 function createApp(config: ApiConfig, repository = new SqliteRecordRepository(config.databasePath), poolServices?: PoolServices): LifeosApp {
+  const appLock = new AppLock(config.dataDirectory, config.cookieSecure);
+  const journalIndexer = new JournalMemoryIndexer(config, repository);
+  journalIndexer.start();
   const poolBridge = poolServices?.bridge ?? new PoolConsumerBridge();
   const poolStore = poolServices === undefined
     ? (poolBridge.enabled ? new StoragePoolStore(config.databasePath) : null)
@@ -367,10 +385,16 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   const ownsPoolStore = poolServices === undefined && poolStore !== null;
   const poolAccountId = poolServices?.accountId ?? "local-owner";
   const calendarTaskLabels = new CalendarTaskLabels(config.databasePath);
-  const poolAdmin = poolServices?.admin ?? true;
+  // Local/password-only access has no authenticated username to match the env designation.
+  const poolAdmin = poolServices?.admin ?? false;
+  const welcomeStore = poolServices?.welcomeStore ?? new AssistantWelcomeStore(config.databasePath);
   const poolPreflight = poolServices?.preflight ?? (async () => { throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪"); });
   const loginFailures = new Map<string, LoginFailureBucket>();
   let lastLoginFailureSweepAt = 0;
+  // Retention for the failure-only assistant log. It gets no timer of its own:
+  // this boot pass plus the on-write check in assistant-attempt-log.ts is enough,
+  // and the box this runs on is shared with other projects.
+  pruneAssistantAttemptsOnceADay(repository);
   const backupScheduler = new BackupScheduler({
     repository,
     config,
@@ -438,7 +462,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     thumbnail: async (id, width) => (await resolveAssetThumbnail(routeContext(), id, width)).file,
     summaries: async (dates, now) => {
       const byDate = collectSummarisableRecords(repository, "Asia/Shanghai");
-      await resolveDaySummaries({ dates, recordsForDate: date => byDate.get(date) ?? [], latestRecordsForDate: date => collectSummarisableRecords(repository, "Asia/Shanghai").get(date) ?? [], isActive: () => !closed, cache: repository, provider: createDaySummaryProvider(config), today: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now) });
+      await resolveDaySummaries({ dates, recordsForDate: date => byDate.get(date) ?? [], latestRecordsForDate: date => collectSummarisableRecords(repository, "Asia/Shanghai").get(date) ?? [], isActive: () => !closed, cache: repository, provider: createDaySummaryProvider(config), today: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(now), maxStale: SCHEDULER_SUMMARY_MAX_STALE, onProviderFallback: failure => recordSummaryAttemptFailure(repository, "calendar_scheduler", failure) });
     },
     onError: error => console.error("[calendar-days]", error),
   });
@@ -462,6 +486,15 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (!authenticated(req)) throw new HttpError(401, "authentication_required", "Authentication required");
   }
 
+  function localPreviewAdministrator(req: IncomingMessage): boolean {
+    if (!config.localPreviewAdmin || config.gatewayAuthenticated || !localHostAllowed(req)) return false;
+    const peer = req.socket.remoteAddress?.replace(/^::ffff:/i, "");
+    if (!peer || !isLoopbackHost(peer)) return false;
+    const origin = requestOrigin(req);
+    if (origin === undefined) return true;
+    try { return isLoopbackHost(new URL(origin).hostname); } catch { return false; }
+  }
+
   function checkRequestSecurity(req: IncomingMessage): void {
     // Passwordless mode is intentionally safe only on the loopback interface and
     // rejects a hostile Host header to prevent DNS-rebinding reads/writes.
@@ -471,12 +504,12 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (!originAllowed(req, config)) throw new HttpError(403, "origin_not_allowed", "Origin is not allowed");
   }
 
-  function routeContext(): RouteContext {
+  function routeContext(req?: IncomingMessage): RouteContext {
     return {
       calendarDays,
       calendarBackgrounds,
       config,
-      repository,
+      repository: req && !((req.url ?? '').startsWith('/api/public/')) && !(req.url ?? '').startsWith('/api/ai/backfill/chat/stop') ? appLockRepository(repository, appLock.policy(req)) : repository,
       calendarTaskLabels,
       backupScheduler,
       weatherArchiveScheduler,
@@ -485,26 +518,30 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       poolBridge,
       poolStore,
       poolAccountId,
-      poolAdmin,
+      poolAdmin: poolAdmin || (req !== undefined && localPreviewAdministrator(req)),
+      welcomeStore,
       poolPreflight,
       poolTransition: poolServices?.transition ?? null,
       loginFailures,
       authenticated,
       requireAuth,
+      ...(req ? { appLock: appLock.policy(req) } : {}),
       checkRequestSecurity,
     };
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): Promise<void> {
-    const ctx = routeContext();
+    const ctx = routeContext(req);
     if (await handlePublicNoteRoutes(ctx,req,res,pathname,url)) return;
-    if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method ?? "") && !pathname.startsWith("/api/calendar/background")) res.once("finish", () => { if (res.statusCode < 300) { calendarDays.schedule(); calendarBackgrounds.changed(); } });
+    const welcomeRequest = pathname.startsWith("/api/ai/assistant/welcome") || pathname.startsWith("/api/admin/assistant-welcome");
+    if (!welcomeRequest && ["POST", "PATCH", "PUT", "DELETE"].includes(req.method ?? "") && !pathname.startsWith("/api/calendar/background")) res.once("finish", () => { if (res.statusCode < 300) { calendarDays.schedule(); calendarBackgrounds.changed(); journalIndexer.schedule(); } });
     if (pathname === "/api/health" && req.method === "GET") {
       setJson(res, 200, { ok: true });
       return;
     }
     if (pathname === "/api/auth" && req.method === "GET") {
-      setJson(res, 200, { required: config.password !== undefined, authenticated: authenticated(req) });
+      const signedIn = authenticated(req);
+      setJson(res, 200, { required: config.password !== undefined, authenticated: signedIn, admin: signedIn && localPreviewAdministrator(req) });
       return;
     }
     if (pathname === "/api/auth/login" && req.method === "POST") {
@@ -513,7 +550,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       hasOnlyKeys(input, ["password"]);
       const password = stringField(input.password, "password");
       if (config.password === undefined) {
-        setJson(res, 200, { required: false, authenticated: true });
+        setJson(res, 200, { required: false, authenticated: true, admin: localPreviewAdministrator(req) });
         return;
       }
       const loginKey = req.socket.remoteAddress ?? "unknown";
@@ -537,7 +574,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       loginFailures.delete(loginKey);
       const token = randomBytes(32).toString("base64url");
       repository.createSession(sessionHash(token), Date.now() + SESSION_TTL_MS);
-      setJson(res, 200, { required: true, authenticated: true }, { "set-cookie": cookieHeader(token, config, SESSION_TTL_MS / 1000) });
+      setJson(res, 200, { required: true, authenticated: true, admin: localPreviewAdministrator(req) }, { "set-cookie": cookieHeader(token, config, SESSION_TTL_MS / 1000) });
       return;
     }
     if (pathname === "/api/auth/logout" && req.method === "POST") {
@@ -549,6 +586,28 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     }
 
     requireAuth(req);
+    if (await appLock.handle(req, res, pathname, config.bodyLimitBytes)) return;
+    const policy = appLock.policy(req);
+    if (policy.protected) res.setHeader('cache-control', 'no-store');
+    const need = (targets: import('@lifeos/core').AppLockTarget[]) => {
+      const locked = targets.filter(policy.locked);
+      if (locked.length) throw new HttpError(423, 'app_locked', '请先解锁后继续', { targets: locked });
+    };
+    if (/^\/api\/(notes|note-folders)(\/|$)/.test(pathname)) need(['notes']);
+    if (/^\/api\/(entities|places)(\/|$)/.test(pathname) && !(pathname === '/api/entities' && req.method === 'GET')) need(['entities']);
+    if (/^\/api\/ai\/(assistant|backfill)(\/|$)/.test(pathname) && !pathname.endsWith('/stop') && !pathname.endsWith('/memory/status')) need(['assistant']);
+    if (pathname.startsWith('/api/modules/cycle-intimacy') && req.method !== 'GET') need(['cycle']);
+    if (pathname.startsWith('/api/calendar') || pathname.startsWith('/api/summaries')) need(['calendar']);
+    if (pathname.startsWith('/api/ai/') && req.headers['x-lifeos-private-access'] !== undefined) need(['privacy-ai']);
+    const restrictedContent = (['tasks', 'notes', 'dreams', 'privacy-display'] as const).some(policy.locked);
+    if (/^\/api\/(export|import|archive)(\/|$)/.test(pathname) || /^\/api\/backup\/(snapshot|restore|download|files)/.test(pathname)) need(thisLockTargets());
+    if (/^\/api\/assets\/(trash|resolve)(\/|$)/.test(pathname)) need(thisLockTargets());
+    if (pathname === '/api/calendar/tasks/labels' && policy.locked('tasks')) { setJson(res, 200, { items: [] }); return; }
+    if (restrictedContent && req.method === 'GET' && (pathname === '/api/calendar/days' || pathname === '/api/summaries')) { setJson(res, 200, { items: [] }); return; }
+    if (restrictedContent && pathname.startsWith('/api/calendar/background') && !pathname.endsWith('/viewing')) need(['tasks', 'notes', 'dreams', 'privacy-display']);
+    if (pathname.startsWith("/api/admin/") && !ctx.poolAdmin) throw new HttpError(403, "administrator_required", "仅环境配置指定的管理员账号可访问");
+    if (await handleAssistantWelcomeRoutes(ctx, req, res, pathname, url)) return;
+    if (await handleAdminAttentionRoutes(ctx, req, res, pathname, url)) return;
     if (await handleNoteShareRoutes(ctx,req,res,pathname,url)) return;
     if (await handleCalendarBackgroundRoutes(ctx, req, res, pathname, url)) return;
     if (await handleArchiveRoutes(ctx, req, res, pathname, url)) return;
@@ -605,6 +664,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
   }
 
   let closed = false;
+  function thisLockTargets(): import('@lifeos/core').AppLockTarget[] { return [...appLock.status({ headers: {} } as IncomingMessage).targets]; }
   const app: LifeosApp = {
     calendarBackgrounds,
     config,
@@ -653,6 +713,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     close: () => {
       if (closed) return;
       closed = true;
+      journalIndexer.stop();
       backupScheduler.stop();
       closeArchiveService(repository);
       clearVideoDownloadCache(repository);
@@ -664,6 +725,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       calendarTaskLabels.close();
       repository.close();
       if (ownsPoolStore) poolStore?.close();
+      if (!poolServices) welcomeStore.close();
     },
   };
   calendarDays.start();
@@ -831,6 +893,10 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
   }
 
   const ownerConfig = accountOwnerConfig(config);
+  const isEnvironmentAdmin = (account: AccountIdentity | PublicAccount): boolean =>
+    !account.disabled && account.role === "owner" && Boolean(config.ownerUsername?.trim())
+    && normalizeAccountUsername(account.username) === normalizeAccountUsername(config.ownerUsername!);
+  const welcomeStore = new AssistantWelcomeStore(ownerConfig.databasePath);
   const poolBridge = new PoolConsumerBridge();
   const poolStore = poolBridge.enabled ? new StoragePoolStore(ownerConfig.databasePath) : null;
   const poolTransition = poolStore === null ? null : new PoolTransition(config.dataDirectory, poolBridge, poolStore,
@@ -840,8 +906,8 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
         : { assetRoot: join(tenantDirectoryFor(config, account.tenantId), "assets") }),
     })), identity.configMasterSecret, /^(1|true)$/i.test(process.env.LIFEOS_POOL_LOCAL_PRIMARY?.trim() ?? ""));
   /**
-   * What a member space is allowed to borrow. Read at the moment the space is
-   * created so a key the owner saved in settings is picked up, and read from
+   * What a member space is allowed to borrow. Resolve at each use, including
+   * for an already cached member app, and read from
    * the owner's *effective* config so a key typed into the settings page counts
    * exactly like one put in the environment.
    */
@@ -853,6 +919,14 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     weather: () => {
       const weather = readRuntimeWeatherConfig(ownerConfig);
       return weather.apiKey === undefined ? undefined : { apiKey: weather.apiKey, host: weather.apiHost };
+    },
+    amap: () => {
+      const amap = readAmapConfig(ownerConfig);
+      return amap.apiKey === undefined ? undefined : { apiKey: amap.apiKey };
+    },
+    movie: () => {
+      const movie = readRuntimeMovieConfig(ownerConfig);
+      return movie.apiKey === undefined ? undefined : { apiKey: movie.apiKey };
     },
   });
   const apps = new Map<string, { readonly app: LifeosApp; lastUsedAt: number }>();
@@ -869,9 +943,10 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       bridge: poolBridge,
       store: poolStore,
       accountId: account.id,
-      admin: account.role === "owner",
+      admin: isEnvironmentAdmin(account),
       preflight: () => poolReadiness(),
       transition: poolTransition,
+      welcomeStore,
     });
     apps.set(key, { app, lastUsedAt: Date.now() });
     return app;
@@ -1011,6 +1086,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
               required: true,
               authenticated: session !== null,
               accountMode: true,
+              admin: session !== null && isEnvironmentAdmin(session.account),
               ...(session === null ? {} : { account: accountPublicView(session.account) }),
             });
             return;
@@ -1102,6 +1178,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
               required: true,
               authenticated: true,
               accountMode: true,
+              admin: isEnvironmentAdmin(session.account),
               account: accountPublicView(session.account),
             }, { "set-cookie": cookieHeader(token, config, ttlMs / 1000) });
             return;
@@ -1162,6 +1239,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
               required: true,
               authenticated: true,
               accountMode: true,
+              admin: isEnvironmentAdmin(session.account),
               account: accountPublicView(session.account),
             }, { "set-cookie": cookieHeader(token, config, ttlMs / 1000) });
             return;
@@ -1182,6 +1260,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
           }
           const session = sessionFor(req);
           if (session === null) throw new HttpError(401, "authentication_required", "Authentication required");
+          if (path.startsWith("/api/admin/") && !isEnvironmentAdmin(session.account)) throw new HttpError(403, "administrator_required", "仅环境配置指定的管理员账号可访问");
           if (path === "/api/admin/storage-pool/read-canary") {
             if (session.account.role !== "owner") throw new HttpError(403, "owner_required", "仅空间所有者可切换照片试读");
             if (poolTransition === null) throw new HttpError(503, "storage_pool_disabled", "存储池接入尚未启用");
@@ -1407,6 +1486,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
         for (const entry of apps.values()) entry.app.close();
         apps.clear();
         poolStore?.close();
+        welcomeStore.close();
         identity.close();
       },
     };
@@ -1415,6 +1495,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     poolTransition?.close();
     for (const entry of apps.values()) entry.app.close();
     poolStore?.close();
+    welcomeStore.close();
     identity.close();
     throw error;
   }

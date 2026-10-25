@@ -10,6 +10,7 @@ import { assertValidAsset, VIDEO_LIMITS, type Asset } from "@lifeos/core";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
 import { clearVideoDownloadCache, readVideoMetadata, videoByteRange } from "../src/video-assets.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 const fixturePath = new URL("../../test/fixtures/video-avc-aac.mp4", import.meta.url);
 const fixture = readFileSync(fixturePath);
@@ -31,7 +32,7 @@ test("video metadata and byte ranges reject invalid limits instead of trusting c
 test("isolated video HTTP upload validates bytes, deduplicates and supports authenticated seeking", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-video-http-"));
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root,"data"), LIFEOS_ASSET_ROOT: join(root,"assets"), LIFEOS_BACKUP_DIR: join(root,"backups") });
-  const current = createHttpServer(config); current.server.listen(0,"127.0.0.1"); await once(current.server,"listening");
+  const current = createHttpServer(config); await listenOnFetchablePort(current.server);
   const address = current.server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { clearVideoDownloadCache(); current.server.closeAllConnections(); await new Promise<void>(done => current.server.close(()=>done())); assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep)); rmSync(root,{recursive:true,force:true}); });
   const upload = (body: Buffer, mediaType = "video/mp4") => fetch(base+"/api/assets/videos?name=test.mp4",{method:"POST",headers:{"content-type":mediaType},body});
@@ -77,7 +78,7 @@ test("pool video upload bypasses historical local-primary mode and charges one c
   const vars={LIFEOS_STORAGE_POOL_ENABLED:"1",LIFEOS_POOL_LOCAL_PRIMARY:"1",LIFEOS_POOL_CONSUMER:"2",LIFEOS_POOL_PHP_BINARY:process.execPath,LIFEOS_POOL_WORKER_PATH:workerPath,LIFEOS_LOG_DIR:join(root,"logs")};
   const previous=Object.fromEntries(Object.keys(vars).map(key=>[key,process.env[key]]));Object.assign(process.env,vars);
   const config=readConfig({LIFEOS_HOST:"127.0.0.1",LIFEOS_ACCOUNT_MODE:"1",LIFEOS_OWNER_USERNAME:"owner",LIFEOS_PASSWORD:"isolated-video-password",LIFEOS_DATA_DIR:join(root,"data"),LIFEOS_ASSET_ROOT:join(root,"assets"),LIFEOS_BACKUP_DIR:join(root,"backups"),LIFEOS_ALLOWED_ORIGINS:"http://127.0.0.1:3097",LIFEOS_COOKIE_SECURE:"false"});
-  const current=createHttpServer(config);current.server.listen(0,"127.0.0.1");await once(current.server,"listening");const address=current.server.address();assert.ok(address&&typeof address!=="string");const base=`http://127.0.0.1:${address.port}`;
+  const current=createHttpServer(config);await listenOnFetchablePort(current.server);const address=current.server.address();assert.ok(address&&typeof address!=="string");const base=`http://127.0.0.1:${address.port}`;
   t.after(async()=>{clearVideoDownloadCache();current.server.closeAllConnections();await new Promise<void>(done=>current.server.close(()=>done()));for(const[key,value]of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}assert.ok(resolve(root).startsWith(resolve(tmpdir())+sep));rmSync(root,{recursive:true,force:true});});
   let cookie="";
   async function json(path:string,method="GET",body?:unknown,auth=cookie){const response=await fetch(base+path,{method,headers:{...(auth?{cookie:auth}:{}),...(body===undefined?{}:{"content-type":"application/json"})},...(body===undefined?{}:{body:JSON.stringify(body)})});return {response,value:await response.json() as any};}

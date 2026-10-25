@@ -503,10 +503,11 @@ test("mixed portrait and landscape photo walls preserve both ends of every image
 test("photo-wall endpoints enforce login and the feature gate before private account settings", async () => {
   const { createHttpServer } = await import("../src/server.js");
   const { readConfig } = await import("../src/config.js");
+  const { listenOnFetchablePort } = await import("./support/fetchable-port.js");
   const dir = mkdtempSync(join(tmpdir(), "lifeos-wall-account-"));
   const config = readConfig({ LIFEOS_ACCOUNT_MODE: "1", LIFEOS_PASSWORD: "wall-owner-password", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_COOKIE_SECURE: "true", LIFEOS_ALLOWED_ORIGINS: "https://lifeos.test", LIFEOS_DATA_DIR: join(dir, "data"), LIFEOS_ASSET_ROOT: join(dir, "assets") });
   const { server, app } = createHttpServer(config);
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
   const request = (path: string, cookie?: string, body?: unknown, method = "POST") => fetch(base + path, { ...(body === undefined ? {} : { method, body: JSON.stringify(body) }), headers: { ...(cookie ? { Cookie: cookie } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) } });
   const login = async (username: string, password: string) => { const response = await request("/api/auth/login", undefined, { username, password }); assert.equal(response.status, 200); return response.headers.get("set-cookie")!.split(";")[0]!; };

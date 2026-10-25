@@ -43,7 +43,9 @@ function deriveConfigSecret(masterSecret: string, tenantId: string, module: stri
  * Integration keys a member space borrows from the server instead of bringing
  * its own. Invites are handed out by the owner to people they trust, and the
  * owner's standing instruction is that an invited person never has to go and
- * register their own weather or AI account — so these are inherited.
+ * register their own service account — AI, weather, maps and movies share
+ * the owner's effective credentials. OCR and embeddings already use the
+ * server configuration retained below.
  *
  * Nothing location-shaped is inherited: a member in another city must not be
  * shown the owner's forecast. They pick their own city, and their device
@@ -52,6 +54,8 @@ function deriveConfigSecret(masterSecret: string, tenantId: string, module: stri
 export interface SharedIntegrations {
   readonly ai?: () => { readonly apiKey: string; readonly baseUrl: string; readonly model: string } | undefined;
   readonly weather?: () => { readonly apiKey: string; readonly host: string } | undefined;
+  readonly amap?: () => { readonly apiKey: string } | undefined;
+  readonly movie?: () => { readonly apiKey: string } | undefined;
 }
 
 /** Build an isolated runtime config. Client input never participates in any path. */
@@ -61,6 +65,7 @@ export function tenantConfigFor(root: ApiConfig, account: AccountIdentity, maste
     password: _rootPassword,
     ownerUsername: _ownerUsername,
     accountMode: _accountMode,
+    localPreviewAdmin: _localPreviewAdmin,
     gatewayAuthenticated: _gatewayAuthenticated,
     sharedIntegrations: _sharedIntegrations,
     deepseekApiKey: _deepseekApiKey,

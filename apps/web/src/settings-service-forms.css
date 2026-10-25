@@ -1,0 +1,225 @@
+/* Service settings migrate by card; unrelated settings keep their own rules. */
+.settings-ai-card :is(.settings-ai-head > button, .settings-config-read-error > button, .settings-ai-actions > button),
+.settings-weather-card :is(.weather-location-manual > button, .settings-config-read-error > button, .settings-weather-actions > button, .settings-weather-advanced-body > button),
+.settings-amap-card .weather-location-actions > button,
+.movie-settings-card :is(.movie-settings-actions > button, .movie-settings-read-error > button),
+.cycle-settings-card .cycle-settings-actions > button,
+.habit-management-card :is(.habit-new-button, .habit-dialog-footer > button),
+.app-lock-settings > div > button,
+:is(.app-lock-settings, .app-lock-dialog) .app-lock-actions > button,
+.app-lock-placeholder > button,
+.weather-location-dialog .weather-location-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 40px;
+  height: auto;
+  width: auto;
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--control-muted);
+  font: inherit;
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+  transform: none;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+.app-lock-dialog .app-lock-actions > button {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+  line-height: 20px;
+}
+.settings-ai-card .settings-ai-actions > .primary-button,
+.settings-weather-card .settings-weather-actions > .primary-button,
+.movie-settings-card .movie-settings-actions > .primary-button,
+.cycle-settings-card .cycle-settings-actions > .primary-button,
+.habit-management-card .habit-dialog-footer > .primary-button,
+:is(.app-lock-settings, .app-lock-dialog) .app-lock-actions > .primary-button,
+.weather-location-dialog .weather-location-actions > .primary-button {
+  border-color: var(--control-ink);
+  background: var(--control-ink);
+  color: #fff;
+}
+.settings-ai-card .settings-ai-actions,
+.app-lock-settings .app-lock-actions,
+.movie-settings-card .movie-settings-actions {
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--control-line);
+}
+.settings-ai-card .settings-ai-fields :is(input:not([type="checkbox"]), select),
+.settings-weather-card .settings-weather-form :is(input:not([type="checkbox"]), select),
+.movie-settings-card .movie-settings-fields input[type="password"],
+.cycle-settings-card .dialog-field input,
+.habit-management-card .habit-field input,
+:is(.app-lock-settings, .app-lock-dialog) .app-lock-password input,
+.settings-amap-card .dialog-field input {
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 9px 10px;
+  border: 1px solid var(--control-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--control-ink);
+  font: inherit;
+  font-size: .875rem;
+  line-height: 20px;
+}
+.settings-ai-card .settings-ai-fields :is(input:not([type="checkbox"]), select):focus,
+.settings-weather-card .settings-weather-form :is(input:not([type="checkbox"]), select):focus,
+.movie-settings-card .movie-settings-fields input[type="password"]:focus,
+.cycle-settings-card .dialog-field input:focus,
+.habit-management-card .habit-field input:focus,
+:is(.app-lock-settings, .app-lock-dialog) .app-lock-password input:focus,
+.settings-amap-card .dialog-field input:focus {
+  border-color: var(--control-muted);
+  box-shadow: 0 0 0 2px rgb(99 107 116 / .12);
+}
+:is(.app-lock-settings, .app-lock-dialog) .app-lock-password input { padding-right: 40px; outline: none; }
+.settings-ai-card .settings-ai-fields label:not(.settings-ai-enabled) {
+  font-weight: 400;
+}
+.settings-ai-card .settings-ai-visibility {
+  align-items: center;
+  border-color: var(--control-line);
+  background: var(--control-tray);
+}
+.settings-ai-card :is(.settings-ai-visibility, .settings-ai-enabled) input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--control-ink);
+}
+.settings-ai-card .settings-ai-visibility strong { font-weight: 400; }
+.settings-ai-card .settings-ai-form-heading strong {
+  color: var(--control-ink);
+  background: var(--control-tray);
+  font-weight: 400;
+}
+.settings-ai-card .settings-ai-preset {
+  border-color: var(--control-line);
+  background: var(--surface);
+  color: var(--control-ink);
+  box-shadow: none;
+  transform: none;
+}
+.settings-ai-card .settings-ai-preset.is-selected {
+  border-color: var(--control-muted);
+  background: var(--control-tray);
+}
+.settings-ai-card .settings-ai-preset strong { font-weight: 500; }
+.settings-ai-card .settings-ai-advanced { border-color: var(--control-line); padding-top: 16px; }
+.settings-ai-card .settings-ai-advanced > summary {
+  min-height: 40px;
+  color: var(--control-ink);
+  font-weight: 400;
+}
+.settings-ai-card .settings-ai-form { border: 0; padding-top: 16px; }
+:is(.settings-ai-card, .settings-weather-card, .settings-amap-card, .movie-settings-card, .cycle-settings-card, .habit-management-card, .weather-location-dialog) :is(button, input[type="checkbox"], summary):focus-visible {
+  outline: 2px solid var(--control-muted);
+  outline-offset: 2px;
+}
+:is(.settings-ai-card, .settings-weather-card, .settings-amap-card, .movie-settings-card, .cycle-settings-card, .habit-management-card, .weather-location-dialog) :is(button, input, select):disabled { opacity: .52; cursor: not-allowed; }
+.movie-settings-card .movie-settings-fields > label:not(.movie-enabled-toggle) { font-weight: 400; }
+.movie-settings-card .movie-enabled-toggle { border-color: var(--control-line); border-radius: 10px; background: var(--surface); color: var(--control-ink); }
+.movie-settings-card .movie-enabled-toggle strong { font-weight: 400; }
+.movie-settings-card .movie-enabled-toggle input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--control-ink);
+}
+.settings-weather-card .settings-weather-form,
+.settings-amap-card { border-color: var(--control-line); padding-top: 16px; }
+.settings-weather-card .settings-weather-actions,
+.settings-amap-card .weather-location-actions,
+.weather-location-dialog .weather-location-actions {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--control-line);
+}
+.settings-weather-card .settings-weather-actions > button { width: auto; }
+.settings-weather-card .settings-weather-advanced-body > button { justify-self: start; }
+.settings-weather-card .settings-weather-advanced { border-color: var(--control-line); padding-top: 16px; }
+.settings-weather-card .settings-weather-advanced > summary { min-height: 40px; color: var(--control-ink); font-weight: 400; }
+.settings-weather-card .settings-weather-form label > span,
+.settings-weather-card .settings-weather-advanced-body > label > span { font-weight: 400; }
+.settings-weather-card .settings-weather-form input[type="checkbox"],
+.settings-amap-card .weather-location-option input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--control-ink);
+}
+.settings-weather-card .weather-location-manual { flex-wrap: wrap; }
+.settings-weather-card .weather-location-manual small { min-width: 0; overflow-wrap: anywhere; }
+.settings-amap-card .weather-location-option { min-height: 40px; }
+.settings-amap-card .dialog-field { min-width: 0; }
+.settings-amap-card .dialog-field input { width: 100%; min-width: 0; outline: none; }
+.weather-location-dialog .weather-location-actions > button { flex: 0 1 auto; }
+@media (hover: hover) and (pointer: fine) {
+  .settings-ai-card :is(.settings-ai-head > button, .settings-config-read-error > button, .settings-ai-actions > button, .settings-ai-preset):hover:not(:disabled) { background: var(--control-tray); }
+  .settings-weather-card :is(.weather-location-manual > button, .settings-config-read-error > button, .settings-weather-advanced-body > button):hover:not(:disabled),
+  .settings-amap-card .weather-location-actions > button:hover:not(:disabled),
+  .movie-settings-card :is(.movie-settings-actions > button, .movie-settings-read-error > button):hover:not(:disabled),
+  .habit-management-card :is(.habit-new-button, .habit-dialog-footer > button):hover:not(:disabled),
+  .app-lock-settings > div > button:hover:not(:disabled),
+  :is(.app-lock-settings, .app-lock-dialog) .app-lock-actions > button:hover:not(:disabled),
+  .app-lock-placeholder > button:hover:not(:disabled),
+  .weather-location-dialog .weather-location-actions > button:hover:not(:disabled) { background: var(--control-tray); }
+  .settings-ai-card .settings-ai-actions > .primary-button:hover:not(:disabled),
+  .settings-weather-card .settings-weather-actions > .primary-button:hover:not(:disabled),
+  .movie-settings-card .movie-settings-actions > .primary-button:hover:not(:disabled),
+  .cycle-settings-card .cycle-settings-actions > .primary-button:hover:not(:disabled),
+  .habit-management-card .habit-dialog-footer > .primary-button:hover:not(:disabled),
+  :is(.app-lock-settings, .app-lock-dialog) .app-lock-actions > .primary-button:hover:not(:disabled),
+  .weather-location-dialog .weather-location-actions > .primary-button:hover:not(:disabled) { background: #343b42; border-color: #343b42; }
+}
+@container settings-page (max-width: 680px) {
+  .settings-ai-card .settings-ai-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; }
+  .settings-ai-card .settings-ai-actions > button { width: 100%; }
+  .movie-settings-card .movie-settings-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; }
+  .movie-settings-card .movie-settings-actions > button { width: 100%; }
+}
+@container settings-page (max-width: 480px) {
+  .settings-ai-card .settings-ai-actions { grid-template-columns: minmax(0, 1fr); }
+  .settings-ai-card .settings-ai-preset-grid { grid-template-columns: minmax(0, 1fr); }
+  .settings-ai-card .settings-ai-fields { grid-template-columns: minmax(0, 1fr); }
+  .movie-settings-card .movie-settings-actions { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.settings-ai-card, .settings-weather-card, .settings-amap-card, .movie-settings-card, .cycle-settings-card, .habit-management-card, .weather-location-dialog, .app-lock-settings, .app-lock-dialog, .app-lock-placeholder) :is(button, summary svg) { transition: none !important; }
+}
+@media (max-width: 480px) {
+  .weather-location-dialog .weather-location-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; }
+  .weather-location-dialog .weather-location-actions > button { width: 100%; }
+}
+@media (max-width: 340px) {
+  .weather-location-dialog .weather-location-actions { grid-template-columns: minmax(0, 1fr); }
+}

@@ -161,8 +161,14 @@ export function SharedNotePage({ space, token }: {
         title: string;
         html: string;
         content: string;
-    }) => { const response = await fetch(endpoint, { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...payload, revision: note!.revision }) }); const value = await response.json(); if (!response.ok)
-        throw new Error(value.message ?? '保存失败'); setNote(value); setEditing(false); };
+    }) => {
+        const response = await fetch(endpoint, { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...payload, revision: note!.revision }) });
+        const value = await response.json();
+        if (!response.ok)
+            throw new Error(value.message ?? '保存失败');
+        setNote(value);
+        setEditing(false);
+    };
     let html = '';
     if (note) {
         const doc = new DOMParser().parseFromString(sanitizeNoteHtml(note.html ?? textToNoteHtml(note.content)), 'text/html');
@@ -200,29 +206,42 @@ function SharedNoteEditor({ note, html, onSave, onCancel }: {
     const ref = useRef<HTMLDivElement>(null), engine = useRef<Editor | null>(null);
     const [title, setTitle] = useState(note.title), [busy, setBusy] = useState(false), [error, setError] = useState(''), [dirty, setDirty] = useState(false);
     useEffect(() => { const editor = new Editor({ editor: ref.current!, onUpdate: () => setDirty(true), onToast: setError }); editor.setHTML(html); engine.current = editor; setDirty(false); return () => { editor.destroy(); engine.current = null; }; }, []);
-    useEffect(() => { if (!dirty)
-        return; const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; }; window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard); }, [dirty]);
-    const save = async () => { if (!engine.current || busy)
-        return; setBusy(true); setError(''); try {
-        const doc = new DOMParser().parseFromString(sanitizeNoteHtml(engine.current.getHTML()), 'text/html');
-        for (const image of Array.from(doc.querySelectorAll('img'))) {
-            const source = image.getAttribute('src') ?? '';
-            const id = Object.entries(note.assets).find(([, url]) => new URL(url, location.origin).href === new URL(source, location.origin).href)?.[0];
-            if (id)
-                image.src = '/api/assets/' + encodeURIComponent(id) + '/content';
+    useEffect(() => {
+        if (!dirty)
+            return;
+        const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+        window.addEventListener('beforeunload', guard);
+        return () => window.removeEventListener('beforeunload', guard);
+    }, [dirty]);
+    const save = async () => {
+        if (!engine.current || busy)
+            return;
+        setBusy(true);
+        setError('');
+        try {
+            const doc = new DOMParser().parseFromString(sanitizeNoteHtml(engine.current.getHTML()), 'text/html');
+            for (const image of Array.from(doc.querySelectorAll('img'))) {
+                const source = image.getAttribute('src') ?? '';
+                const id = Object.entries(note.assets).find(([, url]) => new URL(url, location.origin).href === new URL(source, location.origin).href)?.[0];
+                if (id)
+                    image.src = '/api/assets/' + encodeURIComponent(id) + '/content';
+            }
+            await onSave({ title, html: doc.body.innerHTML, content: noteHtmlText(doc.body.innerHTML) });
         }
-        await onSave({ title, html: doc.body.innerHTML, content: noteHtmlText(doc.body.innerHTML) });
-    }
-    catch (cause) {
-        setError((cause as Error).message);
-    }
-    finally {
-        setBusy(false);
-    } };
-    return <section className="pm-public-edit"><input className="pm-note-title" aria-label="共享笔记标题" value={title} maxLength={300} disabled={busy} onChange={event => { setTitle(event.target.value); setDirty(true); }}/><div className="pm-editor-toolbar" role="toolbar" aria-label="共享笔记文字格式" onMouseDown={event => event.preventDefault()}>{[['加粗', 'bold'], ['斜体', 'italic'], ['列表', 'insertUnorderedList']].map(([label, command]) => <button type="button" className="text-button" disabled={busy} key={command} onClick={() => engine.current?.exec(command)}>{label}</button>)}</div><div className="pm-editor-host"><div ref={ref} className="editor pm-shared-content" aria-label="共享笔记正文" role="textbox" aria-multiline="true" contentEditable={!busy} suppressContentEditableWarning onPasteCapture={event => { const html = event.clipboardData.getData('text/html'); if (html) {
-        event.preventDefault();
-        event.stopPropagation();
-        document.execCommand('insertHTML', false, sanitizeNoteHtml(html));
-        setDirty(true);
-    } }}/></div>{error ? <p className="pm-note-error" role="alert">{error}</p> : null}<div className="pm-public-edit-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onCancel}>取消编辑</button><button className="primary-button" type="button" disabled={busy} onClick={() => void save()}>{busy ? '保存中' : '保存修改'}</button></div></section>;
+        catch (cause) {
+            setError((cause as Error).message);
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    return <section className="pm-public-edit"><input className="pm-note-title" aria-label="共享笔记标题" value={title} maxLength={300} disabled={busy} onChange={event => { setTitle(event.target.value); setDirty(true); }}/><div className="pm-editor-toolbar" role="toolbar" aria-label="共享笔记文字格式" onMouseDown={event => event.preventDefault()}>{[['加粗', 'bold'], ['斜体', 'italic'], ['列表', 'insertUnorderedList']].map(([label, command]) => <button type="button" className="text-button" disabled={busy} key={command} onClick={() => engine.current?.exec(command)}>{label}</button>)}</div><div className="pm-editor-host"><div ref={ref} className="editor pm-shared-content" aria-label="共享笔记正文" role="textbox" aria-multiline="true" contentEditable={!busy} suppressContentEditableWarning onPasteCapture={event => {
+            const html = event.clipboardData.getData('text/html');
+            if (html) {
+                event.preventDefault();
+                event.stopPropagation();
+                document.execCommand('insertHTML', false, sanitizeNoteHtml(html));
+                setDirty(true);
+            }
+        }}/></div>{error ? <p className="pm-note-error" role="alert">{error}</p> : null}<div className="pm-public-edit-actions"><button className="secondary-button" type="button" disabled={busy} onClick={onCancel}>取消编辑</button><button className="primary-button" type="button" disabled={busy} onClick={() => void save()}>{busy ? '保存中' : '保存修改'}</button></div></section>;
 }

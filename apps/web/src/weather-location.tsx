@@ -5,7 +5,7 @@ import type { WeatherConfigStatus } from "./weather";
 import "./weather-location.css";
 
 export interface LocationCandidate { locationId: string; city: string; source: "browser" | "ip" }
-export interface AmapStatus { enabled: boolean; hasKey: boolean; keyUnreadable: boolean; keySource: "file" | "env" | "none" }
+export interface AmapStatus { enabled: boolean; photoAddress: boolean; hasKey: boolean; keyUnreadable: boolean; keySource: "file" | "env" | "shared" | "none" }
 const LocationContext = createContext<{ request: () => void; busy: boolean }>({ request: () => {}, busy: false });
 export const useWeatherLocation = () => useContext(LocationContext);
 
@@ -102,6 +102,7 @@ export function WeatherLocationProvider({ tenantId, status, onChanged, onNotice,
 export function AmapLocationSettings() {
   const [status, setStatus] = useState<AmapStatus | null>(null);
   const [enabled, setEnabled] = useState(false);
+  const [photoAddress, setPhotoAddress] = useState(true);
   const [key, setKey] = useState("");
   const [clear, setClear] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -110,26 +111,29 @@ export function AmapLocationSettings() {
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let active = true; setStatus(null); setError(null);
-    void apiRequest<AmapStatus>("/api/location/config").then(value => { if (active) { setStatus(value); setEnabled(value.enabled); } }, cause => { if (active) setError(cause instanceof Error ? cause.message : "高德配置读取失败"); });
+    void apiRequest<AmapStatus>("/api/location/config").then(value => { if (active) { setStatus(value); setEnabled(value.enabled); setPhotoAddress(value.photoAddress); } }, cause => { if (active) setError(cause instanceof Error ? cause.message : "高德配置读取失败"); });
     return () => { active = false; };
   }, [retry]);
   const save = async () => {
     if (!status || busy) return;
     setBusy(true); setError(null); setMessage(null);
     try {
-      const value = await apiRequest<AmapStatus>("/api/location/config", { method: "POST", body: JSON.stringify({ enabled, ...(key.trim() ? { apiKey: key.trim() } : {}), clearApiKey: clear }) });
+      const value = await apiRequest<AmapStatus>("/api/location/config", { method: "POST", body: JSON.stringify({ enabled, photoAddress, ...(key.trim() ? { apiKey: key.trim() } : {}), clearApiKey: clear }) });
       setStatus(value); setKey(""); setClear(false); setMessage("高德配置已保存");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "高德配置保存失败"); }
     finally { setBusy(false); }
   };
   return <section className="settings-amap-card" aria-labelledby="amap-title">
-    <h3 id="amap-title">高德备用定位</h3>
-    <p className="weather-location-note">优先使用浏览器定位。启用后，手动定位失败时通过高德查询大致城市，仅支持国内 IPv4。Key 与日记和地点管理中的地点搜索共用，关闭备用定位不影响搜索。</p>
+    <h3 id="amap-title">高德地图</h3>
+    <p className="weather-location-note">同一个 Key 供三处共用：天气的备用定位、日记和地点管理中的地点搜索、照片信息里的地点名称。Key 只保存在本机。</p>
     <label className="weather-location-option"><input type="checkbox" checked={enabled} disabled={!status || busy} onChange={event => setEnabled(event.target.checked)} />启用网络备用定位</label>
+    <p className="weather-location-note">优先使用浏览器定位。启用后，手动定位失败时通过高德查询大致城市，仅支持国内 IPv4。关闭备用定位不影响搜索和照片地点。</p>
     <label className="dialog-field"><span>高德 Web 服务 API Key{status?.hasKey ? "（已配置，留空保留）" : ""}</span><input type="password" autoComplete="new-password" value={key} disabled={!status || busy || clear} onChange={event => setKey(event.target.value)} /></label>
     {status?.keySource === "env" ? <p className="weather-location-note">当前使用服务器 .env 中的 LIFEOS_AMAP_API_KEY。修改后需重启 API 服务；此处填写新 Key 会优先使用新值。</p> : null}
     {status?.keyUnreadable ? <p role="alert" className="settings-inline-error">已保存的 Key 暂时无法解密，请检查服务端配置；留空保存会保留原密文。</p> : null}
     {status?.keySource === "file" || status?.keyUnreadable ? <label className="weather-location-option"><input type="checkbox" checked={clear} disabled={busy} onChange={event => setClear(event.target.checked)} />清除界面保存的高德 Key（如有环境变量配置，将恢复使用）</label> : null}
+    <label className="weather-location-option"><input type="checkbox" checked={photoAddress} disabled={!status || busy} onChange={event => setPhotoAddress(event.target.checked)} />照片信息里显示地点名称</label>
+    <p className="weather-location-note">打开后，照片的拍摄坐标会发给高德换取地点名，同一坐标只查一次。关闭后照片信息只显示坐标，不再发出任何请求；已经查到的结果留在本机，重新打开即可恢复。</p>
     <div className="weather-location-actions"><button type="button" className="secondary-button" disabled={!status || busy} onClick={() => void save()}>{busy ? "保存中…" : "保存高德配置"}</button>{!status && error ? <button type="button" className="secondary-button" onClick={() => setRetry(value => value + 1)}>重试读取</button> : null}</div>
     {message ? <p role="status">{message}</p> : null}{error ? <p role="alert" className="settings-inline-error">{error}</p> : null}
   </section>;

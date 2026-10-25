@@ -123,12 +123,16 @@ body {
 .calendar-day-dialog,
 .calendar-settings-dialog,
 .record-delete-dialog,
+.entity-edit-dialog,
+.contact-avatar-dialog,
+.movie-card-dialog,
 .asset-preview,
 .assistant-history-dialog,
 .assistant-share-dialog,
 .place-card-dialog,
 .place-map-dialog,
-.place-map-view-dialog {
+.place-map-view-dialog,
+.archive-dialog {
   -webkit-user-select: none;
   user-select: none;
 }
@@ -158,9 +162,15 @@ select,
    标签（`<span>当前模型</span>`）与其它节点，放容器等于把界面文字也一起放回来。 */
 .timeline-text,
 .assistant-share-choice-copy,
+.assistant-share-text-leaf,
 .record-delete-dialog .confirm-preview,
 .original-block,
 .note-card-excerpt,
+.contact-dossier-description,
+.person-contact-value,
+.movie-card-field p,
+.movie-card-external > span,
+.contact-dossier-excerpt,
 .week-card-text,
 .summary-message,
 .task-summary-copy,
@@ -1633,6 +1643,7 @@ h2 {
 }
 
 .timeline-item {
+  --timeline-card-width: calc(3 * 5 * 1.617rem + 2 * 6px + 42px);
   position: relative;
   display: grid;
   grid-template-columns: 65px 46px minmax(0, 1fr);
@@ -1702,17 +1713,13 @@ h2 {
   grid-row: 2;
   min-width: 0;
   /*
-   * 30px, not 28px: `box-sizing: border-box` is global, so this width has to carry the
-   * two 14px paddings AND the 1px border above and below it. The old 28px budgeted for
-   * the padding alone, which left the content box at 398.08px against a grid that needs
-   * 3 × 5 lines + 2 × 6px gaps = 400.08px — exactly 2px short, so the browser clamped
-   * every track to 128.69px and a "five line" square came out 0.66px short, at every
-   * viewport width. `verify-photo-grid.mjs` caught it as five red assertions.
+   * Keep the existing three-photo grid width while allowing the agreed 20px
+   * side padding plus the two border pixels.
    */
-  width: calc(3 * 5 * 1.617rem + 2 * 6px + 30px);
+  width: var(--timeline-card-width);
   max-width: 100%;
   justify-self: start;
-  padding: 13px 14px 12px;
+  padding: 18px 20px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: rgb(255 255 255 / 0.82);
@@ -2137,6 +2144,10 @@ h2 {
 
 .task-summary {
   --task-content-right-inset: 24px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100dvh - 68px);
   position: sticky;
   top: 34px;
   overflow: hidden;
@@ -2148,6 +2159,9 @@ h2 {
 }
 
 .task-summary .summary-heading {
+  flex: none;
+  overflow: hidden;
+  scrollbar-gutter: stable;
   align-items: center;
   padding: 12px var(--task-content-right-inset) 12px 14px;
   border-bottom: 1px solid #e4e9f0;
@@ -2234,6 +2248,11 @@ h2 {
 
 .task-list {
   display: grid;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
   gap: 0;
   margin: 0;
   padding: 0;
@@ -2254,6 +2273,38 @@ h2 {
 }
 
 .task-summary-item:last-child { border-bottom: 0; }
+
+/* The photos are part of the last text line, at the same scale as mention avatars. */
+.task-summary-photos {
+  white-space: nowrap;
+}
+
+.task-summary-photo {
+  display: inline-block;
+  width: var(--record-inline-image-size);
+  height: var(--record-inline-image-size);
+  vertical-align: var(--record-inline-image-align);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: var(--record-inline-image-radius);
+  background: transparent;
+  cursor: pointer;
+}
+
+.task-summary-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.task-summary-photo + .task-summary-photo { margin-left: 3px; }
+
+.task-summary-photo:hover { background: #e8eef7; }
+.task-summary-photo:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.task-summary-photo:disabled { cursor: default; opacity: 0.58; }
 
 .task-summary-item.is-completing {
   background: #eef5f0;
@@ -2340,11 +2391,6 @@ h2 {
   stroke-dashoffset: 1;
 }
 
-.task-dot-button.is-progress .task-dot-indicator {
-  border-color: #7994ca;
-  background: #e9eff9;
-}
-
 .task-summary-item.is-saving .task-dot-indicator {
   border-style: dashed;
   animation: task-saving-turn 900ms linear infinite;
@@ -2384,19 +2430,20 @@ h2 {
   100% { transform: scale(1); }
 }
 
-.task-summary-copy {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
+.task-summary-content {
+  min-width: 0;
+  margin-top: calc((32px - 1.5em) / 2);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
+.task-summary-copy { display: inline; }
+
 .task-summary-open {
+  display: inline;
   min-width: 0;
   padding: 0;
-  margin: calc((32px - 1.5em) / 2) 0 0;
+  margin: 0;
   border: 0;
   border-radius: 4px;
   color: inherit;
@@ -2406,13 +2453,7 @@ h2 {
   cursor: pointer;
 }
 
-.task-summary-open[aria-expanded="true"] .task-summary-copy {
-  display: block;
-  overflow: visible;
-  -webkit-line-clamp: unset;
-}
-
-.task-summary-open:disabled {
+.task-summary-open[aria-disabled="true"] {
   cursor: default;
 }
 
@@ -2427,6 +2468,7 @@ h2 {
 }
 
 .task-undo {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2483,16 +2525,19 @@ h2 {
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  padding: 0 14px;
+  gap: 6px;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 32px));
+  min-height: 34px;
+  padding: 4px 10px;
   border: 1px solid #cbe5dc;
-  border-radius: 12px;
+  border-radius: 9px;
   color: #28735f;
   background: #f1fbf7;
   box-shadow: var(--shadow-soft);
-  font-size: 0.82rem;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
   animation: toast-in 180ms ease both;
 }
 
@@ -2507,7 +2552,11 @@ h2 {
 
 .action-toast-text {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
+
+.action-toast > svg { flex: none; }
 
 /* The way back. Outlined rather than filled: an undo is an offer, not the
    action the toast is asking for, and a solid button here would compete with
@@ -2515,15 +2564,16 @@ h2 {
 .action-toast-undo {
   flex: 0 0 auto;
   min-height: 26px;
-  margin-left: 4px;
-  padding: 0 10px;
+  margin: 0;
+  padding: 0 8px;
   border: 1px solid currentColor;
-  border-radius: 8px;
+  border-radius: 6px;
   color: inherit;
   background: transparent;
   cursor: pointer;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
   opacity: 0.85;
   transition: opacity 160ms ease, background-color 160ms ease;
 }
@@ -3087,10 +3137,10 @@ h2 {
   gap: 7px;
   min-height: 42px;
   padding: 0 14px;
-  border: 1px solid #cbd6ff;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  color: var(--primary-strong);
-  background: var(--primary-soft);
+  color: var(--ink-soft);
+  background: var(--surface);
   box-shadow: var(--shadow-soft);
   cursor: pointer;
   font-size: 0.78rem;
@@ -3098,7 +3148,7 @@ h2 {
 }
 
 .ai-assistant-launcher:hover {
-  background: #e2e8ff;
+  background: var(--surface-soft);
   transform: translateY(-1px);
 }
 
@@ -3122,7 +3172,12 @@ h2 {
   justify-content: space-between;
   gap: 10px;
   padding: 13px 14px;
-  border-bottom: 1px solid var(--line);
+  /* 顶栏是「一张纸」：不再画一条硬线，改用两层阴影表达纸的边缘——第一层是紧贴
+     边缘的接触暗边（给边缘厚度），第二层朝下淡出（纸投在内容上的光）。必须抬到
+     滚动区之上，否则阴影会被滚上来的内容盖掉（2026-10-17 主人确认）。 */
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 1px 0 rgb(15 23 42 / 0.07), 0 6px 14px -8px rgb(15 23 42 / 0.18);
 }
 
 .ai-assistant-title,
@@ -3667,6 +3722,23 @@ h2 {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   line-height: 1;
+}
+
+.shot-progress-summary {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.shot-progress-summary-slot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: max-content;
+  padding-left: 8px;
 }
 
 /* Always there. This one does not hide: emptying the whole set is a thing
@@ -6602,10 +6674,13 @@ button.relation-chip {
   width: min(390px, calc(100vw - 24px));
   max-height: 72vh;
   overflow: hidden;
-  border: 1px solid #d8e2f3;
+  /* 2026-10-19：面板回到产品的「柔白底、细灰边、淡阴影」。原来的 #d8e2f3 边和
+     rgb(26 58 143/.24) 蓝投影是参考 App 的蓝白视觉，和 DESIGN.md 第 4 节的
+     浮层规范（细灰边 + 中性阴影）不是一套。 */
+  border: 1px solid var(--line);
   border-radius: 16px;
   background: white;
-  box-shadow: 0 18px 44px rgb(26 58 143 / 0.24), 0 2px 10px rgb(15 23 42 / 0.08);
+  box-shadow: var(--shadow-soft);
   opacity: 0;
   pointer-events: none;
   transform: translateY(20px) scale(0.86);
@@ -6622,7 +6697,6 @@ button.relation-chip {
 .ai-assistant-header {
   min-height: 58px;
   padding: 11px 14px;
-  border-bottom-color: #e8eef8;
 }
 
 .ai-assistant-title {
@@ -6635,7 +6709,7 @@ button.relation-chip {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  box-shadow: 0 3px 8px rgb(51 112 255 / 0.16);
+  box-shadow: 0 2px 6px rgb(24 36 61 / 0.10);
 }
 
 .ai-logo-svg {
@@ -6645,14 +6719,14 @@ button.relation-chip {
 }
 
 .ai-assistant-title strong {
-  color: #1a3a8f;
-  font-size: 0.94rem;
+  color: var(--ink);
+  font-size: 15px;
   font-weight: 650;
 }
 
 .ai-assistant-title small {
-  color: #9aa6b8;
-  font-size: 0.68rem;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .ai-header-pill,
@@ -6663,11 +6737,18 @@ button.relation-chip {
   gap: 4px;
   min-height: 29px;
   border-radius: 999px;
-  color: #8b96a8;
-  background: #f7f9fd;
-  box-shadow: 0 0 0 1px #eef2fa inset;
+  /* 顶栏图标是工具，不是徽标：不加浅蓝底和蓝内描边，悬停才浮出浅灰。 */
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
   cursor: pointer;
   font-size: 0.72rem;
+}
+
+.ai-header-pill:hover,
+.ai-header-icon:hover {
+  color: var(--ink);
+  background: var(--surface-soft);
 }
 
 .ai-header-pill {
@@ -6676,7 +6757,6 @@ button.relation-chip {
 
 .ai-header-icon {
   width: 31px;
-  background: #f0f4fa;
 }
 
 .ai-assistant-messages,
@@ -6705,19 +6785,19 @@ button.relation-chip {
   gap: 4px;
   max-width: 86%;
   padding: 8px 10px;
-  border-radius: 15px 15px 4px 15px;
-  color: #4b5563;
+  border-radius: 14px 14px 4px 14px;
+  color: var(--ink-soft);
   background: #f1f3f5;
   box-shadow: 0 0 0 1px rgb(229 231 235 / 0.7) inset;
-  font-size: 0.82rem;
+  font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
 }
 
 .ai-assistant-message {
   width: 100%;
-  color: #4b5563;
-  font-size: 0.82rem;
+  color: var(--ink-soft);
+  font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
 }
@@ -6810,16 +6890,16 @@ button.relation-chip {
   padding: 10px 12px;
   border: 0;
   border-radius: 12px;
-  color: #374151;
+  color: var(--ink);
   background: #f0f4fa;
-  font-size: 0.82rem;
+  font-size: 13px;
   line-height: 1.4;
   resize: none;
 }
 
 .ai-assistant-composer textarea:focus {
   border: 0;
-  box-shadow: 0 0 0 3px rgb(51 112 255 / 0.12);
+  box-shadow: none;
 }
 
 .ai-send-button,
@@ -6831,21 +6911,24 @@ button.relation-chip {
   cursor: pointer;
 }
 
+/* 发送是管家唯一的主操作，沿用产品墨色主按钮（与日记保存、分享弹窗一致）；
+   原来的微信绿 + 绿投影是参考 App 的遗留。 */
 .ai-send-button {
   width: 64px;
   border-radius: 12px;
   color: white;
-  background: #07c160;
-  box-shadow: 0 6px 14px rgb(7 193 96 / 0.22);
-  font-size: 0.8rem;
+  background: var(--control-ink);
+  box-shadow: none;
+  font-size: 13px;
   font-weight: 650;
 }
 
 .ai-send-button:disabled {
   cursor: not-allowed;
-  background: #bfebd1;
+  background: #e6e8ea;
+  color: #7c858e;
   box-shadow: none;
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .ai-send-button.is-stop {
@@ -6857,8 +6940,7 @@ button.relation-chip {
   padding: 3px;
   border-radius: 50%;
   background: white;
-  box-shadow: 0 4px 12px rgb(51 112 255 / 0.16);
-  box-shadow: 0 0 0 1px #d8e2ff inset, 0 4px 12px rgb(51 112 255 / 0.16);
+  box-shadow: 0 0 0 1px var(--line) inset, 0 4px 12px rgb(24 36 61 / 0.08);
 }
 
 .ai-setup-guide {
@@ -6961,7 +7043,7 @@ button.relation-chip {
   border: 0;
   border-radius: 50%;
   background: white;
-  box-shadow: 0 4px 16px rgb(51 112 255 / 0.25), 0 1px 4px rgb(15 23 42 / 0.06);
+  box-shadow: 0 4px 14px rgb(24 36 61 / 0.10), 0 1px 4px rgb(24 36 61 / 0.06);
   cursor: pointer;
   transition: opacity 200ms ease, transform 200ms ease;
 }
@@ -7677,6 +7759,7 @@ button.relation-chip {
      quietly becomes five and a half on a phone. */
   .timeline-content {
     --record-line: 1.5345rem;
+    padding: 16px;
   }
 
   .timeline-state {
@@ -7690,9 +7773,10 @@ button.relation-chip {
   }
 
   .action-toast {
-    right: 16px;
+    right: auto;
     bottom: calc(86px + env(safe-area-inset-bottom));
-    left: 16px;
+    left: 50%;
+    translate: -50% 0;
     justify-content: center;
   }
 }
@@ -9689,13 +9773,14 @@ button.mention-review-context { cursor: pointer; }
 .calendar-section[data-date-art-desktop-layout="big"] .calendar-date-art { flex-direction: row; gap: 0; font-size: min(clamp(14px, 2.1vw, 30px), 100cqh, 100cqw); }
 .calendar-section[data-date-art-desktop-layout="big"] .month-cell.has-date-art[data-date-art-glyph-count="2"] .calendar-date-art { font-size: min(clamp(14px, 2.1vw, 30px), 100cqh, 50cqw); }
 
-/* Week cards keep their paper dates vertical, independently of month layouts. */
+/* Paper dates follow the week card orientation, independently of month layouts. */
 .week-card-date-art .calendar-date-art-safe-area { inset: 52px 12px 38px; }
 .week-card.is-prev .calendar-date-art-safe-area { inset: 40px 10px 28px; }
 .calendar-section .week-card.has-date-art .calendar-date-art { display: inline-flex; flex-direction: column; flex: 0 0 auto; align-items: center; justify-content: center; gap: 0; max-width: 100%; max-height: 100%; color: var(--calendar-date-art-foreground); font-size: min(clamp(16px, 2.1vw, 30px), 50cqh, 100cqw); line-height: 1; }
 .week-card-date-art .calendar-date-glyph { display: block; flex: 0 0 1em; width: 1em; height: 1em; overflow: visible; }
-@media (max-width: 560px) {
+@media (max-width: 720px) {
   .week-card-date-art .calendar-date-art-safe-area { inset: 12px 12px 32px 64px; }
+  .calendar-section .week-card.has-date-art .calendar-date-art { flex-direction: row; font-size: min(clamp(16px, 2.1vw, 30px), 100cqh, 50cqw); }
 }
 
 @media (min-width: 1101px) {
@@ -9810,44 +9895,6 @@ button.mention-review-context { cursor: pointer; }
 .weather-pin-toggle:disabled {
   cursor: wait;
   opacity: 0.62;
-}
-
-.record-weather-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.weather-record-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid #d9e2f6;
-  border-radius: 999px;
-  color: #526789;
-  background: #f3f7ff;
-  font-size: 0.72rem;
-  line-height: 1.5;
-}
-
-.weather-record-chip--realtime {
-  border-color: #f0d8bd;
-  color: #94602e;
-  background: #fff7ed;
-}
-
-.weather-record-chip strong {
-  font-size: 0.7rem;
-  font-weight: 760;
-}
-
-.weather-record-chip small {
-  color: currentColor;
-  opacity: 0.72;
-  font-size: 0.68rem;
 }
 
 .settings-weather-scope {
@@ -11742,6 +11789,8 @@ button.mention-review-context { cursor: pointer; }
   }
 
   .composer-mobile-action-row .shot-strip-tally { margin: 0; font-size: 0.76rem; }
+  .composer-mobile-action-row .shot-progress-summary { font-size: 0.68rem; }
+  .composer-mobile-action-row .shot-progress-summary-slot { padding-left: 6px; }
   .composer-mobile-action-row .shot-clear { min-height: 32px; padding: 4px 7px; font-size: 0.72rem; }
   .composer-inline-save {
     display: inline-flex;
@@ -11856,7 +11905,7 @@ button.mention-review-context { cursor: pointer; }
 @media (max-width: 700px) {
   .timeline-list::before { left: 15px; }
   .timeline-group-title { margin-left: 30px; }
-  .timeline-item { grid-template-columns: 30px minmax(0, 1fr); }
+  .timeline-item { --timeline-card-width: 100%; grid-template-columns: 30px minmax(0, 1fr); }
   .timeline-time { grid-column: 2; grid-row: 1; justify-self: start; text-align: left; }
   .timeline-marker { grid-column: 1; }
   .timeline-content { grid-column: 2; grid-row: 2; width: 100%; }
@@ -11867,9 +11916,10 @@ button.mention-review-context { cursor: pointer; }
    `touch-action: none` makes the same direct-manipulation gesture work on a
    phone without the page interpreting it as a scroll. */
 .ai-assistant-launcher {
-  border: 1px solid rgb(152 177 245 / 0.56);
-  background: rgb(255 255 255 / 0.68);
-  box-shadow: 0 5px 16px rgb(51 112 255 / 0.16), 0 1px 3px rgb(15 23 42 / 0.07);
+  /* 入口只有图标：白底 + 细灰边 + 中性阴影，不再用蓝色药丸的描边和光晕。 */
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.86);
+  box-shadow: 0 4px 14px rgb(24 36 61 / 0.10), 0 1px 3px rgb(24 36 61 / 0.06);
   backdrop-filter: blur(9px);
   cursor: grab;
   touch-action: none;
@@ -11878,8 +11928,8 @@ button.mention-review-context { cursor: pointer; }
 
 .ai-assistant-launcher:hover:not(.is-dragging),
 .ai-assistant-launcher:focus-visible {
-  background: rgb(255 255 255 / 0.9);
-  box-shadow: 0 7px 18px rgb(51 112 255 / 0.21), 0 0 0 3px rgb(51 112 255 / 0.1);
+  background: rgb(255 255 255 / 0.96);
+  box-shadow: 0 6px 16px rgb(24 36 61 / 0.12), 0 0 0 3px rgb(24 36 61 / 0.05);
   transform: translateY(-1px);
 }
 
@@ -12391,7 +12441,6 @@ button.mention-review-context { cursor: pointer; }
 .month-cell-copy { position: relative; z-index: 2; display: grid; gap: 2px; min-width: 0; }
 .month-task-line { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink-soft); font-size: .75rem; line-height: 1.35; }
 .calendar-task-circle { display: inline-block; flex: 0 0 7px; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
-.calendar-task-circle.is-progress { background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
 .calendar-task-circle.is-done { background: currentColor; opacity: .55; }
 .month-task-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .month-day-summary.has-task-sibling { display: block; max-height: 1.35em; white-space: nowrap; text-overflow: ellipsis; }
@@ -12465,6 +12514,15 @@ dialog.asset-preview::after { content: ""; position: absolute; inset: 0; z-index
 .photo-information .photo-information-camera { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 18px; }
 .photo-information .photo-information-camera > div { display: flex; flex-direction: column; gap: 3px; }
 .photo-information .photo-information-location { margin-top: 18px; }
+/* 位置在前、坐标在后：地址是人读的，数字是给机器与核验留的。 */
+.photo-information .photo-information-place { display: block; color: #f1f3f6; font-size: .84rem; line-height: 1.45; }
+.photo-information a.photo-information-place { text-decoration: underline; text-decoration-color: rgb(212 183 128 / .45); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.photo-information a.photo-information-place:hover { text-decoration-color: #d4b780; }
+.photo-information .photo-information-area { display: block; margin-top: 2px; color: #aeb6c5; font-size: .72rem; line-height: 1.45; }
+.photo-information .photo-information-coordinate { position: relative; padding: 0; border: 0; background: none; color: inherit; font: inherit; line-height: inherit; text-align: left; cursor: pointer; }
+.photo-information .photo-information-coordinate:hover { color: #d4b780; }
+.photo-information .photo-information-coordinate:focus-visible { outline: 1px solid #d4b780; outline-offset: 2px; border-radius: 3px; }
+.photo-information .photo-information-coordinate[data-copied="true"]::after { content: "已复制"; position: absolute; left: 0; bottom: calc(100% + 5px); padding: 2px 6px; border-radius: 6px; background: rgb(20 26 38 / .94); color: #f1f3f6; font-size: .66rem; line-height: 1.4; white-space: nowrap; }
 .photo-information-note { margin: 14px 0 0; color: #aeb6c5; font-size: .75rem; line-height: 1.5; }
 .photo-information-more { margin-top: 20px; padding-top: 14px; border-top: 1px solid rgb(255 255 255 / .16); }
 .photo-information-more summary { color: #d4dae4; font-size: .8rem; cursor: pointer; }
@@ -12489,7 +12547,7 @@ dialog.asset-preview.has-photo-information { grid-template-columns: minmax(0, 1f
   .asset-preview .photo-information-host { position: absolute; z-index: 3; left: 12px; right: 12px; bottom: calc(68px + env(safe-area-inset-bottom, 0px)); width: auto; max-height: min(58dvh, calc(100dvh - 140px)); padding: 18px 18px 4px; border: 0; border-radius: 18px; background: rgb(14 19 30 / .72); backdrop-filter: blur(20px) saturate(.9); -webkit-backdrop-filter: blur(20px) saturate(.9); box-shadow: 0 -8px 32px rgb(0 0 0 / .16); cursor: default; scrollbar-width: none; }
   .asset-preview .photo-information-host::-webkit-scrollbar { display: none; }
   .asset-preview .photo-information { padding-top: 0; }
-  .asset-preview .photo-information dt, .asset-preview .photo-information-note, .asset-preview .photo-information-capture small { color: #c9cfda; }
+  .asset-preview .photo-information dt, .asset-preview .photo-information-note, .asset-preview .photo-information-capture small, .asset-preview .photo-information-area { color: #c9cfda; }
   .asset-preview .photo-information h2 { margin-bottom: 18px; color: #e0e5ed; font-size: .8rem; letter-spacing: 0; }
   .asset-preview .photo-information-additional { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgb(255 255 255 / .12); }
   .asset-preview .photo-information-identity { gap: 12px; margin-bottom: 16px; }

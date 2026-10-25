@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 管家私密状态尺寸 Demo</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #202425; background: #f4f5f7; --lock-size: 12px; --text-size: 9px; --frame-padding: 1px; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px 16px 48px; }
+    main { max-width: 820px; margin: auto; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p { margin: 0; color: #5c626b; font-size: 13px; line-height: 1.55; }
+    .intro { margin-bottom: 22px; }
+    .previews { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card, .controls { background: white; border: 1px solid #d7dde4; border-radius: 14px; box-shadow: 0 5px 20px rgb(24 36 61 / .05); }
+    .card { padding: 14px; }
+    .card h2 { margin: 0 0 12px; color: #525a64; font-size: 12px; font-weight: 650; }
+    .header { min-height: 58px; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #e3e7eb; border-radius: 10px; box-shadow: 0 2px 5px rgb(20 24 30 / .05); }
+    .brand { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%; background: #39434e; color: white; font-size: 14px; font-weight: 700; }
+    .name { flex: none; font-size: 15px; font-weight: 650; white-space: nowrap; }
+    .status-slot { position: relative; flex: none; display: inline-block; min-width: 0; }
+    .status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; align-items: center; justify-content: center; gap: 3px; width: max-content; padding: var(--frame-padding) calc(4px + var(--frame-padding)); border: 1px solid #bdcadb; border-radius: 7px; background: #f2f4f7; box-shadow: inset 0 1px 2px rgb(32 36 37 / .16), inset 0 -1px 0 rgb(255 255 255 / .8); color: #202425; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .status-lock { display: block; flex: none; width: var(--lock-size); height: var(--lock-size); }
+    .status-text { font-size: var(--text-size); font-weight: 850; line-height: 1; }
+    .actions { margin-left: auto; display: flex; align-items: center; gap: 10px; color: #626a72; font-size: 20px; line-height: 1; }
+    .controls { margin-top: 16px; padding: 18px; }
+    .controls h2 { margin: 0 0 14px; font-size: 16px; }
+    .control { display: grid; grid-template-columns: 160px minmax(120px, 1fr) 54px; align-items: center; gap: 12px; min-height: 44px; }
+    .control label { font-size: 13px; font-weight: 600; }
+    .control output { text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+    input[type="range"] { width: 100%; accent-color: #39434e; }
+    .note { margin-top: 10px; }
+    .copy-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+    button { min-height: 38px; padding: 7px 13px; border: 1px solid #343b43; border-radius: 8px; color: white; background: #343b43; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #252b32; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #424a54; outline-offset: 2px; }
+    #copy-feedback { color: #39434e; font-size: 13px; }
+    pre { margin: 14px 0 0; padding: 12px; overflow: auto; border: 1px solid #e1e5e9; border-radius: 8px; background: #f8f9fa; font: 12px/1.5 ui-monospace, Consolas, monospace; user-select: text; }
+    @media (max-width: 620px) { .previews { grid-template-columns: 1fr; } .control { grid-template-columns: 105px minmax(80px, 1fr) 52px; gap: 8px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="intro">
+      <h1>AI 管家私密状态尺寸</h1>
+      <p>两种状态都保留左侧开锁图形，只切换右侧「24H」和「长期」。两种文字共用字号，外框尺寸与位置始终一致。此页不会修改产品设置。</p>
+    </div>
+    <section class="previews" aria-label="状态预览">
+      <div class="card"><h2>限时开启</h2><div class="header"><span class="brand" aria-hidden="true">AI</span><span class="name">AI管家</span><span class="status-slot"><span class="status" aria-label="检索私密剩余 24 小时"><svg class="status-lock" viewBox="265 200 495 625" aria-hidden="true"><path d="M352 448v-99.2C352 278.4 409.6 224 480 224s128 54.4 128 124.8c0 19.2-12.8 32-32 32s-32-12.8-32-32c0-35.2-28.8-60.8-64-60.8s-64 25.6-64 60.8V448h288c19.2 0 32 12.8 32 32v224c0 54.4-41.6 96-96 96h-256c-54.4 0-96-41.6-96-96v-224c0-19.2 12.8-32 32-32h32z m0 64v192c0 19.2 12.8 32 32 32h256c19.2 0 32-12.8 32-32v-192H352z m160 64c19.2 0 32 12.8 32 32v32c0 19.2-12.8 32-32 32s-32-12.8-32-32v-32c0-19.2 12.8-32 32-32z" fill="currentColor" /></svg><span class="status-text">24H</span></span></span><span class="actions" aria-hidden="true">◴ ⋯</span></div></div>
+      <div class="card"><h2>长期开启</h2><div class="header"><span class="brand" aria-hidden="true">AI</span><span class="name">AI管家</span><span class="status-slot"><span class="status is-always" aria-label="检索私密长期开启"><svg class="status-lock" viewBox="265 200 495 625" aria-hidden="true"><path d="M352 448v-99.2C352 278.4 409.6 224 480 224s128 54.4 128 124.8c0 19.2-12.8 32-32 32s-32-12.8-32-32c0-35.2-28.8-60.8-64-60.8s-64 25.6-64 60.8V448h288c19.2 0 32 12.8 32 32v224c0 54.4-41.6 96-96 96h-256c-54.4 0-96-41.6-96-96v-224c0-19.2 12.8-32 32-32h32z m0 64v192c0 19.2 12.8 32 32 32h256c19.2 0 32-12.8 32-32v-192H352z m160 64c19.2 0 32 12.8 32 32v32c0 19.2-12.8 32-32 32s-32-12.8-32-32v-32c0-19.2 12.8-32 32-32z" fill="currentColor" /></svg><span class="status-text">长期</span></span></span><span class="actions" aria-hidden="true">◴ ⋯</span></div></div>
+    </section>
+    <section class="controls" aria-label="尺寸调节">
+      <h2>调节尺寸</h2>
+      <div class="control"><label for="lock-size">锁头大小</label><input id="lock-size" type="range" min="12" max="20" step="1" value="12"><output id="lock-value" for="lock-size">12px</output></div>
+      <div class="control"><label for="text-size">24H／长期字号</label><input id="text-size" type="range" min="9" max="17" step="1" value="9"><output id="text-value" for="text-size">9px</output></div>
+      <div class="control"><label for="frame-padding">外框大小</label><input id="frame-padding" type="range" min="0" max="6" step="1" value="1"><output id="frame-value" for="frame-padding">1px</output></div>
+      <p class="note">外框以当前图文中心对称收放；图形和文字不会跟着缩放。两种状态共用同一外框宽高，下方列出实测值。</p>
+      <div class="copy-row"><button id="copy" type="button">复制参数</button><span id="copy-feedback" role="status" aria-live="polite"></span></div>
+      <pre id="params" aria-label="当前参数"></pre>
+    </section>
+  </main>
+  <script>
+    const lock = document.querySelector('#lock-size');
+    const text = document.querySelector('#text-size');
+    const frame = document.querySelector('#frame-padding');
+    const output = document.querySelector('#params');
+    const feedback = document.querySelector('#copy-feedback');
+    function params() {
+      return { lockSizePx: Number(lock.value), textSizePx: Number(text.value), framePaddingPx: Number(frame.value) };
+    }
+    function update() {
+      const p = params();
+      const statuses = [...document.querySelectorAll('.status')];
+      statuses.forEach(status => { status.style.width = 'max-content'; status.style.height = 'auto'; });
+      document.documentElement.style.setProperty('--lock-size', `${p.lockSizePx}px`);
+      document.documentElement.style.setProperty('--text-size', `${p.textSizePx}px`);
+      document.documentElement.style.setProperty('--frame-padding', '1px');
+      const limited = document.querySelector('.status:not(.is-always)');
+      const baseline = limited.getBoundingClientRect();
+      document.querySelectorAll('.status-slot').forEach(slot => {
+        slot.style.width = `${baseline.width}px`;
+        slot.style.height = `${baseline.height}px`;
+      });
+      document.documentElement.style.setProperty('--frame-padding', `${p.framePaddingPx}px`);
+      const frame = limited.getBoundingClientRect();
+      statuses.forEach(status => { status.style.width = `${frame.width}px`; status.style.height = `${frame.height}px`; });
+      document.querySelector('#lock-value').value = `${p.lockSizePx}px`;
+      document.querySelector('#text-value').value = `${p.textSizePx}px`;
+      document.querySelector('#frame-value').value = `${p.framePaddingPx}px`;
+      const size = element => { const r = element.getBoundingClientRect(); return { widthPx: Math.round(r.width * 100) / 100, heightPx: Math.round(r.height * 100) / 100 }; };
+      output.textContent = JSON.stringify({ ...p, limitedFramePx: size(document.querySelector('.status:not(.is-always)')), permanentFramePx: size(document.querySelector('.status.is-always')) }, null, 2);
+      feedback.textContent = '';
+    }
+    [lock, text, frame].forEach(slider => slider.addEventListener('input', update));
+    document.querySelector('#copy').addEventListener('click', async () => {
+      const value = output.textContent;
+      try { await navigator.clipboard.writeText(value); feedback.textContent = '已复制，直接粘贴给我'; }
+      catch {
+        const selection = window.getSelection();
+        const range = document.createRange(); range.selectNodeContents(output);
+        selection.removeAllRanges(); selection.addRange(range);
+        feedback.textContent = '浏览器未允许自动复制，参数已选中；按 Ctrl+C 复制';
+      }
+    });
+    update();
+  </script>
+</body>
+</html>

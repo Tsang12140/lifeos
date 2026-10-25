@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { ArchiveService, cleanupStaleArchives } from "./archive-service.js";
+import { parseSelection, parseSelectionQuery } from "./archive-merge.js";
 import { HttpError, setJson, setEmpty } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
 import type { RouteContext, RouteHandler } from "./route-context.js";
@@ -15,7 +16,15 @@ function idField(value: unknown): string { if (typeof value !== "string" || !/^[
 export const handleArchiveRoutes: RouteHandler = async (ctx, req, res, path, url) => {
   if (!path.startsWith("/api/archive/")) return false;
   const service = serviceFor(ctx);
-  if (path === "/api/archive/estimate" && req.method === "GET") { setJson(res, 200, await service.estimate(ctx)); return true; }
+  if (path === "/api/archive/estimate" && req.method === "GET") {
+    let selection;
+    try { selection = parseSelectionQuery(url.searchParams); }
+    catch (error) { throw new HttpError(400, "archive_selection_invalid", error instanceof Error ? error.message : "导出范围无效"); }
+    setJson(res, 200, await service.estimate(ctx, selection)); return true;
+  }
+  if (path === "/api/archive/batches" && req.method === "GET") { setJson(res, 200, await service.listBatches(ctx)); return true; }
+  const undo = /^\/api\/archive\/batches\/([0-9a-f-]{36})$/.exec(path);
+  if (undo && req.method === "DELETE") { setJson(res, 200, await service.undoBatch(ctx, undo[1]!)); return true; }
   if (path === "/api/archive/uploads" && req.method === "POST") {
     if (!/^application\/octet-stream(?:;|$)/i.test(req.headers["content-type"] ?? "")) throw new HttpError(415, "archive_content_type", "请上传完整加密包文件");
     const id = await service.upload(req); setJson(res, 201, service.view(id)); return true;
@@ -25,11 +34,19 @@ export const handleArchiveRoutes: RouteHandler = async (ctx, req, res, path, url
     const input = await readBody(req, Math.min(ctx.config.bodyLimitBytes, 8192)) as Record<string, unknown>;
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "archive_invalid_request", "归档请求格式无效");
     if (path === "/api/archive/commit") {
-      if (input.replaceConfirmed !== true) throw new HttpError(400, "archive_confirmation_required", "请确认替换当前空间数据");
-      setJson(res, 200, await service.commitImport(ctx, idField(input.id))); return true;
+      const mode = input.mode === undefined ? "replace" : input.mode;
+      if (mode !== "replace" && mode !== "merge") throw new HttpError(400, "archive_invalid_request", "导入方式无效");
+      if (mode === "replace" && input.replaceConfirmed !== true) throw new HttpError(400, "archive_confirmation_required", "请确认替换当前空间数据");
+      setJson(res, 200, await service.commitImport(ctx, idField(input.id), mode)); return true;
     }
     if (typeof input.password !== "string" || input.password.length < 10 || input.password.length > 1024) throw new HttpError(400, "archive_password_invalid", "密码长度需为 10–1024 个字符");
-    const id = path === "/api/archive/export" ? await service.export(ctx, input.password) : idField(input.id);
+    let id: string;
+    if (path === "/api/archive/export") {
+      let selection;
+      try { selection = parseSelection(input.selection); }
+      catch (error) { throw new HttpError(400, "archive_selection_invalid", error instanceof Error ? error.message : "导出范围无效"); }
+      id = await service.export(ctx, input.password, selection);
+    } else id = idField(input.id);
     if (path === "/api/archive/import") await service.prepareImport(ctx, id, input.password);
     setJson(res, 202, service.view(id)); return true;
   }

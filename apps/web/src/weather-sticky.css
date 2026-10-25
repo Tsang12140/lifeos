@@ -39,10 +39,11 @@ html {
   pointer-events: auto;
 }
 
-.app-shell[data-view="tasks"] .weather-header-frame::before {
-  background: #fffcf5;
-}
-
 @media (max-width: 900px) {
   .weather-header-frame { --weather-frame-top: 16px; --weather-frame-radius: 18px; }
+}
+
+/* Match the existing main-column gutters on very narrow screens. */
+@media (max-width: 360px) {
+  .weather-header-frame::before { right:-8px;left:-8px; }
 }

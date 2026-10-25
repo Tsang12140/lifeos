@@ -1,4 +1,7 @@
 import { assertAssistantActive, cancellableAssistant } from "./assistant-cancellation.js";
+import { APP_LOCK_TARGETS } from '@lifeos/core';
+import { appLockRepositoryIdentity, appLockRepositoryPolicy } from './app-lock-context.js';
+import { attemptDetailOf, repositoryAttemptRecorder } from "./assistant-attempt-log.js";
 import { createHash } from "node:crypto";
 import type { BackfillChatAnswer, BackfillMaterial } from "@lifeos/core";
 import { backfillMaterials } from "./assistant-backfill.js";
@@ -14,7 +17,7 @@ const operations = new WeakMap<SqliteRecordRepository, Map<string, { controller:
 const previews = new WeakMap<SqliteRecordRepository, Map<string, { text: string; listeners: Set<(text: string) => void> }>>();
 
 function publishPreview(repository: SqliteRecordRepository, conversationId: string, turnId: string, text: string): void {
-  const preview = previews.get(repository)?.get(turnKey(conversationId, turnId));
+  const preview = previews.get(appLockRepositoryIdentity(repository))?.get(turnKey(conversationId, turnId));
   if (!preview) return;
   preview.text = text;
   for (const listener of preview.listeners) listener(text);
@@ -23,10 +26,10 @@ const WRITE_COMMANDS = new Set(["确认记录", "确认全部", "确认全部记
 const UNDO_COMMANDS = new Set(["撤销这次补记", "撤销本次补记", "撤销这批补记"]);
 
 function inFlight(repository: SqliteRecordRepository): Map<string, Promise<BackfillChatAnswer>> {
-  let turns = inFlightByRepository.get(repository);
+  let turns = inFlightByRepository.get(appLockRepositoryIdentity(repository));
   if (turns === undefined) {
     turns = new Map();
-    inFlightByRepository.set(repository, turns);
+    inFlightByRepository.set(appLockRepositoryIdentity(repository), turns);
   }
   return turns;
 }
@@ -67,6 +70,7 @@ function requestShape(input: JsonObject, materials: readonly BackfillMaterial[],
     boundBatchRevision,
     requestedBatchId,
     requestedRevision,
+    ...(input.pageContext === undefined ? {} : { pageContext: input.pageContext }),
   })).digest("hex");
 }
 
@@ -132,9 +136,11 @@ function validateRequest(input: JsonObject, repository: SqliteRecordRepository):
   requestedBatchId: string | null;
   requestedRevision: number | null;
   privacyVisible: boolean;
+  privateAccessUntil: unknown;
   effort: AiGear | undefined;
+  pageContext: "dreams" | undefined;
 } {
-  hasOnlyKeys(input, ["conversationId", "turnId", "message", "materials", "history", "batchId", "revision", "privacyVisible", "effort"]);
+  hasOnlyKeys(input, ["conversationId", "turnId", "message", "materials", "history", "batchId", "revision", "privacyVisible", "privateAccessUntil", "effort", "pageContext"]);
   const conversationId = assertTurnIdentity(input.conversationId, "conversationId");
   const turnId = assertTurnIdentity(input.turnId, "turnId");
   const message = input.message === undefined ? "" : stringField(input.message, "message").trim();
@@ -148,7 +154,9 @@ function validateRequest(input: JsonObject, repository: SqliteRecordRepository):
     materials,
     requestedBatchId: requestedBatchId(input),
     requestedRevision: requestedRevision(input),
+    privateAccessUntil: input.privateAccessUntil,
     privacyVisible: input.privacyVisible === undefined ? false : booleanField(input.privacyVisible, "privacyVisible"),
+    pageContext: input.pageContext === undefined ? undefined : enumField(input.pageContext, ["dreams"] as const, "pageContext"),
     effort: input.effort === undefined ? undefined : enumField(input.effort, AI_GEARS, "effort"),
   };
 }
@@ -173,23 +181,30 @@ async function runTurn(
   identity: ReturnType<typeof validateRequest>,
   turn: AssistantChatTurnRow,
 ): Promise<BackfillChatAnswer> {
-  let active = operations.get(repository);
-  if (!active) { active = new Map(); operations.set(repository, active); }
+  let active = operations.get(appLockRepositoryIdentity(repository));
+  if (!active) { active = new Map(); operations.set(appLockRepositoryIdentity(repository), active); }
   const operation = { controller: new AbortController(), text: "" };
   const key = turnKey(identity.conversationId, identity.turnId);
   active.set(key, operation);
   const signal = operation.controller.signal;
+  const policy = appLockRepositoryPolicy(repository);
+  const available = APP_LOCK_TARGETS.filter(t => policy && !policy.locked(t.id));
+  const revoked = () => available.some(t => policy!.locked(t.id));
+  const lockTimer = policy ? setInterval(() => { if (revoked()) operation.controller.abort(); }, 500) : undefined;
   const batchBefore = turn.boundBatchId === null ? null : repository.assistantBatch(turn.boundBatchId);
+  const recorder = repositoryAttemptRecorder(repository, identity.conversationId, identity.turnId);
   try {
     const answer = await cancellableAssistant(chatBackfill(config, repository, {
       message: identity.message,
       materials: identity.materials,
       history: turn.context,
       privacyVisible: identity.privacyVisible,
+      privateAccessUntil: identity.privateAccessUntil,
+      ...(identity.pageContext ? { pageContext: identity.pageContext } : {}),
       ...(identity.effort === undefined ? {} : { effort: identity.effort }),
       ...(turn.boundBatchId === null ? {} : { batchId: turn.boundBatchId }),
       ...(turn.boundBatchRevision === null ? {} : { revision: turn.boundBatchRevision }),
-    }, text => { if (!signal.aborted) { operation.text = text; publishPreview(repository, identity.conversationId, identity.turnId, text); } }, signal), signal);
+    }, text => { if (revoked()) operation.controller.abort(); if (!signal.aborted) { operation.text = text; publishPreview(repository, identity.conversationId, identity.turnId, text); } }, signal, recorder), signal);
     assertAssistantActive(signal);
     const durableAnswer: BackfillChatAnswer = { ...answer, conversationId: identity.conversationId, turnId: identity.turnId };
     const answerBatch = durableAnswer.batch;
@@ -198,6 +213,10 @@ async function runTurn(
     }
     return durableAnswer;
   } catch (error) {
+    if (revoked()) {
+      appLockRepositoryIdentity(repository).interruptAssistantChatTurn(identity.conversationId, identity.turnId, new Date().toISOString());
+      throw new HttpError(423, 'app_locked', '应用已重新上锁，请解锁后重试');
+    }
     if (signal.aborted) {
       const batch = turn.boundBatchId === null ? null : repository.assistantBatch(turn.boundBatchId);
       const answer: BackfillChatAnswer = { reply: operation.text ? operation.text + "\n\n（已停止）" : "已停止回答。", action: "reply", mode: "rules", conversationId: identity.conversationId, turnId: identity.turnId, ...(batch ? { batch } : {}) };
@@ -205,10 +224,16 @@ async function runTurn(
       return answer;
     }
     const retryable = canRetryAfterFailure(error, repository, batchBefore, turn.boundBatchId, identity.message);
+    const partial = attemptDetailOf(error)?.partialReply;
+    if (partial && retryable) repository.retainAssistantChatPartial(identity.conversationId, identity.turnId, partial, new Date().toISOString());
     const code = error instanceof HttpError ? error.code : "chat_failed";
     repository.failAssistantChatTurn(identity.conversationId, identity.turnId, code, retryable, new Date().toISOString());
+    // The buffered attempt log is written only now. A turn that succeeded, or one
+    // the owner stopped, is not a failure and must not leave rows behind — and
+    // the flush comes after the state change so a log write can never mask it.
+    recorder.flush();
     throw error;
-  } finally { if (active.get(key) === operation) active.delete(key); }
+  } finally { clearInterval(lockTimer); if (active.get(key) === operation) active.delete(key); }
 }
 
 /** An explicit stop cancels generation; closing an observer still permits reconnect. */
@@ -220,7 +245,7 @@ export async function stopAssistantChatTurn(repository: SqliteRecordRepository, 
   if (!turn) throw new HttpError(404, "unknown_turn", "这条消息尚未开始，请稍后再试");
   if (turn.status !== "running") return { status: turn.status };
   const key = turnKey(conversationId, turnId);
-  const operation = operations.get(repository)?.get(key);
+  const operation = operations.get(appLockRepositoryIdentity(repository))?.get(key);
   if (!operation) throw new HttpError(409, "turn_interrupted", "任务已中断，请刷新查看");
   operation.controller.abort();
   await inFlight(repository).get(key);
@@ -317,8 +342,8 @@ export async function chatBackfillWithHistory(config: ApiConfig, repository: Sql
     const hash = stableHash(input, identity.message, identity.materials, existing.boundBatchId, existing.boundBatchRevision, identity.requestedBatchId, identity.requestedRevision);
     if (hash !== existing.requestHash) throw new HttpError(409, "turn_request_conflict", "相同轮次不能更改消息或材料，请开始新一轮");
   }
-  let map = previews.get(repository);
-  if (!map) { map = new Map(); previews.set(repository, map); }
+  let map = previews.get(appLockRepositoryIdentity(repository));
+  if (!map) { map = new Map(); previews.set(appLockRepositoryIdentity(repository), map); }
   const key = turnKey(identity.conversationId, identity.turnId);
   let preview = map.get(key);
   if (!preview) { preview = { text: "", listeners: new Set() }; map.set(key, preview); }
@@ -326,7 +351,7 @@ export async function chatBackfillWithHistory(config: ApiConfig, repository: Sql
   preview.listeners.add(listener);
   if (preview.text) listener(preview.text);
   try { return await runChatBackfillWithHistory(config, repository, input); }
-  catch (error) { listener(""); throw error; }
+  catch (error) { if (!attemptDetailOf(error)?.partialReply) listener(""); throw error; }
   finally {
     preview.listeners.delete(listener);
     if (preview.listeners.size === 0 && map.get(key) === preview) map.delete(key);

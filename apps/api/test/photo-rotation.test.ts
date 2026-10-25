@@ -11,13 +11,14 @@ import { readConfig } from "../src/config.js";
 import { buildRecord } from "../src/record-builders.js";
 import { createThumbnailCache } from "../src/derived-thumbs.js";
 import { describePhotoLibrary } from "../src/photo-description.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 test("photo display rotation preserves originals, descriptions, reuse and EXIF; rejects stale writers", async () => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-photo-rotation-"));
   mkdirSync(join(root, "assets"));
   const config = readConfig({ LIFEOS_DATA_DIR: root, LIFEOS_DB_PATH: join(root, "lifeos.sqlite"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_HOST: "127.0.0.1", LIFEOS_PORT: "3099" });
   const { server, app } = createHttpServer(config);
-  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  await listenOnFetchablePort(server);
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const json = (body: unknown) => ({ method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   try {
@@ -66,7 +67,7 @@ test("photo display rotation preserves originals, descriptions, reuse and EXIF; 
     equal(app.repository.exportData().assets.find(a => a.id === asset.id)?.displayRotation, 0);
     await new Promise<void>((r, reject) => server.close(error => error ? reject(error) : r()));
     const restarted = createHttpServer(config);
-    await new Promise<void>(r => restarted.server.listen(0, "127.0.0.1", r));
+    await listenOnFetchablePort(restarted.server);
     try {
       const origin = `http://127.0.0.1:${(restarted.server.address() as { port: number }).port}`;
       equal(((await (await fetch(origin + "/api/assets/" + asset.id)).json()) as Asset).displayRotation, 0);

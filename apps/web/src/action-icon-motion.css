@@ -1,0 +1,53 @@
+.action-icon-swap {
+  display: inline-grid;
+  flex: none;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.action-icon-swap > span {
+  grid-area: 1 / 1;
+  place-self: center;
+  transform-origin: center;
+  transition: opacity 180ms cubic-bezier(.23,1,.32,1), transform 180ms cubic-bezier(.23,1,.32,1), filter 180ms cubic-bezier(.23,1,.32,1);
+}
+
+.action-icon-swap svg { display: block; }
+.action-icon-swap__idle, .action-icon-swap[data-active="true"] > .action-icon-swap__changed {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+}
+.action-icon-swap__changed, .action-icon-swap[data-active="true"] > .action-icon-swap__idle {
+  opacity: 0;
+  transform: scale(.6);
+  filter: blur(1.5px);
+  pointer-events: none;
+}
+
+.copy-action-icon { display: block; flex: none; overflow: visible; }
+.copy-action-icon__sheets, .copy-action-icon__success {
+  transform-origin: 12px 12px;
+  transition: opacity 180ms cubic-bezier(.23,1,.32,1), transform 180ms cubic-bezier(.23,1,.32,1), filter 180ms cubic-bezier(.23,1,.32,1);
+}
+.copy-action-icon__sheets { opacity: 1; transform: scale(1); filter: blur(0); }
+.copy-action-icon__success { opacity: 0; transform: scale(.6); filter: blur(1px); }
+.copy-action-icon__ring, .copy-action-icon__check {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 180ms cubic-bezier(.23,1,.32,1);
+}
+.copy-action-icon[data-copied="true"] .copy-action-icon__sheets { opacity: 0; transform: scale(.6); filter: blur(1px); }
+.copy-action-icon[data-copied="true"] .copy-action-icon__success { opacity: 1; transform: scale(1); filter: blur(0); }
+.copy-action-icon[data-copied="true"] .copy-action-icon__ring { stroke-dashoffset: 0; }
+.copy-action-icon[data-copied="true"] .copy-action-icon__check { stroke-dashoffset: 0; transition-delay: 55ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .action-icon-swap > span,
+  .copy-action-icon__sheets, .copy-action-icon__success,
+  .copy-action-icon__ring, .copy-action-icon__check {
+    transition: none;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
+}

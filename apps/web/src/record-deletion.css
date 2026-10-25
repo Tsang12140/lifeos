@@ -3,10 +3,19 @@
 .note-card.is-delete-pending > .note-card-main,
 .note-card.is-delete-pending > .note-card-actions { filter: grayscale(1); opacity: .42; pointer-events: none; }
 .is-delete-pending .timeline-actions, .note-card.is-delete-pending > .note-card-actions { visibility: hidden; }
-.record-delete-undo { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 44px); padding-left: 8px; background: var(--surface); color: var(--muted); font-size: .8125rem; line-height: 1.2; }
+.record-delete-undo { position: absolute; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); color: var(--muted); font-size: .75rem; font-weight: 400; line-height: 18px; }
+/* Use the card's grid area and width, not the wider timeline article. The
+   transparent overlay preserves the original card's height and scroll position. */
+.timeline-item > .record-delete-undo { grid-column: 3; grid-row: 2; left: 0; right: auto; bottom: 18px; width: 100%; max-width: min(100%, var(--timeline-card-width)); padding: 0 20px; justify-content: flex-end; pointer-events: none; }
+.app-shell[data-view="tasks"] .timeline-item > .record-delete-undo { grid-column: 1; grid-row: 1; max-width: 100%; }
 .record-delete-undo > span { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.record-delete-undo > .secondary-button { height: 34px; min-height: 34px; padding: 0 12px; border-color: #a8b1bb; background: var(--surface-soft); color: var(--ink-soft); font-size: .8125rem; font-weight: 600; line-height: 1.2; margin: 0; }
-.record-delete-undo > .secondary-button:hover:not(:disabled) { background: #edf0f3; border-color: #7d8996; }
+.record-delete-undo > .secondary-button { height: 34px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--control-line); border-radius: 999px; background: var(--surface); color: var(--control-ink); font-size: .8125rem; font-weight: 400; line-height: 20px; margin: 0; box-shadow: none; pointer-events: auto; }
+.record-delete-undo > .secondary-button:hover:not(:disabled) { background: var(--control-tray); border-color: #9aa6b2; }
+.record-delete-undo > .secondary-button:focus-visible { outline: 2px solid #9aa6b2; outline-offset: 2px; }
+.record-delete-undo > .secondary-button:disabled { opacity: .55; }
+@media (max-width: 700px) {
+  .timeline-item > .record-delete-undo { grid-column: 2; bottom: 16px; padding-inline: 16px; }
+}
 .timeline-item.is-photo-only .timeline-content > .timeline-text { display: none; }
 .delete-preview-media { margin: 10px 20px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .delete-preview-thumbs { display: flex; gap: 6px; }

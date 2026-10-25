@@ -1,6 +1,6 @@
 /* Task label and prose share the header; lightweight status and actions share the footer. */
 .timeline-item.timeline-task .timeline-content {
-  padding: 8px 10px;
+  padding: 18px 20px;
   container: timeline-task / inline-size;
 }
 
@@ -60,6 +60,11 @@
 .timeline-task .task-record-metadata:empty {
   display: none;
 }
+
+.task-record-schedule { display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:10px;color:var(--muted);font-size:.78rem;line-height:1.5; }
+.task-record-schedule > time { overflow-wrap:anywhere; }
+
+@media(max-width:700px) { .timeline-item.timeline-task .timeline-content { padding:16px; } }
 
 .timeline-task .task-record-footer {
   display: flex;

@@ -1,4 +1,6 @@
 import { DiaryNavIcon } from "./diary-nav-icon";
+import { GalleryNavIcon } from "./gallery-nav-icon";
+import { AssistantNavIcon } from "./assistant-nav-icon";
 import { deviceUiFont } from "./ui-font";
 import {
   BookOpen,
@@ -43,6 +45,8 @@ export const MOVIE_PROMPT_HIDDEN_STORAGE_KEY = scopedKey("lifeos.moviePromptHidd
 export const AI_ASSISTANT_VISIBLE_STORAGE_KEY = scopedKey("lifeos.ai.assistant-visible");
 export const COMPOSER_SHOTS_STORAGE_KEY = scopedKey("lifeos.composerShots");
 export const UI_FONT_STORAGE_KEY = scopedKey("lifeos.uiFont");
+export const TASK_SORT_STORAGE_KEY = scopedKey("lifeos.taskSort");
+export const TASK_DENSITY_STORAGE_KEY = scopedKey("lifeos.taskDensity");
 /** A name typed by this user is normally Chinese; a token like `@a1b2` is not. */
 export const CJK_PATTERN = /[㐀-鿿]/;
 export const MAX_IMPLICIT_CJK_MENTION_NAME_LENGTH = 6;
@@ -53,10 +57,11 @@ export const SETTINGS_PAGE_GROUPS: readonly {
   readonly label: string;
   readonly pages: readonly { readonly id: SettingsPageId; readonly label: string }[];
 }[] = [
-  { id: "account", label: "账户", pages: [{ id: "account/session", label: "账户与会话" }, { id: "account/storage", label: "存储与额度" }] },
+  { id: "account", label: "账户", pages: [{ id: "account/session", label: "账户与会话" }, { id: "account/lock", label: "应用锁" }, { id: "account/storage", label: "存储与额度" }] },
+  { id: "admin", label: "管理员", pages: [{ id: "admin/attention", label: "待处理" }, { id: "admin/welcome", label: "开场问题" }, { id: "admin/welcome-stats", label: "点击统计" }] },
   { id: "data", label: "数据", pages: [{ id: "data/import-export", label: "导入与导出" }, { id: "data/backup", label: "备份与恢复" }, { id: "data/demo", label: "演示数据" }, { id: "data/photos", label: "照片存储" }] },
   { id: "appearance", label: "外观", pages: [{ id: "appearance/interface", label: "界面" }] },
-  { id: "integrations", label: "服务集成", pages: [{ id: "integrations/weather", label: "天气" }, { id: "integrations/ai", label: "AI 助手" }, { id: "integrations/movie", label: "观影" }, { id: "integrations/photo-text", label: "照片文字" }] },
+  { id: "integrations", label: "服务集成", pages: [{ id: "integrations/weather", label: "天气" }, { id: "integrations/ai", label: "AI 助手" }, { id: "integrations/ai-log", label: "AI 调用记录" }, { id: "integrations/movie", label: "观影" }, { id: "integrations/photo-text", label: "照片文字" }] },
   { id: "private", label: "私密模块", pages: [{ id: "private/cycle", label: "周期与亲密" }] },
   { id: "about", label: "关于", pages: [{ id: "about", label: "LifeOS" }] },
 ];
@@ -232,25 +237,26 @@ export function mentionVocabulary(record: RecordView, entities: readonly Entity[
 
 export const NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
   { id: "today", label: "日记", icon: DiaryNavIcon },
+  { id: "gallery", label: "图库", icon: GalleryNavIcon },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "tasks", label: "任务", icon: ListChecks },
   { id: "notes", label: "笔记", icon: NotebookPen },
   { id: "entities", label: "联系人与地点", icon: ContactRound },
-  { id: "timemachine", label: "时光机", icon: History },
 ];
 
 export const SETTINGS_NAV_ITEM: { id: AppView; label: string; icon: LucideIcon } = { id: "settings", label: "设置", icon: Settings };
 
-export const MOBILE_NAV_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
+export const MOBILE_NAV_ITEMS: readonly { id: AppView | "assistant"; label: string; icon: LucideIcon }[] = [
   { id: "today", label: "日记", icon: DiaryNavIcon },
   { id: "calendar", label: "日历", icon: CalendarRange },
+  { id: "assistant", label: "AI管家", icon: AssistantNavIcon },
   { id: "notes", label: "笔记", icon: NotebookPen },
-  { id: "entities", label: "联系人", icon: ContactRound },
 ];
 
 export const MOBILE_MORE_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
+  { id: "gallery", label: "图库", icon: GalleryNavIcon },
+  { id: "entities", label: "联系人与地点", icon: ContactRound },
   { id: "tasks", label: "任务", icon: ListChecks },
-  { id: "timemachine", label: "时光机", icon: History },
   SETTINGS_NAV_ITEM,
 ];
 
@@ -277,10 +283,10 @@ export function noteFormatOf(record: RecordView): NoteFormat {
 }
 
 export function statusLabel(status: string | undefined): string {
-  if (status === "in_progress") return "进行中";
+  if (status === "in_progress") return "未完成";
   if (status === "done") return "已完成";
   if (status === "cancelled") return "已取消";
-  return "待办";
+  return "未完成";
 }
 
 export function isDemoRecord(record: RecordView): boolean {
@@ -324,6 +330,7 @@ export function errorMessage(error: unknown, fallback = "请稍后重试"): stri
 }
 
 export function timelineHeading(view: AppView): string {
+  if (view === "dreams") return "梦境";
   if (view === "today") return "当日记录";
   if (view === "timeline") return "全部记录";
   if (view === "tasks") return "任务记录";

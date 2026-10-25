@@ -15,11 +15,12 @@ import { createDateOnly, type EntityKind } from "./model.js";
  * `settings` is deliberately absent from `UI_VIEW_IDS`: the owner can be sent
  * to the pages they read, not to the pages that hold credentials.
  */
-export const UI_VIEW_IDS = ["today", "timeline", "calendar", "tasks", "notes", "entities", "timemachine"] as const;
+export const UI_VIEW_IDS = ["today", "dreams", "timeline", "calendar", "tasks", "notes", "entities", "timemachine"] as const;
 export type UiViewId = (typeof UI_VIEW_IDS)[number];
 
 /** The same keys `SearchFilters` uses, so the client can assign them straight through. */
 export interface UiSearchRecordsParams {
+  readonly nature?: "dream" | "real";
   readonly query?: string;
   readonly kinds?: readonly string[];
   readonly personIds?: readonly string[];
@@ -54,6 +55,13 @@ export type UiCommandType = UiCommand["type"];
 export interface UiOffer {
   readonly label: string;
   readonly command: UiCommand;
+  /** Added only by the server after checking the supplied source. Model UI input cannot set it. */
+  readonly source?: {
+    readonly kind: "journal" | "note";
+    readonly nature?: "dream";
+    readonly revision: number;
+    readonly excerpt: string;
+  };
 }
 
 /**
@@ -130,6 +138,7 @@ export const UI_COMMANDS: readonly UiCommandSpec[] = [
       { name: "entityTypes", kind: "string[]", required: false, describe: "关联对象类型" },
       { name: "backfill", kind: "enum", required: false, values: ["all", "ai"], describe: "补记 / 辅记" },
       { name: "assisted", kind: "boolean", required: false, describe: "只看辅记记录" },
+      { name: "nature", kind: "string", required: false, describe: "dream 只看梦境；real 只看现实记录" },
       { name: "from", kind: "date", required: false, describe: "起始日期 YYYY-MM-DD，闭区间" },
       { name: "to", kind: "date", required: false, describe: "结束日期 YYYY-MM-DD，闭区间" },
     ],
@@ -270,6 +279,10 @@ function dateOnly(value: unknown): string | undefined {
 function checkSearchParams(raw: unknown, context: UiValidationContext): UiSearchRecordsParams | string {
   if (!isRecord(raw)) return "search.records 参数必须是对象";
   const params: Record<string, unknown> = {};
+  if (raw["nature"] !== undefined) {
+    if (raw["nature"] !== "dream" && raw["nature"] !== "real") return "nature 只能是 dream 或 real";
+    params["nature"] = raw["nature"];
+  }
   if (raw["query"] !== undefined) {
     if (typeof raw["query"] !== "string" || raw["query"].length > 200) return "query 不合法";
     if (raw["query"].trim()) params["query"] = raw["query"].trim();

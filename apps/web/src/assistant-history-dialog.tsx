@@ -4,6 +4,7 @@ import {
   groupConversationsByDay,
   splitHistoryMatches,
   type AssistantConversationSummary,
+  type UiCommand,
 } from "@lifeos/core";
 import { History, Search, X } from "lucide-react";
 import { AssistantShareDialog, type AssistantShareRequest } from "./assistant-share-dialog";
@@ -11,6 +12,7 @@ import { AssistantMessageTime, useAssistantMessageInfo } from "./assistant-messa
 import { assistantMessageTime, assistantTimeDivider } from "./assistant-message-time";
 import { AssistantMessageActions } from "./assistant-message-actions";
 import { AssistantHistoryRangePicker } from "./assistant-history-range";
+import { AssistantCitedText, AssistantDeliveryNote } from "./assistant-journal-sources";
 import {
   continueAssistantConversation,
   listAssistantConversations,
@@ -36,6 +38,7 @@ export function AssistantHistoryDialog({ open, onClose, onContinue, onOpenAttach
   readonly onClose: () => void;
   readonly onContinue: (conversation: AssistantConversationView) => void;
   readonly onOpenAttachment: (assetId: string) => void;
+  readonly onUiCommand?: (command: UiCommand) => void;
   readonly actionsDisabled?: boolean;
 }) {
   const [shareRequest, setShareRequest] = useState<AssistantShareRequest | null>(null);
@@ -246,7 +249,7 @@ export function AssistantHistoryDialog({ open, onClose, onContinue, onOpenAttach
             <div className="assistant-history-messages">
               {selected.messages.map((message, index) => <Fragment key={message.id}>{assistantTimeDivider(selected.messages[index - 1]?.at, message.at) ? <p className="assistant-time-divider">{assistantMessageTime(message.at)}</p> : null}<div onContextMenu={event => openMessageInfo(event, message.at, message.text, () => shareConversation(index))} className={`ai-message-row assistant-history-message is-${message.role}`} key={message.id}>
                 <div className="assistant-history-message-content">
-                  <p className="assistant-history-message-copy">{splitHistoryMatches(message.text, applied).map((segment, position) => segment.match ? <mark key={position}>{segment.text}</mark> : <span key={position}>{segment.text}</span>)}</p>
+                  {message.role === "assistant" ? <div className="assistant-history-reply"><AssistantCitedText text={message.text} offers={message.ui?.offers} disabled={interactionsBlocked} query={applied} className="assistant-history-message-copy" /><AssistantDeliveryNote delivery={message.delivery} /></div> : <p className="assistant-history-message-copy">{splitHistoryMatches(message.text, applied).map((segment, position) => segment.match ? <mark key={position}>{segment.text}</mark> : <span key={position}>{segment.text}</span>)}</p>}
                   {message.attachments?.length ? <div className="assistant-history-attachments" aria-label="消息附件">{message.attachments.map((attachment) => <a key={attachment.assetId} href={assetContentUrl(attachment.assetId)} onClick={(event) => { event.preventDefault(); onOpenAttachment(attachment.assetId); }}>{attachment.name}</a>)}</div> : null}
                   <div className="assistant-message-meta">{message.role === "assistant" ? <AssistantMessageActions content={message.text} onShare={() => shareConversation(index)} /> : null}<AssistantMessageTime at={message.at} /></div>
                 </div>

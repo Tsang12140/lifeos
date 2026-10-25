@@ -50,10 +50,8 @@ import {
 const WEEKDAYS: readonly string[] = ["一", "二", "三", "四", "五", "六", "日"];
 
 /**
- * A day has no time until somebody gives it one. These are the times a task
- * means when nobody said: morning for the start, end of the working day for the
- * end. They are only ever used to fill a blank — a value already on the record
- * is shown and kept exactly as it is.
+ * These are only the time-wheel starting positions. Picking a calendar day
+ * keeps a date-only value until the user explicitly chooses a clock time.
  */
 const DEFAULT_START_TIME = "09:00";
 const DEFAULT_END_TIME = "18:00";
@@ -103,6 +101,7 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
   const endTime = timePartOf(end) || DEFAULT_END_TIME;
   const activeDate = target === "start" ? startDate : endDate;
   const activeTime = target === "start" ? startTime : endTime;
+  const activeHasTime = Boolean(timePartOf(target === "start" ? start : end));
 
   const grid = useMemo(() => monthGridDates(monthAnchor), [monthAnchor]);
   /*
@@ -153,7 +152,7 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
    * click finishes the range.
    */
   const writeStart = (date: string) => {
-    onStartChange(combineDateTime(date, startTime));
+    onStartChange(timePartOf(start) ? combineDateTime(date, startTime) : date);
     setMonthAnchor(date);
     if (endDate !== "" && endDate < date) {
       onEndChange("");
@@ -170,7 +169,7 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
       return;
     }
     setNote("");
-    onEndChange(combineDateTime(date, endTime));
+    onEndChange(timePartOf(end) ? combineDateTime(date, endTime) : date);
     setMonthAnchor(date);
   };
 
@@ -189,7 +188,7 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
     if (target === "start") {
       // A time alone cannot make the start land after the end on the same day.
       const date = startDate || localDateToday();
-      if (endDate !== "" && date === endDate && time > endTime) {
+      if (endDate !== "" && timePartOf(end) && date === endDate && time > endTime) {
         setNote("开始不能晚于结束");
         return;
       }
@@ -198,7 +197,7 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
       return;
     }
     const date = endDate || startDate || localDateToday();
-    if (startDate !== "" && date === startDate && time < startTime) {
+    if (startDate !== "" && timePartOf(start) && date === startDate && time < startTime) {
       setNote("结束不能早于开始");
       return;
     }
@@ -207,11 +206,11 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
   };
 
   return <div className={`task-schedule ${className} ${open ? "is-open" : ""}`} ref={rootRef} data-task-schedule="on" data-range-start={start} data-range-end={end}>
-    <button type="button" className="task-schedule-trigger" onClick={openPanel} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}：开始 ${startDate === "" ? "未设置" : `${dayLabel(startDate)} ${startTime}`}，结束 ${endDate === "" ? "未设置" : `${dayLabel(endDate)} ${endTime}`}`}>
+    <button type="button" className="task-schedule-trigger" onClick={openPanel} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}：开始 ${startDate === "" ? "未设置" : `${dayLabel(startDate)} ${timePartOf(start) || "全天"}`}，结束 ${endDate === "" ? "未设置" : `${dayLabel(endDate)} ${timePartOf(end) || "全天"}`}`}>
       <CalendarRange size={15} strokeWidth={1.8} aria-hidden="true" />
-      <span className="task-schedule-part">{startDate === "" ? "开始" : dayLabel(startDate)}<span className="task-schedule-clock">{startTime}</span></span>
+      <span className="task-schedule-part">{startDate === "" ? "开始" : dayLabel(startDate)}<span className="task-schedule-clock">{startDate ? timePartOf(start) || "全天" : ""}</span></span>
       <ArrowRight className="task-schedule-arrow" size={14} strokeWidth={1.8} aria-hidden="true" />
-      <span className={`task-schedule-part ${endDate === "" ? "is-blank" : ""}`}>{endDate === "" ? "结束" : dayLabel(endDate)}<span className="task-schedule-clock">{endTime}</span></span>
+      <span className={`task-schedule-part ${endDate === "" ? "is-blank" : ""}`}>{endDate === "" ? "结束" : dayLabel(endDate)}<span className="task-schedule-clock">{endDate ? timePartOf(end) || "全天" : ""}</span></span>
     </button>
     {open ? createPortal(<div ref={panelRef} className="task-schedule-panel date-control-popover" role="dialog" aria-label={`${label}选择器`}>
       {/* Always-on month paging. The single-day picker hides its month grid
@@ -226,10 +225,10 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
       <div className="task-panel-targets" role="group" aria-label="选择要设置的端点">
         {(["start", "end"] as const).map((which) => {
           const date = which === "start" ? startDate : endDate;
-          const time = which === "start" ? startTime : endTime;
+          const time = which === "start" ? timePartOf(start) : timePartOf(end);
           return <button key={which} type="button" className={`task-target ${target === which ? "is-active" : ""} ${date === "" ? "is-blank" : ""}`} data-target={which} data-active={target === which ? "on" : "off"} aria-pressed={target === which} onClick={() => { setTarget(which); setNote(""); if (date !== "") setMonthAnchor(date); }}>
             <span className="task-target-label">{which === "start" ? "开始" : "结束"}</span>
-            <span className="task-target-value">{date === "" ? "点日历选" : `${dayLabel(date)} ${time}`}</span>
+            <span className="task-target-value">{date === "" ? "点日历选" : `${dayLabel(date)} ${time || "全天"}`}</span>
           </button>;
         })}
       </div>
@@ -263,14 +262,15 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
       <div className="task-panel-time">
         <div className="date-time-wheels">
         <ScrollSlotStrip className="date-time-column" scrollKey={`${target}-${activeDate}-${activeTime.slice(0, 2)}`}>
-          {hourOptions().map((hour) => <button key={hour} type="button" className={`date-time-slot ${activeTime.startsWith(`${hour}:`) ? "is-selected" : ""}`} onClick={() => writeTime(`${hour}:${minuteSlot}`)} aria-pressed={activeTime.startsWith(`${hour}:`)}>{hour}</button>)}
+          {hourOptions().map((hour) => <button key={hour} type="button" className={`date-time-slot ${timePartOf(target === "start" ? start : end).startsWith(`${hour}:`) ? "is-selected" : ""}`} onClick={() => writeTime(`${hour}:${minuteSlot}`)} aria-pressed={timePartOf(target === "start" ? start : end).startsWith(`${hour}:`)}>{hour}</button>)}
         </ScrollSlotStrip>
         <span className="date-time-sep" aria-hidden="true">:</span>
         <ScrollSlotStrip className="date-time-column" scrollKey={`${target}-${activeDate}-minute-${minuteSlot}-${minuteStep}`}>
-          {minuteOptions(minuteStep).map((minute) => <button key={minute} type="button" className={`date-time-slot ${minute === minuteSlot ? "is-selected" : ""}`} onClick={() => writeTime(`${activeTime.slice(0, 2)}:${minute}`)} aria-pressed={minute === minuteSlot}>{minute}</button>)}
+          {minuteOptions(minuteStep).map((minute) => <button key={minute} type="button" className={`date-time-slot ${activeHasTime && minute === minuteSlot ? "is-selected" : ""}`} onClick={() => writeTime(`${activeTime.slice(0, 2)}:${minute}`)} aria-pressed={activeHasTime && minute === minuteSlot}>{minute}</button>)}
         </ScrollSlotStrip>
         </div>
         <div className="task-panel-time-side">
+          <button type="button" className="text-button" aria-pressed={Boolean(activeDate && !timePartOf(target === "start" ? start : end))} onClick={() => { setNote(""); if (target === "start") onStartChange(startDate || localDateToday()); else onEndChange(endDate || startDate || localDateToday()); }}>全天</button>
           <label className="task-panel-fine"><input type="checkbox" checked={fineMinutes} onChange={(event) => setFineMinutes(event.target.checked)} /><span>精细</span></label>
           {/* Only the start can mean "now". Offering it for the end would put the
               end before the start and then refuse the click. */}

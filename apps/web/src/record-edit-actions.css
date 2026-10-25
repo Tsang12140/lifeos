@@ -1,0 +1,22 @@
+.record-action.record-edit-control {
+  margin: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  font-weight: 400;
+  transition: color 100ms ease-out, background-color 100ms ease-out;
+}
+.record-action.record-edit-control:focus-visible {
+  outline: 2px solid var(--ink-soft);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+.record-action.record-edit-control:disabled { cursor: default; color: var(--muted); background: transparent; border-color: transparent; }
+@media (hover: hover) and (pointer: fine) {
+  .record-action.record-edit-control:hover:not(:disabled) { color: var(--ink-soft); background: var(--surface-soft); border-color: transparent; }
+  .record-action.record-edit-control.record-action-danger:hover:not(:disabled) { color: var(--danger); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .record-action.record-edit-control { transition: none; transition-duration: 0s !important; }
+  .record-edit-control .spin { animation: none; }
+}

@@ -1,0 +1,65 @@
+/* Detail dialogs share the creation/editing action vocabulary. */
+:is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--control-line);
+}
+:is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > :is(button, a) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 40px;
+  height: auto;
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--control-muted);
+  font: inherit;
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+  box-shadow: none;
+  transform: none;
+  cursor: pointer;
+  transition: background-color 180ms cubic-bezier(.2,0,0,1), color 180ms cubic-bezier(.2,0,0,1);
+}
+:is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > .primary-button {
+  border-color: var(--control-ink);
+  background: var(--control-ink);
+  color: #fff;
+}
+:is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > :is(button, a) > svg { flex-shrink: 0; }
+:is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > :is(button, a):focus-visible {
+  outline: 2px solid var(--control-muted);
+  outline-offset: 2px;
+}
+:is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > :is(:disabled, [aria-disabled="true"]) {
+  opacity: .52;
+  cursor: not-allowed;
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > :is(button, a):hover:not(:disabled, [aria-disabled="true"]) { background: var(--control-tray); }
+  :is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > .primary-button:hover:not(:disabled) { border-color: #343b42; background: #343b42; }
+}
+@media (max-width: 480px) {
+  :is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; padding: 16px; }
+}
+@media (max-width: 340px) {
+  :is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.person-card-dialog, .place-card-dialog, .contact-avatar-dialog, .movie-card-dialog, .place-map-view-dialog) > .dialog-footer > :is(button, a) { transition: none !important; }
+}

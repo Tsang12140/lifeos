@@ -28,6 +28,41 @@ test("assistant partial confirmation keeps deferred items, immutable written ent
   const undo=await request(h.base,path+"/undo",{method:"POST",...json({})});equal(undo.response.status,200,JSON.stringify(undo.body));equal(backfillItems((await request(h.base,"/api/records")).body).length,2);
 });
 
+test("cycle subjects stay separate across transfer, switching, restart and assistant context", async t => {
+  const h = await startHarness(); t.after(() => h.stop());
+  const path = "/api/modules/cycle-intimacy";
+  const personResponse = await request(h.base, "/api/entities", { method: "POST", ...json({ type: "person", name: "测试伴侣" }) });
+  equal(personResponse.response.status, 201);
+  const person = personResponse.body as Entity;
+  await request(h.base, path + "/events", { method: "POST", ...json({ date: "2026-09-29", kind: "period_start" }) });
+  await request(h.base, path + "/events", { method: "POST", ...json({ date: "2026-10-03", kind: "period_end" }) });
+  await request(h.base, path + "/events", { method: "POST", ...json({ date: "2026-10-01", kind: "intimacy" }) });
+  const before = (await request(h.base, path)).body as { config: { subjectId?: string }; events: Array<{ id: string; kind: string }>; eventRevision: string };
+  const start = before.events.find(event => event.kind === "period_start")!;
+  const moved = await request(h.base, path + "/transfer", { method: "POST", ...json({ groupKeys: [start.id], targetSubjectId: person.id, revision: before.eventRevision }) });
+  equal(moved.response.status, 200, JSON.stringify(moved.body));
+  const partner = moved.body as typeof before;
+  equal(partner.config.subjectId, person.id);
+  deepEqual(partner.events.map(event => event.kind), ["period_start", "period_end"]);
+  const repo = new SqliteRecordRepository(join(h.root, "lifeos.sqlite"));
+  try {
+    const context = assistantCycleContext(repo, true);
+    equal(context.cycles[0]?.subject.name, "测试伴侣");
+    deepEqual(context.cycles[0]?.events.map(event => event.kind), ["period_start", "period_end"]);
+    equal(context.cycles[1]?.subject.name, "当前用户本人");
+    equal(context.cycles[1]?.events.length, 0);
+    const identityOnly = assistantCycleContext(repo);
+    equal(identityOnly.cycles[0]?.subject.name, "测试伴侣");
+    deepEqual(identityOnly.cycles[0]?.events, []);
+  } finally { repo.close(); }
+  const self = await request(h.base, path + "/config", { method: "PUT", ...json({ enabled: true, cycleLength: 28, periodLength: 7, subjectId: null }) });
+  equal(self.response.status, 200);
+  deepEqual((self.body as typeof before).events.map(event => event.kind), ["intimacy"]);
+  const again = await request(h.base, path + "/config", { method: "PUT", ...json({ enabled: true, cycleLength: 28, periodLength: 7, subjectId: person.id }) });
+  deepEqual((again.body as typeof before).events.map(event => event.kind), ["period_start", "period_end"]);
+  equal((await request(h.base, path + "/transfer", { method: "POST", ...json({ groupKeys: [start.id], targetSubjectId: person.id, revision: partner.eventRevision }) })).response.status, 409);
+});
+
 test("assistant cycle and habit proposals are actual markers, atomic, guarded and reversible", async t=>{
   const h=await startHarness();t.after(()=>h.stop());
   let batch=(await request(h.base,"/api/ai/backfill/prepare",{method:"POST",...json({materials:[{name:"请求",text:"2026-09-20 标记周期开始和读书"}]})})).body as BackfillBatch;
@@ -165,12 +200,14 @@ import { createThumbnailCache } from "../src/derived-thumbs.js";
 import { describePhotoLibrary } from "../src/photo-description.js";
 import { buildTencentCanonicalRequest, buildTencentStringToSign, signTencentRequest } from "../src/tencent-ocr.js";
 import { createHttpServer } from "../src/server.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 import { IdentityStore } from "../src/identity-store.js";
 import { tenantConfigFor } from "../src/tenant-config.js";
 import { publicBackupConfig, resolvedBackupS3, saveRuntimeBackupConfig } from "../src/backup-config.js";
 import { BackupScheduler, backupScheduleRunKey, nextDailyBackupAt } from "../src/backup-scheduler.js";
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, describeBackupRetention, planBackupRetention, retentionHorizonDays } from "../src/backup-retention.js";
 import { SqliteRecordRepository } from "../src/repository.js";
+import { assistantCycleContext } from "../src/assistant-cycle-context.js";
 import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
 import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
 import { OBSERVATION_KEEP_LIMIT, selectDayObservations } from "../src/weather-selection.js";
@@ -181,12 +218,13 @@ import type { BackfillBatch, BackfillChatAnswer, Entity, Movie } from "@lifeos/c
 import { isAiBackfill } from "@lifeos/core";
 import { cameraEvidenceFromExif, readPhotoMetadata } from "../src/photo-metadata.js";
 import { CalendarTaskLabels } from "../src/calendar-task-labels.js";
-import { buildManualDaySummary, resolveDaySummaries, summarySources } from "../src/summary.js";
+import { buildManualDaySummary, resolveDaySummaries, summarySources, type DaySummaryProviderFallback } from "../src/summary.js";
+import { writeApiLogEvent } from "../src/api-log.js";
 import { calendarToday, type CustomHabit, type DaySummary } from "@lifeos/core";
 import { calendarPhotoUrl, type CalendarPresentation } from "@lifeos/core";
 import { photoDetailsFromExif } from "../src/photo-details.js";
 import type { RecordView } from "../src/repository.js";
-import { summaryFingerprint, type DaySummaryProvider } from "@lifeos/core";
+import { summaryFingerprint, SUMMARY_MAX_AUTO_ATTEMPTS, SUMMARY_RETRY_BACKOFF_MS, type DaySummaryProvider } from "@lifeos/core";
 
 function backfillItems(body: unknown): unknown[] { return (body as { items: unknown[] }).items; }
 
@@ -521,7 +559,9 @@ test("assistant conversation forwards mixed requests, revises proposals and neve
   const saved = batch.plan;
   providerFailed = true; result = await chat({ message: "把地点改成新店", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 502); equal((result.body as { error: string }).error, "ai_service_unavailable"); deepEqual(h.app.repository.assistantBatch(batch.id)!.plan, saved); providerFailed = false;
   envelope = { action: "commit", reply: "模型试图声称已经写入", plan };
-  equal((await chat({ message: "看看这个方案", batchId: batch.id, revision: batch.revision })).response.status, 400);
+  result = await chat({ message: "看看这个方案", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200);
+  equal((result.body as BackfillChatAnswer).action, "reply"); equal((result.body as BackfillChatAnswer).delivery?.issue, "operation");
+  equal((result.body as BackfillChatAnswer).reply, "模型试图声称已经写入"); deepEqual(h.app.repository.assistantBatch(batch.id)!.plan, saved);
   equal(backfillItems((await request(h.base, "/api/records?backfill=ai")).body).length, 0);
   result = await chat({ message: "确认写入", batchId: batch.id, revision: batch.revision }); equal(result.response.status, 200); batch = (result.body as BackfillChatAnswer).batch!; equal(batch.status, "committed");
   const written = (await request(h.base, `/api/records/${batch.recordIds![0]}`)).body as RecordView; equal(written.occurredAt?.value, "2026-09-23"); equal(written.entityRefs.length, 2);
@@ -789,52 +829,6 @@ test("per-occurrence marking preserves aliases, exclusions, references and expor
   deepEqual((read.body as { items: (typeof record)[] }).items[0]!.body.entityMentions, bundle.records[0]!.body.entityMentions);
 });
 
-// WHATWG fetch rejects a small set of historically reserved ports even when
-// Node's HTTP server can bind them.  Windows can hand one of those ports out
-// for listen(0), which makes an otherwise unrelated fetch fail with
-// `TypeError: fetch failed` / `bad port`.  Keep the OS allocator (so parallel
-// tests remain collision-safe), but close and retry if it picked a forbidden
-// port.
-const FETCH_FORBIDDEN_PORTS = new Set([
-  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 79,
-  80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
-  98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 113,
-  119, 123, 135, 139, 143, 179, 389, 427, 465, 512, 513, 514, 515, 548,
-  554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
-  2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
-  6697, 10080,
-]);
-
-async function listenOnFetchablePort(server: ReturnType<typeof createServer>, host: string): Promise<number> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    server.listen(0, host);
-    await once(server, "listening");
-    const address = server.address();
-    if (address !== null && typeof address !== "string" && !FETCH_FORBIDDEN_PORTS.has(address.port)) {
-      return address.port;
-    }
-
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        cleanup();
-        reject(error);
-      };
-      const onClose = () => {
-        cleanup();
-        resolve();
-      };
-      const cleanup = () => {
-        server.off("error", onError);
-        server.off("close", onClose);
-      };
-      server.once("error", onError);
-      server.once("close", onClose);
-      server.close();
-    });
-  }
-  throw new Error("Test server could not obtain a fetchable port after retries");
-}
-
 interface Harness {
   readonly root: string;
   readonly base: string;
@@ -1033,7 +1027,7 @@ test("SQLite API persists records, preserves original content, filters, conflict
 
   const auth = await request(harness.base, "/api/auth");
   equal(auth.response.status, 200);
-  deepEqual(auth.body, { required: false, authenticated: true });
+  deepEqual(auth.body, { required: false, authenticated: true, admin: false });
 
   const created = await request(harness.base, "/api/records", {
     method: "POST",
@@ -1328,7 +1322,7 @@ test("login sessions persist in SQLite and AI assistant falls back without a key
   await harness.stop(false);
   harness = await startHarness("secret", 1024 * 1024, root);
   const persistedAuth = await request(harness.base, "/api/auth", { headers: { cookie } });
-  deepEqual(persistedAuth.body, { required: true, authenticated: true });
+  deepEqual(persistedAuth.body, { required: true, authenticated: true, admin: false });
 
   const publicRecord = await request(harness.base, "/api/records", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ kind: "note", content: "公开记录" }) });
   equal(publicRecord.response.status, 201);
@@ -1336,15 +1330,16 @@ test("login sessions persist in SQLite and AI assistant falls back without a key
   equal(privateRecord.response.status, 201);
   const aiStatus = await request(harness.base, "/api/ai/status", { headers: { cookie } });
   deepEqual(aiStatus.body, {
+    privateRetrievalSupported: true,
     enabled: true,
     configured: false,
     keyConfigured: false,
     provider: "deepseek",
     model: "deepseek-flash",
     baseUrl: "https://api.deepseek.com",
-    thinking: false,
-    reasoningEffort: null,
-    preset: "quick",
+    thinking: true,
+    reasoningEffort: "high",
+    preset: "reflect",
     keySource: "none",
     keyUnreadable: false,
     summaryPrompt: SUMMARY_SYSTEM_PROMPT,
@@ -1893,15 +1888,16 @@ test("AI config exposes effective presets, validates reasoning, and never return
 
   const initial = await request(harness.base, "/api/ai/status");
   deepEqual(initial.body, {
+    privateRetrievalSupported: true,
     enabled: true,
     configured: false,
     keyConfigured: false,
     provider: "deepseek",
     model: "deepseek-flash",
     baseUrl: "https://api.deepseek.com",
-    thinking: false,
-    reasoningEffort: null,
-    preset: "quick",
+    thinking: true,
+    reasoningEffort: "high",
+    preset: "reflect",
     keySource: "none",
     keyUnreadable: false,
     summaryPrompt: SUMMARY_SYSTEM_PROMPT,
@@ -1922,6 +1918,7 @@ test("AI config exposes effective presets, validates reasoning, and never return
   const savedJson = JSON.stringify(saved.body);
   ok(!savedJson.includes("unit-test-secret"));
   deepEqual(saved.body, {
+    privateRetrievalSupported: true,
     enabled: true,
     configured: true,
     keyConfigured: true,
@@ -4693,6 +4690,58 @@ test("a thumbnail is derived once, filed under the data directory, and rebuilt a
   equal((afterRebuild.body as { count: number }).count, 1, "only the width that was actually asked for came back");
 });
 
+test("small PNG screenshots pass through unchanged at background sizes, while 400 tiles and oversized PNGs derive thumbnails", async (t) => {
+  const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-png-threshold-root-"));
+  t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
+  const harness = await startHarness(undefined, 4 * 1024 * 1024, undefined, assetRoot);
+  t.after(async () => harness.stop());
+
+  const uploadPng = async (name: string, original: Buffer) => {
+    const upload = await request(harness.base, `/api/assets/uploads?name=${encodeURIComponent(name)}`, {
+      method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(original),
+    });
+    equal(upload.response.status, 201);
+    return (upload.body as { id: string }).id;
+  };
+  const thumbnail = (id: string, width = 400) => fetch(`${harness.base}/api/assets/${encodeURIComponent(id)}/thumbnail?w=${width}`);
+  const png = (width: number, height: number, compressionLevel = 6) => sharp({
+    create: { width, height, channels: 3, background: { r: 47, g: 111, b: 143 } },
+  }).png({ compressionLevel }).toBuffer();
+
+  const regular = await png(1041, 371);
+  ok(regular.length < 1024 * 1024);
+  const regularId = await uploadPng("desktop-capture.png", regular);
+  // A 400 grid tile is painted ~170px wide, so shipping the whole PNG there is pure waste.
+  const tile = await thumbnail(regularId);
+  equal(tile.status, 200);
+  equal(tile.headers.get("content-type"), "image/webp");
+  equal(tile.headers.get("x-lifeos-asset-source"), "local-derived");
+  const direct = await thumbnail(regularId, 1200);
+  equal(direct.status, 200);
+  equal(direct.headers.get("content-type"), "image/png");
+  equal(direct.headers.get("x-lifeos-asset-source"), "original-png");
+  ok(Buffer.from(await direct.arrayBuffer()).equals(regular), "eligible PNG bytes must reach the browser unchanged at background sizes");
+
+  const largeEdge = await png(2200, 371);
+  const largeEdgeId = await uploadPng("wide-capture.png", largeEdge);
+  const edgeResponse = await thumbnail(largeEdgeId);
+  equal(edgeResponse.headers.get("content-type"), "image/webp");
+  equal((await sizeOf(Buffer.from(await edgeResponse.arrayBuffer()))).width, 400, "screenshots wider than 2048px still downscale");
+
+  const largePixels = await png(1800, 1800);
+  const largePixelsId = await uploadPng("dense-capture.png", largePixels);
+  const pixelResponse = await thumbnail(largePixelsId);
+  equal(pixelResponse.headers.get("content-type"), "image/webp");
+  equal((await sizeOf(Buffer.from(await pixelResponse.arrayBuffer()))).width, 400, "screenshots over three megapixels still downscale");
+
+  const largeBytes = await png(800, 800, 0);
+  ok(largeBytes.length > 1024 * 1024, "fixture must exceed the one-MiB transfer gate");
+  const largeBytesId = await uploadPng("large-png.png", largeBytes);
+  const byteResponse = await thumbnail(largeBytesId);
+  equal(byteResponse.headers.get("content-type"), "image/webp");
+  equal((await sizeOf(Buffer.from(await byteResponse.arrayBuffer()))).width, 400, "large PNG payloads still derive a smaller version");
+});
+
 test("opened photo previews bound both dimensions, retain orientation and leave originals unchanged", async (t) => {
   const assetRoot = mkdtempSync(join(tmpdir(), "lifeos-photo-preview-"));
   t.after(() => rmSync(assetRoot, { recursive: true, force: true }));
@@ -5017,11 +5066,12 @@ test("calendar summaries defer today, reuse meaningful content, coalesce force a
   const record = created.body as RecordView;
   let calls = 0, fail = false;
   const provider: DaySummaryProvider = { providerId: "fake", kind: "ai", contextKey: "fake-A", summarizeDays: async days => {
-    calls++; await new Promise(r => setTimeout(r, 15)); if (fail) throw Error("isolated failure");
+    calls++; await new Promise(r => setTimeout(r, 15)); if (fail) throw Error("DeepSeek responded 503");
     return days.map(d => ({ date: d.date, text: "江边散步" }));
   } };
   const cache = harness.app.repository;
-  const base = { dates: ["2026-10-06"], recordsForDate: () => [record], cache, provider };
+  const providerFallbacks: DaySummaryProviderFallback[] = [];
+  const base = { dates: ["2026-10-06"], recordsForDate: () => [record], cache, provider, onProviderFallback: (failure: DaySummaryProviderFallback) => providerFallbacks.push(failure) };
   await resolveDaySummaries({ ...base, today: "2026-10-06" }); equal(calls, 0); ok(cache.readDaySummary("2026-10-06")?.contextRevision?.startsWith("provisional:v1:"));
   equal((await resolveDaySummaries({ ...base, today: "2026-10-05" })).length, 0); equal(calls, 0);
   await Promise.all([resolveDaySummaries({ ...base, today: "2026-10-07" }), resolveDaySummaries({ ...base, today: "2026-10-07" })]); equal(calls, 1);
@@ -5035,10 +5085,126 @@ test("calendar summaries defer today, reuse meaningful content, coalesce force a
   fail = true;
   const changed = { ...record, body: { ...record.body, edited: "内容已修改" } };
   const failed = await resolveDaySummaries({ ...base, recordsForDate: () => [changed] }); equal(calls, 3); ok(failed[0]?.retryAfter);
+  deepEqual(providerFallbacks, [{ provider: "fake", dates: ["2026-10-06"], reason: "http_error", httpStatus: 503 }]);
   const reopened = new SqliteRecordRepository(join(harness.root, "lifeos.sqlite"));
   try { await resolveDaySummaries({ ...base, cache: reopened, recordsForDate: () => [changed] }); equal(calls, 3, "failure backoff persists in SQLite"); } finally { reopened.close(); }
   cache.writeDaySummary({ ...failed[0]!, retryAfter: new Date(Date.now() - 1000).toISOString() });
   await resolveDaySummaries({ ...base, recordsForDate: () => [changed] }); equal(calls, 4, "expired backoff permits the next requested attempt");
+  const omittedProvider: DaySummaryProvider = { ...provider, contextKey: "fake-omitted", summarizeDays: async () => [] };
+  const omitted = await resolveDaySummaries({ ...base, dates: ["2026-10-05"], provider: omittedProvider });
+  equal(omitted[0]?.status, "fallback");
+  deepEqual(providerFallbacks[2], { provider: "fake", dates: ["2026-10-05"], reason: "missing_date" });
+});
+
+/** 45 consecutive Shanghai days ending 2026-10-04, oldest first. */
+function summaryDates(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => new Date(Date.UTC(2026, 9, 4) - (count - 1 - index) * 86_400_000).toISOString().slice(0, 10));
+}
+
+test("a long history is summarised in chunks, so one failed chunk cannot hold back the rest", async () => {
+  const cache = new SqliteRecordRepository(":memory:");
+  const record = { id: "rec-batch", revision: 1, kind: "journal", body: { original: "分批测试" }, entityRefs: [] } as unknown as RecordView;
+  const dates = summaryDates(45);
+  const sizes: number[] = [];
+  const fallbacks: DaySummaryProviderFallback[] = [];
+  const provider: DaySummaryProvider = { providerId: "fake", kind: "ai", contextKey: "fake-chunks", summarizeDays: async (days) => {
+    sizes.push(days.length);
+    // Only the first chunk fails: before batching this was "all 45 days failed".
+    if (sizes.length === 1) throw new Error("DeepSeek responded 503");
+    return days.map(day => ({ date: day.date, text: "分批" }));
+  } };
+  const items = await resolveDaySummaries({
+    dates,
+    recordsForDate: () => [record],
+    cache,
+    provider,
+    today: "2026-10-05",
+    onProviderFallback: (failure) => fallbacks.push(failure),
+  });
+
+  deepEqual(sizes, [20, 20, 5], "45 天切成 3 批，每批不超过 20 天");
+  equal(items.length, 45);
+  equal(items.filter(item => item.status === "generated").length, 25, "后两批照常生成");
+  equal(items.filter(item => item.status === "fallback").length, 20, "只有第一批退回离线规则");
+  equal(fallbacks.length, 1, "失败只报一次，不是每天一条");
+  deepEqual(fallbacks[0]!.dates, dates.slice(0, 20));
+  const failedDay = items.find(item => item.date === dates[0])!;
+  equal(failedDay.retryCount, 1, "失败的天记一次");
+  ok(failedDay.retryAfter, "并带上退避时间");
+  equal(items.find(item => item.date === dates[44])!.retryCount, undefined, "成功的天不带失败计数");
+  cache.close();
+});
+
+test("the background pass caps how much history one run asks the model about, and the next run picks up the rest", async () => {
+  const cache = new SqliteRecordRepository(":memory:");
+  const record = { id: "rec-cap", revision: 1, kind: "journal", body: { original: "限量测试" }, entityRefs: [] } as unknown as RecordView;
+  const dates = summaryDates(45);
+  const sizes: number[] = [];
+  const provider: DaySummaryProvider = { providerId: "fake", kind: "ai", contextKey: "fake-cap", summarizeDays: async (days) => {
+    sizes.push(days.length);
+    return days.map(day => ({ date: day.date, text: "限量" }));
+  } };
+  const base = { dates, recordsForDate: () => [record], cache, provider, today: "2026-10-05" };
+
+  const first = await resolveDaySummaries({ ...base, maxStale: 25 });
+  deepEqual(sizes, [20, 5], "一轮最多 25 天、仍然按 20 天一批");
+  equal(first.length, 25);
+  equal(first[0]!.date, dates[20], "从最近的日子往回补");
+  equal(cache.readDaySummary(dates[0]!), null, "超出上限的日子这一轮不动，也不写兜底");
+
+  await resolveDaySummaries({ ...base, maxStale: 25 });
+  deepEqual(sizes, [20, 5, 20], "下一轮接着补剩下的 20 天");
+  equal(cache.readDaySummary(dates[0]!)?.status, "generated");
+  cache.close();
+});
+
+test("a day that keeps failing backs off 24h, 48h, 7d and then stops asking on its own", async () => {
+  const cache = new SqliteRecordRepository(":memory:");
+  const record = { id: "rec-backoff", revision: 1, kind: "journal", body: { original: "退避测试" }, entityRefs: [] } as unknown as RecordView;
+  let calls = 0;
+  const provider: DaySummaryProvider = { providerId: "fake", kind: "ai", contextKey: "fake-backoff", summarizeDays: async () => { calls++; throw new Error("DeepSeek responded 401"); } };
+  const base = { dates: ["2026-10-04"], recordsForDate: () => [record], cache, provider, today: "2026-10-05" };
+  const delayOf = (item: DaySummary) => Date.parse(item.retryAfter!) - Date.now();
+
+  const first = (await resolveDaySummaries(base))[0]!;
+  equal(first.retryCount, 1); ok(Math.abs(delayOf(first) - SUMMARY_RETRY_BACKOFF_MS[0]!) < 10_000, "第一次失败等一天");
+  const expire = (item: DaySummary) => cache.writeDaySummary({ ...item, retryAfter: new Date(Date.now() - 1000).toISOString() });
+
+  expire(first);
+  const second = (await resolveDaySummaries(base))[0]!;
+  equal(second.retryCount, 2); ok(Math.abs(delayOf(second) - SUMMARY_RETRY_BACKOFF_MS[1]!) < 10_000, "第二次失败等两天");
+  expire(second);
+  const third = (await resolveDaySummaries(base))[0]!;
+  equal(third.retryCount, 3); ok(Math.abs(delayOf(third) - SUMMARY_RETRY_BACKOFF_MS[2]!) < 10_000, "第三次失败等一周");
+  expire(third);
+  const fourth = (await resolveDaySummaries(base))[0]!;
+  equal(calls, SUMMARY_MAX_AUTO_ATTEMPTS, "四次自动尝试");
+  equal(fourth.retryCount, SUMMARY_MAX_AUTO_ATTEMPTS);
+  equal(fourth.retryAfter, undefined, "用完自动次数后不再安排下一次");
+
+  await resolveDaySummaries(base);
+  equal(calls, SUMMARY_MAX_AUTO_ATTEMPTS, "停手之后不再偷偷重问模型");
+  await resolveDaySummaries(base);
+  equal(calls, SUMMARY_MAX_AUTO_ATTEMPTS, "也不会因为别的天刷新而顺手再试");
+
+  const edited = { ...record, body: { original: "内容改了" } } as unknown as RecordView;
+  const restarted = (await resolveDaySummaries({ ...base, recordsForDate: () => [edited] }))[0]!;
+  equal(calls, SUMMARY_MAX_AUTO_ATTEMPTS + 1, "记录改了就重新给一次机会");
+  equal(restarted.retryCount, 1, "计数从头开始");
+  cache.close();
+});
+
+test("API diagnostic events append as structured lines in the normal daily request log", async t => {
+  const logDirectory = mkdtempSync(join(tmpdir(), "lifeos-api-log-"));
+  const previous = process.env.LIFEOS_LOG_DIR;
+  process.env.LIFEOS_LOG_DIR = logDirectory;
+  t.after(() => { if (previous === undefined) delete process.env.LIFEOS_LOG_DIR; else process.env.LIFEOS_LOG_DIR = previous; rmSync(logDirectory, { recursive: true, force: true }); });
+  writeApiLogEvent("day_summary_ai_fallback", { surface: "calendar_read", provider: "deepseek", model: "deepseek-flash", dates: ["2026-10-19"], reason: "http_error", httpStatus: 503 });
+  const logFile = join(logDirectory, `api-${new Date().toISOString().slice(0, 10)}.log`);
+  const entries = readFileSync(logFile, "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
+  equal(entries.length, 1);
+  equal(entries[0]?.event, "day_summary_ai_fallback"); equal(entries[0]?.reason, "http_error"); equal(entries[0]?.httpStatus, 503);
+  ok(!("text" in entries[0]!) && !("apiKey" in entries[0]!), "event contains no source content or credentials");
 });
 
 test("photo details ignore absent metadata and safely bound corrupt TIFF pointers", async () => {

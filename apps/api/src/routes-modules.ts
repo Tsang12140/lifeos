@@ -38,7 +38,23 @@ export const handleModulesRoutes: RouteHandler = async (
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
     // Habit edits have their own revision-checked routes. Old settings clients
     // must not erase habits or overwrite marks from a stale config snapshot.
-    repository.writeCycleIntimacyConfig({ ...cycleIntimacyConfig(input), ...(repository.cycleIntimacyModule().config.habits ? { habits: repository.cycleIntimacyModule().config.habits } : {}) });
+    const current = repository.cycleIntimacyModule().config;
+    const proposed = cycleIntimacyConfig(input);
+    if (proposed.subjectId && !repository.findEntityById(proposed.subjectId)?.type?.includes("person")) throw new HttpError(400, "unknown_subject", "请从联系人中选择人物");
+    repository.writeCycleIntimacyConfig({ ...proposed, ...(current.habits ? { habits: current.habits } : {}), ...(current.otherSubjects ? { otherSubjects: current.otherSubjects } : {}) });
+    setJson(res, 200, cycleModuleResponse(repository));
+    return true;
+  }
+  if (pathname === "/api/modules/cycle-intimacy/transfer" && req.method === "POST") {
+    requireJsonContentType(req);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, ["groupKeys", "targetSubjectId", "revision"]);
+    if (!Array.isArray(input.groupKeys) || input.groupKeys.length > 100 || !input.groupKeys.every(key => typeof key === "string" && key.length > 0)) throw new HttpError(400, "invalid_groups", "请选择要转移的经期");
+    const targetSubjectId = input.targetSubjectId === null || input.targetSubjectId === undefined ? undefined : stringField(input.targetSubjectId, "targetSubjectId", { nonEmpty: true });
+    if (targetSubjectId && repository.findEntityById(targetSubjectId)?.type !== "person") throw new HttpError(400, "unknown_subject", "请从联系人中选择人物");
+    if (stringField(input.revision, "revision") !== repository.cycleIntimacyEventRevision()) throw new HttpError(409, "cycle_conflict", "周期记录已改变，请重新载入");
+    try { repository.transferCyclePeriods(input.groupKeys as string[], targetSubjectId); }
+    catch (error) { throw new HttpError(409, "cycle_transfer_conflict", error instanceof Error ? error.message : "转移失败"); }
     setJson(res, 200, cycleModuleResponse(repository));
     return true;
   }

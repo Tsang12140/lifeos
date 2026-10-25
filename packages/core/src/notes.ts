@@ -13,10 +13,10 @@ export function assertNoteFolders(value: unknown): asserts value is readonly Not
     const ids = new Map<string, NoteFolder>();
     const names = new Set<string>();
     for (const folder of value) {
-        if (!folder || typeof folder !== "object" || typeof folder.id !== "string" || !folder.id || folder.id.length > 512 || typeof folder.name !== "string" || !folder.name.trim() || folder.name.length > 100 || !(folder.parentId === null || typeof folder.parentId === "string") || !Number.isSafeInteger(folder.revision) || folder.revision < 1 || !Number.isFinite(Date.parse(folder.createdAt)) || !Number.isFinite(Date.parse(folder.updatedAt)))
+        if (!folder || typeof folder !== "object" || typeof folder.id !== "string" || !folder.id || folder.id.length > 512 || typeof folder.name !== "string" || !folder.name.trim() || folder.name.length > 100 || !(folder.parentId === null || typeof folder.parentId === "string") || !Number.isSafeInteger(folder.revision) || folder.revision < 1 || typeof folder.createdAt !== 'string' || typeof folder.updatedAt !== 'string' || !Number.isFinite(Date.parse(folder.createdAt)) || !Number.isFinite(Date.parse(folder.updatedAt)))
             throw new Error("笔记文件夹数据无效");
         const key = JSON.stringify([folder.parentId, folder.name.trim()]);
-        if (folder.name === '.' || folder.name === '..' || /[\/\\\u0000-\u001f]/.test(folder.name))
+        if (folder.name.trim() === '.' || folder.name.trim() === '..' || /[\/\\\u0000-\u001f]/.test(folder.name))
             throw new Error('文件夹名称不能含路径分隔符');
         if (ids.has(folder.id) || names.has(key))
             throw new Error("笔记文件夹重复");

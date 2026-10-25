@@ -2,6 +2,7 @@ export * from "./model.js";
 export * from "./contact-activity.js";
 export * from "./assistant-backfill.js";
 export * from "./assistant-history.js";
+export * from "./assistant-welcome.js";
 export * from "./mention.js";
 export * from "./mention-review.js";
 export * from "./ui-command.js";
@@ -21,3 +22,7 @@ export * from "./photo-wall.js";
 export { PLACE_CITY_CATALOG } from "./place-cities.js";
 
 export * from "./notes.js";
+export * from "./dreams.js";
+
+export * from './app-lock.js';
+export * from "./assistant-citations.js";

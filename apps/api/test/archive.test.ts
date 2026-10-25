@@ -1,12 +1,11 @@
 import test from "node:test";
 import { equal, ok, deepEqual, rejects, throws } from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { IncomingMessage } from "node:http";
 import { ArchiveService } from "../src/archive-service.js";
 import { StoragePoolStore } from "../src/storage-pool-store.js";
@@ -16,6 +15,10 @@ import { trashPathFor } from "../src/asset-gc.js";
 import { readConfig, type ApiConfig } from "../src/config.js";
 import { spaceFingerprint } from "../src/portable-space.js";
 import { encryptArchive, decryptArchive } from "../src/encrypted-archive.js";
+import { ARCHIVE_CATEGORIES, planMerge, type ArchiveSelection } from "../src/archive-merge.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
+
+const ALL_CATEGORIES: ArchiveSelection = { categories: [...ARCHIVE_CATEGORIES] };
 
 process.env.LIFEOS_LOG_DIR ??= join(tmpdir(), "lifeos-archive-test-logs");
 const { createHttpServer } = await import("../src/server.js");
@@ -23,7 +26,7 @@ const { createHttpServer } = await import("../src/server.js");
 async function harness(overrides: Partial<ApiConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "lifeos-archive-test-")); mkdirSync(join(dir, "assets"));
   const config = { ...readConfig({ LIFEOS_DATA_DIR: join(dir, "data"), LIFEOS_ASSET_ROOT: join(dir, "assets"), LIFEOS_PORT: "3099" }), ...overrides };
-  const { app, server } = createHttpServer(config); server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const { app, server } = createHttpServer(config); await listenOnFetchablePort(server);
   const address = server.address(); if (!address || typeof address === "string") throw Error("no test port");
   return { dir, app, config, base: `http://127.0.0.1:${address.port}`, stop: async () => { await new Promise<void>(r => server.close(() => r())); app.close(); const full = resolve(dir); if (!full.startsWith(resolve(tmpdir()) + requireSeparator())) throw Error("unsafe test cleanup"); rmSync(full, { recursive: true, force: true }); } };
 }
@@ -175,8 +178,8 @@ test("cloud originals are included without another stored archive, download quot
   const preflight = async () => ({ storageFreeBytes: 4096, trafficFreeBytes: 4096, month });
   const sourceCtx = { config: source.config, repository: source.app.repository, poolStore: store, poolBridge: bridge, poolAccountId: account, poolPreflight: preflight } as unknown as RouteContext;
   const service = new ArchiveService(); t.after(async () => { service.close(); store.close(); await source.stop(); await target.stop(); });
-  equal((await service.estimate(sourceCtx)).cloudReadBytes, bytes.length);
-  const id = await service.export(sourceCtx, "remote-test-password");
+  equal((await service.estimate(sourceCtx, ALL_CATEGORIES)).cloudReadBytes, bytes.length);
+  const id = await service.export(sourceCtx, "remote-test-password", ALL_CATEGORIES);
   for (let i = 0; i < 200 && service.view(id).phase === "working"; i++) await new Promise(r => setTimeout(r, 30));
   equal(service.view(id).phase, "ready", service.view(id).error); equal(puts, 0); equal(downloads, 1); equal(store.usage(account, month).trafficUsedBytes, bytes.length);
   const encrypted = readFileSync(join(service.get(id).directory, "archive.lifeos")); await service.remove(id);
@@ -188,10 +191,125 @@ test("cloud originals are included without another stored archive, download quot
   await service.prepareImport(targetCtx, localId, "remote-test-password");
   for (let i = 0; i < 200 && service.view(localId).phase === "working"; i++) await new Promise(r => setTimeout(r, 30));
   equal(service.view(localId).phase, "ready", service.view(localId).error);
-  await rejects(service.commitImport(targetCtx, localId), /当前空间已发生变化/);
+  await rejects(service.commitImport(targetCtx, localId, "replace"), /当前空间已发生变化/);
   equal(target.app.repository.exportData().records.length, 1); equal(target.app.repository.exportData().assets.length, 0);
   deepEqual(deleted, ["pool/import-original"]); equal(store.poolObject(account, "remote", "pool/import-original"), null); ok(store.poolObject(account, "remote", "pool/source-original"));
   await service.remove(localId);
   store.saveQuota(account, { storageLimitBytes: 4096, trafficLimitBytes: 0 }, 4096, 4096);
-  await rejects(service.estimate(sourceCtx), /流量超过剩余额度/);
+  await rejects(service.estimate(sourceCtx, ALL_CATEGORIES), /流量超过剩余额度/);
+});
+
+test("incremental merge adds only new content, reuses originals by hash and stays idempotent", async (t) => {
+  const source = await harness(), target = await harness(); t.after(source.stop); t.after(target.stop);
+  const bytes = Buffer.from("identical original bytes on both sides");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  writeFileSync(join(source.dir, "assets", "source-photo.jpg"), bytes);
+  writeFileSync(join(target.dir, "assets", "existing-photo.jpg"), bytes);
+  source.app.repository.insertAsset({ id: "src-photo", kind: "photo", mediaType: "image/jpeg", sizeBytes: bytes.length, storageRefs: [{ sourceId: "local", sourceRef: "source-photo.jpg", contentHash: { algorithm: "sha256", value: hash } }] });
+  target.app.repository.insertAsset({ id: "existing-photo", kind: "photo", mediaType: "image/jpeg", sizeBytes: bytes.length, storageRefs: [{ sourceId: "local", sourceRef: "existing-photo.jpg", contentHash: { algorithm: "sha256", value: hash } }] });
+  await json(source.base, "/api/records", { kind: "journal", content: "共同记忆", occurredAt: { kind: "date", value: "2026-08-01" } });
+  await json(source.base, "/api/records", { kind: "journal", content: "只在新包", occurredAt: { kind: "date", value: "2026-08-02" } });
+  const { value: photoRecord } = await json(source.base, "/api/records", { kind: "journal", content: "带照片的新包记录", occurredAt: { kind: "date", value: "2026-08-03" }, assetRefs: [{ assetId: "src-photo", role: "photo" }] });
+  // Same words and the same day, but a different database id: this is the fingerprint case.
+  await json(target.base, "/api/records", { kind: "journal", content: "共同记忆", occurredAt: { kind: "date", value: "2026-08-01" } });
+  const targetBefore = spaceFingerprint(target.app.repository.portableSpace());
+
+  const estimate = await json(source.base, "/api/archive/estimate?categories=journal");
+  equal(estimate.response.status, 200, JSON.stringify(estimate.value)); equal(estimate.value.counts.records, 3); equal(estimate.value.complete, false);
+  const started = await json(source.base, "/api/archive/export", { password: "archive-test-password", selection: { categories: ["journal"] } });
+  equal((await ready(source.base, started.value.id)).phase, "ready");
+  const encrypted = Buffer.from(await (await fetch(source.base + `/api/archive/jobs/${started.value.id}/download`)).arrayBuffer());
+  const prepared = await upload(target.base, encrypted, "archive-test-password"); equal(prepared.phase, "ready", prepared.error);
+  equal(prepared.version, 2); equal(prepared.replaceAllowed, false);
+  equal(prepared.merge.tables.records.add, 2); equal(prepared.merge.tables.records.skip, 1);
+  equal(prepared.merge.tables.assets.add, 0); equal(prepared.merge.tables.assets.skip, 1); equal(prepared.merge.files.write, 0); equal(prepared.merge.files.reuse, 1);
+  equal(spaceFingerprint(target.app.repository.portableSpace()), targetBefore, "preview never touches target data");
+
+  const committed = await json(target.base, "/api/archive/commit", { id: prepared.id, mode: "merge" });
+  equal(committed.response.status, 200, JSON.stringify(committed.value)); ok(committed.value.batchId);
+  const space = target.app.repository.portableSpace();
+  equal(space.records.rows.length, 3); equal(space.assets.rows.length, 1, "hash-identical original is reused, not duplicated");
+  equal(target.app.repository.findAssetById("src-photo"), null);
+  const imported = target.app.repository.findById(photoRecord.id)!;
+  equal(imported.assetRefs[0]!.assetId, "existing-photo");
+  ok(!existsSync(join(target.dir, "assets", "uploads")) || readdirSync(join(target.dir, "assets", "uploads")).length === 0);
+
+  const again = await upload(target.base, encrypted, "archive-test-password"); equal(again.phase, "ready", again.error);
+  equal(again.merge.tables.records.add, 0, "the same package cannot add a record twice"); equal(again.merge.tables.records.skip, 3);
+  equal(again.merge.tables.assets.add, 0); equal(again.merge.files.write, 0);
+  const second = await json(target.base, "/api/archive/commit", { id: again.id, mode: "merge" }); equal(second.response.status, 200, JSON.stringify(second.value));
+  equal(target.app.repository.portableSpace().records.rows.length, 3);
+});
+
+test("batch undo removes exactly what one merge added and refuses after later edits", async (t) => {
+  const source = await harness(), target = await harness(); t.after(source.stop); t.after(target.stop);
+  const bytes = Buffer.from("undo fixture original");
+  writeFileSync(join(source.dir, "assets", "undo.jpg"), bytes);
+  source.app.repository.insertAsset({ id: "undo-photo", kind: "photo", mediaType: "image/jpeg", sizeBytes: bytes.length, storageRefs: [{ sourceId: "local", sourceRef: "undo.jpg", contentHash: { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") } }] });
+  const { value: record } = await json(source.base, "/api/records", { kind: "journal", content: "会被整批撤销的记录", occurredAt: { kind: "date", value: "2026-09-01" }, assetRefs: [{ assetId: "undo-photo", role: "photo" }] });
+  await json(target.base, "/api/records", { kind: "journal", content: "目标原有内容" });
+  const targetBefore = spaceFingerprint(target.app.repository.portableSpace());
+  const exportJob = await json(source.base, "/api/archive/export", { password: "archive-test-password" });
+  equal((await ready(source.base, exportJob.value.id)).phase, "ready");
+  const encrypted = Buffer.from(await (await fetch(source.base + `/api/archive/jobs/${exportJob.value.id}/download`)).arrayBuffer());
+  const prepared = await upload(target.base, encrypted, "archive-test-password"); equal(prepared.phase, "ready", prepared.error);
+  const committed = await json(target.base, "/api/archive/commit", { id: prepared.id, mode: "merge" }); equal(committed.response.status, 200, JSON.stringify(committed.value));
+  const batchId = String(committed.value.batchId);
+  ok(target.app.repository.findById(record.id));
+  const storedRef = target.app.repository.findAssetById("undo-photo")!.storageRefs[0]!.sourceRef;
+  ok(existsSync(join(target.dir, "assets", storedRef)));
+
+  // A second identical upload proves undo is unaffected by a fresh preview.
+  const preview = await upload(target.base, encrypted, "archive-test-password"); equal(preview.phase, "ready", preview.error);
+  equal(preview.merge.tables.records.add, 0); await fetch(target.base + `/api/archive/jobs/${preview.id}`, { method: "DELETE" });
+
+  const batches = await json(target.base, "/api/archive/batches"); equal(batches.value.items.length, 1); equal(batches.value.items[0].id, batchId);
+  const undone = await fetch(target.base + `/api/archive/batches/${batchId}`, { method: "DELETE" }); equal(undone.status, 200, await undone.text());
+  equal(spaceFingerprint(target.app.repository.portableSpace()), targetBefore, "undo restores the exact previous space");
+  equal(target.app.repository.findById(record.id), null); equal(target.app.repository.findAssetById("undo-photo"), null);
+  ok(!existsSync(join(target.dir, "assets", storedRef)), "originals copied by this batch are removed");
+  equal((await fetch(target.base + `/api/archive/batches/${batchId}`, { method: "DELETE" })).status, 409);
+
+  // Edit one imported record after merging: the whole batch must refuse to undo.
+  const mergeAgain = await upload(target.base, encrypted, "archive-test-password"); equal(mergeAgain.phase, "ready", mergeAgain.error);
+  const second = await json(target.base, "/api/archive/commit", { id: mergeAgain.id, mode: "merge" }); equal(second.response.status, 200, JSON.stringify(second.value));
+  const current = target.app.repository.findById(record.id)!;
+  equal((await json(target.base, `/api/records/${record.id}`, undefined)).response.status, 200);
+  const patched = await fetch(target.base + `/api/records/${record.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ revision: current.revision, content: "导入后被改过的内容" }) });
+  equal(patched.status, 200, await patched.text());
+  const refused = await fetch(target.base + `/api/archive/batches/${second.value.batchId}`, { method: "DELETE" });
+  equal(refused.status, 409); equal((await refused.json() as any).error, "archive_undo_conflict");
+  ok(target.app.repository.findById(record.id));
+});
+
+test("partial packages refuse replacement and the planner keeps the target on every conflict", async (t) => {
+  const source = await harness(), target = await harness(); t.after(source.stop); t.after(target.stop);
+  await json(source.base, "/api/records", { kind: "journal", content: "只导出日记", occurredAt: { kind: "date", value: "2026-07-01" } });
+  await json(source.base, "/api/records", { kind: "task", content: "不导出的待办", occurredAt: { kind: "date", value: "2026-07-02" } });
+  const started = await json(source.base, "/api/archive/export", { password: "archive-test-password", selection: { categories: ["journal"] } });
+  equal((await ready(source.base, started.value.id)).phase, "ready");
+  const encrypted = Buffer.from(await (await fetch(source.base + `/api/archive/jobs/${started.value.id}/download`)).arrayBuffer());
+  const prepared = await upload(target.base, encrypted, "archive-test-password"); equal(prepared.phase, "ready", prepared.error);
+  equal(prepared.merge.tables.records.add, 1, "the task stayed out of the partial package");
+  const replaced = await json(target.base, "/api/archive/commit", { id: prepared.id, mode: "replace", replaceConfirmed: true });
+  equal(replaced.response.status, 409); equal(replaced.value.error, "archive_replace_unavailable");
+
+  // Planner-level conflicts: same id with different words, and a reference that left the package.
+  const incoming = structuredClone(source.app.repository.portableSpace());
+  const { value: keep } = await json(target.base, "/api/records", { kind: "journal", content: "目标自己的记录" });
+  const targetTables = target.app.repository.portableSpace();
+  const before = spaceFingerprint(targetTables);
+  const bodyIndex = incoming.records.columns.indexOf("body_json"), idIndex = incoming.records.columns.indexOf("id");
+  const entityIndex = incoming.records.columns.indexOf("entity_refs_json");
+  const rows = incoming.records.rows.map(item => [...item] as SQLInputValue[]);
+  rows[0]![idIndex!] = keep.id; rows[0]![bodyIndex!] = JSON.stringify({ original: "同一编号但内容不同" });
+  rows[1]![entityIndex!] = JSON.stringify([{ entityId: "missing-entity", entityType: "person" }]);
+  incoming.records.rows = rows;
+  const plan = planMerge(targetTables, incoming, [], ALL_CATEGORIES);
+  equal(plan.summary.conflictTotal, 1); equal(plan.summary.conflicts[0]!.reason.includes("已保留现有记录"), true);
+  equal(plan.inserts.records.rows.some(item => String(item[idIndex!]) === keep.id), false, "a conflict is never written");
+  ok(plan.summary.strippedReferences > 0);
+  const added = plan.inserts.records.rows.find(item => String(item[idIndex!]) === String(rows[1]![idIndex!]))!;
+  deepEqual(JSON.parse(String(added[entityIndex!])), [], "a dangling reference is stripped");
+  equal(spaceFingerprint(target.app.repository.portableSpace()), before, "planning is read-only");
 });

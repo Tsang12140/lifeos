@@ -130,7 +130,7 @@ export function WelcomeGate({ onLogin, loginError, loginLoading, onFinished }: {
 
   const isLogin = stage === "login";
   return <main className={`welcome-screen${isLogin ? " welcome-login-screen" : ""}`}>{isLogin ? <LoginIntro /> : null}<div className={`welcome-shell${isLogin ? " welcome-login-shell" : ""}`}>
-    <div className="welcome-brand" aria-label="LifeOS"><img className="welcome-brand-mark" src="/favicon.svg?v=2" alt="" /><span>LifeOS</span></div>
+    <div className="welcome-brand" aria-label="LifeOS"><img className="welcome-brand-mark" src="/favicon.svg?v=3" alt="" /><span>LifeOS</span></div>
     <section className={`welcome-panel${isLogin ? " welcome-login-panel" : ""}`} aria-labelledby="welcome-title">
       {isLogin ? <LoginCardBrand /> : null}
       <div className="welcome-step-icon" aria-hidden="true">{stage === "weather" ? <CloudSun size={24} /> : stage === "login" ? <LockKeyhole size={24} /> : <KeyRound size={24} />}</div>

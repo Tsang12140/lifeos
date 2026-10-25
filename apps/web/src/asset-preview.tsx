@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { Asset } from "@lifeos/core";
-import { ChevronLeft, ChevronRight, Download, Info, LoaderCircle, Maximize, Minus, Plus, RotateCcw, RotateCw, X } from "lucide-react";
+import { Download, Info, LoaderCircle, Maximize, Minus, Plus, RotateCcw, RotateCw, X } from "lucide-react";
 import { apiRequest, type RecordView } from "./api";
-import { assetContentUrl, viewerThumbUrl } from "./asset-urls";
+import { DateStepGlyph } from "./date-step-glyph";
+import { GalleryNavIcon } from "./gallery-nav-icon";
+import { assetContentUrl, assetThumbUrl, viewerThumbUrl } from "./asset-urls";
 import { boundPhoto, fitPhoto, fitTransform, zoomPhoto, type PhotoTransform } from "./asset-preview-model";
 import { PhotoInformation, photoSummary, usePhotoInfo, type PhotoInfo } from "./photo-info";
 import { lockDialogScroll } from "./dialog-scroll-lock";
@@ -15,12 +17,14 @@ export interface PreviewImage { readonly id: string; readonly url: string; reado
 interface Props {
   assetIds: readonly string[]; index: number; assets: readonly Asset[]; images?: readonly PreviewImage[];
   owners?: readonly RecordView[]; onClose: () => void; onIndexChange: (index: number) => void;
+  onEnterDiary?: (record: RecordView) => void;
+  onOpenGallery?: (assetId: string, owner?: RecordView) => void;
   onAssetChange?: (asset: Asset) => void;
 }
 interface EntryState { transform: PhotoTransform; rotation: number; original: boolean }
 type Point = { x: number; y: number };
 
-export function AssetPreview({ assetIds, index, assets, images, owners, onClose, onIndexChange, onAssetChange }: Props) {
+export function AssetPreview({ assetIds, index, assets, images, owners, onClose, onIndexChange, onEnterDiary, onOpenGallery, onAssetChange }: Props) {
   const id = assetIds[index] ?? assetIds[0] ?? "";
   const asset = assets.find(a => a.id === id), image = images?.find(a => a.id === id), owner = owners?.[index];
   const key = `${owner?.id ?? ""}:${id}`;
@@ -34,6 +38,10 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
   const current = useRef(entry); current.current = entry;
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 760px)").matches);
   const [sheet, setSheet] = useState(false);
+  const [entryPrompt, setEntryPrompt] = useState(false);
+  const entryClick = useRef<{ ownerId: string; until: number } | null>(null);
+  const entryTimer = useRef<number | null>(null);
+  const entryPress = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false), mounted = useRef(true);
@@ -106,8 +114,11 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
     query.addEventListener("change", change); return () => query.removeEventListener("change", change);
   }, []);
   useEffect(() => {
-    setSheet(false); setSaveError(""); pointers.current.clear(); gesture.current = null;
+    setSheet(false); setSaveError(""); setEntryPrompt(false); entryClick.current = null;
+    if (entryTimer.current !== null) window.clearTimeout(entryTimer.current);
+    pointers.current.clear(); gesture.current = null;
   }, [key]);
+  useEffect(() => () => { if (entryTimer.current !== null) window.clearTimeout(entryTimer.current); }, []);
   useEffect(() => { if (reading.current) reading.current.scrollTop = 0; }, [owner?.id]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -198,6 +209,19 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
   const nextDiary = owner ? owners?.findIndex((o,i) => i>index && o.id!==owner.id) ?? -1 : -1;
   const ownerIndices = owner ? owners?.flatMap((o,i)=>o.id===owner.id?[i]:[]) ?? [] : [];
   const photoIndex = owner ? ownerIndices.indexOf(index)+1 : index+1, photoCount = owner ? ownerIndices.length : assetIds.length;
+  const galleryIndices = owner ? ownerIndices : assetIds.map((_, i) => i);
+  const enterDiary = () => {
+    if (!owner || !onEnterDiary || entryPress.current?.moved) return;
+    const now = performance.now();
+    if (entryClick.current?.ownerId === owner.id && now <= entryClick.current.until) {
+      entryClick.current = null; setEntryPrompt(false); onEnterDiary(owner); return;
+    }
+    if (window.getSelection()?.isCollapsed === false) return;
+    entryClick.current = { ownerId: owner.id, until: now + 1600 };
+    setEntryPrompt(true);
+    if (entryTimer.current !== null) window.clearTimeout(entryTimer.current);
+    entryTimer.current = window.setTimeout(() => { entryClick.current = null; setEntryPrompt(false); entryTimer.current = null; }, 1600);
+  };
   const summary = video ? [] : photoSummary(info.value);
   const scale = fit * view.zoom;
   const imageStyle: CSSProperties = { width: dimensions.width * scale, height: dimensions.height * scale, transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) rotate(${entry.rotation}deg)` };
@@ -225,7 +249,14 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
           {status==="loading"?<span className="asset-preview-loading" role="status" aria-label="正在加载照片"><LoaderCircle className="spin" size={18}/></span>:null}
           {status==="error"?<div className="asset-preview-status" role="status"><span>照片未能加载，请重试</span><button className="photo-tool" onClick={()=>{setLoad({url,status:"loading"});setAttempt(v=>v+1);}}>重试</button></div>:null}
         </div>
-        <figcaption aria-live="polite">{owner?"本篇 ":""}{photoIndex} / {photoCount}</figcaption>
+        <figcaption className="photo-mini-gallery" aria-label={`${owner?"本篇":"照片"} ${photoIndex} / ${photoCount}`}>
+          {[-2,-1,0,1,2].map(offset => {
+            const target = galleryIndices[photoIndex - 1 + offset];
+            const targetId = target === undefined ? undefined : assetIds[target];
+            const targetAsset = targetId ? assets.find(a => a.id === targetId) : undefined;
+            return targetId === undefined ? <span className="photo-mini-slot" key={offset} aria-hidden="true" /> : <button type="button" key={offset} className="photo-mini-slot photo-mini-thumb" data-distance={Math.abs(offset)} aria-label={`本篇第 ${photoIndex + offset} 张${offset === 0 ? "，当前" : ""}`} aria-current={offset === 0 ? "true" : undefined} disabled={saving || offset === 0} onClick={() => onIndexChange(target)}>{targetAsset?.kind === "video" ? <span aria-hidden="true">▶</span> : <img src={images?.find(a => a.id === targetId)?.url ?? assetThumbUrl(targetId, 400)} alt="" loading="lazy" decoding="async" />}</button>;
+          })}
+        </figcaption>
       </figure>
       <div className="photo-toolbar" role="group" aria-label="图片工具">
         {!video?<>
@@ -236,20 +267,22 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
           {button("放大",<Plus size={18}/>,()=>zoom(1.25),view.zoom>=maxZoom)}
           {button("适应窗口",<Maximize size={18}/>,()=>changeView(fitTransform()))}
           {derived?<button type="button" className="photo-tool photo-original" aria-label={entry.original?"返回预览":"查看原图"} aria-pressed={entry.original} onClick={()=>update({original:!entry.original})}>{entry.original?"预览":"原图"}</button>:null}
+          {asset?.kind === "photo" && onOpenGallery ? button("打开图库", <GalleryNavIcon size={18} />, () => onOpenGallery(id, owner), saving) : null}
         </>:null}
-        <a className="photo-tool" href={image?.url??`${assetContentUrl(id)}?download=1`} download={image?.name??asset?.originalName??"photo"} aria-label="下载原文件" title="下载原文件"><Download size={18}/></a>
+        <a className="photo-tool" href={image?.url??assetContentUrl(id, true)} download={image?.name??asset?.originalName??"photo"} aria-label="下载原文件" title="下载原文件"><Download size={18}/></a>
       </div>
       {saving?<span className="photo-save-state" role="status">正在保存方向…</span>:saveError?<span className="photo-save-state" role="alert">{saveError}</span>:null}
     </section>
-    {index>0?<button type="button" className="asset-preview-nav asset-preview-nav-prev" disabled={saving} aria-label="上一张" title="上一张（←）" onClick={()=>navigate(-1)}><ChevronLeft size={22}/></button>:null}
-    {index<assetIds.length-1?<button type="button" className="asset-preview-nav asset-preview-nav-next" disabled={saving} aria-label="下一张" title="下一张（→）" onClick={()=>navigate(1)}><ChevronRight size={22}/></button>:null}
+    {index>0?<button type="button" className="asset-preview-nav asset-preview-nav-prev" disabled={saving} aria-label="上一张" title="上一张（←）" onClick={()=>navigate(-1)}><DateStepGlyph direction="left" /></button>:null}
+    {index<assetIds.length-1?<button type="button" className="asset-preview-nav asset-preview-nav-next" disabled={saving} aria-label="下一张" title="下一张（→）" onClick={()=>navigate(1)}><DateStepGlyph direction="right" /></button>:null}
     <aside className="photo-reader-sidebar" id="photo-reader-details" hidden={mobile&&!sheet} aria-label="日记与照片信息">
-      {owner?<div className="photo-diary-navigation" role="group" aria-label="切换日记"><button type="button" className="photo-tool" disabled={saving||previousDiary<0} onClick={()=>{const prev=owners![previousDiary];onIndexChange(owners!.findIndex(o=>o.id===prev.id));}}><ChevronLeft size={15}/>上一篇日记</button><button type="button" className="photo-tool" disabled={saving||nextDiary<0} onClick={()=>onIndexChange(nextDiary)}>下一篇日记<ChevronRight size={15}/></button></div>:null}
+      {owner?<div className="photo-diary-navigation" role="group" aria-label="切换日记"><button type="button" className="photo-tool" aria-label="上一篇日记" title="上一篇日记" disabled={saving||previousDiary<0} onClick={()=>onIndexChange(previousDiary)}><DateStepGlyph direction="left" /></button><time>{lifeTimeDate(owner.occurredAt??owner.createdAt)}{lifeTimeTime(owner.occurredAt??owner.createdAt)?` ${lifeTimeTime(owner.occurredAt??owner.createdAt)}`:""}</time><button type="button" className="photo-tool" aria-label="下一篇日记" title="下一篇日记" disabled={saving||nextDiary<0} onClick={()=>onIndexChange(nextDiary)}><DateStepGlyph direction="right" /></button></div>:null}
       <div className="photo-reader-scroll" ref={reading}>
-        {owner?<article className="photo-reading" key={owner.id} data-record-id={owner.id}><header><span>日记</span><time>{lifeTimeDate(owner.occurredAt??owner.createdAt)}{lifeTimeTime(owner.occurredAt??owner.createdAt)?` ${lifeTimeTime(owner.occurredAt??owner.createdAt)}`:""}</time></header>{recordText(owner)?<p className="photo-reading-body">{recordText(owner)}</p>:null}</article>:null}
+        {owner?<article className="photo-reading" key={owner.id} data-record-id={owner.id}>{recordText(owner)?<p className="photo-reading-body" role="link" tabIndex={0} aria-label="日记正文，连按两次进入时间轴" onPointerDown={event=>{entryPress.current={x:event.clientX,y:event.clientY,moved:false};}} onPointerMove={event=>{const press=entryPress.current;if(press&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>6)press.moved=true;}} onPointerCancel={()=>{entryPress.current=null;}} onClick={event=>{enterDiary();entryPress.current=null;}} onKeyDown={event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();entryPress.current=null;enterDiary();}}}>{recordText(owner)}</p>:null}</article>:null}
         {!video?<div className="photo-information-host"><PhotoInformation key={id} info={info} mobile={mobile}/></div>:null}
       </div>
     </aside>
+    {entryPrompt?<div className="photo-entry-toast" role="status">再点击一次就进入正文</div>:null}
     {mobile?<button className="photo-reading-toggle" type="button" aria-label={sheet?"收起阅读面板":"查看日记与照片信息"} aria-expanded={sheet} aria-controls="photo-reader-details" onClick={()=>setSheet(v=>!v)}><span>{owner?lifeTimeDate(owner.occurredAt??owner.createdAt):summary.find(s=>s.kind==="time")?.text??"照片信息"}</span>{owner?<span>日记与照片信息</span>:null}<Info size={17}/></button>:null}
   </dialog>;
 }

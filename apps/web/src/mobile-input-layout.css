@@ -1,5 +1,6 @@
 /* Approved mobile study: writing surface, then one tools/save footer. */
-.composer-photo-slot, .backfill-photo-slot, .ai-mobile-back { display: none; }
+.composer-photo-slot, .backfill-photo-slot { display: none; }
+.ai-mobile-back { display: none; }
 
 @media (max-width: 900px) {
   .composer.surface > .composer-entry textarea { font-size: 16px; }
@@ -96,25 +97,65 @@
     overscroll-behavior: contain;
   }
   .ai-assistant-panel.has-backfill .ai-assistant-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     min-height: 60px;
     gap: 8px;
     padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
   }
-  .ai-assistant-panel.has-backfill .ai-assistant-title { flex: 1; min-width: 0; gap: 8px; }
+  .ai-assistant-panel.has-backfill .ai-assistant-title {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    justify-content: center;
+    max-width: calc(100% - 168px);
+    gap: 0;
+  }
   .ai-assistant-panel.has-backfill .ai-assistant-title > div { min-width: 0; }
-  .ai-assistant-panel.has-backfill .ai-assistant-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
-  .ai-assistant-panel.has-backfill .ai-assistant-logo { width: 26px; height: 26px; flex: none; }
-  .ai-assistant-panel.has-backfill .ai-assistant-actions { gap: 4px; flex: none; }
+  /* 标题保持居中，状态长条挂在右缘，不参与标题排布。 */
+  .ai-assistant-panel.has-backfill .ai-assistant-status {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 5px;
+  }
+  @media (max-width: 350px) {
+    .ai-assistant-panel.has-backfill .ai-assistant-status { width: 22px; padding: 0; }
+    .ai-assistant-panel.has-backfill .ai-assistant-status-text { display: none; }
+  }
+  .ai-assistant-panel.has-backfill .ai-assistant-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; text-align: center; color: #33363a; }
+  .ai-assistant-panel.has-backfill .ai-assistant-actions { gap: 4px; flex: none; margin-left: auto; }
+  .ai-assistant-panel.has-backfill .ai-mobile-back { display: inline-grid; flex: none; margin-right: auto; }
+  .ai-assistant-panel.has-backfill .ai-assistant-logo { display: none; }
   .ai-assistant-panel.has-backfill .ai-header-icon {
     display: inline-grid;
     place-items: center;
     width: 40px;
+    min-width: 40px;
     height: 40px;
     min-height: 40px;
     margin: 0;
-    padding: 8px;
-    border-radius: 999px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    color: #606469;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
   }
+  .ai-assistant-panel.has-backfill .ai-header-icon:is(:hover, :active, :focus-visible, [aria-expanded="true"]) {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    color: #44484d;
+  }
+  /* 顶栏三个按钮都只画图标本身：22px 的箭头/记录/更多，外面什么都不包。 */
+  .ai-assistant-panel.has-backfill .ai-header-icon > svg { width: 22px; height: 22px; }
+  .ai-assistant-panel.has-backfill .ai-mobile-settings { display: none; }
   .ai-assistant-panel.has-backfill .ai-desktop-close { display: none; }
   .ai-assistant-panel.has-backfill .backfill-workspace-scroll { padding: 14px; }
   .ai-assistant-panel.has-backfill .backfill-workspace-footer {
@@ -125,10 +166,9 @@
   .ai-assistant-panel.has-backfill .backfill-input-actions > .composer-shots { grid-column: 1 / -1; }
   .ai-assistant-panel.has-backfill .backfill-input-actions > .composer-shots.is-empty,
   .ai-assistant-panel.has-backfill .backfill-input-actions .shot-tile-add { display: none; }
-  .ai-assistant-panel.has-backfill .backfill-photo-slot { display: flex; min-width: 0; grid-column: 1; }
+  .ai-assistant-panel.has-backfill .backfill-photo-slot { display: flex; align-items: center; min-width: 0; grid-column: 1; }
   .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group { grid-column: 2; gap: 8px; }
-  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group > button,
-  .ai-assistant-panel.has-backfill .backfill-photo-slot > button {
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group > button {
     width: auto;
     height: 40px;
     min-height: 40px;
@@ -139,18 +179,94 @@
     border-radius: 999px;
     gap: 6px;
   }
-  .ai-assistant-panel.has-backfill .backfill-photo-slot > button { min-width: 0; }
+  .ai-assistant-panel.has-backfill .ai-gear-button:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+  .ai-assistant-panel.has-backfill .ai-gear-button:is(:hover, [aria-expanded="true"]):not(:disabled) {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+  /* DeepSeek-style send affordance: gray and still tappable when empty. */
+  .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button) {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    flex: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: #e6e8ea;
+    color: #7c858e;
+    box-shadow: none;
+    cursor: pointer;
+    line-height: 1;
+    transition: background-color 140ms ease, color 140ms ease, transform 140ms ease;
+  }
+  .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button).is-sendable:not(:disabled) {
+    background: #526cf4;
+    color: #fff;
+  }
+  .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button):disabled {
+    border-color: #e6e8ea;
+    background: #e6e8ea;
+    color: #7c858e;
+    opacity: 1;
+    cursor: default;
+  }
+  .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button).is-sendable:not(:disabled):hover {
+    background: #405fe9;
+  }
+  .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button):not(:disabled):active {
+    transform: scale(.92);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button) {
+      transition: none;
+    }
+    .ai-assistant-panel.has-backfill .backfill-chat-composer .ai-send-button:not(.ai-stop-button):active {
+      transform: none;
+    }
+  }
+  .ai-assistant-panel.has-backfill .ai-send-icon { display: block; flex: none; }
+  .ai-assistant-panel.has-backfill .ai-send-label { display: none; }
+  /* The photo trigger is a bare icon at the left of the footer: no label, no
+     pill around it. The 36px box is only the tap target; nothing is painted. */
+  .ai-assistant-panel.has-backfill .backfill-photo-slot > button {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--ink-soft);
+    gap: 0;
+  }
+  .ai-assistant-panel.has-backfill .backfill-photo-slot > button:hover,
+  .ai-assistant-panel.has-backfill .backfill-photo-slot > button:focus-visible {
+    border-color: transparent;
+    background: transparent;
+    color: var(--primary);
+  }
   .ai-assistant-panel.has-backfill .backfill-input-actions .shot-row .shot-strip[data-count] .shot-tile { flex-basis: 44px; width: 44px; height: 44px; }
 }
 @media (max-width: 350px) {
   .ai-assistant-panel.has-backfill .backfill-input-actions { gap: 8px; }
   .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group { gap: 8px; }
-  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group > button,
-  .ai-assistant-panel.has-backfill .backfill-photo-slot > button { padding-inline: 8px; gap: 4px; }
-}
-@media (max-width: 360px) {
-  .composer.surface > .composer-footer { grid-template-columns: minmax(0, 1fr); }
+  .ai-assistant-panel.has-backfill .backfill-input-actions > .backfill-operation-group > button { padding-inline: 8px; gap: 4px; }
 }
 @media (max-width: 900px) and (prefers-reduced-motion: reduce) {
   .ai-assistant-panel.has-backfill:not(.is-docked) { transition: none !important; }
+}
+@media (max-width: 360px) {
+  .composer.surface > .composer-footer { grid-template-columns: minmax(0, 1fr); }
 }

@@ -1,5 +1,3 @@
-import { extractRawText } from "mammoth";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { HttpError } from "./http-kit.js";
 
 export const MATERIAL_FORMATS: Readonly<Record<string, { extension: string; matches: (bytes: Buffer) => boolean }>> = {
@@ -14,6 +12,8 @@ export async function extractMaterialText(bytes: Buffer, mediaType: string): Pro
   let result: string;
   try {
     if (mediaType === "application/pdf") {
+      // Load document engines only for their format; ordinary diary requests do not need them.
+      const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
       const task = getDocument({ data: new Uint8Array(bytes), useSystemFonts: true });
       try {
         const pdf = await task.promise;
@@ -36,6 +36,7 @@ export async function extractMaterialText(bytes: Buffer, mediaType: string): Pro
         i += 45 + bytes.readUInt16LE(i + 28) + bytes.readUInt16LE(i + 30) + bytes.readUInt16LE(i + 32);
       }
       if (!entries || entries > 5000 || expanded > 40 * 1024 * 1024) throw new Error("Word 文件解压体积过大或格式损坏");
+      const { extractRawText } = await import("mammoth");
       result = (await extractRawText({ buffer: bytes })).value;
     } else result = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) { throw new HttpError(422, "material_read_failed", error instanceof Error ? `材料无法读取：${error.message}` : "材料无法读取"); }

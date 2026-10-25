@@ -1,15 +1,18 @@
+import { useApplicationLock } from "./app-lock";
 import { useMobileAssistantPage } from "./use-mobile-assistant-page";
 import { assistantLogoPath } from "./assistant-logo-path";
 import type { ComposerProps } from "./composer";
+import type { PrivacyAccessState } from "./privacy-access-control";
 import type { Entity, UiCommand, UiTurnPlan } from "@lifeos/core";
-import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { ArrowLeft, History, MoreHorizontal, Settings2, X } from "lucide-react";
 import { AssistantBackfill, type AssistantBackfillHandle } from "./assistant-backfill";
+import { AssistantPrivacyStatus } from "./assistant-privacy-menu";
 import type { AiStatus } from "./api";
 import { gearFromStatus } from "./api";
 import { scopedKey } from "./storage-scope";
 
-interface AIAssistantProps { readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">; readonly status: AiStatus; readonly onOpenSettings: () => void; readonly visible?: boolean; readonly desktopDocked?: boolean; readonly scope: string; readonly onOpenEntity: (entity: Entity) => void; readonly onChanged: () => void; readonly onViewRecords: (ids: readonly string[]) => void; readonly onUiPlan: (plan: UiTurnPlan) => void; readonly onUiCommand: (command: UiCommand) => void; readonly privacyRequest: { readonly reason: string } | null; readonly onPrivacyDecision: (decision: "once" | "session" | "never") => void; readonly privacyVisible?: boolean; }
+interface AIAssistantProps { readonly privacyAccess: PrivacyAccessState; readonly privacyDisabled?: boolean; readonly privateAccessUntil: string | undefined; readonly pageContext?: "dreams" | undefined; readonly onEnterSource?: ((record: import("./api").RecordView) => void) | undefined; readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">; readonly status: AiStatus; readonly onOpenSettings: () => void; readonly visible?: boolean; readonly desktopDocked?: boolean; readonly mobilePage?: boolean; readonly onMobileOpen?: () => void; readonly onMobileClose?: () => void; readonly scope: string; readonly onOpenEntity: (entity: Entity) => void; readonly onChanged: () => void; readonly onViewRecords: (ids: readonly string[]) => void; readonly onUiPlan: (plan: UiTurnPlan) => void; readonly onUiCommand: (command: UiCommand) => void; readonly privacyRequest: { readonly reason: string } | null; readonly onPrivacyDecision: (decision: "once" | "session" | "never") => void; readonly privacyVisible?: boolean; }
 interface LauncherPosition { readonly x: number; readonly y: number; }
 const LAUNCHER_POSITION_KEY = scopedKey("lifeos.ai.launcher-position.v1");
 const LAUNCHER_SIZE = 56;
@@ -39,21 +42,23 @@ function restoreLauncherPosition(): LauncherPosition | null {
 
 function AssistantLogo() {
   const gradientId = `lifeos-ai-logo-${useId().replace(/:/g, "")}`;
-  return <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" className="ai-logo-svg"><defs><linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#60A5FA" /><stop offset="100%" stopColor="#3370FF" /></linearGradient></defs><path d={assistantLogoPath} fill={`url(#${gradientId})`} /></svg>;
+  return <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" className="ai-logo-svg"><defs><linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#5A6679" /><stop offset="100%" stopColor="#3F4651" /></linearGradient></defs><path d={assistantLogoPath} fill={`url(#${gradientId})`} /></svg>;
 }
 
 
-export function AIAssistant({ photoInput, status, onOpenSettings, visible = true, desktopDocked = false, scope, onChanged, onViewRecords, onOpenEntity, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false }: AIAssistantProps) {
+export function AIAssistant({ privacyAccess, privacyDisabled = false, privateAccessUntil, pageContext, photoInput, status, onOpenSettings, visible = true, desktopDocked = false, mobilePage = false, onMobileOpen, onMobileClose, scope, onChanged, onViewRecords, onOpenEntity, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false, onEnterSource }: AIAssistantProps) {
+  const applicationLock = useApplicationLock();
+  const locked = !!applicationLock?.locked("assistant");
   const backfillRef = useRef<AssistantBackfillHandle>(null);
   const panelRef = useRef<HTMLElement>(null);
-  const mobileBackRef = useRef<HTMLButtonElement>(null);
+
   const launcherRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [inputFocusRequested, setInputFocusRequested] = useState(false);
   useEffect(() => setInputFocusRequested(false), [scope]);
   const [desktopLayout, setDesktopLayout] = useState(() => window.matchMedia("(min-width: 901px)").matches);
   const docked = desktopDocked && desktopLayout;
-  const expanded = docked || open;
+  const expanded = desktopLayout ? docked || open : mobilePage;
   useEffect(() => {
     const media = window.matchMedia("(min-width: 901px)");
     const update = () => setDesktopLayout(media.matches);
@@ -80,10 +85,10 @@ export function AIAssistant({ photoInput, status, onOpenSettings, visible = true
   }, [launcherPosition]);
 
 
-  const close = () => { setOpen(false); setInputFocusRequested(false); };
-  const openAssistant = () => setOpen(true);
-  const mobilePageOpen = visible && expanded && !desktopLayout;
-  useMobileAssistantPage(mobilePageOpen, panelRef, mobileBackRef, launcherRef, close);
+  const close = useCallback(() => { setOpen(false); setInputFocusRequested(false); if (!desktopLayout) onMobileClose?.(); }, [desktopLayout, onMobileClose]);
+  const openAssistant = useCallback(() => { const enter = () => { if (desktopLayout) setOpen(true); else onMobileOpen?.(); }; if (applicationLock) applicationLock.guard(["assistant"], enter); else enter(); }, [desktopLayout, onMobileOpen, applicationLock]);
+  const mobilePageOpen = expanded && !desktopLayout;
+  useMobileAssistantPage(mobilePageOpen, panelRef, close);
   const beginLauncherDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
     // Touch drags may never emit the synthetic click that normally consumes
@@ -150,7 +155,7 @@ export function AIAssistant({ photoInput, status, onOpenSettings, visible = true
     const closeForSettings = () => close();
     window.addEventListener("lifeos:close-ai", closeForSettings);
     return () => window.removeEventListener("lifeos:close-ai", closeForSettings);
-  }, []);
+  }, [close]);
   /**
    * The assistant's own commands must not shut the assistant.
    *
@@ -165,15 +170,28 @@ export function AIAssistant({ photoInput, status, onOpenSettings, visible = true
     };
     window.addEventListener("lifeos:open-ai", keepInFront);
     return () => window.removeEventListener("lifeos:open-ai", keepInFront);
-  }, []);
+  }, [openAssistant]);
 
 
-  if (!visible) return null;
+  if (!visible && desktopLayout) return null;
   return <>
     {open && !docked ? <button className="ai-assistant-backdrop" type="button" aria-label="关闭 AI 助手背景" onClick={close} /> : null}
-    <section ref={panelRef} role={mobilePageOpen ? "dialog" : undefined} aria-modal={mobilePageOpen ? true : undefined} className={`ai-assistant-panel has-backfill ${expanded ? "is-open" : ""} ${docked ? "is-docked" : ""}`} aria-hidden={!expanded} inert={!expanded} aria-label="AI 助手">
-      <header className="ai-assistant-header" onContextMenu={(event) => { event.preventDefault(); backfillRef.current?.openMenu(event.clientX, event.clientY); }}><button className="ai-header-icon ai-mobile-back" type="button" ref={mobileBackRef} onClick={close} aria-label="返回记录页面"><ArrowLeft size={20} aria-hidden="true" /></button><div className="ai-assistant-title"><span className="ai-assistant-logo"><AssistantLogo /></span><div><strong>AI管家</strong></div></div><div className="ai-assistant-actions"><button className="ai-header-icon" type="button" onClick={() => backfillRef.current?.openHistory()} aria-label="聊天记录"><History size={17} aria-hidden="true" /></button>{!docked ? <button className="ai-header-icon" type="button" aria-haspopup="menu" aria-label="更多操作" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); backfillRef.current?.openMenu(rect.right - 12, rect.bottom + 6); }}><MoreHorizontal size={17} aria-hidden="true" /></button> : null}{!status.configured ? <button className="ai-header-icon" type="button" onClick={onOpenSettings} aria-label="AI 助手设置"><Settings2 size={17} aria-hidden="true" /></button> : null}{!docked ? <button className="ai-header-icon ai-desktop-close" type="button" onClick={close} aria-label="关闭 AI 助手"><X size={17} aria-hidden="true" /></button> : null}</div></header>
-      <AssistantBackfill ref={backfillRef} photoInput={photoInput} key={scope} scope={scope} configured={status.configured} defaultGear={gearFromStatus(status)} onChanged={onChanged} onViewRecords={onViewRecords} onOpenEntity={onOpenEntity} onOpenSettings={onOpenSettings} onUiPlan={onUiPlan} onUiCommand={onUiCommand} privacyRequest={privacyRequest} onPrivacyDecision={onPrivacyDecision} privacyVisible={privacyVisible} focusRequested={inputFocusRequested} onFocusHandled={() => setInputFocusRequested(false)} />
+    <section ref={panelRef} role={mobilePageOpen ? "region" : undefined} tabIndex={mobilePageOpen ? -1 : undefined} className={`ai-assistant-panel has-backfill ${expanded ? "is-open" : ""} ${docked ? "is-docked" : ""} ${mobilePageOpen ? "is-mobile-page" : ""}`} aria-hidden={!expanded} inert={!expanded} aria-label="AI 助手">
+      <header className="ai-assistant-header" onContextMenu={(event) => { event.preventDefault(); backfillRef.current?.openMenu(event.clientX, event.clientY); }}>
+        <button className="ai-header-icon ai-mobile-back" type="button" onClick={close} aria-label="返回上一页" title="返回上一页"><ArrowLeft size={17} aria-hidden="true" /></button>
+        <div className="ai-assistant-title">
+          <span className="ai-assistant-logo"><AssistantLogo /></span>
+          <div><strong>AI管家</strong></div>
+          <AssistantPrivacyStatus access={privacyAccess} disabled={privacyDisabled} />
+        </div>
+        <div className="ai-assistant-actions">
+          <button className="ai-header-icon" type="button" onClick={() => backfillRef.current?.openHistory()} aria-label="聊天记录" title="聊天记录"><History size={17} aria-hidden="true" /></button>
+          {!docked ? <button className="ai-header-icon" type="button" aria-haspopup="menu" aria-label="更多操作" title="更多操作" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); backfillRef.current?.openMenu(rect.right - 12, rect.bottom + 6); }}><MoreHorizontal size={17} aria-hidden="true" /></button> : null}
+          {!status.configured ? <button className="ai-header-icon ai-mobile-settings" type="button" onClick={onOpenSettings} aria-label="AI 助手设置" title="AI 助手设置"><Settings2 size={17} aria-hidden="true" /></button> : null}
+          {!docked ? <button className="ai-header-icon ai-desktop-close" type="button" onClick={close} aria-label="关闭 AI 助手"><X size={17} aria-hidden="true" /></button> : null}
+        </div>
+      </header>
+      {locked ? <div className="app-lock-placeholder"><span>AI管家已上锁</span><button type="button" className="secondary-button" onClick={() => applicationLock?.guard(["assistant"], () => {})}>解锁</button></div> : <AssistantBackfill privateAccessUntil={privateAccessUntil} pageContext={pageContext} onEnterSource={onEnterSource} ref={backfillRef} photoInput={photoInput} key={scope} scope={scope} configured={status.configured} defaultGear={gearFromStatus(status)} onChanged={onChanged} onViewRecords={onViewRecords} onOpenEntity={onOpenEntity} onOpenSettings={onOpenSettings} onUiPlan={onUiPlan} onUiCommand={onUiCommand} privacyAccess={privacyAccess} privacyDisabled={privacyDisabled} privacyRequest={privacyRequest} onPrivacyDecision={onPrivacyDecision} privacyVisible={privacyVisible} focusRequested={inputFocusRequested} onFocusHandled={() => setInputFocusRequested(false)} />}
     </section>
     <button ref={launcherRef} className={`ai-assistant-launcher ${expanded ? "is-hidden" : ""} ${draggingLauncher ? "is-dragging" : ""}`} type="button" aria-hidden={expanded} tabIndex={expanded ? -1 : 0} style={launcherPosition === null ? undefined : { left: `${launcherPosition.x}px`, top: `${launcherPosition.y}px`, right: "auto", bottom: "auto" }} onPointerDown={beginLauncherDrag} onPointerMove={moveLauncher} onPointerUp={endLauncherDrag} onPointerCancel={endLauncherDrag} onClick={activateLauncher} aria-label="打开 AI 助手，可拖拽移动"><AssistantLogo /></button>
   </>;

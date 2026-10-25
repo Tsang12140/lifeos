@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>LifeOS AI 欢迎与引用 Demo</title>
+  <link rel="icon" href="../apps/web/public/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assistant-citations.css">
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 19V5"/></symbol>
+    <symbol id="close" viewBox="0 0 24 24"><path d="m18 6-12 12M6 6l12 12"/></symbol>
+    <symbol id="back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></symbol>
+    <symbol id="history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2"/></symbol>
+    <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3-3a2 2 0 0 0-3 0L6 21"/></symbol>
+    <symbol id="chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="share" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
+  </svg>
+  <header class="demo-bar">
+    <div class="demo-label"><strong>AI 欢迎与引用</strong><span>独立 Demo，记录均为虚构</span></div>
+    <div class="demo-controls">
+      <div class="segmented" role="group" aria-label="演示内容">
+        <button type="button" data-scene="welcome" aria-pressed="true">欢迎空屏</button>
+        <button type="button" data-scene="answer" aria-pressed="false">引用示例</button>
+      </div>
+      <div class="segmented" role="group" aria-label="演示尺寸">
+        <button type="button" data-device="desktop" aria-pressed="true">桌面</button>
+        <button type="button" data-device="phone" aria-pressed="false">手机</button>
+      </div>
+    </div>
+  </header>
+  <main class="stage" id="stage" data-device="desktop">
+    <section class="home-sample" aria-label="日记页面示意">
+      <div class="home-brand">LifeOS</div>
+      <div class="home-heading"><h1>10月18日</h1><span>日记</span></div>
+      <article class="home-paper"><time>今天</time><p>把桌上的书归好，泡了一杯茶。下午没有安排，想出门走走。</p></article>
+      <article class="home-paper"><time>10月16日</time><p>傍晚和小禾去河边散步。风有一点凉，走到桥边时天刚好暗下来。</p></article>
+    </section>
+    <section class="assistant" id="assistant" aria-label="AI管家演示">
+      <header class="assistant-header">
+        <button class="icon-button mobile-back" type="button" aria-label="返回欢迎空屏" data-reset><svg><use href="#back"/></svg></button>
+        <strong><span class="assistant-logo" aria-hidden="true"><svg viewBox="0 0 1024 1024"><path d="M512 0c282.773333 0 512 229.226667 512 512S794.773333 1024 512 1024 0 794.773333 0 512 229.226667 0 512 0z m-0.021333 170.666667c-19.818667 0-39.829333 4.010667-58.773334 12.394666a141.866667 141.866667 0 0 0-65.344 58.026667l-197.973333 336.938667-1.237333 2.154666c-37.845333 67.029333-14.122667 151.786667 53.717333 190.272 68.565333 38.890667 156.245333 15.786667 195.818667-51.584l104.682666-178.176h0.106667l27.904-46.805333a75.157333 75.157333 0 0 1 63.744-41.130667 75.456 75.456 0 0 1 67.498667 34.88l1.152 1.877334 71.701333 122.026666 1.002667 1.770667c19.242667 35.456 6.08 79.509667-29.610667 99.136-35.690667 19.605333-80.789333 7.552-101.44-27.114667l-59.114667 33.536 1.28 2.133334c40.149333 65.706667 126.698667 87.893333 194.538667 49.408l2.154667-1.258667 2.282666-1.344 2.090667-1.322667 2.730667-1.792 1.962666-1.344 3.072-2.197333 1.258667-0.917333a141.653333 141.653333 0 0 0 11.626667-9.770667l4.224-4.117333a140.970667 140.970667 0 0 0 23.509333-31.829334l1.002667-1.856c1.045333-1.984 2.005333-3.989333 2.944-6.016l1.450666-3.242666c2.730667-6.378667 4.992-12.928 6.762667-19.626667l0.597333-2.325333 0.512-2.154667c0.426667-1.92 0.853333-3.882667 1.194667-5.824l0.682667-3.925333a137.472 137.472 0 0 0-5.802667-65.834667l-0.896-2.602667a142.293333 142.293333 0 0 0-10.901333-23.082666l-197.973334-336.917334-1.28-2.133333a141.866667 141.866667 0 0 0-64.085333-55.914667l-4.202667-1.792A144.64 144.64 0 0 0 511.978667 170.666667z m0.832 67.072c10.410667 0.128 20.693333 2.368 30.186666 6.592 14.293333 6.336 26.197333 16.938667 34.026667 30.293333l65.216 111.018667a144.661333 144.661333 0 0 0-75.626667 18.837333 141.504 141.504 0 0 0-57.045333 59.904l-0.512-0.298667-129.984 221.226667-1.066667 1.770667c-21.632 34.069333-67.050667 44.906667-102.165333 24.32a73.066667 73.066667 0 0 1-26.837333-99.84l197.973333-336.917334 1.066667-1.749333c6.506667-10.453333 15.573333-19.136 26.410666-25.258667l1.792-0.981333a76.586667 76.586667 0 0 1 36.565334-8.917333z"/></svg></span>AI管家</strong>
+        <div class="header-tools">
+          <button class="icon-button" type="button" aria-label="聊天记录" data-note="此 Demo 展示当前会话，未连接聊天记录。"><svg><use href="#history"/></svg></button>
+          <button class="icon-button" type="button" aria-label="更多操作" data-note="可以用页面上方的按钮切换欢迎空屏与引用示例。"><svg><use href="#more"/></svg></button>
+        </div>
+      </header>
+      <div class="chat-scroll" id="chat-scroll">
+        <section class="welcome" id="welcome" aria-label="开始聊天">
+          <h2>今天想从哪件事聊起？</h2>
+          <div class="suggestions">
+            <button type="button" data-prompt="帮我回顾这一周">帮我回顾这一周</button>
+            <button type="button" data-prompt="找找之前记过的一件事">找找之前记过的一件事</button>
+            <button type="button" data-prompt="把这段零碎整理成日记">把这段零碎整理成日记</button>
+          </div>
+        </section>
+        <div id="conversation" class="conversation" role="log" aria-label="示例对话" hidden></div>
+      </div>
+      <footer class="input-dock">
+        <form id="composer" class="composer">
+          <textarea id="message-input" rows="2" aria-label="发给AI管家的消息"></textarea>
+          <div class="composer-tools">
+            <button class="icon-button photo-button" type="button" aria-label="添加照片" data-note="此 Demo 使用虚构文字记录，不上传照片。"><svg><use href="#image"/></svg></button>
+            <div class="send-tools"><button class="gear" type="button" aria-label="推理程度：高" data-note="此 Demo 不调用模型，推理程度沿用当前外观。">高<svg><use href="#chevron"/></svg></button><button class="send" id="send" type="submit" aria-label="发送" disabled><span>发送</span><svg><use href="#arrow-up"/></svg></button></div>
+          </div>
+        </form>
+      </footer>
+    </section>
+  </main>
+  <button id="source-preview" class="source-preview" type="button" aria-label="阅读引用原文" hidden>
+    <span class="preview-meta" id="preview-meta"></span>
+    <span class="preview-title" id="preview-title"></span>
+    <span class="preview-copy" id="preview-copy"></span>
+  </button>
+  <dialog id="source-reader" class="source-reader" aria-labelledby="reader-heading">
+    <header class="reader-header"><h2 id="reader-heading">来源原文</h2><button class="icon-button" type="button" id="close-reader" aria-label="关闭原文"><svg><use href="#close"/></svg></button></header>
+    <div class="reader-scroll" id="reader-scroll"><div id="reader-meta" class="reader-meta"></div><h3 id="reader-title"></h3><div id="reader-copy"></div></div>
+    <footer class="reader-footer"><button class="secondary" type="button" id="reader-back">返回对话</button><button class="secondary" type="button" id="enter-record">进入原记录</button></footer>
+  </dialog>
+  <dialog id="original-record" class="original-record" aria-labelledby="original-heading">
+    <header class="reader-header"><h2 id="original-heading">原记录</h2><button class="icon-button" type="button" id="close-original" aria-label="关闭原记录"><svg><use href="#close"/></svg></button></header>
+    <div class="reader-scroll" id="original-copy"></div>
+  </dialog>
+  <p class="toast" id="toast" role="status" hidden></p>
+  <script type="module" src="assistant-citations.js"></script>
+</body>
+</html>

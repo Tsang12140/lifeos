@@ -1,0 +1,139 @@
+.primary-nav .nav-item[data-view="gallery"]:focus-visible,
+.mobile-menu-nav-item[data-view="gallery"]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.diary-photo-tile:focus-visible,
+.diary-photo-message button:focus-visible,
+.diary-photo-load-more:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.diary-photo-gallery {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding-bottom: 22px;
+}
+
+.diary-photo-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.diary-photo-months {
+  display: grid;
+  gap: 22px;
+}
+
+.diary-photo-month {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.diary-photo-month h2 {
+  margin: 0;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.diary-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.diary-photo-tile {
+  display: block;
+  min-width: 0;
+  aspect-ratio: 1;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.diary-photo-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: filter 120ms ease;
+}
+
+.diary-photo-tile:hover:not(:disabled) img {
+  filter: brightness(0.94);
+}
+
+.diary-photo-tile:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.diary-photo-message {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+.diary-photo-message button,
+.diary-photo-load-more {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.diary-photo-message button:hover:not(:disabled),
+.diary-photo-load-more:hover {
+  background: var(--surface-soft);
+}
+
+.diary-photo-message button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.diary-photo-refresh {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.diary-photo-sentinel {
+  height: 1px;
+}
+
+@media (max-width: 360px) {
+  .diary-photo-grid {
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    gap: 6px;
+  }
+}
+
+@media (min-width: 361px) and (max-width: 560px) {
+  .diary-photo-grid {
+    grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  }
+}

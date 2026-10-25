@@ -1,13 +1,18 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import type { SQLInputValue } from "node:sqlite";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, realpath, rm, stat, statfs } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { IncomingMessage } from "node:http";
 import { assertValidAsset, type Asset } from "@lifeos/core";
 import { SqliteRecordRepository } from "./repository.js";
-import { spaceCounts, spaceFingerprint, type SpaceTables } from "./portable-space.js";
+import { SPACE_TABLES, spaceCounts, spaceFingerprint, type SpaceTables } from "./portable-space.js";
+import {
+  isCompleteSelection, parseSelection, planMerge, recordFingerprints, rowObject, selectSpaceTables, spaceRowKey,
+  tableRowFingerprint, type ArchiveSelection, type MergePlan,
+} from "./archive-merge.js";
 import { ARCHIVE_MAX_BYTES, MANIFEST_MAX_BYTES, decryptArchive, encryptArchive } from "./encrypted-archive.js";
 import { trashPathFor } from "./asset-gc.js";
 import { ASSET_MEDIA_TYPES, baseMediaType } from "./asset-static.js";
@@ -17,9 +22,17 @@ import { HttpError } from "./http-kit.js";
 import type { RouteContext } from "./route-context.js";
 
 interface ArchiveFile { assetId: string; trash: boolean; bytes: number; sha256: string; mediaType: string }
-interface Manifest { format: "lifeos.space"; version: 1; exportedAt: string; tables: SpaceTables; files: ArchiveFile[] }
+interface ManifestV1 { format: "lifeos.space"; version: 1; exportedAt: string; tables: SpaceTables; files: ArchiveFile[] }
+interface ManifestV2 { format: "lifeos.space"; version: 2; exportedAt: string; selection: ArchiveSelection; tables: SpaceTables; files: ArchiveFile[]; records: { id: string; fingerprint: string }[] }
+type Manifest = ManifestV1 | ManifestV2;
 interface Original { asset: Asset; trash: boolean; file?: string; bytes: number }
-interface Job { id: string; directory: string; kind: "export" | "upload" | "import"; phase: "working" | "ready" | "failed"; createdAt: number; bytes?: number; error?: string; manifest?: Manifest; targetFingerprint?: string; targetCounts?: ReturnType<typeof spaceCounts>; controller: AbortController }
+interface Job { id: string; directory: string; kind: "export" | "upload" | "import"; phase: "working" | "ready" | "failed"; createdAt: number; bytes?: number; error?: string; manifest?: Manifest; targetFingerprint?: string; targetCounts?: ReturnType<typeof spaceCounts>; merge?: MergePlan; controller: AbortController }
+interface ArchiveBatch {
+  id: string; createdAt: string; committedAt?: string; undoneAt?: string; exportedAt: string; selection: ArchiveSelection;
+  rows: Partial<Record<(typeof SPACE_TABLES)[number], Record<string, string>>>;
+  localFiles: string[];
+  uploads: { attempt: string; key: string; assetId: string }[];
+}
 const TTL = 15 * 60_000;
 let active = 0;
 const TEMP_PREFIX = "lifeos-space-archive-";
@@ -64,7 +77,15 @@ export class ArchiveService {
   }
   view(id: string) {
     const job = this.get(id);
-    return { id, kind: job.kind, phase: job.phase, bytes: job.bytes, error: job.error, expiresAt: new Date(job.createdAt + TTL).toISOString(), ...(job.manifest ? { exportedAt: job.manifest.exportedAt, counts: spaceCounts(job.manifest.tables), targetCounts: job.targetCounts } : {}) };
+    const manifest = job.manifest;
+    return {
+      id, kind: job.kind, phase: job.phase, bytes: job.bytes, error: job.error, expiresAt: new Date(job.createdAt + TTL).toISOString(),
+      ...(manifest ? {
+        version: manifest.version, exportedAt: manifest.exportedAt, counts: spaceCounts(manifest.tables), targetCounts: job.targetCounts,
+        ...(manifest.version === 2 ? { selection: manifest.selection, replaceAllowed: isCompleteSelection(manifest.selection) } : { replaceAllowed: true }),
+        ...(job.merge ? { merge: job.merge.summary } : {}),
+      } : {}),
+    };
   }
   async remove(id: string): Promise<void> {
     const job = this.#jobs.get(id); if (!job) return;
@@ -101,8 +122,9 @@ export class ArchiveService {
     if (originals.length > 100_000) throw new HttpError(413, "archive_too_many_files", "文件数量超过完整包上限");
     return originals;
   }
-  async estimate(ctx: RouteContext) {
-    const tables = ctx.repository.portableSpace(), originals = await this.#originals(ctx, tables);
+  async estimate(ctx: RouteContext, selection: ArchiveSelection) {
+    const selected = selectSpaceTables(ctx.repository.portableSpace(), selection);
+    const tables = selected.tables, originals = await this.#originals(ctx, tables);
     const originalBytes = originals.reduce((sum, item) => sum + item.bytes, 0);
     const cloudReadBytes = originals.filter(item => !item.file).reduce((sum, item) => sum + item.bytes, 0);
     const metadataBytes = Buffer.byteLength(JSON.stringify(tables));
@@ -114,9 +136,12 @@ export class ArchiveService {
       const readiness = await ctx.poolPreflight(), usage = ctx.poolStore.usage(ctx.poolAccountId, readiness.month);
       if (cloudReadBytes > readiness.trafficFreeBytes || cloudReadBytes > usage.trafficLimitBytes - usage.trafficUsedBytes - usage.trafficReservedBytes) throw new HttpError(409, "archive_traffic_quota", "完整包所需原件下载流量超过剩余额度");
     }
-    return { counts: spaceCounts(tables), originalBytes, cloudReadBytes, estimatedBytes, requiresAccountPassword: ctx.config.archivePasswordVerifier !== undefined || ctx.config.password !== undefined, maxBytes: ARCHIVE_MAX_BYTES };
+    return {
+      counts: spaceCounts(tables), selection: selected.selection, complete: selected.complete,
+      originalBytes, cloudReadBytes, estimatedBytes, requiresAccountPassword: ctx.config.archivePasswordVerifier !== undefined || ctx.config.password !== undefined, maxBytes: ARCHIVE_MAX_BYTES,
+    };
   }
-  async export(ctx: RouteContext, password: string): Promise<string> {
+  async export(ctx: RouteContext, password: string, selection: ArchiveSelection): Promise<string> {
     this.#reserve();
     let job: Job;
     try {
@@ -128,11 +153,12 @@ export class ArchiveService {
         if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) { this.#passwordFailures++; throw new HttpError(403, "archive_password_invalid", "当前登录密码不正确"); }
       }
       if (password.length < 10 || password.length > 1024) throw new HttpError(400, "archive_password_invalid", "密码长度需为 10–1024 个字符");
-      await this.estimate(ctx);
+      await this.estimate(ctx, selection);
       job = await this.#new("export");
     } catch (error) { this.#busy = false; active--; throw error; }
     void this.#work(job, async () => {
-      const tables = ctx.repository.portableSpace(), originals = await this.#originals(ctx, tables);
+      const selected = selectSpaceTables(ctx.repository.portableSpace(), selection);
+      const tables = selected.tables, originals = await this.#originals(ctx, tables);
       const files: ArchiveFile[] = [];
       // Pin bytes into our private workspace before encryption. A missing/racing original fails the whole job.
       for (const [index, item] of originals.entries()) {
@@ -149,7 +175,8 @@ export class ArchiveService {
         if (digest.bytes !== item.bytes || (known && known.value !== digest.sha256)) throw new Error("原件大小或校验值已改变，请重新生成完整包");
         files.push({ assetId: item.asset.id, trash: item.trash, ...digest, mediaType: mediaTypeOf(item.asset) });
       }
-      const manifest: Manifest = { format: "lifeos.space", version: 1, exportedAt: new Date().toISOString(), tables, files };
+      const records = [...recordFingerprints(tables, files)].map(([id, fingerprint]) => ({ id, fingerprint }));
+      const manifest: ManifestV2 = { format: "lifeos.space", version: 2, exportedAt: new Date().toISOString(), selection: selected.selection, tables, files, records };
       const json = Buffer.from(JSON.stringify(manifest));
       if (json.length > MANIFEST_MAX_BYTES) throw new Error("完整包元数据过大");
       const length = Buffer.alloc(4); length.writeUInt32BE(json.length);
@@ -189,7 +216,12 @@ export class ArchiveService {
         const size = length.readUInt32BE(); if (size > MANIFEST_MAX_BYTES || size < 2) throw new Error("完整包清单大小无效");
         const json = Buffer.alloc(size); if ((await file.read(json, 0, size, 4)).bytesRead !== size) throw new Error("完整包清单被截断");
         const manifest = JSON.parse(json.toString("utf8")) as Manifest;
-        if (manifest.format !== "lifeos.space" || manifest.version !== 1 || !Array.isArray(manifest.files) || manifest.files.length > 100_000 || !Number.isFinite(Date.parse(manifest.exportedAt))) throw new Error("完整包版本或清单无效");
+        if (manifest.format !== "lifeos.space" || (manifest.version !== 1 && manifest.version !== 2) || !Array.isArray(manifest.files) || manifest.files.length > 100_000 || !Number.isFinite(Date.parse(manifest.exportedAt))) throw new Error("完整包版本或清单无效");
+        let selection: ArchiveSelection | undefined;
+        if (manifest.version === 2) {
+          selection = parseSelection(manifest.selection);
+          if (!Array.isArray(manifest.records) || manifest.records.length > 1_000_000 || manifest.records.some(item => typeof item?.id !== "string" || typeof item?.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(item.fingerprint))) throw new Error("完整包记录清单无效");
+        }
         // A trusted schema and a disposable repository validate all SQL rows before touching the target.
         const validation = new SqliteRecordRepository(join(job.directory, "validate.sqlite"));
         try { validation.restorePortableSpace(manifest.tables, spaceFingerprint(validation.portableSpace())); validation.exportData(); validation.cycleIntimacyModule(); } finally { validation.close(); }
@@ -208,20 +240,37 @@ export class ArchiveService {
           offset += item.bytes;
         }
         if (offset !== (await stat(payload)).size) throw new Error("完整包包含未声明的数据");
-        job.manifest = manifest; const target = ctx.repository.portableSpace(); job.targetFingerprint = spaceFingerprint(target); job.targetCounts = spaceCounts(target);
+        if (manifest.version === 2) {
+          const declared = new Map(manifest.records.map(item => [item.id, item.fingerprint]));
+          const expected = recordFingerprints(manifest.tables, manifest.files);
+          if (declared.size !== manifest.records.length || declared.size !== expected.size) throw new Error("完整包记录清单无效");
+          for (const [id, fingerprint] of expected) if (declared.get(id) !== fingerprint) throw new Error("完整包记录指纹不一致");
+        }
+        job.manifest = manifest;
+        const target = ctx.repository.portableSpace();
+        job.targetFingerprint = spaceFingerprint(target); job.targetCounts = spaceCounts(target);
+        if (manifest.version === 2 && selection) job.merge = planMerge(target, manifest.tables, manifest.files, selection);
       } finally { await file.close(); }
       await rm(payload);
     });
   }
 
-  async commitImport(ctx: RouteContext, id: string): Promise<{ backup: string }> {
+  async commitImport(ctx: RouteContext, id: string, mode: "merge" | "replace"): Promise<{ backup: string; batchId?: string; merge?: MergePlan["summary"] }> {
     const job = this.get(id);
     if (job.kind !== "import" || job.phase !== "ready" || !job.manifest || !job.targetFingerprint) throw new HttpError(409, "archive_invalid_state", "完整包尚未校验成功");
+    if (job.manifest.version === 1 && mode === "merge") throw new HttpError(409, "archive_replace_required", "旧版完整包只能整体替换");
+    if (mode === "replace" && job.manifest.version === 2 && !isCompleteSelection(job.manifest.selection)) throw new HttpError(409, "archive_replace_unavailable", "部分导出的完整包只能增量导入");
+    if (mode === "merge" && !job.merge) throw new HttpError(409, "archive_invalid_state", "增量导入准备未完成");
+    return mode === "merge" ? this.#commitMerge(ctx, job) : this.#commitReplace(ctx, job);
+  }
+
+  async #commitReplace(ctx: RouteContext, job: Job): Promise<{ backup: string }> {
+    const manifest = job.manifest!;
     this.#reserve(); job.phase = "working";
-    const tables = structuredClone(job.manifest.tables);
+    const tables = structuredClone(manifest.tables);
     const importId = randomUUID();
     const root = ctx.config.assetRoot;
-    if (!ctx.poolBridge.enabled && !root && job.manifest.files.length) { this.#busy = false; active--; job.phase = "ready"; throw new HttpError(409, "archive_asset_root_missing", "请先配置本地原件目录"); }
+    if (!ctx.poolBridge.enabled && !root && manifest.files.length) { this.#busy = false; active--; job.phase = "ready"; throw new HttpError(409, "archive_asset_root_missing", "请先配置本地原件目录"); }
     const writes: string[] = [], uploads: { attempt: string; key: string }[] = [];
     let committed = false;
     const backupDirectory = ctx.config.backupDirectory ?? join(ctx.config.dataDirectory, "backups");
@@ -232,7 +281,7 @@ export class ArchiveService {
       await ctx.repository.backupTo(join(backupDirectory, backup));
       await chmod(join(backupDirectory, backup), 0o600);
       ctx.repository.recordBackupRun({ provider: "local", kind: "manual", status: "success", fileName: backup, location: join(backupDirectory, backup), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), sizeBytes: (await stat(join(backupDirectory, backup))).size });
-      for (const [index, item] of job.manifest.files.entries()) {
+      for (const [index, item] of manifest.files.entries()) {
         job.controller.signal.throwIfAborted();
         const table = item.trash ? tables.asset_trash : tables.assets;
         const column = table.columns.indexOf(item.trash ? "asset_json" : "value_json");
@@ -276,7 +325,7 @@ export class ArchiveService {
       ctx.repository.restorePortableSpace(tables, job.targetFingerprint);
       committed = true;
       job.phase = "ready";
-      await this.remove(id).catch(() => {});
+      await this.remove(job.id).catch(() => {});
       return { backup };
     } catch (error) {
       if (!committed) {
@@ -290,6 +339,261 @@ export class ArchiveService {
       throw error;
     } finally { this.#busy = false; active--; if (job.controller.signal.aborted) await rm(job.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
   }
+
+  /**
+   * Incremental import: only rows that are genuinely new get inserted. Every
+   * photo that already exists on the target is reused by its SHA-256, and the
+   * batch manifest this writes is the only thing the undo endpoint needs.
+   */
+  async #commitMerge(ctx: RouteContext, job: Job): Promise<{ backup: string; batchId: string; merge: MergePlan["summary"] }> {
+    const manifest = job.manifest as ManifestV2, plan = job.merge!;
+    this.#reserve(); job.phase = "working";
+    const batchId = randomUUID(), root = ctx.config.assetRoot;
+    if (!ctx.poolBridge.enabled && !root && plan.assetFiles.length) { this.#busy = false; active--; job.phase = "ready"; throw new HttpError(409, "archive_asset_root_missing", "请先配置本地原件目录"); }
+    const writes: string[] = [], files: string[] = [], uploads: { attempt: string; key: string; assetId: string }[] = [];
+    let committed = false, batchFile: string | undefined;
+    const backupDirectory = ctx.config.backupDirectory ?? join(ctx.config.dataDirectory, "backups");
+    const backup = `lifeos-before-merge-${batchId}.sqlite`;
+    try {
+      if (spaceFingerprint(ctx.repository.portableSpace()) !== job.targetFingerprint) throw new HttpError(409, "archive_target_changed", "当前空间已发生变化，请重新校验导入包");
+      await mkdir(backupDirectory, { recursive: true });
+      await ctx.repository.backupTo(join(backupDirectory, backup));
+      await chmod(join(backupDirectory, backup), 0o600);
+      ctx.repository.recordBackupRun({ provider: "local", kind: "manual", status: "success", fileName: backup, location: join(backupDirectory, backup), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), sizeBytes: (await stat(join(backupDirectory, backup))).size });
+      for (const item of plan.assetFiles) {
+        job.controller.signal.throwIfAborted();
+        const table = item.table === "assets" ? plan.inserts.assets : plan.inserts.asset_trash;
+        const idColumn = item.table === "assets" ? "id" : "asset_id";
+        const jsonColumn = item.table === "assets" ? "value_json" : "asset_json";
+        const jsonIndex = table.columns.indexOf(jsonColumn);
+        const row = table.rows.find(candidate => String(candidate[table.columns.indexOf(idColumn)]) === item.assetId) as SQLInputValue[] | undefined;
+        if (!row) throw new Error("导入资产行缺失");
+        const asset = JSON.parse(String(row[jsonIndex])) as Asset;
+        const file = manifest.files[item.fileIndex];
+        if (!file) throw new Error("完整包资产清单不一致");
+        const extension = extensionFor(file.mediaType);
+        const ref = `uploads/archive-${batchId}/${item.fileIndex}${extension}`;
+        const hash = { algorithm: "sha256" as const, value: file.sha256 };
+        if (ctx.poolBridge.enabled && !ctx.poolTransition?.localPrimary && !item.trash) {
+          if (!ctx.poolStore) throw new Error("存储池尚未就绪");
+          const readiness = await ctx.poolPreflight();
+          const attempt = ctx.poolStore.reserveUpload(ctx.poolAccountId, item.assetId, file.bytes, readiness.storageFreeBytes);
+          try {
+            const result = await ctx.poolBridge.putFile(join(job.directory, `file-${item.fileIndex}`), asset.originalName ?? `${item.assetId}${extension}`, asset.mediaType ?? "application/octet-stream");
+            ctx.poolStore.keepPendingUpload(attempt, result.key); uploads.push({ attempt, key: result.key, assetId: item.assetId });
+            row[jsonIndex] = JSON.stringify({ ...asset, sizeBytes: file.bytes, storageRefs: [{ sourceId: POOL_SOURCE_ID, sourceRef: result.key, mediaType: asset.mediaType, contentHash: hash }] });
+          } catch (error) {
+            if (error instanceof StoragePoolError && !error.uncertain) ctx.poolStore.releaseUploadReservation(attempt);
+            else ctx.poolStore.keepPendingUpload(attempt, error instanceof StoragePoolError ? error.pendingKey : undefined);
+            throw error;
+          }
+        } else {
+          if (!root) throw new Error("回收站原件需要本地原件目录");
+          const relativePath = item.trash ? trashPathFor(ref)! : ref;
+          const destination = join(root, relativePath);
+          if (!resolve(destination).startsWith(resolve(root) + sep)) throw new Error("导入原件路径越界");
+          await mkdir(join(destination, ".."), { recursive: true });
+          const canonicalRoot = await realpath(root), canonicalParent = await realpath(join(destination, ".."));
+          if (!canonicalParent.startsWith(canonicalRoot + sep)) throw new Error("导入原件路径越界");
+          await copyFile(join(job.directory, `file-${item.fileIndex}`), destination, 1);
+          writes.push(destination); files.push(relativePath);
+          row[jsonIndex] = JSON.stringify({ ...asset, sizeBytes: file.bytes, storageRefs: [{ sourceId: "local", sourceRef: ref, mediaType: asset.mediaType, contentHash: hash }] });
+          if (item.trash) row[table.columns.indexOf("relative_path")] = ref;
+        }
+      }
+      for (const upload of uploads) ctx.poolStore!.completeUpload(upload.attempt, upload.key);
+      const batch: ArchiveBatch = {
+        id: batchId, createdAt: new Date().toISOString(), committedAt: new Date().toISOString(),
+        exportedAt: manifest.exportedAt, selection: manifest.selection,
+        rows: batchRows(plan.inserts), localFiles: files, uploads,
+      };
+      // Written before the transaction: if the merge fails this file is removed,
+      // and if the process dies in between, undo simply finds nothing to delete.
+      batchFile = await this.#saveBatch(ctx, batch);
+      ctx.repository.mergePortableSpace(plan.inserts, job.targetFingerprint);
+      committed = true;
+      job.phase = "ready";
+      await this.remove(job.id).catch(() => {});
+      return { backup, batchId, merge: plan.summary };
+    } catch (error) {
+      if (!committed) {
+        for (const destination of writes) await rm(destination, { force: true });
+        for (const upload of uploads) {
+          try { await ctx.poolBridge.delete(upload.key); ctx.poolStore!.discardConfirmedArchiveUpload(upload.attempt, upload.key); }
+          catch { /* Keep the charged object for administrator reconciliation. */ }
+        }
+        if (batchFile) await rm(batchFile, { force: true }).catch(() => {});
+      }
+      job.phase = "ready";
+      throw error;
+    } finally { this.#busy = false; active--; if (job.controller.signal.aborted) await rm(job.directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+  }
+
+  async listBatches(ctx: RouteContext) {
+    const directory = join(ctx.config.dataDirectory, "archive-batches");
+    let names: string[];
+    try { names = await readdir(directory); } catch { return { items: [] }; }
+    const items: { id: string; committedAt: string; exportedAt: string; selection: ArchiveSelection; added: Record<string, number> }[] = [];
+    for (const name of names) {
+      if (!BATCH_NAME.test(name)) continue;
+      try {
+        const batch = JSON.parse(await readFile(join(directory, name), "utf8")) as ArchiveBatch;
+        if (!batch.committedAt || batch.undoneAt || !batch.rows) continue;
+        items.push({ id: batch.id, committedAt: batch.committedAt, exportedAt: batch.exportedAt, selection: batch.selection, added: batchAdded(batch.rows) });
+      } catch { /* A damaged record must not break the settings page. */ }
+    }
+    items.sort((left, right) => right.committedAt.localeCompare(left.committedAt));
+    return { items: items.slice(0, 10) };
+  }
+
+  async undoBatch(ctx: RouteContext, id: string) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new HttpError(400, "archive_batch_invalid", "导入批次编号无效");
+    const file = join(ctx.config.dataDirectory, "archive-batches", `${id}.json`);
+    let batch: ArchiveBatch;
+    try { batch = JSON.parse(await readFile(file, "utf8")) as ArchiveBatch; }
+    catch { throw new HttpError(404, "archive_batch_missing", "找不到这次导入记录"); }
+    if (!batch.committedAt) throw new HttpError(409, "archive_batch_incomplete", "这次导入没有完成，无法撤销");
+    if (batch.undoneAt) throw new HttpError(409, "archive_batch_undone", "这次导入已经撤销");
+    this.#reserve();
+    try {
+      const current = ctx.repository.portableSpace();
+      const keysByTable: Partial<Record<keyof SpaceTables, string[]>> = {};
+      const changed: string[] = [];
+      for (const [name, keys] of Object.entries(batch.rows)) {
+        const table = current[name as keyof SpaceTables];
+        if (!table) continue;
+        const index = new Map(table.rows.map(row => [spaceRowKey(name as keyof SpaceTables, rowObject(current, name as keyof SpaceTables, row)), row]));
+        for (const [key, fingerprint] of Object.entries(keys)) {
+          const row = index.get(key);
+          if (!row) continue;
+          if (tableRowFingerprint(table, row) !== fingerprint) { changed.push(`${name} ${key}`); continue; }
+          (keysByTable[name as keyof SpaceTables] ??= []).push(key);
+        }
+      }
+      if (changed.length) throw new HttpError(409, "archive_undo_conflict", `这次导入的内容已被修改，无法整批撤销：${changed.slice(0, 5).join("、")}`);
+      const blockers = undoBlockers(current, batch);
+      if (blockers.length) throw new HttpError(409, "archive_undo_conflict", `这次导入的内容已被其他内容使用，无法撤销：${blockers.slice(0, 5).join("；")}`);
+      ctx.repository.deletePortableRows(keysByTable);
+      const warnings: string[] = [];
+      const remaining = ctx.repository.portableSpace();
+      if (ctx.config.assetRoot) {
+        const root = resolve(ctx.config.assetRoot), referenced = referencedLocalPaths(remaining);
+        for (const relativePath of batch.localFiles) {
+          if (referenced.has(relativePath)) continue;
+          const target = resolve(root, relativePath);
+          if (!target.startsWith(root + sep)) continue;
+          try { await rm(target, { force: true }); } catch { warnings.push(`原件未能删除：${relativePath}`); }
+        }
+      }
+      const remoteKeys = referencedPoolKeys(remaining);
+      for (const upload of batch.uploads) {
+        if (remoteKeys.has(upload.key)) continue;
+        try { await ctx.poolBridge.delete(upload.key); ctx.poolStore!.discardConfirmedArchiveUpload(upload.attempt, upload.key); }
+        catch { warnings.push(`云端原件未能删除：${upload.key}`); }
+      }
+      batch.undoneAt = new Date().toISOString();
+      await this.#saveBatch(ctx, batch);
+      const removed: Record<string, number> = {};
+      for (const [name, keys] of Object.entries(keysByTable)) if (keys?.length) removed[name] = keys.length;
+      return { removed, warnings };
+    } finally { this.#busy = false; active--; }
+  }
+
+  async #saveBatch(ctx: RouteContext, batch: ArchiveBatch): Promise<string> {
+    const directory = join(ctx.config.dataDirectory, "archive-batches");
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, `${batch.id}.json`), temporary = `${file}.tmp`;
+    await writeFile(temporary, JSON.stringify(batch), { mode: 0o600 });
+    await rename(temporary, file);
+    return file;
+  }
+}
+
+const BATCH_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
+
+function batchRows(tables: SpaceTables): Partial<Record<(typeof SPACE_TABLES)[number], Record<string, string>>> {
+  const rows: Partial<Record<(typeof SPACE_TABLES)[number], Record<string, string>>> = {};
+  for (const name of SPACE_TABLES) {
+    for (const row of tables[name].rows) {
+      const key = spaceRowKey(name, rowObject(tables, name, row));
+      if (key === null) continue;
+      (rows[name] ??= {})[key] = tableRowFingerprint(tables[name], row);
+    }
+  }
+  return rows;
+}
+
+function batchAdded(rows: Partial<Record<(typeof SPACE_TABLES)[number], Record<string, string> | undefined>>): Record<string, number> {
+  const count = (name: (typeof SPACE_TABLES)[number]) => Object.keys(rows[name] ?? {}).length;
+  return { records: count("records"), entities: count("entities"), assets: count("assets"), summaries: count("day_summaries"), cycleEvents: count("cycle_intimacy_events"), folders: count("note_folders") };
+}
+
+function parsedCell(value: SQLInputValue | undefined): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return value;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+function listOf(value: unknown): readonly unknown[] { return Array.isArray(value) ? value : []; }
+
+function referencedLocalPaths(tables: SpaceTables): Set<string> {
+  const paths = new Set<string>();
+  const collect = (asset: unknown) => {
+    for (const ref of listOf((asset as Record<string, unknown> | null)?.storageRefs)) {
+      const item = ref as Record<string, unknown> | null;
+      if (item?.sourceId === "local" && typeof item.sourceRef === "string") paths.add(item.sourceRef);
+    }
+  };
+  for (const row of tables.assets.rows) collect(parsedCell(rowObject(tables, "assets", row).value_json));
+  for (const row of tables.asset_trash.rows) {
+    const object = rowObject(tables, "asset_trash", row);
+    collect(parsedCell(object.asset_json));
+    if (typeof object.relative_path === "string") paths.add(object.relative_path);
+  }
+  return paths;
+}
+
+function referencedPoolKeys(tables: SpaceTables): Set<string> {
+  const keys = new Set<string>();
+  const collect = (asset: unknown) => {
+    for (const ref of listOf((asset as Record<string, unknown> | null)?.storageRefs)) {
+      const item = ref as Record<string, unknown> | null;
+      if (item?.sourceId === POOL_SOURCE_ID && typeof item.sourceRef === "string") keys.add(item.sourceRef);
+    }
+  };
+  for (const row of tables.assets.rows) collect(parsedCell(rowObject(tables, "assets", row).value_json));
+  for (const row of tables.asset_trash.rows) collect(parsedCell(rowObject(tables, "asset_trash", row).asset_json));
+  return keys;
+}
+
+/** Rows added by this batch may only be removed while nothing outside it points at them. */
+function undoBlockers(tables: SpaceTables, batch: ArchiveBatch): string[] {
+  const added = (name: keyof SpaceTables) => new Set(Object.keys(batch.rows[name] ?? {}));
+  const records = added("records"), entities = added("entities"), assets = added("assets"), folders = added("note_folders");
+  const blockers: string[] = [];
+  const anyAsset = (value: unknown): boolean => listOf(value).some(ref => typeof (ref as Record<string, unknown> | null)?.assetId === "string" && assets.has(String((ref as Record<string, unknown>).assetId)));
+  const anyEntity = (value: unknown): boolean => listOf(value).some(ref => typeof (ref as Record<string, unknown> | null)?.entityId === "string" && entities.has(String((ref as Record<string, unknown>).entityId)));
+  for (const row of tables.records.rows) {
+    const object = rowObject(tables, "records", row);
+    const id = String(object.id);
+    if (records.has(id)) continue;
+    if (anyAsset(parsedCell(object.asset_refs_json))) blockers.push(`记录 ${id} 仍在引用这次导入的照片`);
+    if (anyEntity(parsedCell(object.entity_refs_json))) blockers.push(`记录 ${id} 仍在引用这次导入的人物或地点`);
+    const body = parsedCell(object.body_json) as Record<string, unknown> | null;
+    if (anyEntity(body?.entityMentions)) blockers.push(`记录 ${id} 的正文仍在引用这次导入的人物或地点`);
+    if (anyAsset(body?.transcriptRaw)) blockers.push(`记录 ${id} 的附件仍在引用这次导入的原件`);
+    if (listOf(parsedCell(object.related_record_ids_json)).some(value => records.has(String(value)))) blockers.push(`记录 ${id} 关联了这次导入的记录`);
+    const folderId = (parsedCell(object.note_json) as Record<string, unknown> | null)?.folderId;
+    if (typeof folderId === "string" && folders.has(folderId)) blockers.push(`笔记 ${id} 仍在这个导入的文件夹里`);
+  }
+  for (const row of tables.entities.rows) {
+    const object = rowObject(tables, "entities", row);
+    if (entities.has(String(object.id))) continue;
+    const entity = parsedCell(object.value_json) as Record<string, unknown> | null;
+    if (typeof entity?.avatarAssetId === "string" && assets.has(entity.avatarAssetId)) blockers.push(`人物地点 ${String(entity.name ?? object.id)} 仍在使用这次导入的头像`);
+    if (anyEntity(entity?.relations)) blockers.push(`人物地点 ${String(entity?.name ?? object.id)} 仍关联这次导入的人物或地点`);
+  }
+  return [...new Set(blockers)];
 }
 
 const MIME_EXTENSIONS: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif", "image/avif": ".avif", "image/heic": ".heic", "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/ogg": ".ogg", "video/mp4": ".mp4", "video/webm": ".webm", "application/pdf": ".pdf" };

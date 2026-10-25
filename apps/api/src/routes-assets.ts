@@ -59,16 +59,33 @@ import {
   trashPathFor,
 } from "./asset-gc.js";
 import { nextAssetGcAt } from "./asset-gc-scheduler.js";
-import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, parseThumbnailWidth } from "./derived-thumbs.js";
+import { THUMBNAIL_FORMAT, THUMBNAIL_WIDTHS, parseThumbnailWidth, pngFitsOriginalLimits } from "./derived-thumbs.js";
 import type { RouteContext, RouteHandler } from "./route-context.js";
 import { POOL_SOURCE_ID, StoragePoolError } from "./storage-pool.js";
 import type { PoolObjectRow } from "./storage-pool-store.js";
 import sharp from "sharp";
 import { readPhotoMetadata } from "./photo-metadata.js";
+import { photoLocation } from "./photo-location.js";
 import { MATERIAL_FORMATS } from "./assistant-material.js";
 import { handleVideoRoutes } from "./video-assets.js";
 
-/** Hash-less registered local files may be replaced outside the API; their stat also versions the URL. */
+/**
+ * A locked app must not leave photo bytes in the browser cache, so unproven responses
+ * stay `no-store`. A request carrying a valid unlock proof (header, URL grant or the
+ * unlock cookie) gets `private, no-cache` plus an ETag, so it is reused across reloads
+ * while still revalidating; locking again answers 404 and the copy is never served.
+ */
+function mediaCachedPrivately(ctx: RouteContext): boolean {
+  return ctx.appLock?.protected !== true || ctx.appLock.mediaUnlocked === true;
+}
+function mediaCacheControl(ctx: RouteContext, maxAge: string): string {
+  if (!mediaCachedPrivately(ctx)) return "no-store";
+  return ctx.appLock?.protected === true ? "private, no-cache" : maxAge;
+}
+function notModified(req: { headers: Record<string, string | string[] | undefined> }, cacheControl: string, etag: string): boolean {
+  return cacheControl !== "no-store" && req.headers["if-none-match"] === etag;
+}
+
 export function assetThumbnailVersion(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset, namespace = ctx.config.databasePath): string {
   let stamp: string | undefined;
   if (asset.storageRefs.some(ref => ref.sourceId === "local" && ref.contentHash === undefined)) {
@@ -78,7 +95,7 @@ export function assetThumbnailVersion(ctx: Pick<RouteContext, "config" | "reposi
   return calendarAssetVersion(namespace, asset, stamp);
 }
 
-export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width: import("./derived-thumbs.js").ThumbnailWidth, upright = false): Promise<{ file: string; source: string; canary: boolean }> {
+export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width: import("./derived-thumbs.js").ThumbnailWidth, upright = false, allowOriginalPng = true): Promise<{ file: string; source: string; canary: boolean; mediaType: string }> {
   const { config, repository, thumbnails } = ctx;
   const asset = repository.findAssetById(id);
   if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
@@ -87,6 +104,7 @@ export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width
   const poolReference = poolRead?.reference;
   let file: string;
   let source = "local-derived";
+  let mediaType = `image/${THUMBNAIL_FORMAT}`;
   if (poolReference !== undefined) {
     poolObjectFor(ctx, asset, poolReference, poolRead!.ledgerAssetId);
     const cached = thumbnails.cached(poolReference, width, rotation);
@@ -110,13 +128,62 @@ export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width
     if (!THUMBNAILABLE_ASSET_EXTENSIONS.has(extname(original.file).toLowerCase())) {
       throw new HttpError(415, "unsupported_thumbnail_type", "A thumbnail can only be derived from a raster image");
     }
-    try { file = await thumbnails.ensure(original.reference, original.file, width, rotation); }
-    catch { throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original"); }
+    let originalPng = false;
+    // Screenshot PNGs keep their bytes only at sizes where their text is actually read:
+    // the 400 grid tile and the 160 avatar re-encode to WebP, otherwise one 600 KB
+    // screenshot would be downloaded whole into a 170 px square.
+    if (allowOriginalPng && width >= 1200 && rotation === 0 && extname(original.file).toLowerCase() === ".png") {
+      try {
+        const metadata = await sharp(original.file, { limitInputPixels: 80_000_000 }).metadata();
+        const rotatedExif = metadata.orientation !== undefined && metadata.orientation >= 5 && metadata.orientation <= 8;
+        const sourceWidth = rotatedExif ? metadata.height : metadata.width;
+        const sourceHeight = rotatedExif ? metadata.width : metadata.height;
+        originalPng = pngFitsOriginalLimits(sourceWidth, sourceHeight, statSync(original.file).size);
+      } catch { /* Unknown or malformed headers must use the established thumbnail path. */ }
+    }
+    if (originalPng) {
+      // Computer screenshots are commonly small, lossless PNGs. Re-encoding one
+      // as quality-80 WebP blurs UI text while saving little; return its bytes
+      // unchanged when both transfer and decode costs remain bounded.
+      file = original.file;
+      source = "original-png";
+      mediaType = original.mediaType;
+    } else {
+      try { file = await thumbnails.ensure(original.reference, original.file, width, rotation); }
+      catch { throw new HttpError(500, "thumbnail_failed", "Could not derive a thumbnail from this original"); }
+    }
   }
-  return { file, source, canary: poolRead?.canary === true };
+  return { file, source, canary: poolRead?.canary === true, mediaType };
 }
 
 const photoInfoCache = new WeakMap<RouteContext["repository"], Map<string, Promise<Awaited<ReturnType<typeof readPhotoMetadata>>>>>();
+/**
+ * Header metadata for one photo, read from the bytes at most once per reference.
+ * Shared by `/photo-info` and `/photo-location` so a legacy asset (details
+ * extracted before `detailsVersion: 1`) is not parsed twice for one panel.
+ */
+async function photoMetadataFor(ctx: RouteContext, asset: Asset): Promise<Awaited<ReturnType<typeof readPhotoMetadata>>> {
+  if (asset.photoMetadata?.detailsVersion === 1) return asset.photoMetadata;
+  let cache = photoInfoCache.get(ctx.repository);
+  if (!cache) { cache = new Map(); photoInfoCache.set(ctx.repository, cache); }
+  const key = `${asset.id}:${JSON.stringify(asset.storageRefs)}`;
+  let pending = cache.get(key);
+  if (!pending) {
+    const poolRead = assetPoolRead(ctx, asset);
+    pending = (async () => {
+      if (poolRead) {
+        const downloaded = await downloadPoolAsset(ctx, asset, poolRead.reference, poolRead.ledgerAssetId);
+        try { return await readPhotoMetadata(downloaded.file); }
+        finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
+      }
+      return readPhotoMetadata(resolveAssetOriginal(ctx.config, ctx.repository, asset.id).file);
+    })();
+    cache.set(key, pending);
+    if (cache.size > 256) cache.delete(cache.keys().next().value!);
+    pending.catch(() => cache!.delete(key));
+  }
+  return pending;
+}
 function downloadDisposition(asset: Asset): string {
   if (asset.originalName && /^[\x20-\x7e]+$/.test(asset.originalName) && !/["\\]/.test(asset.originalName)) return contentDisposition(asset.originalName);
   const name = encodeURIComponent(asset.originalName ?? "photo").replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -641,7 +708,7 @@ export const handleAssetsRoutes: RouteHandler = async (
         res.writeHead(200, {
           "content-type": mediaType,
           "content-length": String(downloaded.bytes),
-          "cache-control": poolRead.canary || req.url?.startsWith("/api/public/notes/") ? "no-store" : "private, max-age=300",
+          "cache-control": poolRead.canary || req.url?.startsWith("/api/public/notes/") ? "no-store" : mediaCacheControl(ctx, "private, max-age=300"),
           "x-lifeos-asset-source": "pool",
           "content-disposition": asset.kind === "file" || url.searchParams.get("download") === "1" ? downloadDisposition(asset) : "inline",
         });
@@ -650,10 +717,14 @@ export const handleAssetsRoutes: RouteHandler = async (
       return true;
     }
     const resolved = resolveAssetOriginal(config, repository, id);
+    const cacheControl = req.url?.startsWith("/api/public/notes/") ? "no-store" : mediaCacheControl(ctx, "private, max-age=300");
+    const etag = `"${assetThumbnailVersion(ctx, asset)}"`;
+    if (notModified(req, cacheControl, etag)) { res.writeHead(304, { "cache-control": cacheControl, etag }); res.end(); return true; }
     res.writeHead(200, {
       "content-type": resolved.mediaType,
       "content-length": String(statSync(resolved.file).size),
-      "cache-control": req.url?.startsWith("/api/public/notes/") ? "no-store" : "private, max-age=300",
+      "cache-control": cacheControl,
+      etag,
       "x-lifeos-asset-source": "local",
       "content-disposition": asset.kind === "file" || url.searchParams.get("download") === "1" ? downloadDisposition(asset) : "inline",
     });
@@ -669,29 +740,30 @@ export const handleAssetsRoutes: RouteHandler = async (
     const id = decodeSegment(photoInfoMatch[1]!);
     const asset = repository.findAssetById(id);
     if (asset === null || asset.kind !== "photo") throw new HttpError(404, "not_found", "照片不存在");
-    const poolRead = assetPoolRead(ctx,asset);
-    let metadata = asset.photoMetadata;
-    if (metadata?.detailsVersion !== 1) {
-      let cache = photoInfoCache.get(repository);
-      if (!cache) { cache = new Map(); photoInfoCache.set(repository, cache); }
-      const key = `${id}:${JSON.stringify(asset.storageRefs)}`;
-      let pending = cache.get(key);
-      if (!pending) {
-        pending = (async () => {
-          if (poolRead) {
-            const downloaded = await downloadPoolAsset(ctx, asset, poolRead.reference, poolRead.ledgerAssetId);
-            try { return await readPhotoMetadata(downloaded.file); }
-            finally { rmSync(downloaded.directory, { recursive: true, force: true }); }
-          }
-          return readPhotoMetadata(resolveAssetOriginal(config, repository, id).file);
-        })();
-        cache.set(key, pending);
-        if (cache.size > 256) cache.delete(cache.keys().next().value!);
-        pending.catch(() => cache!.delete(key));
-      }
-      metadata = await pending;
-    }
+    const metadata = await photoMetadataFor(ctx, asset);
     setJson(res, 200, { ...(metadata === undefined ? {} : { photoMetadata: metadata }), ...(asset.originalName === undefined ? {} : { originalName: asset.originalName }), ...(asset.mediaType === undefined ? {} : { mediaType: asset.mediaType }), ...(asset.sizeBytes === undefined ? {} : { sizeBytes: asset.sizeBytes }) });
+    return true;
+  }
+  // The coordinate is the fact, the address is a courtesy. A separate route keeps a
+  // slow or throttled geocoder from ever delaying the rest of the photo information,
+  // and lets the panel paint the numbers first and fill the place name in after.
+  const photoLocationMatch = /^\/api\/assets\/([^/]+)\/photo-location$/.exec(pathname);
+  if (photoLocationMatch !== null && req.method === "GET") {
+    const id = decodeSegment(photoLocationMatch[1]!);
+    const asset = repository.findAssetById(id);
+    if (asset === null || asset.kind !== "photo") throw new HttpError(404, "not_found", "照片不存在");
+    const details = (await photoMetadataFor(ctx, asset))?.details;
+    const { latitude, longitude } = details ?? {};
+    if (typeof latitude !== "number" || typeof longitude !== "number" || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+      setJson(res, 200, { unavailable: "no_gps" });
+      return true;
+    }
+    const controller = new AbortController(), close = () => { if (!res.writableEnded) controller.abort(); };
+    res.on("close", close);
+    try {
+      const outcome = await photoLocation(config, longitude, latitude, AbortSignal.any([controller.signal, AbortSignal.timeout(12_000)]));
+      if (!res.writableEnded) setJson(res, 200, outcome.status === "resolved" ? { ...outcome.location, latitude, longitude } : { unavailable: outcome.reason });
+    } finally { res.off("close", close); }
     return true;
   }
   const assetThumbnailMatch = /^\/api\/assets\/([^/]+)\/thumbnail$/.exec(pathname);
@@ -705,11 +777,17 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
     const version = url.searchParams.get("v");
     if (version !== null && version !== assetThumbnailVersion(ctx, asset)) throw new HttpError(409, "asset_version_changed", "照片已更新，请刷新日历");
-    const { file, source, canary } = await resolveAssetThumbnail(ctx, id, width, url.searchParams.get("upright") === "1");
+    const upright = url.searchParams.get("upright") === "1";
+    const rotation = upright ? 0 : asset.displayRotation ?? 0;
+    const { file, source, canary, mediaType } = await resolveAssetThumbnail(ctx, id, width, upright, version === null);
+    const cacheControl = canary ? "no-store" : mediaCacheControl(ctx, version === null ? "private, max-age=300" : "private, max-age=31536000, immutable");
+    const etag = `"${assetThumbnailVersion(ctx, asset)}-${width}-${rotation}"`;
+    if (notModified(req, cacheControl, etag)) { res.writeHead(304, { "cache-control": cacheControl, etag }); res.end(); return true; }
     res.writeHead(200, {
-      "content-type": `image/${THUMBNAIL_FORMAT}`,
+      "content-type": mediaType,
       "content-length": String(statSync(file).size),
-      "cache-control": canary ? "no-store" : version === null ? "private, max-age=300" : "private, max-age=31536000, immutable",
+      "cache-control": cacheControl,
+      etag,
       "x-lifeos-asset-source": source,
       "content-disposition": "inline",
     });

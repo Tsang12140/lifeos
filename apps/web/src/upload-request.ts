@@ -1,3 +1,4 @@
+import { appUnlockToken } from './app-lock-session.ts';
 export interface ApiUploadProgress {
   readonly loaded: number;
   readonly total: number;
@@ -99,6 +100,7 @@ export function uploadRequest<T>(
     try {
       xhr.open("POST", path, true);
       xhr.setRequestHeader("Accept", "application/json");
+      if (appUnlockToken()) xhr.setRequestHeader('X-LifeOS-App-Unlock', appUnlockToken()!);
       xhr.setRequestHeader("Content-Type", options.contentType || body.type || "application/octet-stream");
       xhr.send(body);
     } catch (error) {

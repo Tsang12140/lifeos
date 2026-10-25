@@ -1,8 +1,33 @@
 export class Editor {
- constructor(options: {editor: HTMLElement; onUpdate?:()=>void; onToast?:(text:string)=>void; onPrompt?:(...args:any[])=>any; onImageSelect?:(image:HTMLElement|null)=>void; onDataImageInserted?:()=>void});
- editor: HTMLElement; selectedImage: HTMLElement|null;
- getHTML():string; setHTML(html:string):void; toMarkdown():string; toPlainText():string; buildSelfContainedHTML():string;
- exec(command:string,value?:string):void; formatBlock(tag:string):void; insertQuote():void; insertCodeBlock():void; insertInlineCode():void; insertTable(rows?:number,cols?:number):void; insertLink():void; insertImage(url:string,range?:Range):void;
- undo():void; redo():void; focus():void; destroy():void; fixImageContainers():void; normalizeTables():void;
- alignImage(image:HTMLElement,align:string):void; fitImageWidth(image:HTMLElement):void; smallImageSize(image:HTMLElement):void; deleteImage(image:HTMLElement):void;
- }
+ constructor(options: {editor: HTMLElement; onUpdate?: (change?: unknown) => void; onToast?: (text: string) => void; onPrompt?: (...args: any[]) => any; onImageSelect?: (image: HTMLElement | null) => void; onDataImageInserted?: () => void});
+ editor: HTMLElement;
+ selectedImage: HTMLElement | null;
+ getHTML(): string;
+ setHTML(html: string): void;
+ toMarkdown(): string;
+ toPlainText(): string;
+ buildSelfContainedHTML(): string;
+ exec(command: string, value?: string): void;
+ formatBlock(tag: string): void;
+ insertQuote(): void;
+ insertTodo(): void;
+ insertCodeBlock(): void;
+ insertCodeInline(): void;
+ insertHR(): void;
+ insertTable(rows?: number, cols?: number): void;
+ insertLink(): Promise<void>;
+ insertImage(url: string, range?: Range): void;
+ currentTableCell(): HTMLTableCellElement | null;
+ getTableState(): {active: boolean; table: HTMLTableElement | null; cell: HTMLTableCellElement | null; selectedCount: number; canMerge: boolean; canSplit: boolean; backgroundColor: string | null};
+ tableCommand(action: 'row-before' | 'row-after' | 'col-left' | 'col-right' | 'delete-row' | 'delete-col' | 'toggle-header' | 'delete-table' | 'equalize' | 'merge' | 'split' | 'clear-bg'): boolean;
+ undo(): boolean;
+ redo(): boolean;
+ focus(): void;
+ destroy(): void;
+ fixImageContainers(): void;
+ normalizeTables(): void;
+ alignImage(image: HTMLElement, align: string): void;
+ fitImageWidth(image: HTMLElement): void;
+ smallImageSize(image: HTMLElement): void;
+ deleteImage(image: HTMLElement): void;
+}

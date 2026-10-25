@@ -64,9 +64,10 @@ export const handleWeatherRoutes: RouteHandler = async (
   if (pathname === "/api/location/config" && req.method === "POST") {
     requireJsonContentType(req, true);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["enabled", "apiKey", "clearApiKey"]);
+    hasOnlyKeys(input, ["enabled", "photoAddress", "apiKey", "clearApiKey"]);
     setJson(res, 200, saveAmapConfig(config, {
       enabled: booleanField(input.enabled, "enabled"),
+      ...(input.photoAddress === undefined ? {} : { photoAddress: booleanField(input.photoAddress, "photoAddress") }),
       ...(input.apiKey === undefined ? {} : { apiKey: stringField(input.apiKey, "apiKey") }),
       ...(input.clearApiKey === undefined ? {} : { clearApiKey: booleanField(input.clearApiKey, "clearApiKey") }),
     })); return true;

@@ -1,11 +1,23 @@
 .contacts-controls { display: grid; gap: 12px; min-width: 0; }
+.contacts-controls-main { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
+.contacts-mode-tabs { display: inline-flex; align-items: center; gap: 2px; width: fit-content; max-width: 100%; padding: 3px; border: 0; border-radius: 999px; background: var(--control-segment); }
+.contacts-mode-tab { display: inline-flex; align-items: center; justify-content: center; min-width: 60px; min-height: 34px; padding: 0 12px; border: 1px solid transparent; border-radius: 999px; color: var(--control-muted); background: transparent; box-shadow: none; cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 500; line-height: 20px; margin: 0; }
+.contacts-mode-tab.is-active { border-color: var(--control-ink); color: #fff; background: var(--control-ink); box-shadow: none; }
+.contacts-mode-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .entities-library-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; position: relative; min-width: 0; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .entities-library-toolbar .entities-tabs { flex: 0 0 auto; margin: 0; padding: 0; border: 0; }
 .entities-library-toolbar .library-search { flex-shrink: 0; margin-left: auto; }
 .library-search .record-filter-option { white-space: normal; overflow-wrap: anywhere; height: auto; }
 .contacts-description { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.6; }
+.entities-results { display: grid; gap: 20px; min-width: 0; }
+.contacts-results-groups { display: grid; gap: 20px; min-width: 0; }
+.contacts-result-group { display: grid; gap: 10px; min-width: 0; }
+.contacts-group-heading { display: flex; align-items: baseline; gap: 7px; margin: 0; color: var(--ink-soft); font-size: 0.88rem; font-weight: 600; line-height: 1.4; }
+.contacts-group-heading span { color: var(--muted); font-size: 0.76rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.contacts-result-group > .entities-grid { min-width: 0; }
 .contacts-error { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .contacts-error p { margin: 0; }
 @media (max-width: 600px) {
   .entities-library-toolbar .record-search-sheet { top: calc(100% + 8px); }
+  .contacts-mode-tab { min-height: 40px; }
 }

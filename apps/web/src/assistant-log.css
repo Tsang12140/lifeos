@@ -1,0 +1,220 @@
+/* 设置 → 服务集成 → AI 调用记录。
+   阅读者是另一个 AI，不是主人：界面只负责「选一段时间 + 复制」。
+   全站界面文字默认不可选中（2026-09-21 定案），所以框选做成勾选框 + Shift 连选。 */
+
+.settings-log-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.settings-log-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-log-head .settings-card-copy { flex: 1; }
+
+.settings-log-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-log-stats > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.settings-log-stats small { color: var(--muted); font-size: 0.7rem; }
+.settings-log-stats strong { color: var(--ink); font-size: 0.92rem; font-weight: 500; }
+
+.settings-log-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.settings-log-chip {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.settings-log-chip:hover { border-color: var(--line-strong); color: var(--ink-soft); }
+
+.settings-log-chip.is-on {
+  border-color: var(--line-strong);
+  background: var(--chip);
+  color: var(--chip-ink);
+}
+
+.settings-log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-log-purge.is-armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+.settings-log-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.55;
+}
+
+.settings-log-empty {
+  margin: 0;
+  padding: 18px 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.settings-log-list { display: grid; min-width: 0; }
+
+.settings-log-row { border-top: 1px solid var(--line); }
+.settings-log-row:first-child { border-top: 0; }
+.settings-log-row.is-selected { background: var(--surface-soft); }
+
+.settings-log-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 4px;
+}
+
+.settings-log-check {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.settings-log-row.is-selected .settings-log-check { border-color: var(--ink-soft); background: var(--ink-soft); color: #fff; }
+
+.settings-log-summary {
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 「对话 / 小结」：只是标明来源，不做强调，免得抢走失败原因那枚徽章。 */
+.settings-log-source {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+
+.settings-log-source.source-summary { border-style: dashed; }
+
+.settings-log-stage {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+/* 三类各自一种颜色，只用于区分，不表示严重程度。 */
+.settings-log-stage.stage-connection { background: #fdf3e0; color: #8a6212; }
+.settings-log-stage.stage-format { background: #fdeee7; color: #9c4a25; }
+.settings-log-stage.stage-service { background: #eef1f6; color: #55647c; }
+
+.settings-log-time { color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+
+.settings-log-question {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-log-tries { color: var(--muted); font-size: 0.68rem; white-space: nowrap; }
+
+.settings-log-detail {
+  display: grid;
+  gap: 10px;
+  margin: 0 4px 12px 30px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.settings-log-attempt { display: grid; gap: 5px; min-width: 0; }
+
+.settings-log-attempt-line { margin: 0; color: var(--ink-soft); font-size: 0.72rem; }
+.settings-log-attempt-line code { font-size: 0.7rem; color: var(--ink-soft); }
+.settings-log-attempt-detail { margin: 0; color: var(--muted); font-size: 0.72rem; line-height: 1.55; }
+
+.settings-log-raw {
+  max-height: 260px;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .settings-log-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-log-summary { grid-template-columns: auto auto minmax(0, 1fr); }
+  .settings-log-time { display: none; }
+  .settings-log-tries { display: none; }
+  .settings-log-detail { margin-left: 4px; }
+}

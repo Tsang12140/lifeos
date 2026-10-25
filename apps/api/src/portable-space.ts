@@ -4,21 +4,24 @@ import { assertNoteFolders, assertValidAsset, assertValidEntity, assertValidTime
 
 // Only personal data. Identity, sessions, credentials, storage ledgers and schedules stay on the target.
 export const SPACE_TABLES = ["records", "entities", "assets", "asset_trash", "day_summaries", "cycle_intimacy_module", "cycle_intimacy_events", "weather_device_locations", "weather_day_cache", "weather_observation", "note_folders", "note_versions"] as const;
-export interface SpaceTable { readonly columns: readonly string[]; readonly rows: readonly (readonly SQLInputValue[])[] }
+export interface SpaceTable { readonly columns: readonly string[]; rows: readonly (readonly SQLInputValue[])[] }
 export type SpaceTables = Record<(typeof SPACE_TABLES)[number], SpaceTable>;
 
-export function readSpaceTables(db: DatabaseSync): SpaceTables {
+function readAllSpaceTables(db: DatabaseSync): SpaceTables {
   const tables = {} as SpaceTables;
+  for (const name of SPACE_TABLES) {
+    // Always read the target's own column order; an archive may order them differently.
+    const columns = db.prepare(`PRAGMA table_info(${name})`).all().map(row => String(row.name));
+    const rows = db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => columns.map(column => row[column] as SQLInputValue));
+    tables[name] = { columns, rows };
+  }
+  return tables;
+}
+
+export function readSpaceTables(db: DatabaseSync): SpaceTables {
   db.exec("BEGIN");
-  try {
-    for (const name of SPACE_TABLES) {
-      const columns = db.prepare(`PRAGMA table_info(${name})`).all().map(row => String(row.name));
-      const rows = db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => columns.map(column => row[column] as SQLInputValue));
-      tables[name] = { columns, rows };
-    }
-    db.exec("COMMIT");
-    return tables;
-  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  try { const tables = readAllSpaceTables(db); db.exec("COMMIT"); return tables; }
+  catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
 export function spaceFingerprint(tables: SpaceTables): string { return createHash("sha256").update(JSON.stringify(tables)).digest("hex"); }
@@ -96,6 +99,73 @@ export function replaceSpaceTables(db: DatabaseSync, tables: SpaceTables, expect
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_batches'").get()) db.exec("DELETE FROM assistant_batches");
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_task_labels'").get()) db.exec("DELETE FROM calendar_task_labels");
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_days'").get()) db.exec("DELETE FROM calendar_days");
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+/**
+ * Adds rows that the merge planner already decided are new. Nothing is deleted
+ * or overwritten: the incoming rows are validated together with the current
+ * target first, so a dangling reference fails the whole batch.
+ */
+export function mergeSpaceTables(db: DatabaseSync, inserts: SpaceTables, expected: string): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = readAllSpaceTables(db);
+    if (spaceFingerprint(current) !== expected) throw new Error("当前空间已发生变化，请重新校验导入包");
+    const combined = {} as SpaceTables;
+    for (const name of SPACE_TABLES) {
+      const target = current[name], extra = inserts[name];
+      const rows = [...target.rows];
+      if (extra) {
+        if (extra.columns.some(column => !target.columns.includes(column))) throw new Error("数据版本不兼容，请使用相同或更新的 LifeOS 版本");
+        for (const row of extra.rows) {
+          const object = Object.fromEntries(extra.columns.map((column, index) => [column, row[index]]));
+          rows.push(target.columns.map(column => object[column] as SQLInputValue));
+        }
+      }
+      combined[name] = { columns: target.columns, rows };
+    }
+    validateSpaceTables(db, combined);
+    for (const name of SPACE_TABLES) {
+      const extra = inserts[name];
+      if (!extra?.rows.length) continue;
+      const insert = db.prepare(`INSERT INTO ${name} (${extra.columns.join(",")}) VALUES (${extra.columns.map(() => "?").join(",")})`);
+      for (const row of extra.rows) insert.run(...row);
+    }
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+const DELETE_SPEC: Record<(typeof SPACE_TABLES)[number], { readonly where: string; readonly parts: number; readonly numeric?: readonly number[] }> = {
+  records: { where: "id = ?", parts: 1 },
+  entities: { where: "id = ?", parts: 1 },
+  assets: { where: "id = ?", parts: 1 },
+  asset_trash: { where: "asset_id = ?", parts: 1 },
+  day_summaries: { where: "date = ?", parts: 1 },
+  cycle_intimacy_module: { where: "id = ?", parts: 1, numeric: [0] },
+  cycle_intimacy_events: { where: "id = ?", parts: 1 },
+  weather_device_locations: { where: "device_id = ?", parts: 1 },
+  weather_day_cache: { where: "date = ? AND location_key = ?", parts: 2 },
+  weather_observation: { where: "date = ? AND hour = ? AND location_key = ? AND source = ?", parts: 4, numeric: [1] },
+  note_folders: { where: "id = ?", parts: 1 },
+  note_versions: { where: "id = ?", parts: 1 },
+};
+
+/** Removes exactly the rows an import batch added, in one transaction. */
+export function deleteSpaceRows(db: DatabaseSync, keys: Partial<Record<(typeof SPACE_TABLES)[number], readonly string[]>>): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const name of SPACE_TABLES) {
+      const values = keys[name];
+      if (!values?.length) continue;
+      const spec = DELETE_SPEC[name], statement = db.prepare(`DELETE FROM ${name} WHERE ${spec.where}`);
+      for (const key of values) {
+        const parts = key.split("\u0000");
+        if (parts.length !== spec.parts) throw new Error("导入批次记录了无效的行编号");
+        statement.run(...parts.map((part, index) => spec.numeric?.includes(index) ? Number(part) : part));
+      }
+    }
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }

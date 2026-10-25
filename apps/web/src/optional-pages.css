@@ -1,0 +1,11 @@
+.optional-page-picker { position:relative; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+.optional-page-add { color:var(--muted); }
+.optional-page-menu { position:absolute; z-index:60; bottom:calc(100% + 8px); left:0; width:208px; max-width:calc(100vw - 32px); padding:6px; border:1px solid var(--line); border-radius:12px; background:var(--surface); box-shadow:0 8px 24px #00000012; }
+.optional-page-menu > button { display:flex; align-items:center; gap:9px; width:100%; min-height:34px; padding:7px 10px; border:0; border-radius:7px; background:transparent; color:var(--ink); font:inherit; font-size:14px; text-align:left; }
+.optional-page-menu > button > span { flex:1; }
+.optional-page-menu > button:hover { background:var(--chip); }
+.optional-page-menu > p { margin:8px 10px; color:var(--muted); font-size:13px; }
+.timeline-item:has(.kind-dream) .timeline-meta { display:flex; }
+.kind-dream { color:var(--muted); background:var(--chip); }
+.settings-timemachine { margin-top:20px; }
+@media(pointer:coarse) { .optional-page-menu > button { min-height:40px; } }

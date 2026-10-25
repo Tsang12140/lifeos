@@ -24,7 +24,7 @@ export function composerDraftScope(authResolved: boolean, auth: AuthState): stri
 }
 
 function key(scope: string): string {
-  if (scope !== "legacy" && !/^account:[a-z0-9-]+$/i.test(scope)) throw new Error("草稿账号范围无效");
+  if (!/^(?:legacy|account:[a-z0-9-]+)(?::dreams)?$/i.test(scope)) throw new Error("草稿账号范围无效");
   return scopedKey(PREFIX + scope);
 }
 

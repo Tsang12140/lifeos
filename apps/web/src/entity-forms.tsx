@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { useActionMenu } from "./action-menu";
+import { ContactMentionAvatar } from "./contact-avatar";
 import { LoaderCircle, MapPin, Plus, User, X } from "lucide-react";
 import { PLACE_MARKER, PLACE_ROLES, entitySearchTerms, normalizeEntitySearchTerm, type PlacePeriod, type PlaceRole } from "@lifeos/core";
 import type { Entity, EntityCandidate, TextEntityDecision } from "@lifeos/core";
@@ -25,6 +26,7 @@ import {
 import { slashSuggestions as slashSuggestionsFn } from "./mention";
 import { clampFixedMenuPosition } from "./menu-position";
 import { PlaceSearch, PlaceRoleField, placeDetailsOf, type PlaceDraft } from "./place-search";
+import { PersonFields } from "./person-fields";
 
 /**
  * One entry in the right-click menu. The menu is generic on purpose: the box
@@ -81,18 +83,28 @@ export interface MentionBoxProps {
  * never a name the owner is typing into a single row. */
 export function AliasField({ value, onChange, label, compact = false, disabled = false, preserveHistory = false }: { value: string; onChange: (value: string) => void; label: string; compact?: boolean; disabled?: boolean; preserveHistory?: boolean }) {
   const [removed, setRemoved] = useState<{ row: string; index: number } | null>(null);
+  const inputs = useRef<Array<HTMLInputElement | null>>([]);
+  const focusNext = useRef<number | null>(null);
   const rows: string[] = value.startsWith("[") ? (() => { try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") && parsed.length > 0 ? parsed : [""]; } catch { return [value]; } })() : value.split("/");
   const update = (next: readonly string[]) => onChange(JSON.stringify(next.length > 0 ? next : [""]));
+  useLayoutEffect(() => { if (focusNext.current !== null) { inputs.current[focusNext.current]?.focus(); focusNext.current = null; } }, [value]);
+  const append = () => { focusNext.current = rows.length; update([...rows, ""]); };
   return <div className={`alias-field ${compact ? "is-compact" : ""}`}>
-    {rows.map((row, index) => <div className="alias-entry" key={index}><input className={compact ? "alias-input" : "entity-create-input alias-input"} value={row} disabled={disabled} onChange={(event) => update(rows.map((item, i) => i === index ? event.target.value : item))} onPaste={(event) => {
+    {rows.map((row, index) => <div className="alias-entry" key={index}><input ref={node => { inputs.current[index] = node; }} className={compact ? "alias-input" : "entity-create-input alias-input"} value={row} placeholder="选填" disabled={disabled} onKeyDown={event => {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+      if (event.key !== "Enter" && !(event.key === "Tab" && !event.shiftKey && row.trim())) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!row.trim()) return;
+      if (index + 1 < rows.length) inputs.current[index + 1]?.focus();
+      else append();
+    }} onChange={(event) => update(rows.map((item, i) => i === index ? event.target.value : item))} onPaste={(event) => {
       const input = event.currentTarget;
       const pasted = event.clipboardData.getData("text");
       const parts = pasted.split(/[、,，/\r\n]+/u).map((part) => part.trim()).filter(Boolean);
       if (parts.length < 2 || (row && (input.selectionStart !== 0 || input.selectionEnd !== row.length))) return;
       event.preventDefault(); update([...rows.slice(0, index), ...parts, ...rows.slice(index + 1)]);
     }} aria-label={`${label.replace(/，用斜杠分隔/u, "")} ${index + 1}`} /><button className="icon-button compact-icon-button" type="button" disabled={disabled} aria-label={`删除别名 ${index + 1}`} onClick={() => { setRemoved(row.trim() ? { row, index } : null); update(rows.filter((_, i) => i !== index)); }}><X size={14} aria-hidden="true" /></button></div>)}
-    <div className="alias-field-actions"><button className="text-button alias-add" type="button" disabled={disabled} onClick={() => update([...rows, ""])}><Plus size={14} aria-hidden="true" />添加别名</button>{preserveHistory && removed ? <button className="text-button alias-add" type="button" disabled={disabled} onClick={() => { const next = rows.filter(item => item.trim()); next.splice(Math.min(removed.index, next.length), 0, removed.row); update(next); setRemoved(null); }}>撤销删除</button> : null}</div>
-    <small className="alias-paste-hint">可粘贴多个别名，用顿号、逗号或换行分隔</small>
+    <div className="alias-field-actions"><button className="text-button alias-add" type="button" disabled={disabled} onClick={append}><Plus size={14} aria-hidden="true" />添加别名</button>{preserveHistory && removed ? <button className="text-button alias-add" type="button" disabled={disabled} onClick={() => { const next = rows.filter(item => item.trim()); next.splice(Math.min(removed.index, next.length), 0, removed.row); update(next); setRemoved(null); }}>撤销删除</button> : null}</div>
     {preserveHistory ? <small className="alias-paste-hint">删除别名不会改变已关联的历史记录。</small> : null}
   </div>;
 }
@@ -160,76 +172,71 @@ export function aliasListFrom(raw: string): readonly string[] {
   }
   return list;
 }
-export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submitLabel }: { defaultType: "person" | "place"; defaultName: string; onCreate: (request: EntityCreateRequest) => Promise<boolean>; onCancel: () => void; submitLabel: string }) {
+export function EntityCreateForm({ defaultType, defaultName, onCreate, onCancel, submitLabel, fixedType = false }: { defaultType: "person" | "place"; defaultName: string; onCreate: (request: EntityCreateRequest) => Promise<boolean>; onCancel: () => void; submitLabel: string; fixedType?: boolean }) {
   const [type, setType] = useState<"person" | "place">(defaultType);
   const [name, setName] = useState(defaultName);
   const [aliases, setAliases] = useState("");
   const [role, setRole] = useState<PlaceRole | "">("");
-  const [hasPeriod, setHasPeriod] = useState(false);
-  const [from, setFrom] = useState("");
-  const [until, setUntil] = useState("");
-  const [hasAddress, setHasAddress] = useState(false);
   const [address, setAddress] = useState("");
+  const [person, setPerson] = useState<import("@lifeos/core").PersonDetails>({});
+  const [existing, setExisting] = useState<Entity | null>(null);
+  const [category, setCategory] = useState("");
+  const [placeReady, setPlaceReady] = useState(false);
   const [details, setDetails] = useState<Partial<PlaceDraft>>({});
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(defaultType === "place");
   const [busy, setBusy] = useState(false);
+  const ready = type === "person" || placeReady && !searchOpen;
   const cleanName = name.replace(/[@#]/g, "").trim();
   const submit = async () => {
-    if (cleanName.length === 0 || busy) return;
+    if (!ready || cleanName.length === 0 || busy) return;
     const aliasList = aliasListFrom(aliases);
     setBusy(true);
-    const created = await onCreate({
+    try { const created = await onCreate({
       type,
       name: cleanName,
+      ...(type === "place" && existing ? { existing } : {}),
       ...(aliasList.length > 0 ? { aliases: aliasList } : {}),
       ...(type === "place" && role !== "" ? { role } : {}),
-      ...(type === "place" && hasPeriod && (from !== "" || until !== "") ? { period: { ...(from === "" ? {} : { from }), ...(until === "" ? {} : { until }) } } : {}),
-      ...(type === "place" && hasAddress && address.trim() ? { address: address.trim() } : {}),
+      ...(type === "place" && address.trim() ? { address: address.trim() } : {}),
       ...(type === "place" ? placeDetailsOf(details) : {}),
+      ...(type === "person" ? Object.fromEntries(Object.entries(person).filter(([, value]) => value?.trim()).map(([key, value]) => [key, value?.trim()])) : {}),
     });
-    setBusy(false);
     if (created) onCancel();
+    } finally { setBusy(false); }
   };
   return <div className="entity-create-form" role="form" aria-label={`新建${type === "place" ? "地点" : "人物"}`}>
-    <div className="entity-create-row">
+    {type === "place" && searchOpen ? <div className="place-create-search"><PlaceSearch createOnly initialQuery={name} manualLabel="找不到？手动填写" onManual={query => { setName(query); setAddress(""); setDetails({}); setExisting(null); setCategory(""); setRole(""); setPlaceReady(true); setSearchOpen(false); }} onPick={choice => { setName(choice.name); setDetails(choice); setAddress(choice.address ?? ""); setExisting("id" in choice ? choice : null); setCategory(("category" in choice ? choice.category : "") || (choice.role ? PLACE_ROLE_LABELS[choice.role] ?? choice.role : "")); setRole("id" in choice ? choice.role ?? "" : ""); setPlaceReady(true); setSearchOpen(false); }} /></div> : null}
+    {ready ? <>
+    {!fixedType ? <div className="entity-create-row">
       <span className="entity-create-label">类型</span>
       <div className="entity-create-types">
-        <button type="button" className={`entity-type-option ${type === "person" ? "is-active" : ""}`} onClick={() => setType("person")}><User size={13} strokeWidth={1.8} aria-hidden="true" />人物</button>
-        <button type="button" className={`entity-type-option ${type === "place" ? "is-active" : ""}`} onClick={() => setType("place")}><MapPin size={13} strokeWidth={1.8} aria-hidden="true" />地点</button>
+        <button type="button" aria-pressed={type === "person"} className={`entity-type-option ${type === "person" ? "is-active" : ""}`} onClick={() => setType("person")}><User size={13} strokeWidth={1.8} aria-hidden="true" />人物</button>
+        <button type="button" aria-pressed={type === "place"} className={`entity-type-option ${type === "place" ? "is-active" : ""}`} onClick={() => { setType("place"); if (!placeReady) setSearchOpen(true); }}><MapPin size={13} strokeWidth={1.8} aria-hidden="true" />地点</button>
       </div>
-    </div>
+    </div> : null}
     <div className="entity-create-row">
       <span className="entity-create-label">名称</span>
-      <input className="entity-create-input" aria-label="对象名称" value={name} onChange={(event) => setName(event.target.value)} autoFocus onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void submit(); } }} />
+      <input className="entity-create-input" aria-label="对象名称" disabled={busy || type === "place" && !!existing} value={name} onChange={(event) => setName(event.target.value)} autoFocus onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} />
     </div>
     <div className="entity-create-row">
       <span className="entity-create-label">别名</span>
-      <AliasField disabled={busy} value={aliases} onChange={setAliases} label="别名，用斜杠分隔" />
+      <AliasField disabled={busy || type === "place" && !!existing} value={type === "place" && existing ? JSON.stringify(existing.aliases ?? [""]) : aliases} onChange={setAliases} label="别名，用斜杠分隔" />
     </div>
+    {type === "person" ? <PersonFields value={person} disabled={busy} onChange={patch => setPerson(value => ({ ...value, ...patch }))} /> : null}
     {type === "place" ? <>
-      <div className="place-search-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setSearchOpen(value => !value)}>{searchOpen ? "收起地点搜索" : "搜索店铺或地址"}</button></div>
-      {searchOpen ? <PlaceSearch initialQuery={name} onPick={choice => { setName(choice.name); setDetails(choice); setRole(choice.role ?? ""); setAddress(choice.address ?? ""); setHasAddress(Boolean(choice.address)); setSearchOpen(false); }} /> : null}
-      <PlaceRoleField value={role} onChange={setRole} disabled={busy} />
-      <label className="dialog-field"><span>城市</span><input aria-label="地点所在城市" value={details.city ?? ""} disabled={busy} onChange={event => setDetails(value => ({ ...value, city: event.target.value || undefined }))} /></label>
-      <label className="dialog-field"><span>电话</span><input aria-label="地点电话" type="tel" value={details.phone ?? ""} disabled={busy} onChange={event => setDetails(value => ({ ...value, phone: event.target.value || undefined }))} /></label>
-      <div className="entity-create-row entity-create-optional-row">
-        <label className="entity-optional-toggle"><input type="checkbox" checked={hasPeriod} onChange={(event) => setHasPeriod(event.target.checked)} />添加时期</label>
-        <label className="entity-optional-toggle"><input type="checkbox" checked={hasAddress} onChange={(event) => setHasAddress(event.target.checked)} />添加详细地址</label>
-      </div>
-      {hasPeriod ? <div className="entity-create-row entity-create-period-row">
-        <span className="entity-create-label">时期</span>
-        <input className="entity-create-input entity-create-month" type="month" value={from} onChange={(event) => setFrom(event.target.value)} aria-label="开始年月" />
-        <span className="entity-create-label">至</span>
-        <input className="entity-create-input entity-create-month" type="month" value={until} onChange={(event) => setUntil(event.target.value)} aria-label="结束年月，留空表示至今" />
-      </div> : null}
-      {hasAddress ? <div className="entity-create-row">
+      <div className="place-search-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => setSearchOpen(true)}>重新搜索</button></div>
+      <PlaceRoleField key={JSON.stringify([details.amapId, existing?.id])} value={role} onChange={setRole} disabled={busy || !!existing} suggestFor={existing ? undefined : { name, address, category }} />
+      <label className="dialog-field"><span>城市</span><input aria-label="地点所在城市" placeholder="选填" value={details.city ?? ""} disabled={busy || !!existing} onChange={event => setDetails(value => ({ ...value, city: event.target.value || undefined }))} /></label>
+      <label className="dialog-field"><span>电话</span><input aria-label="地点电话" type="tel" placeholder="选填" value={details.phone ?? ""} disabled={busy || !!existing} onChange={event => setDetails(value => ({ ...value, phone: event.target.value || undefined }))} /></label>
+      <div className="entity-create-row">
         <span className="entity-create-label">详细地址</span>
-        <input className="entity-create-input" aria-label="详细地址" value={address} onChange={(event) => setAddress(event.target.value)} />
-      </div> : null}
+        <input className="entity-create-input" aria-label="详细地址" placeholder="选填" disabled={busy || !!existing} value={address} onChange={(event) => setAddress(event.target.value)} />
+      </div>
+    </> : null}
     </> : null}
     <div className="entity-create-actions">
       <button type="button" className="text-button" onClick={onCancel}>取消</button>
-      <button type="button" className="primary-button entity-create-submit" disabled={cleanName.length === 0 || busy} onClick={() => void submit()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null}<span>{submitLabel}</span></button>
+      {ready ? <button type="button" className="primary-button entity-create-submit" disabled={cleanName.length === 0 || busy} onClick={() => void submit()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null}<span>{type === "place" && existing ? "使用已有地点" : submitLabel}</span></button> : null}
     </div>
   </div>;
 }
@@ -358,8 +365,8 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
 
   const submitCreateForm = async (request: EntityCreateRequest): Promise<boolean> => {
     if (mention === null) return false;
-    const { type, name, ...extras } = request;
-    const entity = await onCreateEntity(type, name, extras);
+    const { type, name, existing, ...extras } = request;
+    const entity = existing ?? await onCreateEntity(type, name, extras);
     if (entity === null) return false;
     // The form decides the kind last — a ## trigger that was switched to a
     // person must still insert as @.
@@ -473,7 +480,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")}，` : ""}{command.description}</small></button>)}</div> : null}
     {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={onPickEntity ? "创建并核对标记" : `创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">
-      {suggestions.map((entity, index) => <button className={`mention-option ${index === safeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === safeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name, undefined, entity)}>{(() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
+      {suggestions.map((entity, index) => <button className={`mention-option ${index === safeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === safeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name, undefined, entity)}>{entity.type === "person" ? <ContactMentionAvatar entity={entity} /> : (() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
       {wantsNew ? <button className="mention-option mention-option-create" type="button" role="option" aria-selected={safeIndex === suggestions.length} onMouseEnter={() => setActiveIndex(suggestions.length)} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateFormOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{kindLabel}「{trimmedQuery}」…</span></button> : null}
     </div> : null}
   </div>;

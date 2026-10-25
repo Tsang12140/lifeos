@@ -22,7 +22,7 @@
     transform: none;
   }
 
-  .ai-assistant-launcher:focus-visible { outline: 2px solid #3370ff; outline-offset: 2px; }
+  .ai-assistant-launcher:focus-visible { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
   .ai-assistant-launcher.is-dragging { transition: none; }
   .ai-assistant-launcher.is-hidden { opacity: 0; }
 

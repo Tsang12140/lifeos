@@ -11,6 +11,7 @@ import type { Entity } from "@lifeos/core";
 import type { RecordView } from "./api";
 import type { ModuleCommand } from "./movie";
 import { isMovieEntity, relationLabelFor } from "./app-meta";
+import { ContactMentionAvatar } from "./contact-avatar";
 
 export const PLACE_ROLE_LABELS: Record<string, string> = { home: "家", work: "工作", dining: "餐饮", travel: "旅行", shopping: "购物", medical: "医疗", school: "学校", other: "其他" };
 export const placeRoleLabel = (role: string) => PLACE_ROLE_LABELS[role] ?? role;
@@ -168,7 +169,7 @@ export function RecordText({ text, entities, decisions, onOpenEntity }: { readon
     if (mention.start > cursor) parts.push(text.slice(cursor, mention.start));
     const entity = entitiesById.get(mention.entityId);
     const PlaceIcon = entity?.type === "place" && entity.role === "home" ? House : entity?.type === "place" && entity.role === "work" ? BriefcaseBusiness : MapPin;
-    const content = <>{mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : null}{mention.matched}</>;
+    const content = <>{mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : entity?.type === "person" ? <ContactMentionAvatar entity={entity} /> : null}{mention.matched}</>;
     const props = { className: `mention-chip ${mention.entityType === "place" ? "is-place" : ""}`, title: entity ? `当前名称：${entity.name}\n本文称呼：${mention.matched}` : undefined };
     parts.push(entity && onOpenEntity ? <button key={`${mention.entityId}-${mention.start}-${index}`} {...props} type="button" onClick={() => onOpenEntity(entity)}>{content}</button> : <span key={`${mention.entityId}-${mention.start}-${index}`} {...props}>{content}</span>);
     cursor = mention.end;

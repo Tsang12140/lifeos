@@ -40,7 +40,7 @@
 | 领域层 | `packages/core`：模型 / 校验 / 提及解析 / 摘要 / 导出 / **端口接口**。不含任何存储实现 |
 | 仓库形态 | npm workspaces monorepo：`packages/core` + `apps/api` + `apps/web` + `scripts` |
 | 开发端口 | API `127.0.0.1:3001`，Vite `127.0.0.1:5173`（Vite 把 `/api` 代理到 3001） |
-| **本机预览端口** | API **3011** + Web **5199**。⚠️ **这两个端口是主人正在用的实例** |
+| **本机预览端口** | API **3011** + Web **5199**（Web 默认对局域网开放并要求登录，API 只听 loopback）。⚠️ **这两个端口是主人正在用的实例** |
 | 生产 | 宝塔（Linux）+ PM2 进程 `lifeos`，源码在 `/www/server/lifeos-app`，数据在 `/www/server/lifeos-data`，域名 `lifeos.dnbox.cn`。**不用 Docker** |
 | 生产机器 | **4 核 4G，且上面还跑着别的项目** ← 任何"加个常驻服务"的建议都要先过这一关 |
 | 数据库 | `./data/lifeos.sqlite`（WAL 模式）；账户模式下另有 `data/identity.sqlite` |

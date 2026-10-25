@@ -26,6 +26,7 @@ function assetThumbUrl(assetId: string, width: number): string {
  * show, so the badge never becomes a surprise.
  */
 export const SHOT_LIMIT = 9;
+const BATCH_PROGRESS_DISMISS_MS = 3_000;
 export const SHOT_REORDER_TYPE = "application/x-lifeos-shot-order";
 
 /**
@@ -106,6 +107,7 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
   shotsRef.current = shots;
   const [batchProgress, setBatchProgress] = useState<ShotBatchProgress | null>(null);
   const batchProgressRef = useRef<ShotBatchProgress | null>(null);
+  const batchProgressDismissRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [committedPreviews, setCommittedPreviews] = useState<ReadonlyMap<string, string>>(() => new Map());
   const committedPreviewsRef = useRef<ReadonlyMap<string, string>>(new Map());
   const orderByAssetRef = useRef(new Map<string, number>());
@@ -290,6 +292,22 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
     batchProgressRef.current = next;
     setBatchProgress(next);
   };
+
+  useEffect(() => {
+    if (batchProgressDismissRef.current !== null) clearTimeout(batchProgressDismissRef.current);
+    batchProgressDismissRef.current = null;
+    const activeUpload = pending.some(shot => shot.state === "queued" || shot.state === "preparing" || shot.state === "uploading" || shot.state === "processing");
+    if (batchProgress !== null && batchProgress.total > 0 && batchProgress.completed >= batchProgress.total && !activeUpload) {
+      batchProgressDismissRef.current = setTimeout(() => {
+        batchProgressDismissRef.current = null;
+        publishBatchProgress(null);
+      }, BATCH_PROGRESS_DISMISS_MS);
+    }
+    return () => {
+      if (batchProgressDismissRef.current !== null) clearTimeout(batchProgressDismissRef.current);
+      batchProgressDismissRef.current = null;
+    };
+  }, [batchProgress, pending]);
 
   const setShotsTracked = (update: SetStateAction<readonly AssetLink[]>) => {
     const next = typeof update === "function" ? update(shotsRef.current) : update;
@@ -602,12 +620,14 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
             <Plus size={18} strokeWidth={2} aria-hidden="true" />
           </button>
         </li> : null}
+        {!addOutsideStrip && batchProgress !== null ? <li className="shot-progress-summary-slot"><span className="shot-progress-summary" role="status">已完成{batchProgress.completed}/{batchProgress.total}项</span></li> : null}
       </ul>
       {addOutsideStrip ? <div className="shot-tile shot-tile-add shot-tile-add-outside">
         <button type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label="添加照片或视频">
           <Plus size={18} strokeWidth={2} aria-hidden="true" />
         </button>
       </div> : null}
+      {addOutsideStrip && batchProgress !== null ? <div className="shot-progress-summary-slot"><span className="shot-progress-summary" role="status">已完成{batchProgress.completed}/{batchProgress.total}项</span></div> : null}
       {/* The two things that are about the strip rather than in it. They ride
           the end of the same row, so they cost no height of their own: on a
           line underneath they would add a full caption line of blank below
@@ -619,7 +639,6 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
         ? <div className="shot-strip-meta">
             {!empty ? <span className="shot-strip-tally">{shots.length + pending.length}/{SHOT_LIMIT}</span> : null}
             {shots.length > 0 ? <button className="shot-clear" type="button" disabled={disabled} onClick={clearAll} aria-label="清空全部媒体"><Eraser size={13} strokeWidth={2} aria-hidden="true" /><span>清空</span></button> : null}
-            {batchProgress !== null ? <span className="shot-progress-summary" role="status">已完成{batchProgress.completed}/{batchProgress.total}项</span> : null}
             {busy ? <span className="shot-busy" aria-hidden="true"><LoaderCircle className="spin" size={13} /></span> : null}
           </div> : null}
     </div>

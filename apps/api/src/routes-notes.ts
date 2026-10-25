@@ -5,12 +5,18 @@ import { hasOnlyKeys, jsonObject, revisionField, stringField } from "./field-val
 import { relatedRecordIdsField } from "./record-builders.js";
 export const handleNotesRoutes: RouteHandler = async ({ repository, config }, req, res, pathname, url) => {
     const store = repository.notes;
-    if(pathname==="/api/notes/import-links"&&req.method==="POST") {
-        requireJsonContentType(req);const input=jsonObject(await readBody(req,config.bodyLimitBytes),"body");hasOnlyKeys(input,["records"]);
-        if(!Array.isArray(input.records)||input.records.length>1000)throw new HttpError(400,"invalid_links","笔记关联清单无效");
-        const records=input.records;
-        const items=repository.atomic(()=>records.map((raw:unknown)=>{const item=jsonObject(raw,"record");hasOnlyKeys(item,["id","revision","relatedRecordIds"]);const id=stringField(item.id,"id"),current=repository.findById(id);if(current?.kind!=="note")throw new HttpError(404,"not_found","笔记不存在");const relatedRecordIds=relatedRecordIdsField(item.relatedRecordIds,id,repository);if(!repository.update({...current,relatedRecordIds},revisionField(item.revision)))throw new HttpError(409,"revision_conflict","笔记已变化，未覆盖关联");return repository.findById(id)!;}));
-        setJson(res,200,{items});return true;
+    if (pathname === "/api/notes/import-links" && req.method === "POST") {
+        requireJsonContentType(req);
+        const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+        hasOnlyKeys(input, ["records"]);
+        if (!Array.isArray(input.records) || input.records.length > 1000)
+            throw new HttpError(400, "invalid_links", "笔记关联清单无效");
+        const records = input.records;
+        const items = repository.atomic(() => records.map((raw: unknown) => { const item = jsonObject(raw, "record"); hasOnlyKeys(item, ["id", "revision", "relatedRecordIds"]); const id = stringField(item.id, "id"), current = repository.findById(id); if (current?.kind !== "note")
+            throw new HttpError(404, "not_found", "笔记不存在"); const relatedRecordIds = relatedRecordIdsField(item.relatedRecordIds, id, repository); if (!repository.update({ ...current, relatedRecordIds }, revisionField(item.revision)))
+            throw new HttpError(409, "revision_conflict", "笔记已变化，未覆盖关联"); return repository.findById(id)!; }));
+        setJson(res, 200, { items });
+        return true;
     }
     if (pathname === "/api/note-folders" && req.method === "GET") {
         setJson(res, 200, { folders: store.list() });

@@ -75,6 +75,40 @@ export interface DaySummary {
   readonly contextRevision?: string;
   /** Failed automatic AI calls wait until this instant before another attempt. */
   readonly retryAfter?: string;
+  /**
+   * How many automatic AI attempts this day has already lost in a row.
+   *
+   * `retryAfter` alone cannot say "stop trying": an absent `retryAfter` means
+   * both "never failed" and "waited long enough", and the second one is exactly
+   * what a permanent failure looks like from the outside. This counter is what
+   * lets the calendar give up instead of asking the model once a day forever.
+   */
+  readonly retryCount?: number;
+}
+
+/**
+ * Delays between automatic retries of a day that fell back to the offline rule:
+ * tomorrow, then two days later, then a week later. After the fourth failure the
+ * day stops asking on its own — an unchanged broken key would otherwise cost one
+ * call a day for the life of the installation, which is a bill nobody can see.
+ *
+ * Only automatic attempts count. An explicit regenerate from the calendar, or a
+ * record edit (which changes the fingerprint), starts over regardless.
+ */
+export const SUMMARY_RETRY_BACKOFF_MS: readonly number[] = [24 * 60 * 60 * 1000, 2 * 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000];
+
+/** How many automatic attempts a day gets before it waits for the owner. */
+export const SUMMARY_MAX_AUTO_ATTEMPTS = SUMMARY_RETRY_BACKOFF_MS.length + 1;
+
+/** Wait after the `failureCount`-th consecutive failure; `null` means "stop asking". */
+export function summaryRetryDelayMs(failureCount: number): number | null {
+  const attempt = Number.isFinite(failureCount) ? Math.max(1, Math.floor(failureCount)) : 1;
+  return attempt > SUMMARY_RETRY_BACKOFF_MS.length ? null : SUMMARY_RETRY_BACKOFF_MS[attempt - 1]!;
+}
+
+/** True when a day has used up its automatic attempts and is waiting for the owner. */
+export function summaryRetryExhausted(summary: Pick<DaySummary, "status" | "retryCount">): boolean {
+  return summary.status !== "generated" && summary.status !== "manual" && (summary.retryCount ?? 0) >= SUMMARY_MAX_AUTO_ATTEMPTS;
 }
 
 /**

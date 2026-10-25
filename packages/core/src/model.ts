@@ -37,6 +37,8 @@ export interface LocalDateTime {
 export type LifeTime = InstantTime | DateOnlyTime | LocalDateTime;
 
 export interface RecordBody {
+  /** Explicit non-real context; stored with the body in JSON exports and snapshots. */
+  readonly nature?: "dream";
   /** The first captured user content. It is never replaced by editing. */
   readonly original: string;
   /** User-maintained content derived from, but separate from, original. */
@@ -125,7 +127,13 @@ export interface PlacePeriod {
   readonly until?: string;
 }
 
-export interface Person extends EntityBase {
+export interface PersonDetails {
+  readonly phone?: string;
+  readonly wechat?: string;
+  readonly residence?: string;
+}
+
+export interface Person extends EntityBase, PersonDetails {
   readonly type: "person";
   /** Owner-chosen importance preserves visibility even when activity decays. */
   readonly isImportant?: boolean;
@@ -338,6 +346,15 @@ export const CYCLE_INTIMACY_EVENT_KINDS: readonly CycleIntimacyEventKind[] = ["i
 export interface CycleIntimacyModuleConfig {
   readonly habits?: readonly CustomHabit[];
   readonly enabled: boolean;
+  /** The person whose cycle is shown. Omitted means the current user. */
+  readonly subjectId?: string;
+  /** Cycles for other people, kept separate when the displayed person changes. */
+  readonly otherSubjects?: Readonly<Record<string, {
+    readonly cycleLength: number;
+    readonly periodLength: number;
+    readonly anchorStart?: string;
+    readonly events: readonly CycleIntimacyEvent[];
+  }>>;
   /** Days from one confirmed period start to the next estimated start. */
   readonly cycleLength: number;
   /** The expected duration used only until an explicit end is recorded. */
@@ -449,6 +466,11 @@ export interface NoteRecord extends TimelineRecordBase {
 }
 
 export type TimelineRecord = JournalRecord | TaskRecord | EventRecord | NoteRecord;
+
+/** Never infer dream identity from names, keywords or model classifications. */
+export function isDreamRecord(record: Pick<TimelineRecord, "body">): boolean {
+  return record.body.nature === "dream";
+}
 export type TimelineEvent = EventRecord;
 /** Convenience alias for callers that use Event as the domain name. */
 export type Event = EventRecord;
@@ -767,6 +789,10 @@ export function assertValidTimelineRecord(value: unknown): asserts value is Time
   nonEmptyStringValue(record.id, "record.id");
   const kind = enumValue(record.kind, ["journal", "task", "event", "note"], "record.kind");
   const body = objectValue(record.body, "record.body");
+  if (body.nature !== undefined) {
+    enumValue(body.nature, ["dream"], "record.body.nature");
+    if (kind !== "journal") throw new Error("梦境必须保存为日记记录");
+  }
   stringValue(body.original, "record.body.original");
   optionalStringValue(body.edited, "record.body.edited");
   if (body.entityMentions !== undefined) assertValidTextEntityDecisions(body.entityMentions, (body.edited ?? body.original) as string);
@@ -938,7 +964,7 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
   }
   for (const field of ["phone", "city", "province", "district", "amapId", "photoUrl"] as const) {
     if (entity[field] === undefined) continue;
-    if (entity.type !== "place") throw new Error(`${field} is only allowed on a place`);
+    if (entity.type !== "place" && !(entity.type === "person" && field === "phone")) throw new Error(`${field} is only allowed on a place or supported person field`);
     const value = nonEmptyStringValue(entity[field], `entity.${field}`);
     if (value.length > (field === "photoUrl" ? 2000 : 200)) throw new Error(`entity.${field} is too long`);
     if (field === "amapId" && !/^[A-Za-z0-9_-]{1,100}$/.test(value)) throw new Error("entity.amapId is invalid");
@@ -946,6 +972,11 @@ export function assertValidEntity(value: unknown): asserts value is Entity {
       const url = new URL(value);
       if (url.protocol !== "https:" || url.username || url.password) throw new Error("entity.photoUrl must use HTTPS");
     }
+  }
+  for (const field of ["wechat", "residence"] as const) {
+    if (entity[field] === undefined) continue;
+    if (entity.type !== "person") throw new Error(`${field} is only allowed on a person`);
+    if (nonEmptyStringValue(entity[field], `entity.${field}`).length > (field === "residence" ? 500 : 200)) throw new Error(`entity.${field} is too long`);
   }
   for (const field of ["longitude", "latitude"] as const) {
     if (entity[field] === undefined) continue;
@@ -1070,6 +1101,16 @@ export function assertValidAsset(value: unknown): asserts value is Asset {
 /** Validation shared by the API, export format, and any future calendar clients. */
 export function assertValidCycleIntimacyModuleConfig(value: unknown, name = "cycleIntimacy.config"): asserts value is CycleIntimacyModuleConfig {
   const config = objectValue(value, name);
+  if (config.subjectId !== undefined) nonEmptyStringValue(config.subjectId, `${name}.subjectId`);
+  if (config.otherSubjects !== undefined) {
+    const subjects = objectValue(config.otherSubjects, `${name}.otherSubjects`);
+    for (const [key, raw] of Object.entries(subjects)) {
+      if (!key || key === (config.subjectId ?? "self")) throw new Error(`${name}.otherSubjects has invalid subject`);
+      const stored = objectValue(raw, `${name}.otherSubjects.${key}`);
+      assertValidCycleIntimacyModuleConfig({ enabled: true, cycleLength: stored.cycleLength, periodLength: stored.periodLength, anchorStart: stored.anchorStart }, `${name}.otherSubjects.${key}`);
+      for (const event of arrayValue(stored.events, `${name}.otherSubjects.${key}.events`)) assertValidCycleIntimacyEvent(event);
+    }
+  }
   if (config.habits !== undefined) assertValidHabits(config.habits);
   if (typeof config.enabled !== "boolean") throw new Error(`${name}.enabled must be a boolean`);
   for (const key of ["cycleLength", "periodLength"] as const) {
@@ -1107,6 +1148,21 @@ export function periodEndSpan(events: readonly CycleIntimacyEvent[], date: strin
     if (until === undefined || event.date < until) until = event.date;
   }
   return { ...(from === undefined ? {} : { from }), ...(until === undefined ? {} : { until }) };
+}
+
+/** A transfer moves a whole recorded period, including its end across a month boundary. */
+export function periodTransferGroups(events: readonly CycleIntimacyEvent[]): readonly { readonly key: string; readonly start: string; readonly end?: string; readonly eventIds: readonly string[] }[] {
+  const period = events.filter(event => event.kind === "period_start" || event.kind === "period_end").sort((a, b) => a.date.localeCompare(b.date) || (a.kind === "period_start" ? -1 : 1));
+  const groups: { key: string; start: string; end?: string; eventIds: string[] }[] = [];
+  for (const event of period) {
+    if (event.kind === "period_start") groups.push({ key: event.id, start: event.date, eventIds: [event.id] });
+    else {
+      const group = groups.at(-1);
+      if (group) { group.end = event.date; group.eventIds.push(event.id); }
+      else groups.push({ key: event.id, start: event.date, end: event.date, eventIds: [event.id] });
+    }
+  }
+  return groups;
 }
 
 export function assertValidCycleIntimacyEvent(value: unknown, name = "cycleIntimacy.event"): asserts value is CycleIntimacyEvent {

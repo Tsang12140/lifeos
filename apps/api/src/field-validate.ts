@@ -65,7 +65,7 @@ export function boundedIntegerField(value: unknown, name: string, minimum: numbe
 }
 
 export function cycleIntimacyConfig(input: JsonObject): CycleIntimacyModuleConfig {
-  hasOnlyKeys(input, ["enabled", "cycleLength", "periodLength", "anchorStart", "habits"]);
+  hasOnlyKeys(input, ["enabled", "cycleLength", "periodLength", "anchorStart", "subjectId", "habits"]);
   const anchorRaw = input.anchorStart;
   const anchorStart = anchorRaw === undefined || anchorRaw === null
     ? undefined
@@ -74,6 +74,7 @@ export function cycleIntimacyConfig(input: JsonObject): CycleIntimacyModuleConfi
     enabled: booleanField(input.enabled, "enabled"),
     cycleLength: boundedIntegerField(input.cycleLength, "cycleLength", 15, 90),
     periodLength: boundedIntegerField(input.periodLength, "periodLength", 1, 21),
+    ...(input.subjectId === undefined || input.subjectId === null || input.subjectId === "" ? {} : { subjectId: stringField(input.subjectId, "subjectId", { nonEmpty: true }) }),
     ...(anchorStart === undefined ? {} : { anchorStart }),
   };
   return coreValidated("cycle module config", () => {

@@ -199,6 +199,7 @@ export function exportRecordMarkdown(record: TimelineRecord, options: MarkdownEx
     `lifeosVersion: ${EXPORT_VERSION}`,
     `recordId: ${quoteYamlScalar(record.id)}`,
     `kind: ${quoteYamlScalar(record.kind)}`,
+    ...(record.body.nature ? [`nature: ${quoteYamlScalar(record.body.nature)}`] : []),
     `createdAt: ${yamlValue(record.createdAt)}`,
     `updatedAt: ${yamlValue(record.updatedAt ?? null)}`,
     `occurredAt: ${yamlValue(record.occurredAt ?? null)}`,

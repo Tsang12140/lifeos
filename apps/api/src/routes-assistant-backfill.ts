@@ -7,9 +7,20 @@ import { baseMediaType } from "./asset-static.js";
 import { chatBackfill } from "./assistant-conversation.js";
 import { chatBackfillWithHistory, stopAssistantChatTurn } from "./assistant-chat-history.js";
 import type { RouteHandler } from "./route-context.js";
+import { eligibleJournal, journalChunks } from "./journal-memory.js";
+import { embeddingIdentity } from "./journal-embedding.js";
+import { attemptDetailOf } from "./assistant-attempt-log.js";
 
 export const handleAssistantBackfillRoutes: RouteHandler = async (ctx, req, res, pathname) => {
   const { config, repository } = ctx;
+  if (pathname === "/api/ai/assistant/memory/status" && req.method === "GET") {
+    const embedding = config.journalEmbedding;
+    const chunks = repository.list({ kind: "journal" }).filter(eligibleJournal).flatMap(record => journalChunks(record).map(chunk => `${record.id}/${chunk.index}/${chunk.hash}`));
+    const known = new Set(embedding ? repository.journalMemory.list(embeddingIdentity(embedding)).map(row => `${row.recordId}/${row.index}/${row.hash}`) : []);
+    const indexed = chunks.filter(key => known.has(key)).length;
+    setJson(res, 200, { configured: !!embedding, model: embedding?.model ?? null, dimensions: embedding?.dimensions ?? null, totalChunks: chunks.length, indexedChunks: indexed, pendingChunks: chunks.length - indexed });
+    return true;
+  }
   if (pathname === "/api/ai/backfill/chat/stop" && req.method === "POST") {
     requireJsonContentType(req);
     setJson(res, 200, await stopAssistantChatTurn(repository, jsonObject(await readBody(req, config.bodyLimitBytes), "body")));
@@ -18,7 +29,20 @@ export const handleAssistantBackfillRoutes: RouteHandler = async (ctx, req, res,
   if (pathname === "/api/ai/backfill/chat" && req.method === "POST") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, Math.max(config.bodyLimitBytes, 18 * 1024 * 1024)), "body");
-    hasOnlyKeys(input, ["message", "materials", "history", "batchId", "revision", "conversationId", "turnId", "privacyVisible", "effort"]);
+    hasOnlyKeys(input, ["message", "materials", "history", "batchId", "revision", "conversationId", "turnId", "privacyVisible", "effort", "pageContext"]);
+    if (req.headers["x-lifeos-private-access"] !== undefined) input.privateAccessUntil = req.headers["x-lifeos-private-access"];
+    const text = typeof input.message === 'string' ? input.message : '';
+    const needed: import('@lifeos/core').AppLockTarget[] = [];
+    if (/查|搜|找|回顾|以前|之前|记得|多少|几篇|笔记|梦境|梦见|任务|联系人|地点/.test(text)) {
+      if (/笔记/.test(text)) needed.push('notes');
+      if (/梦/.test(text) || input.pageContext === 'dreams') needed.push('dreams');
+      if (/任务|待办/.test(text)) needed.push('tasks');
+      if (/联系人|地点|人物/.test(text)) needed.push('entities');
+      if (!needed.length && !/日记/.test(text)) needed.push('notes', 'dreams');
+    }
+    const locked = needed.filter(target => ctx.appLock?.locked(target));
+    if (/私密|隐私/.test(text) && input.privateAccessUntil === undefined) locked.push('privacy-ai');
+    if (locked.length) throw new HttpError(423, 'app_locked', '需要解锁相关板块后才能检索', { targets: locked });
     const durable = input.conversationId !== undefined || input.turnId !== undefined;
     if (durable && (input.conversationId === undefined || input.turnId === undefined)) throw new HttpError(400, "missing_turn_identity", "conversationId 和 turnId 必须一起提供");
     if (durable && req.headers.accept?.includes("application/x-ndjson")) {
@@ -37,7 +61,8 @@ export const handleAssistantBackfillRoutes: RouteHandler = async (ctx, req, res,
         const answer = await chatBackfillWithHistory(config, repository, input, text => emit({ type: "reply", text }));
         emit({ type: "done", answer });
       } catch (error) {
-        emit({ type: "error", status: error instanceof HttpError ? error.status : 500, code: error instanceof HttpError ? error.code : "chat_failed", message: error instanceof HttpError ? error.message : "回复暂时未能完成，请重试" });
+        const partialReply = attemptDetailOf(error)?.partialReply;
+        emit({ type: "error", status: error instanceof HttpError ? error.status : 500, code: error instanceof HttpError ? error.code : "chat_failed", message: error instanceof HttpError ? error.message : "回复暂时未能完成，请重试", ...(partialReply ? { partialReply } : {}) });
       } finally { clearInterval(heartbeat); res.end(); }
       return true;
     }

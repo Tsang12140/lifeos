@@ -32,8 +32,11 @@ export interface AssistantHistoryMessage {
   readonly ui?: UiTurnPlan;
   /** Present for turns sent through the idempotent chat endpoint. */
   readonly turnId?: string;
+  /** Draft produced by this reply; ordinary replies carrying a bound draft omit it. */
+  readonly draftBatchId?: string;
   readonly turnStatus?: "running" | "failed" | "interrupted" | "completed";
   readonly retryable?: boolean;
+  readonly delivery?: import("./assistant-backfill.js").AssistantReplyDelivery;
 }
 
 export interface AssistantHistoryAttachment {

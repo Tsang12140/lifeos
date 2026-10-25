@@ -1,0 +1,8 @@
+.assistant-journal-sources { display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 0;font-size:12px;color:var(--muted);user-select:none; }
+.assistant-journal-sources .assistant-citation { vertical-align:baseline; }
+.backfill-chat-copy p.assistant-reply-paragraph,.assistant-history-thread p.assistant-reply-paragraph { margin:0;white-space:pre-wrap;overflow-wrap:anywhere; }
+.backfill-chat-copy p.assistant-reply-paragraph + p.assistant-reply-paragraph,.assistant-history-thread p.assistant-reply-paragraph + p.assistant-reply-paragraph { margin-top:.85em; }
+.assistant-reply-paragraph > strong { font-weight:600;color:inherit; }
+.assistant-history-reply { max-width:88%;padding:8px 11px;border-radius:14px 14px 14px 4px;color:var(--ink-soft);background:var(--surface-soft); }
+.assistant-history-reply p.assistant-history-message-copy { max-width:none;padding:0;border-radius:0;background:transparent; }
+.assistant-delivery-note { display:block;margin-top:8px;color:var(--muted);font-size:12px;font-weight:400;line-height:1.6;user-select:none; }

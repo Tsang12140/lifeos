@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assistantMessageTime, assistantTimeDivider } from '../src/assistant-message-time.ts';
-import { initialShareSelection, mergeShareMessages, needsEarlierShareWindow, wrapShareText } from '../src/assistant-share-model.ts';
+import { initialShareSelection, mergeShareMessages, needsEarlierShareWindow, shareMessageDisplayText, shareMessageParts, wrapShareText, type ShareMessage } from '../src/assistant-share-model.ts';
 
 test('assistant timestamps omit current year and retain Chinese dates and padded 24-hour time', () => {
  const now=new Date('2026-10-16T00:00:00Z');
@@ -50,4 +50,19 @@ test('share defaults to clicked answer and preceding question; isolated messages
  assert.equal(initialShareSelection(messages,99).size,0);
  assert.deepEqual(wrapShareText('一二😀三\n\nlongword',3,s=>[...s].length),['一二😀','三','','lon','gwo','rd']);
  assert.deepEqual(wrapShareText('👨‍👩‍👧‍👦你',1,s=>[...new Intl.Segmenter('zh-CN',{granularity:'grapheme'}).segment(s)].length),['👨‍👩‍👧‍👦','你']);
+});
+
+test('share display keeps emphasis and verified citations while omitting unmatched source markers',()=>{
+ const message:ShareMessage={id:'a',role:'assistant',text:'先说**重要判断**。[1] 再看[2]。',ui:{offers:[{label:'来源 1 2026-10-18',command:{type:'record.focus',params:{recordId:'real-source'}}}]}};
+ const parts=shareMessageParts(message);
+ assert.equal(shareMessageDisplayText(message),'先说重要判断。[1] 再看。');
+ assert.equal(shareMessageDisplayText(message).includes('**'),false);
+ assert.equal(parts.find(part=>part.strong)?.text,'重要判断');
+ assert.deepEqual(parts.filter(part=>part.kind==='citation').map(part=>[part.kind,part.number,part.offer?.label]),[['citation',1,'来源 1 2026-10-18']]);
+ assert.equal(parts.map(part=>part.text).join(''),shareMessageDisplayText(message));
+ for(const part of parts)assert.equal(shareMessageDisplayText(message).slice(part.start,part.end),part.text);
+ const rawUser:ShareMessage={id:'u',role:'user',text:'用户输入 **按原样显示** [1]'};
+ assert.equal(shareMessageDisplayText(rawUser),'用户输入 **按原样显示** [1]');
+ const code:ShareMessage={id:'code',role:'assistant',text:'代码：\n\n```js\n[1]\n\n[2]\n```\n\n普通事实[3]。'};
+ assert.equal(shareMessageDisplayText(code),code.text.replace('[3]',''));
 });

@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import type { Asset } from "@lifeos/core";
+import { DreamIcon } from "./dream-icon";
 import { LoginCardBrand, LoginIntro } from "./login-intro";
 import { Image as ImageIcon } from "lucide-react";
 import { PlaceMapButton } from "./place-map";
 import { PlaceCardDialog } from "./place-card";
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { scopedKey } from "./storage-scope";
 import {
   Check,
@@ -31,11 +33,14 @@ import { LibrarySearch } from "./library-search";
 import { SearchAssistantHint } from "./search-assistant-hint";
 import "./contact-library.css";
 import { ContactAvatar } from "./contact-avatar";
+import { ContactDossierCard } from "./contact-dossier-card";
+import { contactJournalPreviews } from "./contact-dossier-model";
 import { ContactStar, type ToggleContactStar } from "./contact-star";
 import { apiRequest, type ApiError, type AuthState, type EntitiesResponse, type MovieEntity, type RecordView } from "./api";
 import { EntityNameHistoryReview, type NameHistoryReview } from "./entity-name-history-review";
 import type { AppView, CreateEntity, EntityCreateRequest, EntityEditPatch } from "./app-types";
 import { AliasField, EntityCreateForm, aliasListFrom } from "./entity-forms";
+import { PersonFields } from "./person-fields";
 import {
   ENTITY_KIND_ORDER,
   ENTITY_META,
@@ -93,6 +98,7 @@ export function PersonCardDialog({ entity, entities, scope, includePrivate = fal
     <div className="person-card-body">
       {entity.aliases && entity.aliases.length > 0 ? <div className="person-card-field"><small>别名</small><div className="person-card-aliases">{entity.aliases.map((alias) => <span key={alias}>{alias}</span>)}</div></div> : null}
       {entity.description ? <div className="person-card-field"><small>备注</small><p>{entity.description}</p></div> : <p className="person-card-empty">还没有人物备注，可以在编辑人物里补充。</p>}
+      {entity.type === "person" ? <div className="person-contact-details">{([["手机号", entity.phone], ["微信号", entity.wechat], ["住址", entity.residence]] as const).filter(([, value]) => value).map(([label, value]) => <div key={label}><small>{label}</small><span className="person-contact-value">{value}</span></div>)}</div> : null}
       {relationItems.length > 0 ? <div className="person-card-field"><small>关系</small><div className="person-card-connections">{relationItems.map(({ relation, target }) => { const Icon = RELATION_META[relation.kind].icon; return <span className={`person-card-connection relation-kind-${relation.kind}`} key={`${relation.kind}-${target!.id}`}><Icon size={13} strokeWidth={1.9} aria-hidden="true" /><span>{target!.name}</span><small>{RELATION_META[relation.kind].label}</small></span>; })}</div></div> : null}
     </div>
     <div className="dialog-footer person-card-footer"><button className="secondary-button" type="button" onClick={() => onViewRecords(entity)}><ExternalLink size={15} aria-hidden="true" /><span>查看相关记录</span></button><button className="primary-button" type="button" onClick={() => onEdit(entity)}><Edit3 size={15} aria-hidden="true" /><span>编辑人物</span></button></div>
@@ -104,6 +110,7 @@ export function EntityEditDialog({ entity, onClose, onSave, onRecordsChanged }: 
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
   const [description, setDescription] = useState("");
+  const [personDetails, setPersonDetails] = useState<import("@lifeos/core").PersonDetails>({});
   const [role, setRole] = useState<PlaceRole | "">("");
   const [hasPeriod, setHasPeriod] = useState(false);
   const [from, setFrom] = useState("");
@@ -124,6 +131,7 @@ export function EntityEditDialog({ entity, onClose, onSave, onRecordsChanged }: 
     setSaveError("");
     setAliases(JSON.stringify(entity.aliases?.length ? entity.aliases : [""]));
     setDescription(entity.description ?? "");
+    setPersonDetails(entity.type === "person" ? { phone: entity.phone, wechat: entity.wechat, residence: entity.residence } : {});
     setRole(entity.type === "place" ? entity.role ?? "" : "");
     setHasPeriod(entity.type === "place" && entity.period !== undefined);
     setFrom(entity.type === "place" ? entity.period?.from ?? "" : "");
@@ -144,6 +152,7 @@ export function EntityEditDialog({ entity, onClose, onSave, onRecordsChanged }: 
       name: nextName,
       aliases: aliasListFrom(aliases),
       description: description.trim(),
+      ...(entity.type === "person" ? { phone: personDetails.phone?.trim() || null, wechat: personDetails.wechat?.trim() || null, residence: personDetails.residence?.trim() || null } : {}),
       ...(entity.type === "place" ? {
         role: role || null,
         period: hasPeriod && (from || until) ? { ...(from ? { from } : {}), ...(until ? { until } : {}) } : null,
@@ -164,6 +173,7 @@ export function EntityEditDialog({ entity, onClose, onSave, onRecordsChanged }: 
     <div className="entity-edit-body">
       <label className="dialog-field"><span>{entity.type === "place" ? "名称" : "姓名"}</span><input disabled={saving} value={name} onChange={(event) => setName(event.target.value)} />{entity.type === "person" && name.trim() && name.trim() !== entity.name ? <small className="alias-paste-hint">保存后，原名称“{entity.name}”会保留为别名。历史日记仍使用原称呼。</small> : null}</label>
       <div className="dialog-field"><span>别名</span><AliasField key={entity.id} preserveHistory={entity.type === "person" || entity.type === "place"} disabled={saving} value={aliases} onChange={setAliases} label="别名，用斜杠分隔" /></div>
+      {entity.type === "person" ? <PersonFields value={personDetails} disabled={saving} onChange={patch => setPersonDetails(value => ({ ...value, ...patch }))} /> : null}
       {entity.type === "place" ? <>
         <div className="place-search-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => setSearchOpen(value => !value)}>{searchOpen ? "收起地点搜索" : "搜索补全资料"}</button></div>
         {searchOpen ? <PlaceSearch initialQuery={name} onPick={choice => { setName(choice.name); setAddress(choice.address ?? ""); setHasAddress(Boolean(choice.address)); setRole(choice.role ?? role); setDetails(placeDetailsOf(choice)); setSearchOpen(false); }} /> : null}
@@ -200,7 +210,7 @@ export function entityPeriodLabel(entity: Entity): string | null {
 export function EntitiesView({ entities, records, scope, generation, hideDemo, includePrivate, onCreateEntity, onToggleStar, onEditAvatar, onEdit, onViewRecords, onViewRecord, onOpenEntity, onAskAssistant }: { readonly entities: readonly Entity[]; readonly records: readonly RecordView[]; readonly scope: string; readonly generation: number; readonly hideDemo: boolean; readonly includePrivate: boolean; readonly onCreateEntity: CreateEntity; readonly onToggleStar: ToggleContactStar; readonly onEditAvatar: (entity: Entity) => void; readonly onEdit: (entity: Entity) => void; readonly onViewRecords: (entity: Entity) => void; readonly onViewRecord: (id: string) => void; readonly onOpenEntity: (entity: Entity) => void; readonly onAskAssistant: () => void }) {
   const [tab, setTab] = useState<"person" | "place">("person");
   const [createOpen, setCreateOpen] = useState(false);
-  const [mode, setMode] = useState<"common" | "all">("common");
+  const [mode, setMode] = useState<"common" | "all">("all");
   const [query, setQuery] = useState("");
   const [placeRole, setPlaceRole] = useState("");
   const thresholdKey = scopedKey(`lifeos.contacts.threshold:${scope}`);
@@ -222,47 +232,75 @@ export function EntitiesView({ entities, records, scope, generation, hideDemo, i
   const activity = activityState?.key === activityKey ? activityState.items : [];
   const activityError = activityState?.key === activityKey ? activityState.error : undefined;
   const activityLoading = activityState?.key !== activityKey;
-  const people = entities.filter(entity => entity.type === "person");
-  const items = tab === "person" ? selectContacts(entities, activity, mode, query, threshold) : entities.filter(entity => entity.type === "place" && (!placeRole || entity.role === placeRole) && [entity.name, ...(entity.aliases ?? []), entity.address, entity.city].filter(Boolean).join(" ").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const librarySearchActive = Boolean(query.trim()) || (tab === "place" ? Boolean(placeRole) : mode === "all");
+  const people = [...new Map(entities.filter(entity => entity.type === "person").map(entity => [entity.id, entity])).values()];
+  const commonPeople = selectContacts(people, activity, "common", "", threshold);
+  const commonIds = new Set(commonPeople.map(entity => entity.id));
+  const allPeople = selectContacts(people, activity, "all", "", threshold);
+  const queryText = query.trim();
+  // A query always covers the complete ID-deduplicated directory, regardless
+  // of the selected tab. Flat results avoid duplicate or misleading groups.
+  const matchingPeople = queryText ? selectContacts(people, activity, mode, queryText, threshold) : [];
+  const otherPeople = allPeople.filter(entity => !commonIds.has(entity.id));
+  const places = entities.filter(entity => entity.type === "place" && (!placeRole || entity.role === placeRole) && [entity.name, ...(entity.aliases ?? []), entity.address, entity.city].filter(Boolean).join(" ").toLocaleLowerCase().includes(queryText.toLocaleLowerCase()));
+  const items = tab === "person" ? queryText ? matchingPeople : mode === "common" ? commonPeople : allPeople : places;
+  const activityReady = !activityLoading && !activityError;
+  const showContactGroups = tab === "person" && mode === "all" && !queryText && activityReady && commonPeople.length > 0;
+  const librarySearchActive = Boolean(queryText) || (tab === "place" && Boolean(placeRole));
+  const journalPreviews = useMemo(() => contactJournalPreviews(records, includePrivate, hideDemo), [records, includePrivate, hideDemo]);
   const create = async (request: EntityCreateRequest): Promise<boolean> => {
-    const { type, name, ...extras } = request;
-    const entity = await onCreateEntity(type, name, extras);
+    const { type, name, existing, ...extras } = request;
+    const entity = existing ?? await onCreateEntity(type, name, extras);
     if (entity !== null) setCreateOpen(false);
     return entity !== null;
   };
+  const renderEntityCard = (entity: Entity) => {
+    if (entity.type === "person") return <ContactDossierCard key={entity.id} entity={entity} scope={scope} relation={relationLabelFor(entity.id, entities)} journal={journalPreviews.get(entity.id)} onOpen={onOpenEntity} onEditAvatar={onEditAvatar} onToggleStar={onToggleStar} onViewRecord={onViewRecord} />;
+    const recent = entityRelatedRecords(entity, records);
+    const period = entityPeriodLabel(entity);
+    return <article className={`entity-library-card entity-library-card--${entity.type}`} key={entity.id} data-entity-card={entity.id}>
+      <div className="entity-library-card-head">{<ContactAvatar entity={entity} scope={scope} small onEdit={onEditAvatar} />}<div><h2>{entity.type === "place" ? <button className="place-library-name" type="button" onClick={() => onOpenEntity(entity)} aria-label={`查看地点：${entity.name}`}>{entity.name}</button> : entity.name}</h2>{entity.type === "place" && entity.role ? <span className="entity-library-role">{placeRoleLabel(entity.role)}</span> : null}</div><div className="entity-library-card-actions"><ContactStar entity={entity} onToggle={onToggleStar} /><button className="icon-button compact-icon-button" type="button" onClick={() => onEdit(entity)} aria-label={`编辑地点${entity.name}`}><Edit3 size={15} aria-hidden="true" /></button></div></div>
+      <div className="entity-library-meta">{entity.aliases && entity.aliases.length > 0 ? <span>别名：{entity.aliases.join("、")}</span> : null}{period ? <span>时期：{period}</span> : null}</div>
+      {entity.type === "place" && entity.phone ? <a className="entity-library-phone" href={`tel:${entity.phone.split(/[;,；]/)[0]?.replace(/[^0-9+*#-]/g, "")}`} aria-label={`拨打${entity.name}电话`}>{entity.phone}</a> : null}{entity.type === "place" && entity.address ? <div className="entity-library-address"><PlaceMapButton place={entity} className="entity-library-map" /><details><summary>查看详细地址</summary><span>{entity.address}</span></details></div> : null}
+      <div className="entity-library-recent"><small>最近关联记录</small>{recent.length > 0 ? recent.map((record) => <button type="button" className="entity-library-record" key={record.id} onClick={() => onViewRecord(record.id)}><time>{shortDate(lifeTimeDate(record.occurredAt ?? record.createdAt) ?? "")}</time><span>{record.isPrivate ? "隐私记录" : recordText(record).slice(0, 32)}</span></button>) : <span className="entity-library-muted">暂无关联记录</span>}</div>
+      <button className="entity-library-view" type="button" onClick={() => onViewRecords(entity)}>查看全部关联记录 <ExternalLink size={13} aria-hidden="true" /></button>
+    </article>;
+  };
+  const renderGrid = (values: readonly Entity[], group?: string) => <div className="entities-grid" data-contact-group={group}>{values.map(renderEntityCard)}</div>;
+  const showEmptyState = items.length === 0 && !(tab === "person" && !queryText && mode === "common" && (activityLoading || activityError));
+  const emptyTitle = tab === "person" && queryText ? "没有匹配的联系人" : tab === "place" && librarySearchActive ? "没有匹配的地点" : tab === "person" && people.length > 0 ? "暂时没有常用联系人" : `还没有${tab === "person" ? "联系人" : "地点"}`;
+  const emptyCopy = tab === "person" && queryText ? "试试其他姓名或别名。" : tab === "place" && librarySearchActive ? "试试其他名称、城市或地址，或选择全部地点。" : tab === "person" && people.length > 0 ? "可以查看全部联系人，点亮星星收藏在意的人。" : `从右上角新建一个，之后可以在记录中用 ${tab === "person" ? "@" : "#"} 提及。`;
   return <section className="entities-section" aria-labelledby="entities-title">
-    <div className="page-heading entities-heading"><div><p className="eyebrow">关联对象</p><h1 id="entities-title">联系人与地点</h1><p>集中管理会出现在时间轴里的联系人与地点。</p></div><button className="primary-button" type="button" onClick={() => { setCreateOpen((current) => !current); }}><Plus size={16} aria-hidden="true" /><span>新建{tab === "person" ? "联系人" : "地点"}</span></button></div>
-    {createOpen ? <div className="entities-create-panel"><EntityCreateForm defaultType={tab} defaultName="" onCreate={create} onCancel={() => setCreateOpen(false)} submitLabel={`创建${tab === "person" ? "联系人" : "地点"}`} /></div> : null}
+    <div className="page-heading entities-heading"><div><h1 id="entities-title">联系人与地点</h1></div><button className="primary-button" type="button" onClick={() => { setCreateOpen((current) => !current); }}><Plus size={16} aria-hidden="true" /><span>新建{tab === "person" ? "联系人" : "地点"}</span></button></div>
+    {createOpen ? <div className="entities-create-grid"><div className="entities-create-panel"><EntityCreateForm defaultType={tab} defaultName="" onCreate={create} onCancel={() => setCreateOpen(false)} submitLabel={`创建${tab === "person" ? "联系人" : "地点"}`} /></div></div> : null}
     <div className="entities-library-toolbar"><div className="entities-tabs" role="tablist" aria-label="联系人与地点分类">
-      <button type="button" role="tab" aria-selected={tab === "person"} className={`entities-tab ${tab === "person" ? "is-active" : ""}`} onClick={() => { setTab("person"); setCreateOpen(false); }}><User size={16} aria-hidden="true" />联系人<span>{entities.filter((entity) => entity.type === "person").length}</span></button>
+      <button type="button" role="tab" aria-selected={tab === "person"} className={`entities-tab ${tab === "person" ? "is-active" : ""}`} onClick={() => { setTab("person"); setCreateOpen(false); }}><User size={16} aria-hidden="true" />联系人<span>{people.length}</span></button>
       <button type="button" role="tab" aria-selected={tab === "place"} className={`entities-tab ${tab === "place" ? "is-active" : ""}`} onClick={() => { setTab("place"); setCreateOpen(false); }}><MapPin size={16} aria-hidden="true" />地点<span>{entities.filter((entity) => entity.type === "place").length}</span></button>
-    </div><LibrarySearch key={tab} query={query} onQueryChange={setQuery} label={tab === "person" ? "搜索全部联系人的姓名或别名" : "搜索已有地点"} filter={tab === "person" ? { label: "联系人显示范围", value: mode, defaultValue: "common", options: [{ value: "common", label: "常用联系人" }, { value: "all", label: "全部联系人" }], onChange: value => setMode(value === "all" ? "all" : "common") } : undefined} /></div>
+    </div><LibrarySearch key={tab} query={query} onQueryChange={setQuery} label={tab === "person" ? "搜索全部联系人的姓名或别名" : "搜索已有地点"} /></div>
     {tab === "place" ? <div className="place-library-controls"><div className="place-role-filters" role="group" aria-label="按地点角色筛选">{["", ...new Set([...PLACE_ROLES, ...entities.flatMap(entity => entity.type === "place" && entity.role ? [entity.role] : [])])].map(role => <button key={role} type="button" aria-pressed={placeRole === role} onClick={() => setPlaceRole(role)}>{role ? placeRoleLabel(role) : "全部地点"}</button>)}</div></div> : null}
     {tab === "person" ? <div className="contacts-controls">
-      <p className="contacts-description">{query.trim() ? `找到 ${items.length} 位联系人` : `${items.length} 位联系人`}</p>
+      <div className="contacts-controls-main">
+        <div className="contacts-mode-tabs" role="tablist" aria-label="联系人显示范围">
+          <button type="button" role="tab" aria-selected={mode === "all"} className={`contacts-mode-tab${mode === "all" ? " is-active" : ""}`} onClick={() => setMode("all")}>全部</button>
+          <button type="button" role="tab" aria-selected={mode === "common"} className={`contacts-mode-tab${mode === "common" ? " is-active" : ""}`} onClick={() => setMode("common")}>常用</button>
+        </div>
+        <p className="contacts-description">{queryText ? `全部联系人中找到 ${items.length} 位` : mode === "all" ? `全部联系人共 ${people.length} 位` : activityReady ? `常用联系人共 ${items.length} 位` : "常用联系人"}</p>
+      </div>
       {activityLoading ? <p className="contacts-description" role="status">正在读取联系人…</p> : null}
       {activityError ? <div className="contacts-error" role="alert"><p>{activityError}</p><button className="secondary-button" type="button" onClick={() => setRetry(value => value + 1)}>重试</button></div> : null}
     </div> : null}
-    <div className="entities-grid" role="tabpanel" aria-label={tab === "person" ? "联系人" : "地点"}>
-      {items.length === 0 && !(tab === "person" && !query.trim() && mode === "common" && (activityLoading || activityError)) ? <div className="entities-empty"><ContactRound size={24} aria-hidden="true" /><strong>{tab === "person" && query.trim() ? "没有匹配的联系人" : tab === "place" && librarySearchActive ? "没有匹配的地点" : tab === "person" && people.length > 0 ? "暂时没有常用联系人" : `还没有${tab === "person" ? "联系人" : "地点"}`}</strong><span>{tab === "person" && query.trim() ? "试试其他姓名或别名。" : tab === "place" && librarySearchActive ? "试试其他名称、城市或地址，或选择全部地点。" : tab === "person" && people.length > 0 ? "可以查看全部联系人，点亮星星收藏在意的人。" : `从右上角新建一个，之后可以在记录中用 ${tab === "person" ? "@" : "#"} 提及。`}</span></div> : items.map((entity) => {
-        const recent = entityRelatedRecords(entity, records);
-        const relation = entity.type === "person" ? relationLabelFor(entity.id, entities) : undefined;
-        const period = entityPeriodLabel(entity);
-        return <article className={`entity-library-card entity-library-card--${entity.type}`} key={entity.id} data-entity-card={entity.id}>
-          <div className="entity-library-card-head">{<ContactAvatar entity={entity} scope={scope} small onEdit={onEditAvatar} />}<div><h2>{entity.type === "place" ? <button className="place-library-name" type="button" onClick={() => onOpenEntity(entity)} aria-label={`查看地点：${entity.name}`}>{entity.name}</button> : entity.name}</h2>{relation ? <span className="entity-library-role">{relation}</span> : entity.type === "place" && entity.role ? <span className="entity-library-role">{placeRoleLabel(entity.role)}</span> : null}</div><div className="entity-library-card-actions"><ContactStar entity={entity} onToggle={onToggleStar} /><button className="icon-button compact-icon-button" type="button" onClick={() => onEdit(entity)} aria-label={`编辑${entity.type === "person" ? "联系人" : "地点"}${entity.name}`}><Edit3 size={15} aria-hidden="true" /></button></div></div>
-          <div className="entity-library-meta">{entity.aliases && entity.aliases.length > 0 ? <span>别名：{entity.aliases.join("、")}</span> : null}{period ? <span>时期：{period}</span> : null}</div>
-          {entity.type === "place" && entity.phone ? <a className="entity-library-phone" href={`tel:${entity.phone.split(/[;,；]/)[0]?.replace(/[^0-9+*#-]/g, "")}`} aria-label={`拨打${entity.name}电话`}>{entity.phone}</a> : null}{entity.type === "place" && entity.address ? <div className="entity-library-address"><PlaceMapButton place={entity} className="entity-library-map" /><details><summary>查看详细地址</summary><span>{entity.address}</span></details></div> : null}
-          <div className="entity-library-recent"><small>最近关联记录</small>{recent.length > 0 ? recent.map((record) => <button type="button" className="entity-library-record" key={record.id} onClick={() => onViewRecord(record.id)}><time>{shortDate(lifeTimeDate(record.occurredAt ?? record.createdAt) ?? "")}</time><span>{record.isPrivate ? "隐私记录" : recordText(record).slice(0, 32)}</span></button>) : <span className="entity-library-muted">暂无关联记录</span>}</div>
-          <button className="entity-library-view" type="button" onClick={() => onViewRecords(entity)}>查看全部关联记录 <ExternalLink size={13} aria-hidden="true" /></button>
-        </article>;
-      })}
+    <div className="entities-results" role="tabpanel" aria-label={tab === "person" ? "联系人" : "地点"}>
+      {showEmptyState ? <div className="entities-empty"><ContactRound size={24} aria-hidden="true" /><strong>{emptyTitle}</strong><span>{emptyCopy}</span></div> : null}
+      {items.length > 0 && tab === "person" && mode === "all" && !queryText && showContactGroups ? <div className="contacts-results-groups">
+        <section className="contacts-result-group" data-contact-group="common"><h2 className="contacts-group-heading">常用联系人 <span>{commonPeople.length}</span></h2>{renderGrid(commonPeople)}</section>
+        {otherPeople.length > 0 ? <section className="contacts-result-group" data-contact-group="other"><h2 className="contacts-group-heading">其他联系人 <span>{otherPeople.length}</span></h2>{renderGrid(otherPeople)}</section> : null}
+      </div> : null}
+      {items.length > 0 && !(tab === "person" && mode === "all" && !queryText && showContactGroups) ? renderGrid(items, tab === "person" ? queryText ? "search" : mode === "common" ? "common" : "all" : undefined) : null}
     </div>
     {librarySearchActive && items.length < 3 ? <SearchAssistantHint onAskAssistant={onAskAssistant} /> : null}
   </section>;
 }
 
-export function MobileMenuDialog({ open, activeView, onClose, onNavigate, onOpenSearch }: { open: boolean; activeView: AppView; onClose: () => void; onNavigate: (view: AppView) => void; onOpenSearch: () => void }) {
+export function MobileMenuDialog({ open, activeView, onClose, onNavigate, onOpenSearch, dreamsEnabled, pagePicker, privacyControl }: { dreamsEnabled: boolean; pagePicker: ReactNode; privacyControl: ReactNode; open: boolean; activeView: AppView; onClose: () => void; onNavigate: (view: AppView) => void; onOpenSearch: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // The parent hands down a fresh callback on every render. Holding it in a ref
   // keeps the positioning effect from tearing down and re-focusing the first
@@ -300,11 +338,13 @@ export function MobileMenuDialog({ open, activeView, onClose, onNavigate, onOpen
     };
     const onOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
+      if (target instanceof Element && target.closest('.privacy-access-popover')) return;
       if (target instanceof Node && (dialog.contains(target) || trigger?.contains(target))) return;
       closeRef.current();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (document.querySelector('.privacy-access-popover')) return;
       event.preventDefault();
       closeRef.current();
       trigger?.focus({ preventScroll: true });
@@ -323,7 +363,7 @@ export function MobileMenuDialog({ open, activeView, onClose, onNavigate, onOpen
       document.removeEventListener("keydown", onKeyDown, true);
     };
   }, [open]);
-  return <dialog ref={dialogRef} id="mobile-more-menu" className="mobile-menu-dialog" aria-label="更多功能" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><nav className="mobile-menu-nav" aria-label="移动端更多功能">{MOBILE_MORE_ITEMS.map((item) => { const Icon = item.icon; return <button className={`mobile-menu-nav-item ${activeView === item.id ? "is-active" : ""}`} type="button" key={item.id} onClick={() => { onNavigate(item.id); onClose(); }} aria-current={activeView === item.id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{item.label}</span></button>; })}<button className="mobile-menu-nav-item mobile-menu-nav-item--search" type="button" onClick={() => { onClose(); onOpenSearch(); }}><Search size={18} aria-hidden="true" /><span>搜索记录</span></button></nav></dialog>;
+  return <dialog ref={dialogRef} id="mobile-more-menu" className="mobile-menu-dialog" aria-label="更多功能" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}><nav className="mobile-menu-nav" aria-label="移动端更多功能">{MOBILE_MORE_ITEMS.map((item) => { const Icon = item.icon; return <button className={`mobile-menu-nav-item ${activeView === item.id ? "is-active" : ""}`} data-view={item.id} type="button" key={item.id} onClick={() => { onNavigate(item.id); onClose(); }} aria-current={activeView === item.id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{item.label}</span></button>; })}{dreamsEnabled ? <button type="button" className={`mobile-menu-nav-item ${activeView === "dreams" ? "is-active" : ""}`} onClick={() => { onNavigate("dreams"); onClose(); }}><DreamIcon size={18} /><span>梦境</span></button> : null}{pagePicker}<button className="mobile-menu-nav-item mobile-menu-nav-item--search" type="button" onClick={() => { onClose(); onOpenSearch(); }}><Search size={18} aria-hidden="true" /><span>搜索记录</span></button></nav>{privacyControl}</dialog>;
 }
 
 export function ImportDialog({ file, busy, error, onClose, onConfirm }: { file: File | null; busy: boolean; error: string | null; onClose: () => void; onConfirm: () => void }) {
@@ -339,7 +379,7 @@ export function LoginGate({ onLogin, error, loading, accountMode = false }: { on
   const [passwordVisible, setPasswordVisible] = useState(false);
   return <main className="auth-screen">
     <LoginIntro />
-    <div className="auth-brand"><img src="/favicon.svg?v=2" alt="" /><span>LifeOS</span></div>
+    <div className="auth-brand"><img src="/favicon.svg?v=3" alt="" /><span>LifeOS</span></div>
     <section className="auth-panel surface" role="dialog" aria-modal="true" aria-labelledby="auth-title">
       <LoginCardBrand />
       <h1 id="auth-title">{accountMode ? "登录你的空间" : "输入访问密码"}</h1>

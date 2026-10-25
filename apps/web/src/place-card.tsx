@@ -48,7 +48,7 @@ export function PlaceCardDialog({ entity, scope, includePrivate = false, onClose
   return <dialog ref={dialog} className="modal-dialog place-card-dialog" aria-labelledby="place-card-title" onCancel={event => { event.preventDefault(); close(); }} onClose={close}>
     <div className="dialog-header"><ContactAvatar entity={entity} scope={scope} onEdit={value => { if (!lock.current) onEditAvatar(value); }} /><div className="place-card-heading"><h2 id="place-card-title">{entity.name}</h2>{entity.role ? <small>{placeRoleLabel(entity.role)}</small> : null}</div><button type="button" className="icon-button compact-icon-button" aria-label="关闭地点详情" disabled={busy} onClick={close}><X size={17} aria-hidden="true" /></button></div>
     <div className={`place-card-body${Number.isFinite(entity.longitude) && Number.isFinite(entity.latitude) ? " has-map" : ""}`}><div className="place-card-details">
-      <div className="place-card-field"><small>地址</small><p className="place-detail-copy">{entity.address || "尚未填写地址"}</p>{entity.city || entity.district ? <small>{[entity.province, entity.city, entity.district].filter(Boolean).join(" ")}</small> : null}</div>
+      <div className="place-card-field"><small>地址</small><p className="place-detail-copy">{entity.address || [entity.province, entity.city, entity.district].filter(Boolean).join(" ") || "尚未填写地址"}</p></div>
       {entity.phone ? <div className="place-card-field"><small>电话</small><p className="place-detail-copy place-detail-phone">{entity.phone}</p></div> : null}
       {entity.description ? <div className="place-card-field"><small>备注</small><p className="place-detail-copy">{entity.description}</p></div> : null}
       {entity.amapId ? <small className="place-card-credit">地点资料来自高德地图</small> : null}
@@ -57,7 +57,7 @@ export function PlaceCardDialog({ entity, scope, includePrivate = false, onClose
     </div><PlaceMiniMap key={entity.id} place={entity} /><PlaceCollectionArchive key={`${entity.id}:${includePrivate}`} id={entity.id} includePrivate={includePrivate} onViewRecord={onViewRecord} /></div>
     <div className="dialog-footer place-card-actions">
       <PlaceMapButton place={entity} disabled={busy} />
-      {phone ? <a className="secondary-button" href={`tel:${phone}`}><Phone size={15} aria-hidden="true" /><span>打电话</span></a> : null}
+      {phone ? <a className="secondary-button" href={`tel:${phone}`} aria-disabled={busy || undefined} tabIndex={busy ? -1 : undefined} onClick={event => { if (busy) event.preventDefault(); }}><Phone size={15} aria-hidden="true" /><span>打电话</span></a> : null}
       <button type="button" className="secondary-button" disabled={busy} onClick={() => onViewRecords(entity)}>相关日记</button>
       <button type="button" className="primary-button" disabled={busy} onClick={() => onEdit(entity)}>编辑地点</button>
     </div>

@@ -12,7 +12,7 @@ export function CalendarDayDialog({ date, tasks, assets, entities, onClose, onEn
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     const controller = new AbortController(); setState(null);
-    apiRequest<RecordsResponse>(`/api/records?date=${encodeURIComponent(date)}&timeZone=${encodeURIComponent(USER_TIME_ZONE)}`, { signal: controller.signal })
+    apiRequest<RecordsResponse>(`/api/records?date=${encodeURIComponent(date)}&nature=all&timeZone=${encodeURIComponent(USER_TIME_ZONE)}`, { signal: controller.signal })
       .then(payload => { if (!controller.signal.aborted) setState({ date, records: payload.items.filter(r => r.kind !== "task").slice().reverse() }); })
       .catch(() => { if (!controller.signal.aborted) setState({ date, error: "当天记录暂时无法读取" }); });
     return () => controller.abort();

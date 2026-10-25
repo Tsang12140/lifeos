@@ -10,7 +10,7 @@ export function calendarTasksForDate(tasks: readonly RecordView[], date: string)
     .sort((a, b) => Number(a.kind === "task" && a.task.status === "done") - Number(b.kind === "task" && b.task.status === "done") || a.createdAt.value.localeCompare(b.createdAt.value) || a.id.localeCompare(b.id));
 }
 export function calendarTaskStatus(record: RecordView): string {
-  return record.kind !== "task" ? "" : record.task.status === "done" ? "已完成" : record.task.status === "in_progress" ? "进行中" : "待办";
+  return record.kind !== "task" ? "" : record.task.status === "done" ? "已完成" : "未完成";
 }
 const sourceText = (r: RecordView) => (r.body.edited ?? r.body.original).replace(/\s+/gu, " ").trim();
 export function useCalendarTaskLabels(tasks: readonly RecordView[], from: string, to: string, timeZone: string, enabled: boolean): ReadonlyMap<string, { text: string; source: string }> {

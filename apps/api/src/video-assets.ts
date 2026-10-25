@@ -5,7 +5,6 @@ import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { MP4, BlobSource, Input } from "mediabunny";
 import { VIDEO_LIMITS, assertValidAsset, type Asset, type ContentHash, type VideoMetadata } from "@lifeos/core";
 import { HttpError, setJson } from "./http-kit.js";
 import { nowInstant } from "./field-validate.js";
@@ -15,6 +14,8 @@ import { downloadPoolAsset, poolObjectFor } from "./routes-assets.js";
 import type { RouteContext, RouteHandler } from "./route-context.js";
 
 export async function readVideoMetadata(file: string): Promise<VideoMetadata> {
+  // Range playback and ordinary photo requests do not need the upload metadata parser.
+  const { MP4, BlobSource, Input } = await import("mediabunny");
   const input = new Input({ source: new BlobSource(await openAsBlob(file)), formats: [MP4] });
   try {
     const videos = await input.getVideoTracks(), audios = await input.getAudioTracks();

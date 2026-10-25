@@ -33,6 +33,20 @@ export const THUMBNAIL_WIDTHS = [160, 400, 1200, 2048] as const;
 export type ThumbnailWidth = (typeof THUMBNAIL_WIDTHS)[number];
 export const DEFAULT_THUMBNAIL_WIDTH: ThumbnailWidth = 400;
 export const THUMBNAIL_FORMAT = "webp";
+/** Small PNG screenshots are already efficient enough to serve unchanged. */
+export const PNG_ORIGINAL_LIMITS = Object.freeze({
+  bytes: 1024 * 1024,
+  pixels: 3_000_000,
+  edge: 2048,
+});
+
+export function pngFitsOriginalLimits(width: number | undefined, height: number | undefined, bytes: number): boolean {
+  if (width === undefined || height === undefined || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) return false;
+  return bytes <= PNG_ORIGINAL_LIMITS.bytes
+    && Math.max(width, height) <= PNG_ORIGINAL_LIMITS.edge
+    && width * height <= PNG_ORIGINAL_LIMITS.pixels;
+}
+
 /** 80 is the knee of the curve for photographs: visually lossless here, tiny on disk. */
 const THUMBNAIL_QUALITY = 80;
 /** Everything this module writes matches this, and only this is ever deleted by `clear`. */

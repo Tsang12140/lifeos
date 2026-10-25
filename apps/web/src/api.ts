@@ -1,3 +1,5 @@
+import { privateAiAccessHeader } from "./assistant-private-access";
+import { appUnlockToken, requestAppUnlock } from './app-lock-session';
 import type {
   Asset,
   AssetKind,
@@ -64,6 +66,8 @@ export interface SummariesResponse {
 export interface AuthState {
   readonly required: boolean;
   readonly authenticated: boolean;
+  /** Server-confirmed environment-designated administrator capability; absent means no access. */
+  readonly admin?: boolean;
   readonly accountMode?: boolean;
   readonly account?: AccountSummary;
 }
@@ -97,6 +101,7 @@ export interface CreatedInviteSummary extends InviteSummary {
 }
 
 export interface AiStatus {
+  readonly privateRetrievalSupported?: boolean;
   readonly preset: "quick" | "reflect" | "review" | "custom";
   readonly enabled: boolean;
   readonly configured: boolean;
@@ -401,6 +406,7 @@ export interface WeatherArchiveResponse {
 }
 
 export interface RecordWritePayload {
+  readonly nature?: "dream";
   readonly entityMentions?: readonly import("@lifeos/core").TextEntityDecision[];
   readonly kind?: RecordKind;
   readonly content?: string;
@@ -419,6 +425,9 @@ export interface RecordWritePayload {
 }
 
 export interface EntityWritePayload {
+  readonly phone?: string;
+  readonly wechat?: string;
+  readonly residence?: string;
   readonly isImportant?: boolean;
   readonly id?: string;
   readonly type?: EntityKind;
@@ -456,11 +465,14 @@ function createApiError(message: string, status?: number): ApiError {
 }
 
 export async function apiResponse(path: string, init: RequestInit = {}): Promise<Response> {
+  const privateAccess = path.startsWith("/api/ai/") ? privateAiAccessHeader() : undefined;
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
+      ...(appUnlockToken() ? { 'X-LifeOS-App-Unlock': appUnlockToken()! } : {}),
+      ...(privateAccess ? { "X-LifeOS-Private-Access": privateAccess } : {}),
       ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
       ...init.headers,
     },
@@ -481,6 +493,14 @@ export async function apiResponse(path: string, init: RequestInit = {}): Promise
       }
     } catch {
       // A non-JSON response still receives a useful status message.
+    }
+    if (response.status === 423 && path === '/api/ai/backfill/chat' && Array.isArray((details as { targets?: unknown })?.targets) && !new Headers(init.headers).has('X-LifeOS-Unlock-Retry')) {
+      const targets = (details as { targets: import('@lifeos/core').AppLockTarget[] }).targets;
+      if (await requestAppUnlock(targets)) {
+        const headers = new Headers(init.headers); headers.set('X-LifeOS-Unlock-Retry', '1');
+        if (targets.includes('privacy-ai')) { window.dispatchEvent(new Event('lifeos:enable-private-ai')); headers.set('X-LifeOS-Private-Access', new Date(Date.now() + 86400000).toISOString()); }
+        return apiResponse(path, { ...init, headers: Object.fromEntries(headers) });
+      }
     }
     logApiFailure(`${init.method ?? "GET"} ${path}`, response.status, message);
     const error = createApiError(message, response.status);

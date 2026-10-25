@@ -157,7 +157,8 @@ export const handleNoteShareRoutes: RouteHandler = async ({ repository, config }
     const revision = revisionField(input.revision);
     if (record.revision !== revision)
         throw new HttpError(409, 'revision_conflict', '笔记已变化，请先保存或重新打开');
-    let passwordHash = store.get(id)?.passwordHash ?? null;
+    const priorGrant = store.get(id);
+    let passwordHash = priorGrant?.passwordHash ?? null;
     if (input.password === null)
         passwordHash = null;
     else if (input.password !== undefined) {
@@ -169,6 +170,8 @@ export const handleNoteShareRoutes: RouteHandler = async ({ repository, config }
     }
     if (repository.findById(id)?.revision !== revision)
         throw new HttpError(409, 'revision_conflict', '笔记已变化，请先保存或重新打开');
+    if (store.get(id)?.secret !== priorGrant?.secret)
+        throw new HttpError(409, 'revision_conflict', '分享设置已变化，请重新打开分享面板');
     const canEdit = input.canEdit === undefined ? store.get(id)?.canEdit === true : booleanField(input.canEdit, 'canEdit');
     setJson(res, 200, publicView(store.save(id, passwordHash, canEdit)));
     return true;

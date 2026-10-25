@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import sharp from "sharp";
-import { analyzePhotoPixels, coverFromAnalysis, storyWeight, type Asset, type CalendarPresentation, type CalendarPhoto, type PhotoAnalysis } from "@lifeos/core";
+import { isDreamRecord, analyzePhotoPixels, coverFromAnalysis, storyWeight, type Asset, type CalendarPresentation, type CalendarPhoto, type PhotoAnalysis } from "@lifeos/core";
 import type { RecordView, SqliteRecordRepository } from "./repository.js";
 import { dateForTime } from "./timeline-query.js";
 import type { ThumbnailWidth } from "./derived-thumbs.js";
@@ -77,7 +77,7 @@ export class CalendarDays {
     this.#tail = run;
     return run;
   }
-  #state() { return { assets: new Map(this.#options.repository.listAssets().map(a => [a.id, a])), records: this.#options.repository.list({ kind: "journal" }) }; }
+  #state() { return { assets: new Map(this.#options.repository.listAssets().map(a => [a.id, a])), records: this.#options.repository.list({ kind: "journal" }).filter(record => !isDreamRecord(record)) }; }
   #inputs(date: string, today: string, hideDemo: boolean, state = this.#state(), preferred?: string) {
     const { assets } = state;
     const photos = (r: RecordView) => r.assetRefs.filter(ref => ref.role === "photo" && assets.get(ref.assetId)?.kind === "photo" && assets.get(ref.assetId)!.storageRefs.some(s => s.sourceId === "local" || s.sourceId === "lifeos-pool")).map(ref => assets.get(ref.assetId)!);

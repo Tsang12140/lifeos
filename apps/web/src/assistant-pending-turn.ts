@@ -6,6 +6,7 @@ export interface PendingAssistantMaterial {
 
 /** Only stable references are persisted. Image data URIs are rebuilt for a retry. */
 export interface PendingAssistantTurn {
+  readonly pageContext?: "dreams";
   readonly conversationId: string;
   readonly turnId: string;
   /** Binding captured when this turn was first sent; retries must not drift. */
@@ -95,6 +96,7 @@ export function parsePendingAssistantTurn(value: unknown): PendingAssistantTurn 
     batchId: batchId as string | null,
     revision: revision as number | null,
     message: candidate.message,
+    ...(candidate.pageContext === "dreams" ? { pageContext: "dreams" as const } : {}),
     materials,
     startedAt: candidate.startedAt,
     status: "unconfirmed",

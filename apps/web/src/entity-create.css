@@ -1,0 +1,158 @@
+/* Shared by directory/mention creation and live entity editing. Existing cards
+   and the unmounted legacy relation form keep their own surfaces. */
+.entity-create-form {
+  min-width: 0;
+  gap: 12px;
+  color: var(--control-ink);
+}
+.entity-create-form .entity-create-row { min-width: 0; }
+.entity-create-form .entity-create-label {
+  flex: 0 0 4em;
+  font-size: .8125rem;
+  line-height: 20px;
+}
+.entity-create-form .entity-create-types {
+  flex-wrap: wrap;
+  max-width: 100%;
+  gap: 2px;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--control-segment);
+}
+.entity-create-form .entity-type-option {
+  justify-content: center;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-size: .8125rem;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--control-muted);
+  box-shadow: none;
+  transition: background-color 180ms cubic-bezier(.2,0,0,1), color 180ms cubic-bezier(.2,0,0,1);
+}
+.entity-create-form .entity-type-option.is-active {
+  color: #fff;
+  background: var(--control-ink);
+  box-shadow: none;
+}
+:is(.entity-create-form, .entity-edit-dialog) :is(.entity-create-input, .person-contact-fields input, .dialog-field input:not([type="checkbox"]), .dialog-field textarea) {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 40px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--control-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--control-ink);
+  font: inherit;
+  font-size: .875rem;
+  line-height: 20px;
+  box-shadow: none;
+}
+:is(.entity-create-form, .entity-edit-dialog) :is(.entity-create-input, .person-contact-fields input, .dialog-field input:not([type="checkbox"]), .dialog-field textarea):focus {
+  outline: none;
+  border-color: var(--control-muted);
+  box-shadow: 0 0 0 2px rgb(99 107 116 / .1);
+}
+.entity-create-form > :is(.dialog-field, .place-role-field) {
+  display: grid;
+  grid-template-columns: 4em minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+  min-width: 0;
+  font-size: .8125rem;
+  font-weight: 400;
+}
+.entity-create-form .place-role-field small { grid-column: 2; }
+:is(.entity-create-form, .entity-edit-dialog) .alias-entry > .icon-button { width: 40px; height: 40px; color: var(--control-muted); }
+:is(.entity-create-form, .entity-edit-dialog) .alias-add { color: var(--control-muted); font-weight: 400; min-height: 34px; margin: 0; padding: 6px 8px; border: 1px solid var(--control-line); border-radius: 7px; background: var(--surface); font-size: .8125rem; line-height: 20px; }
+.entity-create-form .entity-create-row:has(> .alias-field) { align-items: flex-start; }
+.entity-create-form .entity-create-row:has(> .alias-field) > .entity-create-label { padding-top: 10px; }
+.entity-create-form .entity-create-period-row {
+  display: grid;
+  grid-template-columns: 4em minmax(0, 1fr) auto minmax(0, 1fr);
+  font-size: .8125rem;
+}
+.entity-create-form .entity-create-period-row .entity-create-label { min-width: 0; }
+.entity-create-form .entity-create-optional-row { gap: 8px 16px; }
+.entity-create-form .entity-optional-toggle { min-height: 34px; font-size: .8125rem; font-weight: 400; }
+.entity-create-form .entity-optional-toggle input { accent-color: var(--control-ink); }
+.entity-create-form > .place-search-actions { padding: 0; }
+.entity-create-form .entity-create-actions {
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--control-line);
+}
+.entity-create-form :is(.entity-create-actions > button, .place-search-actions > .secondary-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 40px;
+  height: auto;
+  max-width: 100%;
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--control-muted);
+  font: inherit;
+  font-size: .875rem;
+  line-height: 20px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  box-shadow: none;
+  transform: none;
+}
+.entity-create-form .entity-create-actions > .primary-button { border-color: var(--control-ink); color: #fff; background: var(--control-ink); }
+.entity-create-form :is(button, input):focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; box-shadow: none; }
+.entity-create-form :is(.entity-create-actions > button, .place-search-actions > .secondary-button):disabled { opacity: .52; cursor: not-allowed; }
+.entity-create-form button > svg { flex-shrink: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .entity-create-form .entity-type-option:not(.is-active):hover { background: rgb(255 255 255 / .65); }
+  .entity-create-form :is(.entity-create-actions > button, .place-search-actions > .secondary-button, .alias-add):hover:not(:disabled) { background: var(--control-tray); }
+  .entity-create-form .entity-create-actions > .primary-button:hover:not(:disabled) { background: #343b42; border-color: #343b42; }
+}
+@media (max-width: 420px) {
+  .entity-create-form .entity-create-period-row { grid-template-columns: 4em minmax(0, 1fr); }
+}
+@media (max-width: 340px) {
+  .entity-create-form .entity-create-actions > button { flex: 1 1 100%; }
+}
+@media (pointer: coarse) {
+  .entity-create-form :is(.entity-type-option, .entity-optional-toggle, .alias-add) { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .entity-create-form .entity-type-option { transition: none !important; }
+}
+.entities-section :is(.entities-create-grid, .entities-grid) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 13px;
+  min-width: 0;
+}
+.person-contact-fields { display: grid; gap: 8px; min-width: 0; }
+.person-contact-fields input { width: 100%; }
+.person-contact-field { min-width: 0; gap: 6px; font-weight: 400; }
+.person-contact-field > span { color: var(--control-muted); font-size: .8125rem; line-height: 20px; font-weight: 400; }
+.entity-create-form .person-contact-field { grid-template-columns: 4em minmax(0, 1fr); align-items: center; gap: 8px; font-size: .8125rem; }
+.person-contact-details { display: grid; gap: 10px; }
+.person-contact-details:empty { display: none; }
+.person-contact-details > div { display: grid; gap: 4px; min-width: 0; }
+.person-contact-details small { color: var(--muted); font-size: .75rem; user-select: none; -webkit-user-select: none; }
+.person-contact-value { color: var(--ink-soft); font-size: .875rem; overflow-wrap: anywhere; }
+.entity-create-form .place-create-search { min-width: 0; }
+.entity-create-form .place-create-search .place-search-panel { max-height: none; }
+.entity-create-form .place-create-search .place-search-scroll { max-height: 300px; }

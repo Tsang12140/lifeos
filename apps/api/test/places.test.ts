@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -19,11 +18,12 @@ import { assistantPlaceContext, assistantSafePlan } from "../src/assistant-place
 import { chatBackfill } from "../src/assistant-conversation.js";
 import { storeBackfillDraft, commitBackfill, undoBackfill } from "../src/assistant-backfill.js";
 import { assertValidEntity, createInstant, type Place, type BackfillPlan } from "@lifeos/core";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 test("place collection keeps the first saved association across backdating, edits, privacy and deletion", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-place-collection-"));
   const { server, app } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets") }));
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
   const call = async (path: string, body?: unknown, method?: string) => {
@@ -74,7 +74,7 @@ test("place collection API requires authentication", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-place-auth-"));
   const { server, app } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_PASSWORD: "test-password" }));
   app.repository.insertEntity({ id: "private-space-place", type: "place", name: "受保护的地点" });
-  server.listen(0, "127.0.0.1"); await once(server, "listening"); const address = server.address(); assert.ok(address && typeof address !== "string");
+  await listenOnFetchablePort(server); const address = server.address(); assert.ok(address && typeof address !== "string");
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
   const response = await fetch(`http://127.0.0.1:${address.port}/api/entities/private-space-place/collection?includePrivate=1`);
   assert.equal(response.status, 401); assert.ok(!(await response.text()).includes("受保护的地点"));
@@ -122,7 +122,7 @@ test("assistant-created places capture first journals without breaking commit sn
 test("saved-place maps hide keys, use stored markers, merge concurrent loads and reject invalid requests", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-map-")), original = globalThis.fetch;
   const { server } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_AMAP_API_KEY: "private-map-key" }));
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { globalThis.fetch = original; server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
   let calls = 0, broken = false;
@@ -166,7 +166,7 @@ test("place search uses the server key independently of IP, saves reusable detai
   const original = globalThis.fetch;
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_AMAP_API_KEY: "server-only-poi-key" });
   const { server, app } = createHttpServer(config);
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
   let calls = 0, providerError = false;
@@ -211,7 +211,9 @@ test("place search uses the server key independently of IP, saves reusable detai
   assert.equal(photoCalls, 1, "reads never import or call a provider");
   assert.equal((await call(`/api/entities/${id}`, { role: "深夜食堂", phone: "13800138000" }, "PATCH")).body.role, "深夜食堂");
   for (const fields of [{ longitude: 999, latitude: 1 }, { latitude: null }, { phone: "a".repeat(201) }, { photoUrl: "javascript:alert(1)" }, { role: " " }]) assert.equal((await call(`/api/entities/${id}`, fields, "PATCH")).status, 400);
-  assert.equal((await call("/api/entities", { type: "person", name: "错误资料", phone: "123" })).status, 400);
+  const contact = await call("/api/entities", { type: "person", name: "电话联系人", phone: "123" });
+  assert.equal(contact.status, 201); assert.equal(contact.body.phone, "123");
+  assert.equal((await call(`/api/entities/${contact.body.id}`, undefined, "DELETE")).status, 204);
   const image = await sharp({ create: { width: 180, height: 180, channels: 3, background: "#808080" } }).png().toBuffer();
   const upload = await original(base + "/api/assets/uploads?purpose=avatar", { method: "POST", headers: { "content-type": "image/png" }, body: image });
   assert.equal(upload.status, 201); const asset: any = await upload.json();
@@ -263,7 +265,7 @@ test("nearby search converts GPS, sorts distances, caches requests and falls bac
   const root = mkdtempSync(join(tmpdir(), "lifeos-nearby-"));
   const original = globalThis.fetch;
   const { server } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_AMAP_API_KEY: "nearby-secret" }));
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const urls: URL[] = []; let failConversion = false;
   globalThis.fetch = async (input, init) => {

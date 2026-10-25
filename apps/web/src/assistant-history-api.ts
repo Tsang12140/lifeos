@@ -87,10 +87,11 @@ export interface AssistantChatTurnRequest {
   /**
    * Whether the owner can see private records on screen right now.
    *
-   * Private bodies are never sent to the model; this only lets the assistant tell
+   * This flag never grants private retrieval; the independent request header lets the assistant tell
    * "you can look at them in the list" apart from "they are hidden from you too".
    */
   readonly privacyVisible?: boolean;
+  readonly pageContext?: "dreams";
   /** Answer gear chosen beside the composer for this conversation; absent = stored default. */
   readonly effort?: AiGear;
 }
@@ -120,12 +121,12 @@ export async function sendAssistantChatTurn(turn: AssistantChatTurnRequest, onRe
       while ((newline = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
         if (!line) continue;
-        const event = JSON.parse(line) as { type: string; text?: string; answer?: AssistantChatTurnAnswer; status?: number; code?: string; message?: string };
+        const event = JSON.parse(line) as { type: string; text?: string; answer?: AssistantChatTurnAnswer; status?: number; code?: string; message?: string; partialReply?: string };
         if (event.type === "reply" && typeof event.text === "string") onReply?.(event.text);
         if (event.type === "done" && event.answer) return event.answer;
         if (event.type === "error") {
           const error = new Error(event.message ?? "回复未能完成，请重试") as ApiError;
-          Object.defineProperties(error, { status: { value: event.status }, code: { value: event.code } });
+          Object.defineProperties(error, { status: { value: event.status }, code: { value: event.code }, partialReply: { value: typeof event.partialReply === "string" ? event.partialReply.slice(0, 12000) : undefined } });
           throw error;
         }
       }

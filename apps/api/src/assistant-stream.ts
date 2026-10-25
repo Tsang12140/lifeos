@@ -1,70 +1,40 @@
+import { attemptDetailOf, withAttemptDetail } from "./assistant-attempt-log.js";
 import { HttpError } from "./http-kit.js";
 
 export type ReplyPreview = (text: string) => void;
 
-/** Decode only a top-level reply string, never plans, reasoning or JSON syntax. */
-export function partialReply(source: string): string {
-  const text = source.replace(/^\s*```(?:json)?\s*/i, "");
-  let depth = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === "{" || c === "[") depth++;
-    else if (c === "}" || c === "]") depth--;
-    else if (c === '"') {
-      const token = readString(text, i);
-      if (!token.complete) return "";
-      let next = token.end;
-      while (/\s/.test(text[next] ?? "") && next < text.length) next++;
-      if (depth === 1 && token.value === "reply" && text[next] === ":") {
-        next++;
-        while (/\s/.test(text[next] ?? "") && next < text.length) next++;
-        return text[next] === '"' ? readString(text, next).value : "";
-      }
-      i = token.end - 1;
-    }
-  }
-  return "";
-}
+import { readReplyString, readableReply } from "./assistant-reply-body.js";
 
-function readString(text: string, start: number): { value: string; end: number; complete: boolean } {
-  let value = "";
-  for (let i = start + 1; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === '"') return { value, end: i + 1, complete: true };
-    if (c !== "\\") { value += c; continue; }
-    const escape = text[++i];
-    if (escape === undefined) break;
-    if (escape === "u") {
-      const hex = text.slice(i + 1, i + 5);
-      if (!/^[0-9a-f]{4}$/i.test(hex)) break;
-      value += String.fromCharCode(parseInt(hex, 16)); i += 4;
-    } else {
-      const escapes: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", n: "\n", r: "\r", t: "\t", b: "\b", f: "\f" };
-      if (!(escape in escapes)) break;
-      value += escapes[escape];
-    }
-  }
-  // A unicode escape or a provider chunk can split an emoji in half.
-  return { value: value.replace(/[\uD800-\uDBFF]$/, ""), end: text.length, complete: false };
-}
+export function partialReply(source: string): string { return readReplyString(source)?.text ?? ""; }
 
 /** Read OpenAI-compatible SSE. Transport EOF without a finish marker is failure. */
-export async function readAssistantStream(response: Response, onPreview: ReplyPreview): Promise<{ choices: { message: { content: string }; finish_reason: string }[] }> {
-  if (!response.body) throw new HttpError(502, "invalid_ai_reply", "AI 回复中断，请重试");
+export async function readAssistantStream(response: Response, onPreview: ReplyPreview, preserveReply = false): Promise<{ choices: { message: { content: string; reasoning_content: string }; finish_reason: string }[] }> {
+  if (!response.body) throw withAttemptDetail(new HttpError(502, "invalid_ai_reply", "AI 回复中断，请重试"), { stage: "connection", errorCode: "ai_stream_interrupted", errorDetail: "响应没有可读取的正文流", receivedChars: 0, rawText: "" });
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "", content = "", preview = "", finish = "", doneMarker = false;
+  let buffer = "", content = "", reasoning = "", preview = "", finish = "", doneMarker = false;
   const frame = (data: string) => {
     if (data === "[DONE]") { doneMarker = true; return; }
-    const packet = JSON.parse(data) as { error?: unknown; choices?: { index?: number; delta?: { content?: unknown }; finish_reason?: string | null }[] };
-    if (packet.error) throw new HttpError(502, "ai_service_unavailable", "AI 服务暂时未能完成回复，请稍后重试");
+    const packet = JSON.parse(data) as { error?: unknown; choices?: { index?: number; delta?: { content?: unknown; reasoning_content?: unknown }; finish_reason?: string | null }[] };
+    if (packet.error) throw withAttemptDetail(new HttpError(502, "ai_service_unavailable", "AI 服务暂时未能完成回复，请稍后重试"), { stage: "service", errorCode: "ai_service_unavailable", errorDetail: `流式响应内嵌服务端错误：${JSON.stringify(packet.error).slice(0, 300)}`, receivedChars: content.length, rawText: content });
     const choice = packet.choices?.find(item => item.index === 0 || item.index === undefined);
     if (typeof choice?.delta?.content === "string") {
       content += choice.delta.content;
-      if (content.length > 512_000) throw new HttpError(502, "invalid_ai_reply", "AI 回复过长，请重试");
-      const next = partialReply(content).slice(0, 12000);
+      if (content.length > 512_000) throw withAttemptDetail(new HttpError(502, "invalid_ai_reply", "AI 回复过长，请重试"), { stage: "format", errorCode: "ai_reply_too_long", errorDetail: `累计正文超过 512000 字`, receivedChars: content.length, rawText: content });
+      const next = (preserveReply ? readableReply(content, true)?.text ?? "" : partialReply(content)).slice(0, 12000);
       if (next !== preview) { preview = next; onPreview(next); }
     }
+    /**
+     * Thinking modes stream the whole train of thought through
+     * `reasoning_content` before the first `content` chunk. It must never reach
+     * the preview — the owner sees a reply, not the model's scratch pad. It is
+     * collected anyway because it is the only evidence left when a turn comes
+     * back with no body at all (see `assistant.ts`): the failure log would
+     * otherwise say "the provider returned nothing" while the model had, in
+     * fact, thought for thousands of tokens and simply never written an answer.
+     * Capped rather than thrown on: oversized reasoning is not the owner's problem.
+     */
+    if (typeof choice?.delta?.reasoning_content === "string" && reasoning.length < 512_000) reasoning += choice.delta.reasoning_content;
     if (choice?.finish_reason) finish = choice.finish_reason;
   };
   try {
@@ -78,13 +48,16 @@ export async function readAssistantStream(response: Response, onPreview: ReplyPr
         const data = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
         if (data) frame(data);
       }
-      if (buffer.length > 512_000) throw new HttpError(502, "invalid_ai_reply", "AI 回复格式不完整，请重试");
+      if (buffer.length > 512_000) throw withAttemptDetail(new HttpError(502, "invalid_ai_reply", "AI 回复格式不完整，请重试"), { stage: "format", errorCode: "ai_stream_frame_too_long", errorDetail: "未闭合的 SSE 分片超过 512000 字", receivedChars: content.length, rawText: content });
       if (chunk.done) break;
     }
     if (!finish || !doneMarker) {
       console.warn(`[ai-stream] stage=transport finish_marker=${Boolean(finish)} done_marker=${doneMarker} chars=${content.length}`);
-      throw new HttpError(502, "invalid_ai_reply", "AI 回复中断，请重试");
+      throw withAttemptDetail(new HttpError(502, "invalid_ai_reply", "AI 回复中断，请重试"), { stage: "connection", errorCode: "ai_stream_interrupted", errorDetail: `流结束但缺少完成标记（finish=${finish || "无"} done=${doneMarker}）`, receivedChars: content.length, rawText: content });
     }
-    return { choices: [{ message: { content }, finish_reason: finish }] };
+    return { choices: [{ message: { content, reasoning_content: reasoning }, finish_reason: finish }] };
+  } catch (error) {
+    if (attemptDetailOf(error)) throw error;
+    throw withAttemptDetail(error instanceof Error ? error : new Error(String(error)), { stage: "connection", errorCode: "ai_stream_interrupted", errorDetail: "读取正文流时连接中断", receivedChars: content.length, rawText: content });
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }

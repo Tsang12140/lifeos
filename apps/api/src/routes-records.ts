@@ -1,6 +1,6 @@
 import { dateForTime } from "./timeline-query.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { calendarToday, canEditDaySummary, isAiAssisted, isBackfilled, type RecordKind, type TaskStatus } from "@lifeos/core";
+import { calendarToday, canEditDaySummary, isAiAssisted, isBackfilled, isDreamRecord, type RecordKind, type TaskStatus } from "@lifeos/core";
 import { ConflictError, type RecordView } from "./repository.js";
 import { HttpError, setJson, setEmpty } from "./http-kit.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
@@ -19,6 +19,7 @@ import { assertImportReferences, buildRecord, contentDisposition, patchRecord, s
 import { nowInstant } from "./field-validate.js";
 import { assertTimeZone, datesBetween, filterDate, filterDateRange, sortTimeline } from "./timeline-query.js";
 import { buildManualDaySummary, buildOfflineDaySummary, createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
+import { recordSummaryAttemptFailure } from "./assistant-attempt-log.js";
 import {
   createExportBundle,
   exportRecordMarkdown,
@@ -41,6 +42,16 @@ export const handleRecordsRoutes: RouteHandler = async (
   url: URL,
 ): Promise<boolean> => {
   const { config, repository } = ctx;
+  if (pathname === "/api/pages/dreams" && (req.method === "GET" || req.method === "PUT")) {
+    if (req.method === "PUT") {
+      requireJsonContentType(req);
+      const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+      hasOnlyKeys(input, ["enabled"]);
+      repository.setDreamsEnabled(booleanField(input.enabled, "enabled"));
+    }
+    setJson(res, 200, { enabled: repository.dreamsEnabled() });
+    return true;
+  }
   if (pathname === "/api/calendar/days" && req.method === "GET") {
     const from = parseDateQuery(url.searchParams.get("from"), "from");
     const to = parseDateQuery(url.searchParams.get("to"), "to");
@@ -121,7 +132,12 @@ export const handleRecordsRoutes: RouteHandler = async (
     // Date/range reads feed Today and Calendar. Notes are a separate content
     // library and must not leak into those time-oriented surfaces.
     const timeScoped = date !== undefined || from !== undefined || to !== undefined;
+    const natureRaw = url.searchParams.get("nature");
+    const nature = natureRaw === null ? undefined : enumField(natureRaw, ["real", "dream", "all"] as const, "nature");
     const sourceRecords = repository.list(query).filter((record) => {
+      if (nature === "dream" && !isDreamRecord(record)) return false;
+      if (nature === "real" && isDreamRecord(record)) return false;
+      if (!nature && timeScoped && url.searchParams.get("calendar") !== "1" && url.searchParams.get("search") !== "1" && isDreamRecord(record)) return false;
       if (timeScoped && record.kind === "note" && url.searchParams.get("search") !== "1") return false;
       if (kinds.length && !kinds.includes(record.kind)) return false;
       if (statuses.length && (record.kind !== "task" || !statuses.includes(record.task.status))) return false;
@@ -157,7 +173,7 @@ export const handleRecordsRoutes: RouteHandler = async (
     }
     // Calendar cards need an excerpt; opening a day uses the full-record route.
     const items = url.searchParams.get("calendar") === "1"
-      ? sorted.filter(record => record.isPrivate !== true).map(record => ({ ...record, body: { original: Array.from(record.body.edited ?? record.body.original).slice(0, 180).join("") }, aiDerived: [] }))
+      ? sorted.filter(record => record.isPrivate !== true).map(record => ({ ...record, body: { ...(isDreamRecord(record) ? { nature: "dream" as const } : {}), original: Array.from(record.body.edited ?? record.body.original).slice(0, 180).join("") }, aiDerived: [] }))
       : sorted;
     setJson(res, 200, { items });
     return true;
@@ -202,6 +218,7 @@ export const handleRecordsRoutes: RouteHandler = async (
       provider: daySummaryProvider,
       force: url.searchParams.get("force") === "1",
       today: new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date()),
+      onProviderFallback: failure => recordSummaryAttemptFailure(repository, "calendar_read", failure),
     });
     setJson(res, 200, summaryPayload(items, daySummaryProvider));
     return true;
@@ -278,6 +295,7 @@ export const handleRecordsRoutes: RouteHandler = async (
       force: true,
       today: new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date()),
       latestRecordsForDate: date => collectSummarisableRecords(repository, timeZone).get(date) ?? [],
+      onProviderFallback: failure => recordSummaryAttemptFailure(repository, "calendar_regenerate", failure),
     });
     setJson(res, 200, summaryPayload(items, daySummaryProvider));
     return true;

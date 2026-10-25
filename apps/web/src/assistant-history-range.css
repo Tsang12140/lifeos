@@ -98,7 +98,7 @@
   min-width: 0;
   margin: 0;
   color: var(--ink-soft);
-  font-size: 0.77rem;
+  font-size: 12px;
   font-weight: 650;
   line-height: 1.35;
 }
@@ -113,7 +113,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
   color: var(--ink-soft);
   background: var(--surface-soft);
   cursor: pointer;
@@ -122,7 +122,7 @@
 
 .assistant-history-range-clear {
   padding: 0 9px;
-  font-size: 0.75rem;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -147,7 +147,7 @@
   gap: 4px;
   margin: 0;
   color: var(--ink);
-  font-size: 0.9rem;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.2;
 }
@@ -163,7 +163,7 @@
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 13px;
 }
 
 .assistant-history-range-month-select:hover,
@@ -188,7 +188,7 @@
   height: 28px;
   place-items: center;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -205,12 +205,12 @@
   place-items: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 10px;
   color: var(--ink-soft);
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -255,7 +255,7 @@
 .assistant-history-range-hint {
   margin: 9px 1px 0;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 11px;
   line-height: 1.35;
 }
 

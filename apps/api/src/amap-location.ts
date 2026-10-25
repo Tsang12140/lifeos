@@ -1,11 +1,11 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isIP } from "node:net";
 import type { IncomingMessage } from "node:http";
 import type { ApiConfig } from "./config.js";
 
-interface Stored { enabled: boolean; encrypted?: string; iv?: string; tag?: string }
+interface Stored { enabled: boolean; photoAddress?: boolean; encrypted?: string; iv?: string; tag?: string }
 const pathFor = (config: ApiConfig) => join(config.dataDirectory, "amap-config.json");
 function stored(config: ApiConfig): Stored {
   if (!existsSync(pathFor(config))) return { enabled: false };
@@ -16,7 +16,14 @@ function stored(config: ApiConfig): Stored {
 function keyFor(config: ApiConfig): Buffer {
   return scryptSync(config.tenantConfigSecrets?.weather || process.env.LIFEOS_AMAP_CONFIG_SECRET?.trim() || process.env.LIFEOS_WEATHER_CONFIG_SECRET?.trim() || process.env.LIFEOS_PASSWORD || `lifeos-local-weather:${config.dataDirectory}`, "lifeos-amap-config-v1", 32);
 }
-export function readAmapConfig(config: ApiConfig): { enabled: boolean; apiKey?: string; hasStoredKey: boolean; keySource: "file" | "env" | "none" } {
+/**
+ * `photoAddress` decides whether a photo's EXIF coordinate may be sent to Amap
+ * for reverse geocoding. It is deliberately separate from `enabled` (the IP
+ * fallback for weather): a photo's coordinate is far more revealing than a
+ * city name, so the two consents must be given separately. Absent means on,
+ * which is the behaviour every existing install already has.
+ */
+export function readAmapConfig(config: ApiConfig): { enabled: boolean; photoAddress: boolean; apiKey?: string; hasStoredKey: boolean; keySource: "file" | "env" | "shared" | "none" } {
   const value = stored(config);
   const hasStoredKey = Boolean(value.encrypted || value.iv || value.tag);
   let apiKey: string | undefined;
@@ -27,17 +34,20 @@ export function readAmapConfig(config: ApiConfig): { enabled: boolean; apiKey?: 
       apiKey = Buffer.concat([decipher.update(Buffer.from(value.encrypted, "base64")), decipher.final()]).toString("utf8");
     } catch { /* Preserve unreadable ciphertext; a blank save must never erase it. */ }
   }
-  const keySource = apiKey ? "file" : !hasStoredKey && config.amapApiKey ? "env" : "none";
+  const shared = !apiKey && !hasStoredKey && !config.amapApiKey ? config.sharedIntegrations?.amap?.() : undefined;
+  const keySource = apiKey ? "file" : !hasStoredKey && config.amapApiKey ? "env" : shared?.apiKey ? "shared" : "none";
   if (keySource === "env") apiKey = config.amapApiKey;
-  return { enabled: value.enabled, ...(apiKey ? { apiKey } : {}), hasStoredKey, keySource };
+  if (keySource === "shared") apiKey = shared!.apiKey;
+  return { enabled: value.enabled, photoAddress: value.photoAddress !== false, ...(apiKey ? { apiKey } : {}), hasStoredKey, keySource };
 }
 export function publicAmapConfig(config: ApiConfig) {
   const value = readAmapConfig(config);
-  return { enabled: value.enabled, hasKey: Boolean(value.apiKey), keyUnreadable: value.hasStoredKey && !value.apiKey, keySource: value.keySource };
+  return { enabled: value.enabled, photoAddress: value.photoAddress, hasKey: Boolean(value.apiKey), keyUnreadable: value.hasStoredKey && !value.apiKey, keySource: value.keySource };
 }
-export function saveAmapConfig(config: ApiConfig, input: { enabled: boolean; apiKey?: string; clearApiKey?: boolean }) {
+export function saveAmapConfig(config: ApiConfig, input: { enabled: boolean; photoAddress?: boolean; apiKey?: string; clearApiKey?: boolean }) {
   const previous = stored(config);
   const value: Stored = { ...previous, enabled: input.enabled };
+  if (input.photoAddress !== undefined) value.photoAddress = input.photoAddress;
   if (input.clearApiKey) { delete value.encrypted; delete value.iv; delete value.tag; }
   else if (input.apiKey?.trim()) {
     const iv = randomBytes(12);
@@ -69,7 +79,7 @@ const cache = new Map<string, { expires: number; pending: Promise<{ longitude: n
 export async function lookupAmapIp(config: ApiConfig, ip: string): Promise<{ longitude: number; latitude: number }> {
   const runtime = readAmapConfig(config);
   if (!runtime.enabled || !runtime.apiKey) throw new Error("高德备用定位尚未启用或未配置 Key");
-  const cacheKey = `${config.dataDirectory}|${ip}`;
+  const cacheKey = `${config.dataDirectory}|${createHash("sha256").update(runtime.apiKey).digest("hex")}|${ip}`;
   const previous = cache.get(cacheKey);
   if (previous && previous.expires > Date.now()) return previous.pending;
   if (cache.size > 2048) cache.clear();

@@ -13,6 +13,21 @@ export function safeNoteUrl(value: string, image = false): boolean {
 export function sanitizeNoteHtml(html: string): string {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     doc.querySelectorAll(DROP).forEach(node => node.remove());
+    // Native rich-text commands and older PenMark files may emit <font>.
+    // Translate its formatting before the generic tag allowlist unwraps it.
+    for (const font of Array.from(doc.querySelectorAll('font'))) {
+        const span = doc.createElement('span');
+        span.style.cssText = (font as HTMLElement).style.cssText;
+        if (font.getAttribute('color'))
+            span.style.color = font.getAttribute('color')!;
+        if (font.getAttribute('face'))
+            span.style.fontFamily = font.getAttribute('face')!;
+        const size = Number(font.getAttribute('size'));
+        if (Number.isInteger(size) && size >= 1 && size <= 7)
+            span.style.fontSize = ['10px', '13px', '16px', '18px', '24px', '32px', '48px'][size - 1]!;
+        span.append(...Array.from(font.childNodes));
+        font.replaceWith(span);
+    }
     doc.querySelectorAll('.rs-handle,.img-size-label,.pm-table-resize-layer').forEach(node => node.remove());
     doc.querySelectorAll('.img-container').forEach(node => {
         if (!node.querySelector('img'))
@@ -40,8 +55,12 @@ export function sanitizeNoteHtml(html: string): string {
                     el.removeAttribute(name);
             }
             else if (name === 'class') {
-                el.setAttribute('class', attribute.value.split(/\s+/).filter(value => /^(?:img-|todo-|pm-|fn-|footnote|link-card|code-)/.test(value)).join(' '));
+                el.setAttribute('class', attribute.value.split(/\s+/).filter(value => /^(?:img-|todo-|pm-|fn-|footnote|link-card|code-)/.test(value) || /^language-[a-z0-9+-]{1,32}$/i.test(value) || (value === 'checked' && el.classList.contains('todo-check')) || (value === 'done' && el.classList.contains('todo-item'))).join(' '));
             }
+            else if (name === 'contenteditable' && el.classList.contains('todo-check') && attribute.value === 'false') { /* Keep the checkbox outside the editable text. */ }
+            else if (name === 'role' && el.classList.contains('todo-check') && attribute.value === 'checkbox') { }
+            else if (name === 'aria-checked' && el.classList.contains('todo-check') && /^(true|false)$/.test(attribute.value)) { }
+            else if (name === 'data-type' && el.classList.contains('todo-item') && attribute.value === 'todo') { }
             else if (!['alt', 'title', 'width', 'height', 'colspan', 'rowspan', 'align', 'start', 'data-align', 'data-fn-id', 'data-fn-back', 'data-count', 'data-checked'].includes(name) && !(name === 'id' && /^(?:fn-|fnref-|pm)/.test(attribute.value)))
                 el.removeAttribute(name);
         }

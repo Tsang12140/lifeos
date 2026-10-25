@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useApplicationLock, AppLockSettings } from "./app-lock";
 import { ArchiveTransferCard } from "./archive-transfer";
+import { AssistantAttemptLogCard } from "./assistant-log-settings";
+import { AssistantWelcomeAdmin } from "./assistant-welcome-admin";
+import { AdminAttentionPanel } from "./admin-attention";
 import { CustomHabitPanel, type HabitActions } from "./habit-panel";
+import { EntityCreateForm } from "./entity-forms";
+import { ContactMentionAvatar } from "./contact-avatar";
+import type { CreateEntity } from "./app-types";
 import {
   Activity,
   ArrowLeft,
@@ -48,6 +55,9 @@ import {
   type CycleIntimacyModuleConfig,
   type CycleIntimacyModuleData,
   type Entity,
+  entitySearchTerms,
+  normalizeEntitySearchTerm,
+  periodTransferGroups,
 } from "@lifeos/core";
 import {
   AI_GEARS,
@@ -69,7 +79,7 @@ import {
   type WeatherStatus,
 } from "./api";
 import { BackupCalendar } from "./BackupCalendar";
-import { TimeMachine } from "./TimeMachine";
+import { TimeMachineSettings } from "./time-machine-settings";
 import { WeatherLocationPicker } from "./WeatherLocationPicker";
 import { WeatherSimulator } from "./WeatherSimulator";
 import { PoolStorageSettingsCard } from "./PoolStorageSettingsCard";
@@ -173,7 +183,7 @@ export function AiSettingsCard({ statusState, open = false, assistantVisible, on
     </div>
     {statusState.phase === "failed" ? <div className="settings-config-read-error" role="alert"><span>{statusState.error}</span>{status === null ? null : <small>上次确认：{confirmedLabel}</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
     {status === null ? <p className="settings-config-unavailable">状态确认后，才能调整 AI 服务配置或提交测试。</p> : null}
-    <label className="settings-ai-visibility"><input type="checkbox" checked={assistantVisible} onChange={(event) => onAssistantVisibleChange(event.target.checked)} /><span><strong>显示 AI 助手</strong></span></label>
+    <label className="settings-ai-visibility"><input type="checkbox" checked={assistantVisible} onChange={(event) => onAssistantVisibleChange(event.target.checked)} /><span><strong>桌面显示 AI 管家</strong></span></label>
     <div className="settings-ai-presets" aria-label="AI 快捷档位">
       <div className="settings-ai-form-heading"><span>快捷档位</span><strong data-ai-current-preset={`preset-${currentPreset}`}>{aiPresetLabel(currentPreset)}</strong></div>
       <div className="settings-ai-preset-grid">{AI_PRESETS.map((preset) => <button className={`settings-ai-preset ${currentPreset === preset.id ? "is-selected" : ""}`} data-ai-preset={preset.id} aria-pressed={currentPreset === preset.id} type="button" key={preset.id} onClick={() => applyPreset(preset)} disabled={!statusReady}><strong>{preset.label}<em className="settings-ai-preset-id">{preset.id}</em></strong><small>{preset.detail}</small><em>{preset.model}</em></button>)}</div>
@@ -359,7 +369,7 @@ function BackupSettingsContent({ backupStatus, readReady, backupBusy, onBackup, 
     <div className="settings-backup-stats"><div><small>最近本地结果</small><strong>{formatRun(localRun)}{localRun?.status === "success" && localRun.sizeBytes === undefined ? "" : localRun?.status === "success" && localRun.sizeBytes !== undefined ? `，${formatBytes(localRun.sizeBytes)}` : ""}</strong></div><div><small>最近对象存储结果</small><strong>{formatRun(s3Run)}{s3Run?.status === "success" && s3Run.sizeBytes !== undefined ? `，${formatBytes(s3Run.sizeBytes)}` : ""}{s3RunWroteLocally ? "，本机目录" : ""}</strong></div><div><small>下次定时双备份</small><strong>{backupStatus.schedule.enabled && backupStatus.schedule.nextRunAt ? new Date(backupStatus.schedule.nextRunAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "未启用"}</strong></div></div>
     <div className="settings-backup-dual" data-backup-dual-status><div><span>双备份结果</span><strong className={`is-${dual?.status ?? "empty"}`}>{dualLabel}</strong>{dual?.s3.status === "skipped" || dual?.s3.status === "failed" ? <small>{dual.s3.error ?? "远端没有成功"}</small> : null}</div><button className="primary-button" data-backup-action="dual" type="button" onClick={() => onBackup("dual")} disabled={backupBusy || saving}>{backupBusy ? "执行中…" : "立即双备份"}</button></div>
     <div className="settings-backup-actions"><button className="secondary-button" type="button" onClick={() => onBackup("local")} disabled={backupBusy || saving}><HardDrive size={15} aria-hidden="true" /><span>{backupBusy ? "备份中" : "备份到本地"}</span></button><button className="primary-button" type="button" onClick={() => onBackup("s3")} disabled={backupBusy || saving || !s3.configured || !s3.enabled}><CloudUpload size={15} aria-hidden="true" /><span>备份到对象存储</span></button><button className="icon-text-button" type="button" onClick={() => onBackup("test")} disabled={backupBusy || saving || !s3.configured || !s3.enabled}><PlugZap size={15} aria-hidden="true" /><span>测试连接</span></button></div>
-    <details className="settings-backup-advanced" data-backup-schedule-details><summary><History size={15} aria-hidden="true" /><span>高级：定时双备份</span><ChevronDown size={15} aria-hidden="true" /></summary><div className="settings-backup-schedule" data-backup-schedule><div className="settings-backup-schedule-head"><div><span>定时双备份</span><small>服务端执行，Asia/Shanghai</small></div><label className="settings-switch"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /><span aria-hidden="true" /></label></div><div className="settings-backup-schedule-controls"><label><span>每天</span><select value={scheduleHour} onChange={(event) => setScheduleHour(Number(event.target.value))}>{Array.from({ length: 24 }, (_, hour) => <option value={hour} key={hour}>{String(hour).padStart(2, "0")}</option>)}</select></label><b>:</b><label><span>时刻</span><select value={scheduleMinute} onChange={(event) => setScheduleMinute(Number(event.target.value))}>{[0, 15, 30, 45].map((minute) => <option value={minute} key={minute}>{String(minute).padStart(2, "0")}</option>)}</select></label><button className="secondary-button" type="button" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? "保存中…" : "保存排程"}</button></div><div className="settings-backup-schedule-next">{scheduleEnabled && backupStatus.schedule.nextRunAt ? `即将执行：${new Date(backupStatus.schedule.nextRunAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}` : "定时双备份未启用"}{scheduleMessage ? <span role="status">，{scheduleMessage}</span> : null}</div></div></details>
+    <details className="settings-backup-advanced" data-backup-schedule-details><summary><History size={15} aria-hidden="true" /><span>高级：定时双备份</span><ChevronDown size={15} aria-hidden="true" /></summary><div className="settings-backup-schedule" data-backup-schedule><div className="settings-backup-schedule-head"><div><span>定时双备份</span><small>服务端执行，Asia/Shanghai</small></div><label className="settings-switch"><input type="checkbox" aria-label="定时双备份" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} /><span aria-hidden="true" /></label></div><div className="settings-backup-schedule-controls"><label><span>每天</span><select value={scheduleHour} onChange={(event) => setScheduleHour(Number(event.target.value))}>{Array.from({ length: 24 }, (_, hour) => <option value={hour} key={hour}>{String(hour).padStart(2, "0")}</option>)}</select></label><b>:</b><label><span>时刻</span><select value={scheduleMinute} onChange={(event) => setScheduleMinute(Number(event.target.value))}>{[0, 15, 30, 45].map((minute) => <option value={minute} key={minute}>{String(minute).padStart(2, "0")}</option>)}</select></label><button className="secondary-button" type="button" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? "保存中…" : "保存排程"}</button></div><div className="settings-backup-schedule-next">{scheduleEnabled && backupStatus.schedule.nextRunAt ? `即将执行：${new Date(backupStatus.schedule.nextRunAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}` : "定时双备份未启用"}{scheduleMessage ? <span role="status">，{scheduleMessage}</span> : null}</div></div></details>
     {retentionError ? <div className="settings-backup-read-state" role="alert"><span>{retention === null ? "保留策略暂时不可读取" : "保留策略读取失败，暂时不能修改"}</span><small>{retentionError}</small><button className="secondary-button" type="button" onClick={() => setRetentionRetry((current) => current + 1)}>重试保留策略</button></div> : null}
     {retention === null ? null : <details className="settings-backup-retention settings-backup-advanced" data-backup-retention open={retentionOpen} onToggle={(event) => setRetentionOpen(event.currentTarget.open)}><summary><Archive size={15} aria-hidden="true" /><span>高级：保留策略，日备 {retention.policy.dailyDays} 天，周备 {retention.policy.weeklyWeeks} 周，月备 {retention.policy.monthlyMonths} 个月</span><span className="settings-backup-retention-count" data-backup-retention-count>{retention.summary.keepCount} 份保留，{retention.summary.deleteCount} 份待清理</span><ChevronDown size={15} aria-hidden="true" /></summary>
       <div className="settings-backup-retention-body">
@@ -879,15 +889,20 @@ export function WeatherSimulatorCard() {
   </section>;
 }
 
-export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: CycleIntimacyModuleData | null; readonly onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function CycleSettingsCard({ module, entities, onCreateEntity, onSaveConfig, onTransferPeriods }: { readonly module: CycleIntimacyModuleData | null; readonly entities: readonly Entity[]; readonly onCreateEntity: CreateEntity; readonly onSaveConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; readonly onTransferPeriods: (groupKeys: readonly string[], targetSubjectId?: string) => Promise<void> }) {
   const [draft, setDraft] = useState<CycleIntimacyModuleConfig | null>(module?.config ?? null);
   const sourceConfig = useRef(module?.config ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [personSearch, setPersonSearch] = useState("");
+  const [creatingPerson, setCreatingPerson] = useState(false);
+  const [transferKeys, setTransferKeys] = useState<readonly string[]>([]);
+  const [transferTarget, setTransferTarget] = useState("self");
   useEffect(() => {
     const next = module?.config ?? null, previous = sourceConfig.current;
     sourceConfig.current = next;
-    const sameSettings = next && previous && next.enabled === previous.enabled && next.cycleLength === previous.cycleLength && next.periodLength === previous.periodLength && next.anchorStart === previous.anchorStart;
+    setTransferKeys([]);
+    const sameSettings = next && previous && next.enabled === previous.enabled && next.cycleLength === previous.cycleLength && next.periodLength === previous.periodLength && next.anchorStart === previous.anchorStart && next.subjectId === previous.subjectId;
     // Habit saves refresh this module too; keep unrelated unsaved settings and
     // refresh their habit list so a later config save cannot restore stale names.
     setDraft(current => current && next && sameSettings ? { ...current, habits: next.habits } : next);
@@ -899,9 +914,24 @@ export function CycleSettingsCard({ module, onSaveConfig }: { readonly module: C
     try { await onSaveConfig(draft); } catch (caught) { setError(errorMessage(caught, "周期设置暂时无法保存，请重试")); }
     finally { setBusy(false); }
   };
+  const people = entities.filter(entity => entity.type === "person" && (!personSearch.trim() || entitySearchTerms(entity).some(term => normalizeEntitySearchTerm(term).includes(normalizeEntitySearchTerm(personSearch.trim())))));
+  const periodGroups = periodTransferGroups(module?.events ?? []);
+  const activeSubjectName = module?.config.subjectId ? entities.find(entity => entity.id === module.config.subjectId)?.name ?? "已移除的联系人" : "本人";
+  const chooseSubject = (subjectId?: string) => setDraft(current => {
+    if (!current) return current;
+    const key = subjectId ?? "self";
+    const stored = key === (module?.config.subjectId ?? "self") ? module?.config : module?.config.otherSubjects?.[key];
+    const { anchorStart: _anchor, subjectId: _subject, ...rest } = current;
+    return { ...rest, ...(subjectId ? { subjectId } : {}), cycleLength: stored?.cycleLength ?? 28, periodLength: stored?.periodLength ?? 7, ...(stored?.anchorStart ? { anchorStart: stored.anchorStart } : {}) };
+  });
   return <div className="settings-card cycle-settings-card">
     <div className="settings-card-icon"><Heart size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>周期与亲密记录</strong><small>关闭模块后已有私密记录仍会保留；日历中的快捷入口使用同一份配置。</small></div>
     <label className="cycle-enable"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => current ? { ...current, enabled: event.target.checked } : current)} /><span><strong>在日历中启用</strong><small>显示周期推算与私密记录入口。</small></span></label>
+    <div className="cycle-subject"><strong>经期当事人</strong><small>你可以代别人记录；切换后每个人的经期和预测分别保存。</small><button type="button" className="secondary-button" aria-expanded={creatingPerson} onClick={() => setCreatingPerson(value => !value)}>新建联系人</button></div>
+    {creatingPerson ? <EntityCreateForm fixedType defaultType="person" defaultName={personSearch} submitLabel="新建并选择" onCancel={() => setCreatingPerson(false)} onCreate={async request => { const { type, name, ...extras } = request; if (type !== "person") return false; const created = await onCreateEntity(type, name, extras); if (created) { chooseSubject(created.id); setPersonSearch(""); } return Boolean(created); }} /> : null}
+    <input className="cycle-subject-search" aria-label="查找经期当事人" placeholder="搜索联系人" value={personSearch} onChange={event => setPersonSearch(event.target.value)} />
+    <div className="cycle-subject-options" role="group" aria-label="选择经期当事人"><button type="button" aria-pressed={!draft.subjectId} onClick={() => chooseSubject()}>本人</button>{people.map(person => <button type="button" key={person.id} aria-pressed={draft.subjectId === person.id} onClick={() => chooseSubject(person.id)}><ContactMentionAvatar entity={person} />{person.name}</button>)}</div>
+    {periodGroups.length > 0 ? <div className="cycle-transfer"><strong>转移已有经期</strong><small>当前记录：{activeSubjectName}。按每次经期选择；跨月的开始和结束会一起转移。亲密和习惯标记不转移。</small><div className="cycle-transfer-groups">{periodGroups.map(group => <label key={group.key}><input type="checkbox" checked={transferKeys.includes(group.key)} disabled={busy} onChange={event => setTransferKeys(current => event.target.checked ? [...current, group.key] : current.filter(key => key !== group.key))} /><span>{group.start}{group.end && group.end !== group.start ? ` 至 ${group.end}` : ""}</span></label>)}</div><label className="dialog-field"><span>转给</span><select value={transferTarget} disabled={busy} onChange={event => setTransferTarget(event.target.value)}><option value="self">本人</option>{entities.filter(entity => entity.type === "person").map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><button className="secondary-button" type="button" disabled={busy || transferKeys.length === 0 || transferTarget === (module?.config.subjectId ?? "self")} onClick={() => { setBusy(true); setError(null); void onTransferPeriods(transferKeys, transferTarget === "self" ? undefined : transferTarget).catch(caught => setError(errorMessage(caught, "经期归属转移失败"))).finally(() => setBusy(false)); }}>转移所选经期</button></div> : null}
     <div className="dialog-fields-grid"><label className="dialog-field"><span>经期间隔（两次开始相隔天数）</span><input type="number" min="15" max="90" value={draft.cycleLength} onChange={(event) => setDraft((current) => current ? { ...current, cycleLength: Number(event.target.value) } : current)} /></label><label className="dialog-field"><span>预计持续天数</span><input type="number" min="1" max="21" value={draft.periodLength} onChange={(event) => setDraft((current) => current ? { ...current, periodLength: Number(event.target.value) } : current)} /></label></div>
     <label className="dialog-field"><span>最近一次经期开始（可选）</span><input type="date" value={draft.anchorStart ?? ""} onChange={(event) => setDraft((current) => { if (!current) return current; const { anchorStart: _anchorStart, ...rest } = current; return event.target.value ? { ...rest, anchorStart: event.target.value } : rest; })} /></label>
     <p className="cycle-dialog-note">虚影月亮只表示按以上间隔推算的预计日期；确认开始或结束后，会以实心月亮覆盖它。</p>
@@ -1040,9 +1070,11 @@ function InviteManagementCard() {
   </section>;
 }
 
-export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, onSaveCycleConfig }: { habitActions?: HabitActions; page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void> }) {
+export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, admin = false, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, entities, onCreateEntity, onSaveCycleConfig, onTransferPeriods }: { habitActions?: HabitActions; page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; admin?: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; entities: readonly Entity[]; onCreateEntity: CreateEntity; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; onTransferPeriods: (groupKeys: readonly string[], targetSubjectId?: string) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
-  const settingsGroups = SETTINGS_PAGE_GROUPS.map(group => ({ ...group, pages: group.pages.filter(item => item.id !== "account/storage" || (accountMode && account?.role === "owner")) }));
+  useEffect(() => { if ((page.startsWith("admin/") || page === "account/storage") && !admin) onNavigatePage("account/session"); }, [page, admin, onNavigatePage]);
+  const isAdmin = admin;
+  const settingsGroups = SETTINGS_PAGE_GROUPS.filter(group => group.id !== "admin" || isAdmin).map(group => ({ ...group, pages: group.pages.filter(item => item.id !== "account/storage" || (accountMode && isAdmin)) }));
   const activePage = settingsGroups.flatMap((group) => group.pages).find((candidate) => candidate.id === page) ?? settingsGroups[0].pages[0];
   const activeGroup = settingsGroups.find((group) => group.pages.some((candidate) => candidate.id === page)) ?? settingsGroups[0];
   const [mobileLevel, setMobileLevel] = useState<"groups" | "pages" | "detail">(mobileEntry.root ? "groups" : "detail");
@@ -1055,7 +1087,11 @@ export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, 
   useEffect(() => { window.requestAnimationFrame(() => { if (pageHeadingRef.current?.getClientRects().length) pageHeadingRef.current.focus(); }); }, [page, mobileLevel]);
   const pageDescription: Record<SettingsPageId, string> = {
     "account/session": "访问权限与当前会话。",
+    "account/lock": "选择需要密码保护的板块与私密开关。",
     "account/storage": "查看每个人的存储与月流量用量，分配和调整额度。",
+    "admin/attention": "只列反复失败、又没人会注意的事：几次、最近什么时候、该怎么办。",
+    "admin/welcome": "维护 AI 开场问题的文案、启用状态与轮换偏好。",
+    "admin/welcome-stats": "查看问题的展示次数、点击次数与点击率。",
     "data/import-export": "把记录带进来或导出为可保存的文件。",
     "data/backup": "查看备份状态，并管理本地与对象存储策略。",
     "data/demo": "控制预置记录的显示与删除。",
@@ -1063,24 +1099,29 @@ export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, 
     "appearance/interface": "调整当前浏览器里的界面显示。",
     "integrations/weather": "定位或选择固定城市。",
     "integrations/ai": "AI 助手显示方式与服务配置。",
+    "integrations/ai-log": "AI 对话与 AI 小结的失败都在这里；选中一段时间后一键复制给 AI 排查。",
     "integrations/movie": "管理观影模块与影片识别服务。",
     "integrations/photo-text": "读出照片里的文字，让它们也能被搜到。",
     "private/cycle": "周期与亲密模块的私密设置。",
     about: "了解本机优先的数据边界。",
   };
-  const accountContent = <><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{accountMode ? account?.spaceName ?? "已登录空间" : authRequired ? "已登录" : "本机访问"}</strong><small>{accountMode ? `${account?.displayName ?? ""}，${account?.username ?? ""}，${account?.role === "owner" ? "空间所有者" : "独立账号"}` : authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : accountMode ? "退出并切换账号" : "退出登录"}</span></button> : null}</div>{accountMode && account?.role === "owner" ? <><InviteManagementCard /><AccountManagementCard /></> : null}</>;
-  const pageContent = page === "account/session" ? accountContent
-    : page === "account/storage" ? accountMode && account?.role === "owner" ? <PoolStorageSettingsCard /> : <p>仅管理员可管理存储额度。</p>
+  const accountContent = <><div className="settings-card settings-account-card"><div className="settings-card-icon"><LockKeyhole size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{accountMode ? account?.spaceName ?? "已登录空间" : authRequired ? "已登录" : "本机访问"}</strong><small>{accountMode ? `${account?.displayName ?? ""}，${account?.username ?? ""}，${account?.role === "owner" ? "空间所有者" : "独立账号"}` : authRequired ? "当前会话受访问密码保护。" : "当前实例未启用登录密码。"}</small></div>{authRequired ? <button className="danger-button settings-action" type="button" onClick={onLogout} disabled={logoutBusy}>{logoutBusy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <LogOut size={16} aria-hidden="true" />}<span>{logoutBusy ? "退出中" : accountMode ? "退出并切换账号" : "退出登录"}</span></button> : null}</div>{accountMode && isAdmin ? <><InviteManagementCard /><AccountManagementCard /></> : null}</>;
+  const applicationLock = useApplicationLock();
+  const pageContent = page === "private/cycle" && applicationLock?.locked("cycle") ? <div className="app-lock-placeholder"><span>周期与亲密已上锁</span><button className="secondary-button" type="button" onClick={() => applicationLock.guard(["cycle"], () => {})}>解锁</button></div> : page === "account/lock" ? <AppLockSettings /> : page === "account/session" ? accountContent
+    : page === "admin/attention" ? isAdmin ? <AdminAttentionPanel onNavigatePage={onNavigatePage} /> : accountContent
+    : page.startsWith("admin/") ? isAdmin ? <AssistantWelcomeAdmin key={page} statistics={page === "admin/welcome-stats"} /> : accountContent
+    : page === "account/storage" ? accountMode && isAdmin ? <PoolStorageSettingsCard /> : <p>仅管理员可管理存储额度。</p>
     : page === "data/import-export" ? <><ArchiveTransferCard /><div className="settings-card settings-data-grid"><div className="settings-card-icon"><FileJson size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>其他导出格式</strong><small>JSON 只包含记录与原件引用，Markdown 用于阅读；这些文件不加密、不包含原件。</small></div><div className="settings-card-actions"><button className="secondary-button" type="button" onClick={onImport}><Upload size={15} aria-hidden="true" /><span>导入 JSON</span></button><a className="secondary-button" href="/api/export?format=json" download><FileJson size={15} aria-hidden="true" /><span>导出 JSON</span></a><a className="secondary-button" href="/api/export?format=markdown" download><FileText size={15} aria-hidden="true" /><span>导出 Markdown</span></a></div></div></>
-    : page === "data/backup" ? <><ArchiveTransferCard /><BackupSettingsCard backupStatusState={backupStatusState} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} onRetry={onRetryBackupStatus} onReadFailed={onBackupReadFailed} /></>
+    : page === "data/backup" ? <><ArchiveTransferCard /><TimeMachineSettings /><BackupSettingsCard backupStatusState={backupStatusState} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} onRetry={onRetryBackupStatus} onReadFailed={onBackupReadFailed} /></>
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
     : page === "appearance/interface" ? <><FontSettingsCard value={uiFont} onChange={onUiFontChange} /><WeatherSimulatorCard /></>
     : page === "integrations/weather" ? <><WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? "local"} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} /><AmapLocationSettings /></>
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
+    : page === "integrations/ai-log" ? <AssistantAttemptLogCard />
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "integrations/photo-text" ? <PhotoTextSettingsCard />
-    : page === "private/cycle" ? <><CycleSettingsCard module={cycleModule} onSaveConfig={onSaveCycleConfig} />{habitActions && cycleModule ? <div className="settings-card habit-management-card"><CustomHabitPanel management habits={cycleModule.config.habits ?? []} date={localDateToday()} today={localDateToday()} actions={habitActions} /></div> : null}</>
+    : page === "private/cycle" ? <><CycleSettingsCard module={cycleModule} entities={entities} onCreateEntity={onCreateEntity} onSaveConfig={onSaveCycleConfig} onTransferPeriods={onTransferPeriods} />{habitActions && cycleModule ? <div className="settings-card habit-management-card"><CustomHabitPanel management habits={cycleModule.config.habits ?? []} date={localDateToday()} today={localDateToday()} actions={habitActions} /></div> : null}</>
     : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS，本机优先</strong><small>记录与配置由当前 LifeOS 实例管理。</small></div></div>;
   return <section className="settings-page" data-mobile-level={mobileLevel} aria-labelledby="settings-title">
     <header className="settings-page-header"><h1 id="settings-title">设置</h1></header>
@@ -1088,7 +1129,7 @@ export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, 
       <nav className="settings-nav" aria-label="设置分区">{settingsGroups.map((group) => <div className={`settings-nav-group ${group.id === activeGroup.id ? "is-current" : ""}`} key={group.id}><h2>{group.label}</h2>{group.pages.map((item) => <button id={`settings-page-${item.id.replace("/", "-")}`} type="button" key={item.id} className={item.id === page ? "is-active" : ""} aria-current={item.id === page ? "page" : undefined} onClick={() => onNavigatePage(item.id)}>{item.label}</button>)}</div>)}</nav>
       <nav className="settings-mobile-nav" aria-label="设置导航">
         {mobileLevel === "groups" ? <div className="settings-mobile-list" data-settings-mobile-groups>{settingsGroups.map((group) => <button type="button" key={group.id} data-settings-mobile-group={group.id} onClick={() => { setMobileGroupId(group.id); setMobileLevel("pages"); }}><strong>{group.label}</strong><span>{group.pages.length} 项</span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : null}
-        {mobileLevel === "pages" ? <><button className="settings-mobile-back" type="button" onClick={() => setMobileLevel("groups")}><ArrowLeft size={17} aria-hidden="true" />所有设置</button><h2>{mobileGroup.label}</h2><div className="settings-mobile-list" data-settings-mobile-pages>{mobileGroup.pages.map((item) => <button type="button" key={item.id} data-settings-mobile-page={item.id} onClick={() => { setMobileLevel("detail"); onNavigatePage(item.id); }}><strong>{item.label}</strong><ChevronRight size={17} aria-hidden="true" /></button>)}</div></> : null}
+        {mobileLevel === "pages" ? <><button className="settings-mobile-back" type="button" onClick={() => setMobileLevel("groups")}><ArrowLeft size={17} aria-hidden="true" />所有设置</button><h2>{mobileGroup.label}</h2><div className="settings-mobile-list" data-settings-mobile-pages>{mobileGroup.pages.map((item) => <button type="button" key={item.id} data-settings-mobile-page={item.id} aria-current={item.id === page ? "page" : undefined} onClick={() => { setMobileLevel("detail"); onNavigatePage(item.id); }}><strong>{item.label}</strong><ChevronRight size={17} aria-hidden="true" /></button>)}</div></> : null}
         {mobileLevel === "detail" ? <button className="settings-mobile-back" type="button" onClick={() => { setMobileGroupId(activeGroup.id); setMobileLevel("pages"); }}><ArrowLeft size={17} aria-hidden="true" />返回{activeGroup.label}</button> : null}
       </nav>
       <article className="settings-page-content" aria-labelledby="settings-page-title"><div className="settings-section-heading"><span className="settings-content-parent">{activeGroup.label}</span><h2 id="settings-page-title" ref={pageHeadingRef} tabIndex={-1}>{activePage.label}</h2><p>{pageDescription[page]}</p></div>{pageContent}</article>

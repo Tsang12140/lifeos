@@ -8,6 +8,7 @@ export interface BackfillMaterial {
   readonly imageData?: string;
 }
 export interface BackfillEntry {
+  readonly nature?: "dream";
   readonly key: string;
   readonly selected: boolean;
   readonly kind: RecordKind;
@@ -99,6 +100,10 @@ export interface BackfillChatMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
 }
+export interface AssistantReplyDelivery {
+  readonly status: "recovered" | "incomplete";
+  readonly issue: "format" | "references" | "operation";
+}
 export interface BackfillChatAnswer {
   readonly reply: string;
   readonly action: "reply" | "draft" | "commit" | "undo";
@@ -113,6 +118,7 @@ export interface BackfillChatAnswer {
   /** Present when the reply was produced by the durable assistant chat endpoint. */
   readonly conversationId?: string;
   readonly turnId?: string;
+  readonly delivery?: AssistantReplyDelivery;
 }
 export function isAiBackfill(record: Pick<TimelineRecord, "aiDerived" | "isBackfill">): boolean {
   // Compatibility for callers that used this name to identify AI provenance.

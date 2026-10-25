@@ -5,5 +5,5 @@ export function LoginIntro() {
 }
 
 export function LoginCardBrand() {
-  return <div className="login-card-brand"><img src="/favicon.svg?v=2" alt="" /><span>LifeOS</span></div>;
+  return <div className="login-card-brand"><img src="/favicon.svg?v=3" alt="" /><span>LifeOS</span></div>;
 }

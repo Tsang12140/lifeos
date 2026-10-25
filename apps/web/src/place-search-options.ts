@@ -20,6 +20,22 @@ export async function placeSearchPoint(): Promise<DevicePoint | null> {
   });
 }
 
+/** Explicit button request: get a fresh position, and surface permission/errors. */
+export async function requestPlaceSearchPoint(): Promise<DevicePoint> {
+  if (!window.isSecureContext || !navigator.geolocation) throw new Error("当前环境无法定位，请手动选择城市");
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("定位超时，请重试或手动选择城市")), 12_000);
+    try { navigator.geolocation.getCurrentPosition(position => {
+      clearTimeout(timer);
+      const { latitude, longitude, accuracy } = position.coords;
+      if (![latitude, longitude, accuracy].every(Number.isFinite) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180 || accuracy < 0 || accuracy > 100_000) { reject(new Error("当前位置无效，请重试")); return; }
+      rememberDevicePoint(position.coords, position.timestamp);
+      resolve({ latitude, longitude, accuracy, timestamp: position.timestamp });
+    }, error => { clearTimeout(timer); reject(new Error(error.code === 1 ? "未获得定位权限，请允许定位或手动选择城市" : "定位失败，请重试或手动选择城市")); }, { enableHighAccuracy: true, maximumAge: 0, timeout: 12_000 }); }
+    catch { clearTimeout(timer); reject(new Error("定位失败，请手动选择城市")); }
+  });
+}
+
 export function recommendedPlaceCities(weather: string, recent: readonly string[], frequent: readonly string[]): string[] {
   return [...new Set([weather, ...recent, ...frequent].map(name => name.trim().replace(/市$/u, "")).filter(Boolean))].slice(0, 3);
 }

@@ -94,16 +94,16 @@ function Clouds({ specs }: { readonly specs: readonly CloudSpec[] }) {
 const NEUTRAL_SOLAR_POSITION: SolarPosition = { x: 84, y: 32, opacity: 1 };
 const HIDDEN_MOON_POSITION: SolarPosition = { x: 84, y: 32, opacity: 0 };
 
-function MoonDisc() {
+function MoonDisc({ night }: { readonly night: boolean }) {
   return <svg className="sky-moon-disc" viewBox="8 8 104 104" aria-hidden="true" focusable="false">
     <circle cx="60" cy="60" r="52" fill="#efede6" />
-    <g fill="#dedbd4">
+    {night ? <g fill="#dedbd4">
       <circle cx="37" cy="39" r="6.2" />
       <ellipse cx="78" cy="48" rx="5.2" ry="4.2" />
       <circle cx="58" cy="73" r="7.2" />
       <circle cx="85" cy="82" r="3.8" />
       <circle cx="31" cy="80" r="2.4" />
-    </g>
+    </g> : null}
   </svg>;
 }
 
@@ -120,7 +120,7 @@ function Luminary({ night, sunPosition, moonPosition }: { readonly night: boolea
   </div>;
   const moon = <div className="sky-light sky-light--moon" style={positionStyle(moonPosition)}>
     <div className="sky-halo" />
-    <MoonDisc />
+    <MoonDisc night={night} />
   </div>;
   return <>
     {night ? <div className="sky-stars" /> : null}

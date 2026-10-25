@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import {
   SUMMARY_MAX_LENGTH,
+  isDreamRecord,
   SUMMARY_SYSTEM_PROMPT,
   clampSummaryText,
   createInstant,
   isNoteOnlyDay,
   ruleSummaryText,
   summaryFingerprint,
+  summaryRetryDelayMs,
   summaryUsableSources,
   trimSummaryText,
   type DaySummary,
@@ -27,7 +29,7 @@ export interface DaySummaryCache {
 
 /** The visible text of a record, and the names it is linked to. */
 export function summarySources(records: readonly RecordView[]): readonly SummarySourceRecord[] {
-  return records.filter(record => record.kind !== "task").map((record) => ({
+  return records.filter(record => record.kind !== "task" && !isDreamRecord(record)).map((record) => ({
     id: record.id,
     revision: record.revision,
     text: record.body.edited ?? record.body.original,
@@ -87,6 +89,17 @@ function parseDrafts(content: string, asked: ReadonlySet<string>): readonly DayS
   }
   return drafts;
 }
+
+/**
+ * How many days one model call may cover.
+ *
+ * The request has a 30s ceiling, so an unbounded batch means the first time a
+ * long history is opened (or a profile is finally given a key) every day is sent
+ * at once, the call times out, and the whole history is pushed back together —
+ * day after day, never landing. Splitting the work means one slow or failed
+ * chunk costs only that chunk.
+ */
+const SUMMARY_BATCH_SIZE = 20;
 
 /**
  * One request covers every stale day, which is what keeps opening a month cheap:
@@ -192,6 +205,52 @@ export interface DaySummaryRequest {
   /** Re-read after slow AI work so edits/deletes/privacy changes cannot publish obsolete text. */
   readonly latestRecordsForDate?: (date: string) => readonly RecordView[];
   readonly isActive?: () => boolean;
+  /** Receives a content-free diagnostic when an AI day falls back to the rule summary. */
+  readonly onProviderFallback?: (failure: DaySummaryProviderFallback) => void;
+  /**
+   * How many stale days one pass may send to the model. Used by the background
+   * refresh, which is handed the whole history: without a cap the first run on a
+   * long archive fires every chunk back to back and a month read queues behind it.
+   * Omitted (the default) means "everything asked for", which is what a visible
+   * month wants. A day leaves the stale set as soon as it is written, so a capped
+   * pass still makes progress — the leftovers are simply next pass's work.
+   */
+  readonly maxStale?: number;
+}
+
+export interface DaySummaryProviderFallback {
+  readonly provider: string;
+  readonly model?: string;
+  readonly dates: readonly string[];
+  readonly reason: "http_error" | "timeout" | "invalid_json" | "invalid_response" | "network_error" | "provider_error" | "missing_date";
+  readonly httpStatus?: number;
+  readonly networkCode?: string;
+}
+
+function describeDaySummaryFailure(error: unknown): Pick<DaySummaryProviderFallback, "reason" | "httpStatus" | "networkCode"> {
+  if (error instanceof Error) {
+    const status = /^DeepSeek responded (\d{3})$/.exec(error.message)?.[1];
+    if (status !== undefined) return { reason: "http_error", httpStatus: Number(status) };
+    if (error.name === "TimeoutError" || error.name === "AbortError") return { reason: "timeout" };
+    if (error instanceof SyntaxError || error.message === "DeepSeek reply contained no JSON object") return { reason: "invalid_json" };
+    if (error.message === "DeepSeek reply had no message content") return { reason: "invalid_response" };
+    const cause = error.cause;
+    if (typeof cause === "object" && cause !== null && "code" in cause && typeof cause.code === "string" && /^(?:E[A-Z0-9_]{2,}|UND_ERR_[A-Z0-9_]+)$/.test(cause.code)) {
+      return { reason: "network_error", networkCode: cause.code };
+    }
+  }
+  return { reason: "provider_error" };
+}
+
+function reportDaySummaryFallback(request: DaySummaryRequest, dates: readonly string[], failed: boolean, error?: unknown): void {
+  if (request.provider.kind !== "ai" || dates.length === 0) return;
+  const failure: DaySummaryProviderFallback = {
+    provider: request.provider.providerId,
+    ...(request.provider.model === undefined ? {} : { model: request.provider.model }),
+    dates,
+    ...(failed ? describeDaySummaryFailure(error) : { reason: "missing_date" as const }),
+  };
+  try { request.onProviderFallback?.(failure); } catch { /* Diagnostics must not change summary behavior. */ }
 }
 
 /**
@@ -232,7 +291,7 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
 
   for (const date of request.dates) {
     if (request.today !== undefined && date > request.today) continue;
-    const records = request.recordsForDate(date);
+    const records = request.recordsForDate(date).filter(record => !isDreamRecord(record));
     cacheBefore.set(date, JSON.stringify(request.cache.readDaySummary(date)));
     let cached = request.force === true ? null : request.cache.readDaySummary(date);
     // Owner-written text outranks everything and outlives the records beside it:
@@ -273,19 +332,40 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
 
   if (stale.length === 0) return settled;
 
-  let drafts = new Map<string, DaySummaryDraft>();
-  if (request.provider.kind === "ai") {
+  // Newest first when capping: `dates` arrive oldest first, and recent days are
+  // the ones the owner actually looks at.
+  const work = request.maxStale === undefined || stale.length <= request.maxStale ? stale : stale.slice(stale.length - request.maxStale);
+
+  // One call per chunk instead of one call for the whole history: a single slow
+  // or failing chunk can then only hold back its own days. Before this, the very
+  // first read of a long history sent every day at once, hit the 30s ceiling, and
+  // pushed the entire history back by 24h — every day, forever.
+  const batches: (readonly DaySummaryInput[])[] = [];
+  for (let index = 0; index < work.length; index += SUMMARY_BATCH_SIZE) batches.push(work.slice(index, index + SUMMARY_BATCH_SIZE));
+
+  const drafts = new Map<string, DaySummaryDraft>();
+  const failedDates = new Set<string>();
+  const aiProvider = request.provider.kind === "ai";
+  let stopped = false;
+  for (const batch of batches) {
+    if (request.isActive?.() === false) { stopped = true; break; }
     try {
-      for (const draft of await request.provider.summarizeDays(stale)) drafts.set(draft.date, draft);
-    } catch {
-      // A provider failure downgrades the reply; it never fails the request.
-      drafts = new Map();
+      for (const draft of await request.provider.summarizeDays(batch)) drafts.set(draft.date, draft);
+    } catch (error) {
+      // A provider failure downgrades the reply; it never fails the request, and
+      // it only implicates the days that were in this chunk.
+      for (const day of batch) failedDates.add(day.date);
+      if (aiProvider) reportDaySummaryFallback(request, batch.map(day => day.date), true, error);
     }
-  } else {
-    for (const draft of await request.provider.summarizeDays(stale)) drafts.set(draft.date, draft);
+  }
+  if (aiProvider && !stopped) {
+    // A chunk that answered but skipped some days is its own, quieter failure —
+    // and it is reported apart from the chunk that never answered at all.
+    const skipped = batches.flatMap(batch => batch.filter(day => !drafts.has(day.date) && !failedDates.has(day.date)).map(day => day.date));
+    if (skipped.length > 0) reportDaySummaryFallback(request, skipped, false);
   }
 
-  for (const day of stale) {
+  for (const day of work) {
     if (request.isActive?.() === false) break;
     if (request.latestRecordsForDate !== undefined && effectiveFingerprint(summarySources(request.latestRecordsForDate(day.date))) !== effectiveFingerprint(day.records)) continue;
     // Manual writes do not wait behind AI generation. A late reply must respect
@@ -298,6 +378,14 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
     const draft = drafts.get(day.date);
     const fromProvider = draft !== undefined;
     const provider: DaySummaryProvider = fromProvider ? request.provider : new RuleDaySummaryProvider();
+    // Consecutive losses are counted per day, so one broken chunk cannot make an
+    // unrelated day look more broken than it is — and a success clears the count.
+    // A day whose records changed is a different question, so its count restarts.
+    const failedAttempt = !fromProvider && aiProvider;
+    const fingerprint = effectiveFingerprint(day.records);
+    const previousAttempts = current !== null && current.sourceRevision === fingerprint ? current.retryCount ?? 0 : 0;
+    const attempt = failedAttempt ? previousAttempts + 1 : 0;
+    const retryDelay = failedAttempt ? summaryRetryDelayMs(attempt) : null;
     const summary: DaySummary = {
       date: day.date,
       text: fromProvider ? draft.text : ruleSummaryText(day.records),
@@ -305,12 +393,14 @@ async function resolveDaySummariesOnce(request: DaySummaryRequest): Promise<read
       ...(provider.model === undefined ? {} : { model: provider.model }),
       generatedAt: createInstant(new Date().toISOString()),
       status: provider.kind === "ai" ? "generated" : "fallback",
-      sourceRevision: effectiveFingerprint(day.records),
+      sourceRevision: fingerprint,
       // Remember the attempted provider and a durable backoff after failures.
       contextRevision: request.force === true && day.date === request.today
         ? "provisional:v1:" + effectiveFingerprint(summarySources([...request.recordsForDate(day.date)].filter(r => r.kind === "journal").sort((a,b) => a.createdAt.value.localeCompare(b.createdAt.value) || a.id.localeCompare(b.id)).slice(0, 1)))
         : request.provider.kind === "ai" ? context : provider.contextKey ?? provider.providerId,
-      ...(!fromProvider && request.provider.kind === "ai" ? { retryAfter: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() } : {}),
+      // 24h → 48h → 7d, then no `retryAfter` at all: the day has used up its
+      // automatic attempts and waits for the owner (or for its records to change).
+      ...(attempt === 0 ? {} : { retryCount: attempt, ...(retryDelay === null ? {} : { retryAfter: new Date(Date.now() + retryDelay).toISOString() }) }),
     };
     request.cache.writeDaySummary(summary);
     settled.push(summary);

@@ -6,6 +6,7 @@ import { categoryFollowsPhase, findWeatherDay, getMoonPosition, getSolarPosition
 import { WeatherSky } from "./WeatherBackground";
 import { SunEventHint } from "./SunEventHint";
 import { localDateToday, localNowInput, shiftDate, weekdayShort } from "./time";
+import { DateStepGlyph } from "./date-step-glyph";
 import { weatherLocationDisplayName } from "./weather-locations";
 import { useWeatherLocation } from "./weather-location";
 
@@ -40,21 +41,6 @@ function WeatherConditionGlyph({ category }: { readonly category: WeatherCategor
   if (category === "snowy") return <svg {...frame}>{cloud}<path d="M8.1 19.2v2M7.1 20.2h2M11.9 19.2v2M10.9 20.2h2M15.7 19.2v2M14.7 20.2h2" /></svg>;
   if (category === "foggy") return <svg {...frame}><path d="M4 8.5h16M3 12h18M5 15.5h14" /></svg>;
   return <svg {...frame}>{cloud}</svg>;
-}
-
-const DATE_STEP_PATH = "M627.626667 542.293333l-128 128c-8.533333 8.106667-19.2 12.373333-30.293334 12.373334-11.093333 0-21.76-4.266667-30.293333-12.373334-16.64-16.64-16.64-43.946667 0-60.586666l98.133333-97.706667-98.133333-97.706667c-16.64-16.64-16.64-43.946667 0-60.586666 16.64-16.64 43.946667-16.64 60.586667 0l128 128c16.64 16.64 16.64 43.946667 0 60.586666z";
-
-function DateStepGlyph({ direction }: { readonly direction: "left" | "right" }) {
-  // Keep fourth B's source proportions and mirrored optical correction in
-  // fixed SVG units, independent of the responsive button's frame dimensions.
-  const left = direction === "left";
-  const transform = `translate(${left ? -.7 : .7} 0) scale(${left ? -.0645 : .0645} 0.0645) translate(-533.333333 -512)`;
-  return <>
-    <span className="rect-date-surface" aria-hidden="true" />
-    <svg className="material-date-arrow" viewBox="0 0 38 48" width="38" height="48" aria-hidden="true" focusable="false">
-      <g transform="translate(19 24)"><path fill="currentColor" transform={transform} d={DATE_STEP_PATH} /></g>
-    </svg>
-  </>;
 }
 
 function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, maxDate }: { readonly selectedDate: string; readonly onChange: (date: string) => void; readonly onStep?: (direction: number) => void; readonly showSteps?: boolean; readonly maxDate?: string }) {
@@ -93,7 +79,7 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, max
 
   const accessibleDate = `${Number(selectedDate.slice(5, 7))}月${Number(selectedDate.slice(8, 10))}日${weekdayShort(selectedDate)}`;
   return <div className={`weather-date-navigation${showSteps ? "" : " weather-date-navigation--date-only"}`} data-date={selectedDate} aria-label={showSteps ? "日期导航" : "当前日期"}>
-    {showSteps ? <button className="weather-date-step" type="button" onClick={() => step(-1)} aria-label="前一天"><DateStepGlyph direction="left" /></button> : null}
+    {showSteps ? <button className="weather-date-step" type="button" onClick={() => step(-1)} aria-label="前一天"><span className="rect-date-surface" aria-hidden="true" /><DateStepGlyph direction="left" /></button> : null}
     <div className="weather-date-center">
       <label className="weather-date-picker" aria-label={`选择日期，当前${accessibleDate}`}>
         <span className="weather-date-flaps" aria-hidden="true">
@@ -117,7 +103,7 @@ function DateFlipControl({ selectedDate, onChange, onStep, showSteps = true, max
           : <button className="weather-date-return is-return" type="button" onClick={() => onChange(today)} aria-label="回到今天" title="回到今天">回今天</button>}
       </div>
     </div>
-    {showSteps ? <button className="weather-date-step" type="button" disabled={maxDate !== undefined && selectedDate >= maxDate} onClick={() => step(1)} aria-label="后一天"><DateStepGlyph direction="right" /></button> : null}
+    {showSteps ? <button className="weather-date-step" type="button" disabled={maxDate !== undefined && selectedDate >= maxDate} onClick={() => step(1)} aria-label="后一天"><span className="rect-date-surface" aria-hidden="true" /><DateStepGlyph direction="right" /></button> : null}
   </div>;
 }
 

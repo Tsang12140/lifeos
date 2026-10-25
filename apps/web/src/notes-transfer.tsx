@@ -32,7 +32,7 @@ export interface NoteImportPlan {
     readonly notes: readonly ImportNote[];
     readonly warnings: readonly string[];
     readonly directories: readonly string[];
-    readonly native?:ReturnType<typeof parseNativeNotesManifest>;
+    readonly native?: ReturnType<typeof parseNativeNotesManifest>;
 }
 export function normalizeNotePath(path: string): string | null {
     const parts: string[] = [];
@@ -83,10 +83,11 @@ export async function planNoteImport(input: readonly ImportFile[]): Promise<Note
     const paths = new Map(files.map(file => [file.path, file]));
     const directories = new Set<string>();
     const manifest = paths.get('.lifeos/notes.json');
-    let native:ReturnType<typeof parseNativeNotesManifest>|undefined;
+    let native: ReturnType<typeof parseNativeNotesManifest> | undefined;
     const manifestPaths = new Map<string, string>();
     if (manifest) {
-        const value = parseNativeNotesManifest(JSON.parse(await manifest.blob.text()));native=value;
+        const value = parseNativeNotesManifest(JSON.parse(await manifest.blob.text()));
+        native = value;
         if (value.format !== 'lifeos.notes' || value.version !== 1 || !Array.isArray(value.folders))
             throw new Error('笔记导出清单格式不支持');
         for (const folder of value.folders) {
@@ -151,7 +152,7 @@ export async function planNoteImport(input: readonly ImportFile[]): Promise<Note
                 warnings.push('图片缺失或同名无法确定：' + note.path + ' → ' + source);
         }
     }
-    return { files, notes, warnings, directories: [...directories],...(native?{native}:{}) };
+    return { files, notes, warnings, directories: [...directories], ...(native ? { native } : {}) };
 }
 async function stableId(value: string): Promise<string> { const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, '0')).join(''); }
 function findImage(plan: NoteImportPlan, note: ImportNote, source: string): ImportFile | null {
@@ -292,19 +293,29 @@ export function NotesTransfer({ folders, records, onClose, onImported, scope = '
             const existing = (await apiRequest<{
                 items: RecordView[];
             }>('/api/records?kind=note')).items;
-            const nativeRecords=new Map(plan.native?.records.map(record=>[record.id,record])??[]);
-            const pendingLinks:{id:string;links:readonly string[]}[]=[];
-            const knownEntities=plan.native?(await apiRequest<{items:import('@lifeos/core').Entity[]}>('/api/entities')).items:[];
-            const knownAssets=plan.native?new Set((await apiRequest<{items:Asset[]}>('/api/assets')).items.map(asset=>asset.id)):new Set<string>();
-            const knownRecords=plan.native?new Set((await apiRequest<{items:RecordView[]}>('/api/records')).items.map(record=>record.id)):new Set<string>();
-            if(plan.native){
-                const mapped=mapNativeNoteFolders(plan.native.folders,allFolders,()=>crypto.randomUUID());
-                if(mapped.folders.length){
-                    await apiRequest('/api/import',{method:'POST',body:JSON.stringify({bundle:{format:'lifeos.export',version:1,exportedAt:{kind:'instant',value:new Date().toISOString()},records:[],entities:[],assets:[],modules:{notes:{folders:mapped.folders}}}})});
-                    allFolders.push(...mapped.folders);batch.folders.push(...mapped.folders.map(folder=>({id:folder.id,revision:folder.revision})));remember(batch);
+            const nativeRecords = new Map(plan.native?.records.map(record => [record.id, record]) ?? []);
+            const pendingLinks: {
+                id: string;
+                links: readonly string[];
+            }[] = [];
+            const knownEntities = plan.native ? (await apiRequest<{
+                items: import('@lifeos/core').Entity[];
+            }>('/api/entities')).items : [];
+            const knownAssets = plan.native ? new Set((await apiRequest<{
+                items: Asset[];
+            }>('/api/assets')).items.map(asset => asset.id)) : new Set<string>();
+            const knownRecords = plan.native ? new Set((await apiRequest<{
+                items: RecordView[];
+            }>('/api/records')).items.map(record => record.id)) : new Set<string>();
+            if (plan.native) {
+                const mapped = mapNativeNoteFolders(plan.native.folders, allFolders, () => crypto.randomUUID());
+                if (mapped.folders.length) {
+                    await apiRequest('/api/import', { method: 'POST', body: JSON.stringify({ bundle: { format: 'lifeos.export', version: 1, exportedAt: { kind: 'instant', value: new Date().toISOString() }, records: [], entities: [], assets: [], modules: { notes: { folders: mapped.folders } } } }) });
+                    allFolders.push(...mapped.folders);
+                    batch.folders.push(...mapped.folders.map(folder => ({ id: folder.id, revision: folder.revision })));
+                    remember(batch);
                 }
             }
-
             for (const path of plan.directories) {
                 if (cancel.current)
                     break;
@@ -348,10 +359,11 @@ export function NotesTransfer({ folders, records, onClose, onImported, scope = '
                         folderId = folder.id;
                     }
                     const doc = new DOMParser().parseFromString(note.html, 'text/html'), refs: AssetLink[] = [];
-                    const assetIdMap=new Map<string,string>();
-                    const original=nativeRecords.get(id);
-                    const entityRefs=(original?.entityRefs??[]).filter(ref=>knownEntities.some(entity=>entity.id===ref.entityId&&entity.type===ref.entityType));
-                    if(original&&entityRefs.length<original.entityRefs.length)result.push('部分关联对象不在目标空间，原始关联保留在导出清单：'+note.path);
+                    const assetIdMap = new Map<string, string>();
+                    const original = nativeRecords.get(id);
+                    const entityRefs = (original?.entityRefs ?? []).filter(ref => knownEntities.some(entity => entity.id === ref.entityId && entity.type === ref.entityType));
+                    if (original && entityRefs.length < original.entityRefs.length)
+                        result.push('部分关联对象不在目标空间，原始关联保留在导出清单：' + note.path);
                     for (const image of Array.from(doc.querySelectorAll('img'))) {
                         const source = image.getAttribute('src') ?? '';
                         if (/^https?:\/\//i.test(source)) {
@@ -373,20 +385,36 @@ export function NotesTransfer({ folders, records, onClose, onImported, scope = '
                             uploaded.set(file.path, asset);
                         }
                         image.src = '/api/assets/' + encodeURIComponent(asset.id) + '/content';
-                        const sourceName=file.path.split('/').at(-1)!;
-                        try{assetIdMap.set(decodeURIComponent(sourceName.slice(0,sourceName.lastIndexOf('.'))),asset.id);}catch{}
+                        const sourceName = file.path.split('/').at(-1)!;
+                        try {
+                            assetIdMap.set(decodeURIComponent(sourceName.slice(0, sourceName.lastIndexOf('.'))), asset.id);
+                        }
+                        catch { }
                         if (!refs.some(ref => ref.assetId === asset!.id))
                             refs.push({ assetId: asset.id, role: 'photo' });
                     }
                     const now = new Date().toISOString();
-                    for(const ref of original?.assetRefs??[]){const mapped=assetIdMap.get(ref.assetId)??(knownAssets.has(ref.assetId)?ref.assetId:undefined);if(mapped){const index=refs.findIndex(item=>item.assetId===mapped);const value={...ref,assetId:mapped};if(index<0)refs.push(value);else refs[index]=value;}else result.push('附件未能恢复，原件引用保留在导出清单：'+note.path);}
-                    const body=original?{...original.body,...(original.body.entityMentions?{entityMentions:original.body.entityMentions.filter(decision=>decision.entityId===null||entityRefs.some(ref=>ref.entityId===decision.entityId))}:{}),...(original.body.transcriptRaw?{transcriptRaw:original.body.transcriptRaw.map(transcript=>({...transcript,assetId:assetIdMap.get(transcript.assetId)??transcript.assetId}))}:{})}:{original:note.content};
-                    const record:TimelineRecord={...(original??{}),id,kind:'note',body,createdAt:original?.createdAt??{kind:'instant',value:note.createdAt??now},...(original?.updatedAt?{updatedAt:original.updatedAt}:note.updatedAt?{updatedAt:{kind:'instant' as const,value:note.updatedAt}}:{}),note:{format:'note',...(note.title?{title:note.title}:{}),html:doc.body.innerHTML,...(note.source?{source:note.source}:{}),starred:note.starred===true,pinned:note.pinned===true,...(folderId?{folderId}:{})},isPrivate:note.isPrivate===true,assetRefs:refs,entityRefs,relatedRecordIds:(original?.relatedRecordIds??[]).filter(link=>knownRecords.has(link)),aiDerived:original?.aiDerived??[]};
-
+                    for (const ref of original?.assetRefs ?? []) {
+                        const mapped = assetIdMap.get(ref.assetId) ?? (knownAssets.has(ref.assetId) ? ref.assetId : undefined);
+                        if (mapped) {
+                            const index = refs.findIndex(item => item.assetId === mapped);
+                            const value = { ...ref, assetId: mapped };
+                            if (index < 0)
+                                refs.push(value);
+                            else
+                                refs[index] = value;
+                        }
+                        else
+                            result.push('附件未能恢复，原件引用保留在导出清单：' + note.path);
+                    }
+                    const body = original ? { ...original.body, ...(original.body.entityMentions ? { entityMentions: original.body.entityMentions.filter(decision => decision.entityId === null || entityRefs.some(ref => ref.entityId === decision.entityId)) } : {}), ...(original.body.transcriptRaw ? { transcriptRaw: original.body.transcriptRaw.map(transcript => ({ ...transcript, assetId: assetIdMap.get(transcript.assetId) ?? transcript.assetId })) } : {}) } : { original: note.content };
+                    const record: TimelineRecord = { ...(original ?? {}), id, kind: 'note', body, createdAt: original?.createdAt ?? { kind: 'instant', value: note.createdAt ?? now }, ...(original?.updatedAt ? { updatedAt: original.updatedAt } : note.updatedAt ? { updatedAt: { kind: 'instant' as const, value: note.updatedAt } } : {}), note: { format: 'note', ...(note.title ? { title: note.title } : {}), html: doc.body.innerHTML, ...(note.source ? { source: note.source } : {}), starred: note.starred === true, pinned: note.pinned === true, ...(folderId ? { folderId } : {}) }, isPrivate: note.isPrivate === true, assetRefs: refs, entityRefs, relatedRecordIds: (original?.relatedRecordIds ?? []).filter(link => knownRecords.has(link)), aiDerived: original?.aiDerived ?? [] };
                     await apiRequest('/api/import', { method: 'POST', body: JSON.stringify({ bundle: { format: 'lifeos.export', version: 1, exportedAt: { kind: 'instant', value: now }, records: [record], entities: [], assets: [] } }) });
                     existing.push({ ...record, revision: 1 } as RecordView);
                     batch.records.push({ id: record.id, revision: 1 });
-                    knownRecords.add(record.id);if(original?.relatedRecordIds.length)pendingLinks.push({id:record.id,links:original.relatedRecordIds});
+                    knownRecords.add(record.id);
+                    if (original?.relatedRecordIds.length)
+                        pendingLinks.push({ id: record.id, links: original.relatedRecordIds });
                     remember(batch);
                     result.push('已导入：' + note.path);
                 }
@@ -395,7 +423,49 @@ export function NotesTransfer({ folders, records, onClose, onImported, scope = '
                 }
                 setResults([...result]);
             }
-            for(const item of pendingLinks){const links=item.links.filter(id=>knownRecords.has(id));if(links.length<item.links.length)result.push('部分相关记录不在目标空间，原始引用保留在导出清单：'+item.id);if(!links.length)continue;try{const current=existing.find(record=>record.id===item.id)!;if(JSON.stringify(current.relatedRecordIds)===JSON.stringify(links))continue;const saved=await apiRequest<RecordView>('/api/records/'+encodeURIComponent(item.id),{method:'PATCH',body:JSON.stringify({revision:current.revision,relatedRecordIds:links})});const receipt=batch.records.find(record=>record.id===item.id);if(receipt)receipt.revision=saved.revision;remember(batch);}catch(cause){result.push('相关记录未能连接：'+item.id+'，'+(cause as Error).message);}}
+            const linksToRestore: {
+                id: string;
+                revision: number;
+                relatedRecordIds: readonly string[];
+            }[] = [];
+            for (const item of pendingLinks) {
+                const relatedRecordIds = item.links.filter(id => knownRecords.has(id));
+                if (relatedRecordIds.length < item.links.length)
+                    result.push('部分相关记录不在目标空间，原始引用保留在导出清单：' + item.id);
+                if (!relatedRecordIds.length)
+                    continue;
+                const current = existing.find(record => record.id === item.id);
+                if (!current) {
+                    result.push('相关笔记未找到，无法恢复关联：' + item.id);
+                    continue;
+                }
+                if (JSON.stringify(current.relatedRecordIds) !== JSON.stringify(relatedRecordIds))
+                    linksToRestore.push({ id: item.id, revision: current.revision, relatedRecordIds });
+            }
+            for (let offset = 0; offset < linksToRestore.length; offset += 1000) {
+                const linkBatch = linksToRestore.slice(offset, offset + 1000);
+                try {
+                    const { items } = await apiRequest<{
+                        items: RecordView[];
+                    }>('/api/notes/import-links', {
+                        method: 'POST',
+                        body: JSON.stringify({ records: linkBatch }),
+                    });
+                    for (const saved of items) {
+                        const receipt = batch.records.find(record => record.id === saved.id);
+                        if (receipt)
+                            receipt.revision = saved.revision;
+                        const existingIndex = existing.findIndex(record => record.id === saved.id);
+                        if (existingIndex >= 0)
+                            existing[existingIndex] = saved;
+                    }
+                    remember(batch);
+                }
+                catch (cause) {
+                    for (const item of linkBatch)
+                        result.push('相关记录未能连接：' + item.id + '，' + (cause as Error).message);
+                }
+            }
         }
         catch (cause) {
             setError((cause as Error).message);

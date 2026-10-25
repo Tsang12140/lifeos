@@ -1,0 +1,70 @@
+/* Live contact/place editing follows creation's control vocabulary. */
+.entity-edit-dialog .entity-edit-body { gap: 12px; min-width: 0; }
+.entity-edit-dialog .dialog-field { min-width: 0; gap: 6px; font-weight: 400; }
+.entity-edit-dialog .dialog-field > span { color: var(--control-muted); font-size: .8125rem; line-height: 20px; font-weight: 400; }
+.entity-edit-dialog .dialog-field :is(input:not([type="checkbox"]), textarea) { width: 100%; }
+.entity-edit-dialog .dialog-field textarea { resize: vertical; }
+.entity-edit-dialog .entity-edit-period { min-width: 0; }
+.entity-edit-dialog .entity-edit-period > input { flex: 1 1 0; width: 0; min-width: 0; }
+.entity-edit-dialog .entity-optional-toggle { min-height: 34px; color: var(--control-muted); font-size: .8125rem; font-weight: 400; }
+.entity-edit-dialog .entity-optional-toggle input { accent-color: var(--control-ink); }
+.entity-edit-dialog .place-search-actions { padding: 0; }
+.entity-edit-dialog .dialog-footer { align-items: stretch; flex-wrap: wrap; gap: 8px; }
+.entity-edit-dialog :is(.dialog-footer > button, .place-search-actions > .secondary-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 40px;
+  height: auto;
+  max-width: 100%;
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  color: var(--control-muted);
+  background: var(--surface);
+  font: inherit;
+  font-size: .875rem;
+  line-height: 20px;
+  font-weight: 400;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+  transform: none;
+}
+.entity-edit-dialog .dialog-footer > .primary-button { border-color: var(--control-ink); color: #fff; background: var(--control-ink); }
+.entity-edit-dialog :is(.dialog-footer > button, .place-search-actions > button):disabled { opacity: .52; cursor: not-allowed; }
+.entity-edit-dialog button > svg { flex-shrink: 0; }
+.entity-edit-dialog :is(button, input, textarea):focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; box-shadow: none; }
+.entity-edit-dialog .alias-add { min-height: 34px; margin: 0; padding: 6px 8px; border-radius: 7px; font-size: .8125rem; line-height: 20px; }
+.entities-section .place-role-filters button {
+  min-height: 34px;
+  border-color: var(--control-line);
+  border-radius: 999px;
+  color: var(--control-muted);
+  background: var(--surface);
+  font-weight: 400;
+  transition: background-color 180ms cubic-bezier(.2,0,0,1), color 180ms cubic-bezier(.2,0,0,1);
+}
+.entities-section .place-role-filters button[aria-pressed="true"] { border-color: var(--control-ink); color: #fff; background: var(--control-ink); }
+.entities-section .place-role-filters button:focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; box-shadow: none; }
+@media (hover: hover) and (pointer: fine) {
+  .entity-edit-dialog :is(.dialog-footer > button, .place-search-actions > button, .alias-add):hover:not(:disabled),
+  .entities-section .place-role-filters button:not([aria-pressed="true"]):hover { background: var(--control-tray); }
+  .entity-edit-dialog .dialog-footer > .primary-button:hover:not(:disabled) { border-color: #343b42; background: #343b42; }
+}
+@media (max-width: 420px) {
+  .entity-edit-dialog .entity-edit-period { flex-wrap: wrap; }
+  .entity-edit-dialog .entity-edit-period > input { flex: 1 1 100%; width: 100%; }
+}
+@media (max-width: 340px) {
+  .entity-edit-dialog .dialog-footer > button { flex: 1 1 100%; }
+}
+@media (pointer: coarse) {
+  .entity-edit-dialog :is(.entity-optional-toggle, .alias-add), .entities-section .place-role-filters button { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .entities-section .place-role-filters button { transition: none !important; }
+}

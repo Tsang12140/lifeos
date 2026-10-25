@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 
 /** Shared keyboard, outside-press and focus behavior for the three action menus. */
-export function useActionMenu(ref: RefObject<HTMLDivElement | null>, active: boolean, onClose: () => void, onCloseSubmenu?: () => void, options?: { allowOutside?: (target: Element) => boolean; passthrough?: boolean; followViewport?: boolean }): void {
+export function useActionMenu(ref: RefObject<HTMLDivElement | null>, active: boolean, onClose: () => void, onCloseSubmenu?: () => void, options?: { allowOutside?: (target: Element) => boolean; passthrough?: boolean; followViewport?: boolean; nativeControls?: boolean }): void {
   const callbacks = useRef({ onClose, onCloseSubmenu, options });
   useLayoutEffect(() => { callbacks.current = { onClose, onCloseSubmenu, options }; });
   useLayoutEffect(() => {
@@ -59,6 +59,7 @@ export function useActionMenu(ref: RefObject<HTMLDivElement | null>, active: boo
         focus(items(root)[0] ?? root);
       }
       const current = document.activeElement as HTMLElement;
+      if (callbacks.current.options?.nativeControls && current.matches('input,select,textarea') && !['Escape','Tab'].includes(event.key)) return;
       const menu = current.closest('[role="menu"]') ?? root;
       const list = items(menu);
       const index = list.indexOf(current as HTMLButtonElement);

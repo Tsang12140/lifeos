@@ -164,10 +164,14 @@ export function readRuntimeAiConfig(config: ApiConfig): RuntimeAiConfig {
     const reasoningEffort = thinking ? stored.reasoningEffort ?? "high" : undefined;
     return runtimeConfig({ enabled: stored.enabled, baseUrl, model: stored.model, thinking, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), ...(apiKey === undefined ? {} : { apiKey }), ...(stored.summaryPrompt === undefined ? {} : { summaryPrompt: stored.summaryPrompt }), source });
   }
-  const thinking = false;
+  // No saved configuration yet: the owner's default is "认真想" (high), not
+  // direct. Cards imported without settings, fresh tenants and the demo packs
+  // all used to fall back to `thinking: false`, so the butler dial showed
+  // 「关闭」even though the default was decided as high on 2026-10-15.
+  const thinking = true;
   const shared = config.deepseekApiKey === undefined ? config.sharedIntegrations?.ai?.() : undefined;
   const apiKey = config.deepseekApiKey ?? shared?.apiKey;
-  return runtimeConfig({ enabled: true, baseUrl: shared?.baseUrl ?? config.deepseekBaseUrl, model: shared?.model ?? config.deepseekModel, thinking, ...(apiKey === undefined ? {} : { apiKey }), source: config.deepseekApiKey !== undefined ? "env" : shared?.apiKey === undefined ? "none" : "shared" });
+  return runtimeConfig({ enabled: true, baseUrl: shared?.baseUrl ?? config.deepseekBaseUrl, model: shared?.model ?? config.deepseekModel, thinking, reasoningEffort: "high", ...(apiKey === undefined ? {} : { apiKey }), source: config.deepseekApiKey !== undefined ? "env" : shared?.apiKey === undefined ? "none" : "shared" });
 }
 
 /** Refuse to send an inherited owner key anywhere except its current approved endpoint. */
@@ -203,14 +207,14 @@ function nextKeyFields(config: ApiConfig, input: { readonly apiKey?: string; rea
   return {};
 }
 
-export function publicAiConfig(config: ApiConfig): { readonly enabled: boolean; readonly configured: boolean; readonly keyConfigured: boolean; readonly keyUnreadable: boolean; readonly provider: "deepseek"; readonly model: string; readonly baseUrl: string; readonly thinking: boolean; readonly reasoningEffort: AiReasoningEffort | null; readonly preset: AiPresetId; readonly keySource: RuntimeAiConfig["source"]; readonly summaryPrompt: string; readonly summaryPromptCustom: boolean } {
+export function publicAiConfig(config: ApiConfig): { readonly privateRetrievalSupported: boolean; readonly enabled: boolean; readonly configured: boolean; readonly keyConfigured: boolean; readonly keyUnreadable: boolean; readonly provider: "deepseek"; readonly model: string; readonly baseUrl: string; readonly thinking: boolean; readonly reasoningEffort: AiReasoningEffort | null; readonly preset: AiPresetId; readonly keySource: RuntimeAiConfig["source"]; readonly summaryPrompt: string; readonly summaryPromptCustom: boolean } {
   const runtime = readRuntimeAiConfig(config);
   const existing = readStored(config);
   /** 密文还在、却解不开（换过加密种子 / 文件被手改坏）。
    *  这时只报 `keyConfigured:false` 会让界面显示「未配置」——主人既不知道自己
    *  的钥匙其实还躺在文件里，也想不到「重新填一次」就能救。所以要单独说出来。 */
   const keyUnreadable = existing !== undefined && existing.encryptedApiKey !== undefined && (config.sharedIntegrations === undefined || existing.ownApiKey === true) && decryptApiKey(config, existing) === undefined;
-  return { enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, keyUnreadable, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source, summaryPrompt: runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: runtime.summaryPrompt !== undefined };
+  return { privateRetrievalSupported: true, enabled: runtime.enabled, configured: runtime.enabled && runtime.apiKey !== undefined, keyConfigured: runtime.apiKey !== undefined, keyUnreadable, provider: runtime.provider, model: runtime.model, baseUrl: runtime.baseUrl, thinking: runtime.thinking, reasoningEffort: runtime.reasoningEffort ?? null, preset: runtime.preset, keySource: runtime.source, summaryPrompt: runtime.summaryPrompt ?? SUMMARY_SYSTEM_PROMPT, summaryPromptCustom: runtime.summaryPrompt !== undefined };
 }
 
 export function saveRuntimeAiConfig(config: ApiConfig, input: { readonly enabled: boolean; readonly baseUrl: string; readonly model: string; readonly thinking?: boolean; readonly reasoningEffort?: AiReasoningEffort | null; readonly apiKey?: string; readonly clearApiKey?: boolean; readonly summaryPrompt?: string | null }): ReturnType<typeof publicAiConfig> {

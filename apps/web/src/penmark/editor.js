@@ -837,6 +837,8 @@ export class Editor {
   /* ---------- Table editing v2 ---------- */
   _snapshotHTML() {
     const clone = this.editor.cloneNode(true);
+    clone.querySelectorAll('.code-block').forEach(wrap=>{const pre=wrap.querySelector('pre');if(pre)wrap.replaceWith(pre);else wrap.remove();});
+    clone.querySelectorAll('pre code[data-highlighted]').forEach(code=>{code.textContent=code.textContent;code.removeAttribute('data-highlighted');code.classList.remove('hljs');});
     clone.querySelectorAll('.rs-handle,.img-size-label,.pm-table-resize-layer').forEach(el => el.remove());
     clone.querySelectorAll('.img-container').forEach(el => { if (!el.querySelector('img')) el.remove(); });
     clone.querySelectorAll('.pm-table-cell-active,.pm-table-cell-selected').forEach(cell => {

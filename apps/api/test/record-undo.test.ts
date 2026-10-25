@@ -7,12 +7,13 @@ import { join } from "node:path";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
 import { createInstant } from "@lifeos/core";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 test("record deletion receipts undo the same identity, reject stale/expired revisions and survive restart", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-record-undo-"));
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets") });
   let service = createHttpServer(config);
-  const listen = async () => { service.server.listen(0, "127.0.0.1"); await once(service.server, "listening"); return `http://127.0.0.1:${(service.server.address() as { port: number }).port}`; };
+  const listen = async () => { await listenOnFetchablePort(service.server); return `http://127.0.0.1:${(service.server.address() as { port: number }).port}`; };
   let base = await listen();
   t.after(async () => { service.server.closeAllConnections(); await new Promise<void>(done => service.server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
   const call = async (url: string, body?: unknown, method = body === undefined ? "GET" : "POST") => {
@@ -52,7 +53,7 @@ test("record deletion receipts undo the same identity, reject stale/expired revi
 test("record restore requires authentication and stays inside the active account space", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-record-undo-accounts-"));
   const { server } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: root, LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups"), LIFEOS_PASSWORD: "isolated-owner-password", LIFEOS_OWNER_USERNAME: "owner", LIFEOS_ACCOUNT_MODE: "1", LIFEOS_ALLOWED_ORIGINS: "https://example.invalid", LIFEOS_COOKIE_SECURE: "true" }));
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const call = async (path: string, body?: unknown, cookie = "", method = body === undefined ? "GET" : "POST") => {
@@ -76,7 +77,7 @@ test("record restore requires authentication and stays inside the active account
 test("photo-only journals round-trip without synthetic text and preserve asset refs on empty edits", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-photo-only-"));
   const { server, app } = createHttpServer(readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets") }));
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const upload = await fetch(base + "/api/assets/uploads", { method: "POST", headers: { "Content-Type": "image/png" }, body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64") });

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Check, CircleHelp, LoaderCircle } from "lucide-react";
-import type { TaskStatus } from "@lifeos/core";
+import type { Asset, TaskStatus } from "@lifeos/core";
+import type { PhotoPreviewHandler } from "./asset-preview-model";
+import { isPhotoAsset } from "./timeline";
+import { TaskSummaryText } from "./task-summary-text";
 import type { RecordView, TaskRecordView } from "./api";
 import { isTaskRecord, recordText, statusLabel } from "./app-meta";
 import { lifeTimeDate, localDateToday, shiftDate, shortDate } from "./time";
@@ -19,11 +22,10 @@ export function taskDueLabel(task: TaskRecordView): string {
   return shortDate(date);
 }
 
-export function TaskSummary({ tasks, loading, error, onTaskStatus, onTaskStateChange }: { tasks: readonly RecordView[] | null; loading: boolean; error: string | null; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => Promise<RecordView | null>; onTaskStateChange: (record: RecordView) => void }) {
+export function TaskSummary({ tasks, assets, onPreview, onLocate, loading, error, onTaskStatus, onTaskStateChange }: { tasks: readonly RecordView[] | null; assets: readonly Asset[]; onPreview: PhotoPreviewHandler; onLocate: (record: TaskRecordView) => void; loading: boolean; error: string | null; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => Promise<RecordView | null>; onTaskStateChange: (record: RecordView) => void }) {
   const [optimisticDoneIds, setOptimisticDoneIds] = useState<ReadonlySet<string>>(() => new Set());
   const [undoEntry, setUndoEntry] = useState<TaskUndoEntry | null>(null);
   const [completion, setCompletion] = useState<{ task: TaskRecordView; index: number; phase: "saving" | "checked" | "leaving"; height: number } | null>(null);
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
   const [countPulse, setCountPulse] = useState(false);
   const actionBusyRef = useRef(false);
@@ -83,7 +85,6 @@ export function TaskSummary({ tasks, loading, error, onTaskStatus, onTaskStateCh
       setCompletion(current => current === null ? null : { ...current, phase: "leaving", height: row?.getBoundingClientRect().height ?? current.height });
       if (!reducedMotion) await new Promise<void>(resolve => window.setTimeout(resolve, 180));
       setOptimisticDoneIds((current) => new Set(current).add(task.id));
-      setExpandedTaskId(current => current === task.id ? null : current);
       onTaskStateChange(updated);
       if (countPulseTimerRef.current !== null) window.clearTimeout(countPulseTimerRef.current);
       setCountPulse(true);
@@ -120,11 +121,14 @@ export function TaskSummary({ tasks, loading, error, onTaskStatus, onTaskStateCh
     {loading ? <div className="summary-message"><LoaderCircle className="spin" size={17} aria-hidden="true" />正在读取</div> : null}
     {!loading && error ? <div className="summary-message summary-error"><CircleHelp size={17} aria-hidden="true" />暂时无法读取任务</div> : null}
     {!loading && !error && activeTasks.length === 0 ? <div className="summary-empty"><Check size={17} strokeWidth={1.8} aria-hidden="true" /><span>暂时没有待办任务</span></div> : null}
-    {!loading && !error && activeTasks.length > 0 ? <ul className="task-list">{activeTasks.slice(0, 5).map((task) => <li className={`task-summary-item ${completion?.task.id === task.id ? completion.phase === "saving" ? "is-saving" : `is-completing ${completion.phase === "leaving" ? "is-leaving" : ""}` : ""}`} style={completion?.task.id === task.id ? { "--task-completion-height": `${completion.height}px` } as CSSProperties : undefined} key={task.id}>
-      <button className={`task-dot task-dot-button ${task.task.status === "in_progress" ? "is-progress" : ""}`} type="button" onClick={event => void completeTask(task, event.currentTarget.closest("li"))} disabled={summaryBusy} aria-label={`完成任务：${recordText(task)}`} title="标记为已完成"><span className="task-dot-indicator" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4L19 6" pathLength="1" /></svg></span></button>
-      <button className="task-summary-open" type="button" aria-expanded={expandedTaskId === task.id} aria-label={`${expandedTaskId === task.id ? "收起" : "展开"}任务全文：${recordText(task)}`} disabled={completion?.task.id === task.id} onClick={() => setExpandedTaskId(current => current === task.id ? null : task.id)}><span className="task-summary-copy">{recordText(task)}</span></button>
+    {!loading && !error && activeTasks.length > 0 ? <ul className="task-list" aria-label="待办任务">{activeTasks.slice(0, 5).map((task) => {
+      const photos = task.assetRefs.map(ref => assets.find(asset => asset.id === ref.assetId)).filter((asset): asset is Asset => isPhotoAsset(asset));
+      const photoIds = photos.map(asset => asset.id);
+      return <li className={`task-summary-item ${completion?.task.id === task.id ? completion.phase === "saving" ? "is-saving" : `is-completing ${completion.phase === "leaving" ? "is-leaving" : ""}` : ""}`} style={completion?.task.id === task.id ? { "--task-completion-height": `${completion.height}px` } as CSSProperties : undefined} key={task.id}>
+      <button className="task-dot task-dot-button" type="button" onClick={event => void completeTask(task, event.currentTarget.closest("li"))} disabled={summaryBusy} aria-label={`完成任务：${recordText(task)}`} title="标记为已完成"><span className="task-dot-indicator" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 4 4L19 6" pathLength="1" /></svg></span></button>
+      <TaskSummaryText text={recordText(task)} photos={photos} disabled={completion?.task.id === task.id} onOpen={() => onLocate(task)} onPhoto={index => onPreview(photoIds, index, task)} />
       {task.task.dueAt ? <time dateTime={task.task.dueAt.value} aria-label={`截止时间：${taskDueLabel(task)}`}>{taskDueLabel(task)}</time> : null}
-    </li>)}</ul> : null}
+    </li>; })}</ul> : null}
     {undoEntry !== null ? <div className="task-undo" role="status" aria-live="polite"><span className="task-undo-copy"><Check size={14} strokeWidth={2} aria-hidden="true" /><span>任务已完成，可在 5 秒内撤销</span></span><button className="text-button task-undo-button" type="button" onClick={() => void undoCompletion()} disabled={undoBusy} aria-label={`撤销完成：${recordText(undoEntry.task)}`}>{undoBusy ? "恢复中…" : "撤销"}</button></div> : null}
   </aside>;
 }

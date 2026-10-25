@@ -65,13 +65,22 @@ function placeDetails(type: EntityKind, input: Record<string, unknown>, patch = 
   const fields: Record<string, any> = {};
   for (const field of PLACE_FIELDS) {
     if (input[field] === undefined) continue;
-    if (type !== "place") throw new HttpError(400, "invalid_field", "这些资料只适用于地点");
+    if (type !== "place" && !(type === "person" && field === "phone")) throw new HttpError(400, "invalid_field", "这些资料不适用于当前类型");
     const value = input[field];
     if (value === null && patch) { fields[field] = null; continue; }
     if (field === "longitude" || field === "latitude") {
       if (typeof value !== "number" || !Number.isFinite(value)) throw new HttpError(400, "invalid_field", "坐标无效");
       fields[field] = value;
     } else fields[field] = stringField(value, field, { nonEmpty: true }).trim();
+  }
+  return fields;
+}
+function personDetails(type: EntityKind, input: Record<string, unknown>, patch = false) {
+  const fields: Record<string, string | null> = {};
+  for (const field of ["wechat", "residence"] as const) {
+    if (input[field] === undefined) continue;
+    if (type !== "person") throw new HttpError(400, "invalid_field", "这些资料只适用于人物");
+    fields[field] = input[field] === null && patch ? null : stringField(input[field], field, { nonEmpty: true }).trim();
   }
   return fields;
 }
@@ -102,7 +111,7 @@ export const handleEntitiesRoutes: RouteHandler = async (
   if (pathname === "/api/entities" && req.method === "POST") {
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["id", "type", "name", "aliases", "description", "isImportant", "avatarAssetId", "role", "period", "address", ...PLACE_FIELDS, ...MOVIE_FIELD_NAMES]);
+    hasOnlyKeys(input, ["id", "type", "name", "aliases", "description", "isImportant", "avatarAssetId", "role", "period", "address", "wechat", "residence", ...PLACE_FIELDS, ...MOVIE_FIELD_NAMES]);
     const type = enumField(input.type, ENTITY_KINDS, "type");
     const avatarAssetId = avatarField(ctx, type, input.avatarAssetId);
     const isImportant = input.isImportant === undefined ? undefined : booleanField(input.isImportant, "isImportant");
@@ -136,6 +145,7 @@ export const handleEntitiesRoutes: RouteHandler = async (
       ...(address === undefined ? {} : { address }),
       ...movieFields,
       ...placeDetails(type, input),
+      ...personDetails(type, input),
     };
     coreValidated("entity", () => assertValidEntity(entity));
     if (entity.type === "place" && entity.amapId) {
@@ -188,7 +198,7 @@ export const handleEntitiesRoutes: RouteHandler = async (
     if (existing.type === "movie" && !readRuntimeMovieConfig(config).enabled) throw new MovieModuleError(409, "movie_module_disabled", "观影模块未启用；请先在设置中启用");
     requireJsonContentType(req);
     const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
-    hasOnlyKeys(input, ["name", "aliases", "description", "isImportant", "avatarAssetId", "role", "period", "address", ...PLACE_FIELDS, ...MOVIE_FIELD_NAMES]);
+    hasOnlyKeys(input, ["name", "aliases", "description", "isImportant", "avatarAssetId", "role", "period", "address", "wechat", "residence", ...PLACE_FIELDS, ...MOVIE_FIELD_NAMES]);
     const isImportant = input.isImportant === undefined ? undefined : booleanField(input.isImportant, "isImportant");
     if (isImportant !== undefined && existing.type !== "person") throw new HttpError(400, "invalid_field", "仅联系人可以标为重要");
     assertMovieOnlyFields(existing.type, input);
@@ -200,6 +210,7 @@ export const handleEntitiesRoutes: RouteHandler = async (
     const avatarAssetId = avatarField(ctx, existing.type, input.avatarAssetId);
     const updated = coreValidated("entity", () => withEntityEdits(existing, {
       ...placeDetails(existing.type, input, true),
+      ...personDetails(existing.type, input, true),
       ...(avatarAssetId === undefined ? {} : { avatarAssetId }),
       ...(isImportant === undefined ? {} : { isImportant }),
       ...(input.name === undefined ? {} : { name: existing.type === "person" ? canonicalPersonName(stringField(input.name, "name", { nonEmpty: true })) : stringField(input.name, "name", { nonEmpty: true }) }),

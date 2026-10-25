@@ -19,7 +19,12 @@
 .place-card-heading small, .place-card-field > small, .place-card-credit { color: var(--muted); }
 .place-card-body { padding: 20px 24px; display: grid; gap: 16px; }
 .place-card-details { min-width: 0; display: grid; gap: 16px; }
-.place-card-body.has-map { grid-template-columns: minmax(0, 1fr) 160px; align-items: start; }
+/* The map spans the detail rows so its bottom edge lines up with 收录档案,
+   instead of floating as a 160px square next to a taller text column. */
+.place-card-body.has-map { grid-template-columns: minmax(0, 1fr) 160px; grid-template-areas: "details map" "archive map"; align-items: stretch; }
+.place-card-body.has-map .place-card-details { grid-area: details; }
+.place-card-body.has-map .place-mini-map { grid-area: map; align-self: stretch; height: auto; min-height: 160px; }
+.place-card-body.has-map .place-collection-archive { grid-area: archive; }
 .place-mini-map { display: block; position: relative; width: 160px; height: 160px; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); color: var(--muted); font: inherit; cursor: pointer; }
 .place-mini-image, .place-mini-image .place-map-canvas { width: 100%; height: 100%; }
 .place-map-canvas { position: relative; overflow: hidden; background: var(--surface-soft); }
@@ -35,7 +40,7 @@
 .place-map-interactive .place-map-canvas:active { cursor: grabbing; }
 .place-map-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .place-map-tools > button { display: inline-flex; align-items: center; justify-content: center; height: 40px; min-height: 40px; padding: 0 12px; margin: 0; border-radius: 10px; font-size: 13px; line-height: 20px; }
-@media(max-width: 480px) { .place-card-body.has-map { grid-template-columns: minmax(0, 1fr); } .place-mini-map { width: 100%; height: 140px; } }
+@media(max-width: 480px) { .place-card-body.has-map { grid-template-columns: minmax(0, 1fr); grid-template-areas: "details" "map" "archive"; } .place-card-body.has-map .place-mini-map { width: 100%; height: 140px; min-height: 140px; } }
 .place-card-field { display: grid; gap: 6px; }
 .place-collection-archive { grid-column: 1 / -1; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .place-collection-archive summary { cursor: pointer; width: fit-content; max-width: 100%; overflow-wrap: anywhere; padding: 4px 0; }

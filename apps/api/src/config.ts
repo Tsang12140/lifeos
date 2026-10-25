@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import { resolve } from "node:path";
+import { readJournalEmbeddingConfig, type JournalEmbeddingConfig } from "./journal-embedding.js";
 
 export interface BackupS3Config {
   readonly enabled: boolean;
@@ -13,14 +14,17 @@ export interface BackupS3Config {
 }
 
 export interface ApiConfig {
+  readonly journalEmbedding?: JournalEmbeddingConfig;
   readonly host: string;
   readonly port: number;
   readonly databasePath: string;
   readonly password?: string;
   /** Account mode is deliberately opt-in and defaults off for legacy installs. */
   readonly accountMode?: boolean;
-  /** Required only to bootstrap the first account-mode owner. */
+  /** Bootstraps the first owner and explicitly designates the account allowed to administer this instance. */
   readonly ownerUsername?: string;
+  /** Explicit loopback-only development preview capability, never a fallback for ordinary installs. */
+  readonly localPreviewAdmin?: boolean;
   /** Set only by the trusted in-process account gateway, never from request data. */
   readonly gatewayAuthenticated?: boolean;
   /** In-process account gateway hook. Never supplied by request data or persisted. */
@@ -75,6 +79,8 @@ export interface ApiConfig {
   readonly sharedIntegrations?: {
     readonly ai?: () => { readonly apiKey: string; readonly baseUrl: string; readonly model: string } | undefined;
     readonly weather?: () => { readonly apiKey: string; readonly host: string } | undefined;
+    readonly amap?: () => { readonly apiKey: string } | undefined;
+    readonly movie?: () => { readonly apiKey: string } | undefined;
   };
   /** Optional TMDb key used only by the opt-in movie module. */
   readonly tmdbApiKey?: string;
@@ -148,6 +154,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     throw new Error("LIFEOS_ACCOUNT_MODE must be 1/true or 0/false");
   }
   const accountMode = accountModeValue === "1" || accountModeValue === "true";
+  const previewAdminValue = env.LIFEOS_LOCAL_PREVIEW_ADMIN?.trim().toLowerCase();
+  if (previewAdminValue && !["0", "false", "1", "true"].includes(previewAdminValue)) throw new Error("LIFEOS_LOCAL_PREVIEW_ADMIN must be 1/true or 0/false");
+  const localPreviewAdmin = previewAdminValue === "1" || previewAdminValue === "true";
   const host = env.LIFEOS_HOST?.trim() || DEFAULT_HOST;
   const port = parsePort(env.LIFEOS_PORT);
   const dataDirectory = resolve(env.LIFEOS_DATA_DIR?.trim() || "data");
@@ -194,6 +203,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     }
     allowedOrigins.splice(0, allowedOrigins.length, ...new Set(normalizedOrigins));
   }
+  if (localPreviewAdmin && (accountMode || !isLoopbackHost(host) || allowedOrigins.some(origin => {
+    try { return !isLoopbackHost(new URL(origin).hostname); } catch { return true; }
+  }))) throw new Error("LIFEOS_LOCAL_PREVIEW_ADMIN is restricted to a loopback-only, non-account preview");
   const deepseekApiKey = env.LIFEOS_DEEPSEEK_API_KEY?.trim();
   const qweatherApiKey = env.QWEATHER_KEY?.trim();
   const amapApiKey = env.LIFEOS_AMAP_API_KEY?.trim();
@@ -228,12 +240,15 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
         secretAccessKey: backupSecretAccessKey,
       }
     : undefined;
+  const journalEmbedding = readJournalEmbeddingConfig(env);
   return {
+    ...(journalEmbedding ? { journalEmbedding } : {}),
     host,
     port,
     databasePath,
     ...(password === undefined ? {} : { password }),
     ...(accountMode ? { accountMode: true } : {}),
+    ...(localPreviewAdmin ? { localPreviewAdmin: true } : {}),
     ...(ownerUsername === undefined || ownerUsername === "" ? {} : { ownerUsername }),
     dataDirectory,
     webDirectory,

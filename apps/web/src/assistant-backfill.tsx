@@ -1,6 +1,8 @@
+import { assetThumbUrl } from "./asset-urls";
 import { backfillItemState, backfillEntryTime, backfillEntryReady, calendarToday } from "@lifeos/core";
 import { useActionMenu } from "./action-menu";
 import { AssistantReplyProgress } from "./assistant-reply-progress";
+import { AssistantCitedText, AssistantDeliveryNote, isJournalSourceOffer } from "./assistant-journal-sources";
 import { ReasoningIcon } from "./reasoning-icon";
 import type { AssetLink } from "@lifeos/core";
 import type { ComposerProps } from "./composer";
@@ -8,10 +10,13 @@ import { ShotDropZone, type ShotDropZoneHandle } from "./shot-drop-zone";
 import { usePhotoInput } from "./photo-input";
 import { Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { Eraser, Film, History, LoaderCircle, MessageSquarePlus, Plus, Settings2, Check, ChevronDown, ArrowDown, Square, RotateCw } from "lucide-react";
+import { CircleAlert, Eraser, Film, History, LoaderCircle, MessageSquarePlus, Plus, Settings2, Check, ChevronDown, ArrowDown, ArrowUp, Square, RotateCw } from "lucide-react";
 import type { Asset, BackfillBatch, BackfillChatMessage, BackfillEntry, BackfillMaterial, BackfillObject, Entity, UiClarify, UiCommand, UiTurnPlan } from "@lifeos/core";
 import { AI_GEARS, apiRequest, gearLabel, type ApiError, type AiGear } from "./api";
 import { scopedKey } from "./storage-scope";
+import { useApplicationLock } from "./app-lock";
+import type { PrivacyAccessState } from "./privacy-access-control";
+import { AssistantPrivacyMenuItems } from "./assistant-privacy-menu";
 import {
   clearAssistantConversation,
   loadAssistantConversation,
@@ -23,14 +28,19 @@ import {
   type AssistantHistoryAttachment,
 } from "./assistant-history-api";
 import { assistantMessageLengthError, clearPendingAssistantTurn, pendingTurnRecoveryStatus, readPendingAssistantTurn, writePendingAssistantTurn, type PendingAssistantMaterial, type PendingAssistantTurn } from "./assistant-pending-turn";
+import { assistantIdleResetDue } from "./assistant-idle";
 import { AssistantHistoryDialog } from "./assistant-history-dialog";
 import { AssistantShareDialog, type AssistantShareRequest } from "./assistant-share-dialog";
 import { AssistantMessageTime, useAssistantMessageInfo } from "./assistant-message-info";
 import { assistantMessageTime, assistantTimeDivider } from "./assistant-message-time";
+import { assistantDraftPosition } from "./assistant-draft-position";
 import { AssistantMessageActions } from "./assistant-message-actions";
 import { clampFixedMenuPosition } from "./menu-position";
 import { AssetPreview, assetContentUrl } from "./timeline";
 import "./assistant-backfill.css";
+import { AssistantSourceProvider } from "./assistant-source-reader";
+import { AssistantWelcome } from "./assistant-welcome";
+import type { RecordView } from "./api";
 
 const TYPE_LABEL = { person: "人物", place: "地点", movie: "电影" };
 /**
@@ -55,8 +65,10 @@ interface BackfillChatViewMessage extends BackfillChatMessage {
   readonly seq?: number;
   /** Compiled interface commands that came with this reply. */
   readonly ui?: UiTurnPlan;
+  readonly delivery?: AssistantArchiveMessage["delivery"];
   readonly at?: string;
   readonly turnId?: string;
+  readonly draftBatchId?: string;
   readonly turnStatus?: AssistantArchiveMessage["turnStatus"];
   readonly retryable?: boolean;
   readonly attachments?: readonly AssistantHistoryAttachment[];
@@ -89,6 +101,9 @@ export interface AssistantBackfillHandle {
 }
 
 interface AssistantBackfillProps {
+  readonly privateAccessUntil: string | undefined;
+  readonly pageContext?: "dreams" | undefined;
+  readonly onEnterSource?: ((record: RecordView) => void) | undefined;
   readonly focusRequested?: boolean;
   readonly onFocusHandled?: () => void;
   readonly photoInput: Pick<ComposerProps, "onUploadShot" | "onNotify" | "onShotsCleared">;
@@ -103,13 +118,17 @@ interface AssistantBackfillProps {
   readonly onUiCommand: (command: UiCommand) => void;
   readonly privacyRequest: { readonly reason: string } | null;
   readonly onPrivacyDecision: (decision: "once" | "session" | "never") => void;
+  /** AI 私密检索授权：右键菜单里的「检索私密」读写同一份状态。 */
+  readonly privacyAccess: PrivacyAccessState;
+  readonly privacyDisabled?: boolean;
   /** Whether private records are on screen right now — see `AssistantChatTurnRequest`. */
   readonly privacyVisible?: boolean;
   readonly onOpenSettings: () => void;
   readonly ref?: Ref<AssistantBackfillHandle>;
 }
 
-export function AssistantBackfill({ photoInput, scope, configured, defaultGear, onChanged, onViewRecords, onOpenEntity, onOpenSettings, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyVisible = false, focusRequested = false, onFocusHandled, ref }: AssistantBackfillProps) {
+export function AssistantBackfill({ privateAccessUntil, pageContext, photoInput, scope, configured, defaultGear, onChanged, onViewRecords, onOpenEntity, onOpenSettings, onUiPlan, onUiCommand, privacyRequest, onPrivacyDecision, privacyAccess, privacyDisabled = false, privacyVisible = false, focusRequested = false, onFocusHandled, onEnterSource, ref }: AssistantBackfillProps) {
+  const applicationLock = useApplicationLock();
   const [batch, setBatch] = useState<BackfillBatch | null>(null);
   const [batches, setBatches] = useState<readonly BackfillBatch[]>([]);
   const [shots, setShots] = useState<readonly AssetLink[]>(() => { try { return JSON.parse(sessionStorage.getItem(scopedKey('lifeos.assistant.photos:'+scope)) ?? '[]'); } catch { return []; } });
@@ -120,8 +139,6 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   const [input, setInput] = useState(() => { try { return sessionStorage.getItem(scopedKey(`lifeos.backfill.input:${scope}`)) ?? ""; } catch { return ""; } });
   const [chat, setChat] = useState<readonly BackfillChatViewMessage[]>([]);
   const [shareRequest, setShareRequest] = useState<AssistantShareRequest | null>(null);
-  const { openMessageInfo, messageInfo, closeMessageInfo } = useAssistantMessageInfo();
-  useLayoutEffect(() => { setShareRequest(null); closeMessageInfo(); }, [scope]);
   // The conversation this panel is appending to. Null until the first save
   // creates one, so the archive stays empty for someone who never chats.
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -130,6 +147,8 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   const [entities, setEntities] = useState<readonly Entity[]>([]);
   const [busy, setBusy] = useState("");
   const [initializing, setInitializing] = useState(true);
+  /** 初始化失败时界面要解冻（见下方 catch），但手动重试入口得留着。 */
+  const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -192,7 +211,9 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     // The archive stores the compiled plan with the reply, so reloading a
     // conversation redraws its clarify/offer buttons instead of dropping them.
     ...(item.ui === undefined ? {} : { ui: item.ui }),
+    ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
     ...(item.turnId ? { turnId: item.turnId } : {}),
+    ...(item.draftBatchId ? { draftBatchId: item.draftBatchId } : {}),
     ...(item.turnStatus ? { turnStatus: item.turnStatus } : {}),
     ...(item.retryable !== undefined ? { retryable: item.retryable } : {}),
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
@@ -202,6 +223,21 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     setPendingTurn(next);
     setPendingError("");
   };
+  /**
+   * An unconfirmed message must not be lost, but it must not lock the panel
+   * either. 清屏 and 新对话 both park it first — original text back into the
+   * composer, pending marker cleared — and then go ahead. Before 2026-10-17
+   * they refused outright (and were disabled), so a failed reply left the owner
+   * with no way to clear the screen or start over.
+   */
+  const parkPendingTurn = (): string | null => {
+    const pending = pendingRef.current;
+    if (pending === null) return null;
+    clearPendingAssistantTurn(scope, window.sessionStorage);
+    updatePending(null);
+    setInput(pending.message);
+    return pending.message;
+  };
   const execute = async (label: string, run: () => Promise<void>) => {
     if (busyRef.current || initializing) return;
     busyRef.current = true; setBusy(label); setError(""); setNotice("");
@@ -210,10 +246,28 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     finally { busyRef.current = false; if (active.current) setBusy(""); }
   };
   const openMenu = (x: number, y: number) => setMenu({ x, y });
+  // 手机顶栏「更多操作」把菜单锚在按钮右下角（rect.right - 12），窄屏上会伸到视口
+  // 外面；菜单宽度在挂载前不可知，所以在拿到实际尺寸后把整体推回可视区。
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (menu === null || element === null) return;
+    const rect = element.getBoundingClientRect();
+    const x = Math.max(8, Math.min(menu.x, window.innerWidth - rect.width - 8));
+    const y = Math.max(8, Math.min(menu.y, window.innerHeight - rect.height - 8));
+    if (x !== menu.x || y !== menu.y) setMenu({ x, y });
+  }, [menu]);
+  // 「检索私密」从顶栏 Switch 搬进右键菜单（2026-10-23 主人要求）：
+  // 状态仍归 main.tsx 的 privacyAi，这里只负责应用锁上锁时清空。菜单项本身在
+  // assistant-privacy-menu 里，与「单条消息」那份右键菜单共用同一段逻辑。
+  useEffect(() => {
+    if (applicationLock?.ready && applicationLock.locked("privacy-ai") && privacyAccess.active) privacyAccess.change(null);
+  }, [applicationLock?.ready, applicationLock?.status.unlocked, applicationLock?.status.targets, privacyAccess.value, privacyAccess.key]);
   const clearScreen = () => {
     setMenu(null);
     void execute("正在清屏", async () => {
-      if (pendingRef.current !== null) throw new Error("有一条消息尚未确认，请先重试发送后再清屏");
+      // Park any unconfirmed message first: the owner asked for a clear screen,
+      // not for their text to disappear or for the button to refuse.
+      const parked = parkPendingTurn();
       // Keep the bound batch for subsequent turns, but hide its old cards too.
       // Save edits before hiding them so continuing from history recovers them.
       if (dirty) await save();
@@ -232,13 +286,16 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       if (!active.current) return;
       loadGeneration.current++; detailGeneration.current++;
       setClearedAt(cleared.clearedAt); setReviewOpen(false);
-      setChat([]); setError(""); setNotice("屏幕已清空，历史记录仍保留");
+      setChat([]); setError("");
+      // 正常清屏不再弹任何提示（主人 2026-10-17：去掉「屏幕已清空，历史记录仍保留」）。
+      // 只有把未确认的原文放回了输入区才需要说一声，否则原文像是凭空消失了。
+      setNotice(parked === null ? "" : "未确认的原文已放回输入区，检查后可手动发送");
     });
   };
   const startNewConversation = () => {
     setMenu(null);
     void execute("正在新建对话", async () => {
-      if (pendingRef.current !== null) throw new Error("有一条消息尚未确认，请先重试发送后再新建对话");
+      const parked = parkPendingTurn();
       const created = await startAssistantConversation();
       if (!active.current) return;
       loadGeneration.current++; detailGeneration.current++;
@@ -246,11 +303,32 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       bindConversationBatch(null);
       setConversationId(created.conversationId); setClearedAt(null); setChat([]); setBatch(null); setDirty(false);
       resetGearToDefault();
-      clearPendingAssistantTurn(scope, window.sessionStorage); updatePending(null);
       setReviewOpen(false);
+      if (parked !== null) setNotice("新对话已开始；未确认的原文已放回输入区，检查后可手动发送。");
     });
   };
   useImperativeHandle(ref, () => ({ openMenu, openHistory: () => setHistoryOpen(true), clearScreen, startNewConversation }));
+  /**
+   * 闲置翻篇（2026-10-23 主人要求）：一两个小时没找管家，就自动把屏幕收干净。
+   *
+   * 只清屏幕、不落库 —— 真正的新对话等第一条消息发出时，由 sendText 的
+   * `id === null` 分支去建。翻篇本身零写操作，否则每次翻篇都会在库里留一条
+   * 空对话，而那条空对话对主人没有任何意义（虽然它不进历史列表）。
+   *
+   * 不弹提示（主人 2026-10-23：「不用额外提示，直接显示新的那个就行了」）：
+   * 屏幕本来就变成空的欢迎页，再说一句「已清空」只是多余的噪音。
+   *
+   * `nextBatch` 只给初始化路径用：草稿属于方案，不属于对话，翻篇时不该跟着消失。
+   */
+  const startFreshConversationWhenIdle = (nextBatch: BackfillBatch | null = null, nextDirty = false): void => {
+    loadGeneration.current++; detailGeneration.current++;
+    conversationRef.current = null;
+    bindConversationBatch(null);
+    setConversationId(null);
+    setClearedAt(null); setChat([]); setBatch(nextBatch); setDirty(nextDirty);
+    resetGearToDefault(); setReviewOpen(false);
+    setNotice("");
+  };
   useLayoutEffect(() => {
     const element = menuRef.current;
     if (element === null || menu === null) return;
@@ -291,6 +369,19 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         const server = history.items.find((b) => b.id === local?.id);
         if (local && server?.status === "draft" && local.revision === server.revision) { chosen = local; recoveredDraft = true; }
       } catch { /* optional local edit recovery */ }
+      // 打开时先判一次闲置：浏览器关了一晚再打开，组件是重新挂载的，
+      // 只靠下面那个每分钟的定时器，会先把旧对话画出来再闪一下换掉。
+      // 有未确认消息时一律不翻篇 —— 那条原文还等着重试。
+      if (pending === null && archived !== null && assistantIdleResetDue({
+        lastMessageAt: archived.messages.at(-1)?.at,
+        visibleMessageCount: archived.messages.length,
+        now: Date.now(),
+      })) {
+        startFreshConversationWhenIdle(chosen, recoveredDraft);
+        setInitializing(false);
+        setLoadFailed(false);
+        return;
+      }
       if (archived !== null) {
         conversationRef.current = archived.id; setConversationId(archived.id);
         setClearedAt(archived.clearedAt);
@@ -329,13 +420,41 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         setChat(current.conversation === null && chosen?.conversation ? chosen.conversation : []);
       }
       setInitializing(false);
-    }).catch((e) => { if (active.current && generation === loadGeneration.current) setError(message(e)); });
+      setLoadFailed(false);
+    }).catch((e) => {
+      if (!active.current || generation !== loadGeneration.current) return;
+      setError(message(e));
+      // 初始化失败也必须解冻界面：以前这里只 setError，`initializing` 永远停在
+      // true ⇒ `disabled` 永远为真 ⇒ 整个面板的按钮都点不动，不只是清屏/新对话
+      // （2026-10-17）。重试入口改由 loadFailed 保留，见下方提示条。
+      setInitializing(false);
+      setLoadFailed(true);
+    });
     return () => {
       active.current = false;
       if (generation === loadGeneration.current) loadGeneration.current++;
       detailGeneration.current++;
     };
   }, [scope, storageKey, loadRetry]);
+  /**
+   * 面板是常驻挂载的（只有 scope 变才重建），所以「闲置」不能只在初始化时判一次：
+   * 关掉面板两小时再打开，组件根本不会重新初始化。这里每分钟看一眼。
+   *
+   * 下面每一条都是「不能翻篇」的理由，缺一条都可能变成丢东西：
+   * 输入框有字（还没发）、选着照片、有未确认消息（等着重试）、草稿没存、
+   * 正在回复、审核面板 / 聊天记录 / 右键菜单开着、照片还在上传。
+   */
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!active.current || initializing || busyRef.current) return;
+      if (dirty || input.trim().length > 0 || shots.length > 0 || pendingTurn !== null) return;
+      if (reviewOpen || historyOpen || menu !== null || photoState !== null) return;
+      const last = chat.length === 0 ? undefined : chat[chat.length - 1]?.at;
+      if (!assistantIdleResetDue({ lastMessageAt: last, visibleMessageCount: chat.length, now: Date.now() })) return;
+      startFreshConversationWhenIdle();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [chat, dirty, input, shots, pendingTurn, reviewOpen, historyOpen, menu, photoState, initializing]);
   useEffect(() => { if (batch && dirty) { try { sessionStorage.setItem(storageKey, JSON.stringify(batch)); } catch { /* explicit save remains available */ } } }, [batch, dirty, storageKey]);
   useEffect(() => { try { sessionStorage.setItem(scopedKey(`lifeos.backfill.input:${scope}`), input); } catch { /* optional */ } }, [input, scope]);
   useEffect(() => { const field = composerRef.current; if (field) { field.style.height = "32px"; field.style.height = `${Math.min(80, Math.max(32, field.scrollHeight))}px`; } }, [input]);
@@ -404,13 +523,17 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     role: "user", text: turn.message, id: turn.turnId, turnId: turn.turnId, at: turn.startedAt,
     attachments: turn.materials.filter((item) => item.assetId).map((item) => ({ assetId: item.assetId!, name: item.name })),
   });
+  const privateAccessRef = useRef(privateAccessUntil);
+  privateAccessRef.current = privateAccessUntil;
   const submitPendingTurn = async (turn: PendingAssistantTurn) => {
+    privateTurnRef.current = Boolean(privateAccessRef.current);
     setPendingError("");
     setStopError("");
     setStreamReply("");
     readingTurnRef.current = turn.turnId;
     readingConversationRef.current = turn.conversationId;
     readMoreRef.current = false;
+    let receivedBody = "";
     try {
       const materials: BackfillMaterial[] = turn.materials.map((item) => ({ ...item }));
       const result = await sendAssistantChatTurn({
@@ -421,13 +544,14 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         message: turn.message,
         materials: await withImages(materials),
         privacyVisible,
+        ...(turn.pageContext ? { pageContext: turn.pageContext } : {}),
         effort: gear,
-      }, text => { if (active.current && pendingRef.current?.turnId === turn.turnId) setStreamReply(text); });
+      }, text => { if (text) receivedBody = text; if (active.current && pendingRef.current?.turnId === turn.turnId) setStreamReply(text); });
       if (!active.current) return;
       setStreamReply("");
       if (result.conversationId !== turn.conversationId || result.turnId !== turn.turnId) throw new Error("服务器返回的消息编号不匹配，本条仍保留待确认");
       const userMessage = userMessageFromPending(turn);
-      const assistantMessage: BackfillChatViewMessage = { role: "assistant", text: result.reply, id: `${turn.turnId}:assistant`, at: new Date().toISOString(), ...(result.ui === undefined ? {} : { ui: result.ui }) };
+      const assistantMessage: BackfillChatViewMessage = { role: "assistant", text: result.reply, id: `${turn.turnId}:assistant`, at: new Date().toISOString(), ...(result.action === "draft" && result.batch && result.batch.id !== turn.batchId ? { draftBatchId: result.batch.id } : {}), ...(result.ui === undefined ? {} : { ui: result.ui }), ...(result.delivery ? { delivery: result.delivery } : {}), turnId: turn.turnId };
       setChat((current) => [...current.filter((item) => item.turnId !== turn.turnId), userMessage, assistantMessage]);
       // The server already compiled and validated these; run them now. Offers stay
       // on the message and wait for a click.
@@ -455,6 +579,8 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     } catch (e) {
       if (!active.current) throw e;
       setStreamReply("");
+      const partial = (e as { partialReply?: string }).partialReply ?? receivedBody;
+      if (partial) setChat(current => [...current.filter(item => !(item.role === "assistant" && item.turnId === turn.turnId)), { role: "assistant", text: partial, id: turn.turnId + ":partial", turnId: turn.turnId, at: new Date().toISOString(), delivery: { status: "incomplete", issue: "format" } }]);
       const status = (e as ApiError).status;
       if (status === 409 || status === 400 || status === 404 || status === 413) {
         const blocked = { ...turn, retryBlocked: true };
@@ -469,6 +595,8 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       throw e;
     }
   };
+  useEffect(() => { if (!privateAccessUntil && replying && privateTurnRef.current) void stopReply(); }, [privateAccessUntil]);
+  const privateTurnRef = useRef(false);
   const stopReply = async () => {
     const turn = pendingRef.current;
     if (!turn || stopping) return;
@@ -482,7 +610,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     if (pending === null || pending.retryBlocked) return;
     void execute("正在重试消息", () => submitPendingTurn(pending));
   };
-  const retryCurrentLoad = () => { setError(""); setLoadRetry((current) => current + 1); };
+  const retryCurrentLoad = () => { setError(""); setLoadFailed(false); setLoadRetry((current) => current + 1); };
   /** The one place a message is sent. `send` reads the composer; the disambiguation
    *  buttons and other UI hand a finished sentence straight in. */
   const sendText = (raw: string) => execute("正在回复", async () => {
@@ -511,7 +639,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       current = boundBatch.status === "draft" && dirty && batch?.id === boundBatchId ? await save() : boundBatch;
     }
     loadGeneration.current++; detailGeneration.current++;
-    const turn: PendingAssistantTurn = { conversationId: id, turnId: crypto.randomUUID(), batchId: boundBatchId, revision: boundBatchId === null ? null : current?.revision ?? null, message: text, materials, startedAt: new Date().toISOString(), status: "unconfirmed" };
+    const turn: PendingAssistantTurn = { ...(pageContext ? { pageContext } : {}), conversationId: id, turnId: crypto.randomUUID(), batchId: boundBatchId, revision: boundBatchId === null ? null : current?.revision ?? null, message: text, materials, startedAt: new Date().toISOString(), status: "unconfirmed" };
     try { writePendingAssistantTurn(scope, turn, window.sessionStorage); }
     catch { throw new Error("浏览器暂时无法保存待确认消息，尚未发送；请检查会话存储后重试"); }
     updatePending(turn);
@@ -531,8 +659,32 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
     const current = await save(); const next = await apiRequest<BackfillBatch>("/api/ai/backfill/"+current.id+"/review", { method:"POST", body:JSON.stringify({revision:current.revision,key,deferred}) }); remember(next);
   });
   const replying = busy === "正在回复" || busy === "正在重试消息";
+  useEffect(() => {
+    window.dispatchEvent(new Event('lifeos:private-ai-access'));
+    if (initializing || replying || !conversationRef.current) return;
+    const id = conversationRef.current, generation = ++detailGeneration.current;
+    void loadCurrentConversation().then(current => {
+      if (active.current && generation === detailGeneration.current && current.conversation?.id === id && conversationRef.current === id) setChat(current.conversation.messages.map(toChatMessage));
+    }).catch(() => { /* permission still gates source reads server-side */ });
+  }, [privateAccessUntil, initializing, replying]);
   const disabled = Boolean(busy) || initializing;
   const chatBlocked = disabled || pendingTurn !== null;
+  /**
+   * 消息上的右键菜单要带上整个管家都有的两项，所以这个钩子必须等
+   * clearScreen / startNewConversation / disabled 全部就绪之后再挂
+   * （2026-10-17）。scope 变化时收起菜单的副作用一并搬过来。
+   */
+  const { openMessageInfo, messageInfo, closeMessageInfo } = useAssistantMessageInfo({
+    onClearScreen: clearScreen,
+    onNewConversation: startNewConversation,
+    // 只跟 busy/初始化走：未确认的消息不再让这两项变灰（parkPendingTurn 会保留原文）。
+    actionsDisabled: disabled,
+    // 正文上右键命中消息区自己的菜单，它 stopPropagation 后外层不会再开菜单，
+    // 所以「检索私密」必须挂在同一份 extras 里，否则正文右键就看不到。
+    privacyAccess,
+    privacyDisabled,
+  });
+  useLayoutEffect(() => { setShareRequest(null); closeMessageInfo(); }, [scope]);
   useEffect(() => {
     if (!focusRequested || chatBlocked || !composerRef.current) return;
     composerRef.current.focus({ preventScroll: true });
@@ -555,8 +707,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       conversationRef.current = created.conversationId; setConversationId(created.conversationId);
       setClearedAt(null); setChat([]); setBatch(null); setDirty(false); setReviewOpen(false);
       resetGearToDefault();
-      setInput(pending.message);
-      clearPendingAssistantTurn(scope, window.sessionStorage); updatePending(null);
+      parkPendingTurn();
       setNotice("本次没有自动重放；原文和已选附件已放回输入区，检查后可手动发送。");
     });
   };
@@ -573,18 +724,11 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
   // Cleared cards stay hidden across reloads. A newly updated draft can appear
   // again; ordinary conversation replies must not resurrect the old cards.
   const showBatch = batch !== null && (clearedAt === null || Date.parse(batch.updatedAt) > Date.parse(clearedAt));
-  const shareConversation = (index: number) => setShareRequest({ conversationId, initialIndex: index, messages: chat.map((message, i) => ({ ...message, id: message.id ?? "live:" + i })) });
-  return <div className="assistant-backfill" aria-busy={disabled} onContextMenu={(event) => { if ((event.target as HTMLElement).closest("textarea, input, select, [contenteditable]") !== null) return; event.preventDefault(); openMenu(event.clientX, event.clientY); }}>
-    <div className="backfill-reading-area">
-    <div className="backfill-workspace-scroll" ref={scrollRef} onScroll={updateReadingPosition} onWheel={() => { readMoreRef.current = true; }} onTouchStart={() => { readMoreRef.current = true; }} onPointerDown={() => { readMoreRef.current = true; }} onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) readMoreRef.current = true; }} tabIndex={0} aria-label="对话内容">
-      <div className="backfill-workspace-content" ref={contentRef}>
-      <div className="backfill-conversation" role="log" aria-label="和AI管家的对话" aria-live="polite">{displayedChat.length === 0 ? <p className="backfill-chat-copy ai-assistant-message backfill-intro">你好，想聊什么？也可以把资料和要求一起发来，我来帮你补记。</p> : null}{displayedChat.map((m, i) => <Fragment key={m.id ?? `${m.role}:${m.at ?? i}:${i}`} >{assistantTimeDivider(displayedChat[i - 1]?.at, m.at) ? <p className="assistant-time-divider">{assistantMessageTime(m.at)}</p> : null}<div onContextMenu={event => { if (chat[i]) openMessageInfo(event, m.at, m.text, () => shareConversation(i)); }} className={`ai-message-row backfill-chat-message is-${m.role}`} aria-label={m.role === "user" ? "我" : "AI管家"} data-message-role={m.role} data-turn-id={m.turnId} key={m.id ?? `${m.role}:${m.at ?? i}:${i}`}><div className={`backfill-chat-copy ${m.role === "user" ? "ai-user-message" : "ai-assistant-message"}`}><p>{m.text}</p>{m.role === "assistant" && m.ui?.offers?.length ? <div className="backfill-operation-group backfill-ui-offers">{m.ui.offers.map((offer, offerIndex) => <button className="secondary-button" type="button" key={`${offer.label}:${offerIndex}`} onClick={() => onUiCommand(offer.command)}>{offer.label}</button>)}</div> : null}{m.role === "assistant" && m.ui?.clarify ? <UiClarifyPrompt clarify={m.ui.clarify} onPick={(text) => { setInput(""); sendText(text); }} /> : null}{m.attachments?.length ? <div className="backfill-chat-attachments" aria-label="消息附件">{m.attachments.map((attachment) => <button type="button" key={attachment.assetId} onClick={() => void openAttachment(attachment.assetId)}>{attachment.name}</button>)}</div> : null}</div><div className="assistant-message-meta">{m.role === "assistant" ? <AssistantMessageActions content={m.text} onShare={() => shareConversation(i)} /> : null}<AssistantMessageTime at={m.at} /></div></div></Fragment>)}</div>
-      {replying && streamReply ? <div className="ai-message-row backfill-chat-message is-assistant is-streaming" data-message-role="assistant" aria-label="AI管家正在回复"><div className="backfill-chat-copy ai-assistant-message"><p>{streamReply}</p></div></div> : null}
-      {replying && !streamReply ? <AssistantReplyProgress thinking={gear !== "direct"} /> : null}
-      {pendingRecoveryVisible ? <div className="ai-message-row backfill-chat-message is-assistant backfill-reply-failure" data-message-role="assistant" aria-label="AI管家"><div className="backfill-chat-copy ai-assistant-message"><p role="status">{pendingRetryBlocked ? pendingError : pendingError ? "这次回复没能完成。点下方重试，我再来一次。" : "上次回复还没完成，可以接着重试。"}</p></div><div className="assistant-message-actions">{pendingRetryBlocked ? <button className="secondary-button" type="button" disabled={disabled} onClick={preserveAndStartNew}>保留记录并新建对话</button> : <button className="assistant-message-actions__copy" type="button" aria-label="重试这条消息" title="重试这条消息" disabled={disabled} onClick={retryPendingTurn}><RotateCw size={14} aria-hidden="true" /></button>}</div></div> : null}
+  const draftPosition = batch ? assistantDraftPosition(displayedChat, batch) : -1;
+  const draftCards = showBatch && batch ? <div className="backfill-draft-turn" data-draft-batch-id={batch.id}>
       {showBatch && batch ? <section className="backfill-plan-preview" aria-label="当前拟写方案"><strong>{batch.status==="undone" ? "已撤销的内容" : "拟写内容"}</strong>
-        {batch.plan.entries.map(e => { const state=backfillItemState(batch,e.key); return <article className={"backfill-confirm-card is-"+state} data-confirm-key={e.key} data-confirm-state={state} key={e.key}><div className="backfill-card-heading"><DraftDateTime entry={e} generatedAt={batch.createdAt} editable={draft&&state!=="committed"&&!disabled} onChange={patch=>changeEntry(e.key,patch)} /></div>{state==="deferred" ? <details><summary>查看暂存内容</summary><p className="backfill-preview-copy">{e.content}</p><div className="backfill-preview-photos">{e.assetIds.map(id=><img key={id} src={"/api/assets/"+encodeURIComponent(id)+"/thumbnail?w=400"} alt="拟写照片" />)}</div></details> : <><p className="backfill-preview-copy">{e.content}</p><div className="backfill-preview-photos">{e.assetIds.map(id=><img key={id} src={"/api/assets/"+encodeURIComponent(id)+"/thumbnail?w=400"} alt="拟写照片" />)}</div></>}{e.questions ? <p className="backfill-warning">{e.questions}</p> : null}{actionButtons(e.key,backfillEntryReady(e)&&e.entityKeys.every(key=>batch.plan.objects.some(o=>o.key===key&&o.selected&&!o.questions.trim())))}</article>; })}
-        {(batch.plan.actions??[]).map(a=><article className={"backfill-confirm-card is-"+backfillItemState(batch,a.key)} data-confirm-key={a.key} data-confirm-state={backfillItemState(batch,a.key)} key={a.key}><div className="backfill-card-heading"><strong>{a.date||"日期未定"}</strong><span>{a.type==="cycle" ? "周期标记" : "习惯标记"}</span></div><p className="backfill-preview-copy">{a.marked ? "标记" : "移除"}{a.type==="cycle" ? ({period_start:"经期开始",period_end:"经期结束",intimacy:"亲密",fitness:"运动"}[a.cycleKind!]) : a.name}</p>{a.questions ? <p className="backfill-warning">{a.questions}</p> : null}{actionButtons(a.key,a.selected&&!a.questions.trim()&&Boolean(a.date))}</article>)}
+        {batch.plan.entries.map(e => { const state=backfillItemState(batch,e.key); return <article className={"backfill-confirm-card is-"+state} data-confirm-key={e.key} data-confirm-state={state} key={e.key}><div className="backfill-card-heading"><DraftDateTime entry={e} generatedAt={batch.createdAt} editable={draft&&state!=="committed"&&!disabled} onChange={patch=>changeEntry(e.key,patch)} /></div>{state==="deferred" ? <details><summary>查看暂存内容</summary><p className="backfill-preview-copy">{e.content}</p><div className="backfill-preview-photos">{e.assetIds.map(id=><img key={id} src={assetThumbUrl(id,400)} alt="拟写照片" />)}</div></details> : <><p className="backfill-preview-copy">{e.content}</p><div className="backfill-preview-photos">{e.assetIds.map(id=><img key={id} src={assetThumbUrl(id,400)} alt="拟写照片" />)}</div></>}{e.questions ? <p className="backfill-warning">{e.questions}</p> : null}{actionButtons(e.key,backfillEntryReady(e)&&e.entityKeys.every(key=>batch.plan.objects.some(o=>o.key===key&&o.selected&&!o.questions.trim())))}</article>; })}
+        {(batch.plan.actions??[]).map(a=><article className={"backfill-confirm-card is-"+backfillItemState(batch,a.key)} data-confirm-key={a.key} data-confirm-state={backfillItemState(batch,a.key)} key={a.key}><div className="backfill-card-heading"><strong>{a.date||"日期未定"}</strong><span>{a.type==="cycle" ? "周期标记" : "习惯标记"}</span></div><p className="backfill-preview-copy">{a.marked ? "标记" : "移除"}{a.type==="cycle" ? ({period_start:"经期开始",period_end:"经期结束",intimacy:"亲密",fitness:"运动"}[a.cycleKind!]) : a.name}</p>{a.type === "cycle" ? <p className="backfill-preview-copy">当事人：{batch.moduleSnapshot?.config.subjectId ? entities.find(entity => entity.id === batch.moduleSnapshot?.config.subjectId)?.name ?? "已移除的联系人" : "本人"}</p> : null}{a.questions ? <p className="backfill-warning">{a.questions}</p> : null}{actionButtons(a.key,a.selected&&!a.questions.trim()&&Boolean(a.date))}</article>)}
         {batch.plan.objects.filter(o=>o.selected).map(o=><p className="backfill-preview-copy" key={o.key}>{TYPE_LABEL[o.type]}：{o.name}{o.type==="movie"&&o.movie?.watched ? "（已看）" : ""}</p>)}
         {draft&&(pendingItems.length+orphanObjects.length)>1 ? <div className="backfill-operation-group backfill-item-actions"><button className="primary-button" type="button" disabled={disabled||pendingItems.some(item=>"content" in item ? !backfillEntryReady(item) : !item.date||Boolean(item.questions.trim()))||batch.plan.objects.some(o=>o.selected&&!batch.committedObjectKeys?.includes(o.key)&&Boolean(o.questions.trim()))} onClick={()=>void confirm()}>确认全部（{pendingItems.length+orphanObjects.length}条）</button></div> : null}
         {draft&&pendingItems.length===0&&orphanObjects.length===1 ? <div className="backfill-operation-group backfill-item-actions"><button className="primary-button" type="button" disabled={disabled||Boolean(orphanObjects[0]?.questions.trim())} onClick={()=>void confirm()}>确认记录</button></div> : null}
@@ -594,7 +738,7 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
         <fieldset disabled={disabled || !draft} className="backfill-plan-fields"><legend>记录草稿</legend>
           {batch.plan.entries.filter(e=>backfillItemState(batch,e.key)!=="committed").map((e, i) => <section className="backfill-draft-card" data-backfill-entry={e.key} key={e.key}>
             <label className="backfill-choice"><input type="checkbox" checked={e.selected} onChange={(v) => changeEntry(e.key, { selected: v.target.checked })} />第 {i + 1} 条记录</label>
-            <div className="backfill-row"><label className="backfill-field"><span>发生日期</span><input type="date" value={e.date} max={e.kind === "journal" ? calendarToday() : undefined} onChange={(v) => changeEntry(e.key, { date: v.target.value, time: "" })} /></label><label className="backfill-field"><span>类型</span><select value={e.kind} onChange={(v) => changeEntry(e.key, { kind: v.target.value as BackfillEntry["kind"] })}><option value="journal">日记</option><option value="task">任务</option><option value="event">事件</option><option value="note">笔记</option></select></label></div>
+            <div className="backfill-row"><label className="backfill-field"><span>发生日期</span><input type="date" value={e.date} max={e.kind === "journal" ? calendarToday() : undefined} onChange={(v) => changeEntry(e.key, { date: v.target.value, time: "" })} /></label><label className="backfill-field"><span>类型</span><select value={e.kind} onChange={(v) => changeEntry(e.key, { kind: v.target.value as BackfillEntry["kind"] })}><option value="journal">{e.nature === "dream" ? "梦境" : "日记"}</option><option value="task">任务</option><option value="event">事件</option><option value="note">笔记</option></select></label></div>
             <label className="backfill-field"><span>正文</span><textarea rows={3} value={e.content} onChange={(v) => changeEntry(e.key, { content: v.target.value })} /></label>
             <details><summary>依据、关联与待确认</summary><p className="backfill-evidence">{e.evidence}</p>
               <label className="backfill-field"><span>待确认问题（处理后清空）</span><input value={e.questions} onChange={(v) => changeEntry(e.key, { questions: v.target.value })} /></label>
@@ -626,43 +770,59 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       {draft ? <div className="backfill-operation-group"><button className="secondary-button" type="button" disabled={disabled || !dirty} onClick={() => void execute("正在保存", async () => { await save(); setNotice("修改已保存，尚未写入记录。"); })}>保存草稿</button></div> : null}
       </details> : null}
       {showBatch && Boolean(batch?.recordIds?.length) && batch?.status !== "undone" ? <div className="backfill-operation-group backfill-result-actions"><button className="secondary-button" type="button" disabled={disabled} onClick={() => onViewRecords(batch?.recordIds ?? [])}>查看辅记</button></div> : null}
+  </div> : null;
+  const shareConversation = (index: number) => setShareRequest({ conversationId, initialIndex: index, messages: chat.map((message, i) => ({ ...message, id: message.id ?? "live:" + i })) });
+  return <AssistantSourceProvider key={scope} onEnter={record => { setHistoryOpen(false); onEnterSource?.(record); }}><div className="assistant-backfill" aria-busy={disabled} onContextMenu={(event) => { if ((event.target as HTMLElement).closest("textarea, input, select, [contenteditable]") !== null) return; event.preventDefault(); openMenu(event.clientX, event.clientY); }}>
+    <div className="backfill-reading-area">
+    <div className="backfill-workspace-scroll" ref={scrollRef} onScroll={updateReadingPosition} onWheel={() => { readMoreRef.current = true; }} onTouchStart={() => { readMoreRef.current = true; }} onPointerDown={() => { readMoreRef.current = true; }} onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) readMoreRef.current = true; }} tabIndex={0} aria-label="对话内容">
+      <div className="backfill-workspace-content" ref={contentRef}>
+      <div className="backfill-conversation" role="log" aria-label="和AI管家的对话" aria-live="polite">{draftPosition === -1 ? draftCards : null}{displayedChat.length === 0 ? <AssistantWelcome key={String(conversationId) + String(clearedAt)} disabled={chatBlocked || photoState !== null} hasDraft={Boolean(input.trim() || shots.length)} onPick={prompt => { if (input.trim() || shots.length) { setInput(current => current.trim() ? current + "\n" + prompt : prompt); requestAnimationFrame(() => composerRef.current?.focus()); return; } return sendText(prompt); }} /> : null}{displayedChat.map((m, i) => <Fragment key={m.id ?? `${m.role}:${m.at ?? i}:${i}`} >{assistantTimeDivider(displayedChat[i - 1]?.at, m.at) ? <p className="assistant-time-divider">{assistantMessageTime(m.at)}</p> : null}<div onContextMenu={event => { if (chat[i]) openMessageInfo(event, m.at, m.text, () => shareConversation(i)); }} className={`ai-message-row backfill-chat-message is-${m.role}`} aria-label={m.role === "user" ? "我" : "AI管家"} data-message-role={m.role} data-turn-id={m.turnId} key={m.id ?? `${m.role}:${m.at ?? i}:${i}`}><div className={`backfill-chat-copy ${m.role === "user" ? "ai-user-message" : "ai-assistant-message"}`}>{m.role === "assistant" ? <><AssistantCitedText text={m.text} offers={m.ui?.offers} disabled={disabled} /><AssistantDeliveryNote delivery={m.delivery} /></> : <p>{m.text}</p>}{m.role === "assistant" && m.ui?.offers?.some(offer => !isJournalSourceOffer(offer)) ? <div className="backfill-operation-group backfill-ui-offers">{m.ui.offers.filter(offer => !isJournalSourceOffer(offer)).map((offer, offerIndex) => <button className="secondary-button" type="button" key={`${offer.label}:${offerIndex}`} onClick={() => onUiCommand(offer.command)}>{offer.label}</button>)}</div> : null}{m.role === "assistant" && m.ui?.clarify ? <UiClarifyPrompt clarify={m.ui.clarify} onPick={(text) => { setInput(""); sendText(text); }} /> : null}{m.attachments?.length ? <div className="backfill-chat-attachments" aria-label="消息附件">{m.attachments.map((attachment) => <button type="button" key={attachment.assetId} onClick={() => void openAttachment(attachment.assetId)}>{attachment.name}</button>)}</div> : null}</div><div className="assistant-message-meta">{m.role === "assistant" ? <AssistantMessageActions content={m.text} onShare={() => shareConversation(i)} /> : null}<AssistantMessageTime at={m.at} /></div></div>{i === draftPosition ? draftCards : null}</Fragment>)}</div>
+      {replying && streamReply ? <div className="ai-message-row backfill-chat-message is-assistant is-streaming" data-message-role="assistant" aria-label="AI管家正在回复"><div className="backfill-chat-copy ai-assistant-message"><AssistantCitedText text={streamReply} /></div></div> : null}
+      {replying && !streamReply ? <AssistantReplyProgress thinking={gear !== "direct"} /> : null}
+      {pendingRecoveryVisible ? <div className="ai-message-row backfill-chat-message is-assistant backfill-reply-failure" data-message-role="assistant" aria-label="AI管家"><div className="backfill-chat-copy ai-assistant-message"><p role="status">{pendingRetryBlocked ? pendingError : pendingError ? displayedChat.some(item => item.turnId === pendingTurn?.turnId && item.delivery?.status === "incomplete") ? "可以重试这轮回答，已收到的正文会保留。" : "这次回复没能完成。点下方重试，我再来一次。" : "上次回复还没完成，可以接着重试。"}</p></div><div className="assistant-message-actions">{pendingRetryBlocked ? <button className="secondary-button" type="button" disabled={disabled} onClick={preserveAndStartNew}>保留记录并新建对话</button> : <button className="assistant-message-actions__copy" type="button" aria-label="重试这条消息" title="重试这条消息" disabled={disabled} onClick={retryPendingTurn}><RotateCw size={14} aria-hidden="true" /></button>}</div></div> : null}
+
       </div>
     </div>
     {hasMoreBelow ? <button className="backfill-read-more" type="button" aria-label="向下阅读更多内容" title="向下阅读更多内容" onClick={readFurther}><ArrowDown size={19} aria-hidden="true" /></button> : null}
     </div>
     <div className={"backfill-workspace-footer "+(draggingFiles ? "is-dragging" : "")} {...photoHandlers}>
       {initializing ? <p role="status">正在恢复聊天和草稿…</p> : null}
-      {error && !(pendingRecoveryVisible && pendingError) ? <p className="backfill-warning" role="alert">{error}{initializing ? <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={retryCurrentLoad}>重试恢复会话</button> : null}</p> : null}{notice ? <p role="status">{notice}</p> : null}
+      {error && !(pendingRecoveryVisible && pendingError) ? <p className="backfill-warning" role="alert"><CircleAlert className="backfill-warning-icon" size={15} aria-hidden="true" /><span className="backfill-warning-text">{error}</span>{initializing || loadFailed ? <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={retryCurrentLoad}>重试恢复会话</button> : null}</p> : null}{notice ? <p className="backfill-notice" role="status">{notice}</p> : null}
 
       {stopError ? <p role="status">{stopError}</p> : null}
       {busy && !replying ? <p role="status"><LoaderCircle size={14} className="spin" />{busy}…</p> : null}
       {!configured ? <p className="backfill-mode">当前使用本地模式。<button className="ai-configure-link" type="button" onClick={onOpenSettings}>配置 AI</button>后可理解更完整的要求。</p> : null}
       {privacyRequest === null ? null : <div className="backfill-privacy-request" role="alert"><p>{privacyRequest.reason}</p><div className="backfill-operation-group"><button className="primary-button" type="button" onClick={() => onPrivacyDecision("once")}>本次允许</button><button className="secondary-button" type="button" onClick={() => onPrivacyDecision("session")}>本次会话允许</button><button className="secondary-button" type="button" onClick={() => onPrivacyDecision("never")}>不用了</button></div></div>}
-      <form className="ai-assistant-composer backfill-chat-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-        <textarea ref={composerRef} aria-label="发给AI管家的消息" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (!chatBlocked && photoState === null) void send(); } }} rows={1} disabled={chatBlocked} />
+      <form className="ai-assistant-composer backfill-chat-composer" onSubmit={(e) => { e.preventDefault(); if (!chatBlocked && photoState === null && (input.trim() || shots.length)) void send(); }}>
+        <textarea ref={composerRef} aria-label="发给AI管家的消息" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (!chatBlocked && photoState === null && (input.trim() || shots.length)) void send(); } }} rows={1} disabled={chatBlocked} />
         <div className="backfill-input-actions">
-          <ShotDropZone ref={shotRef} toolbarTarget={photoToolbarTarget} toolbarLabel="照片" scopeKey={"assistant:"+scope} numbered addOutsideStrip disabled={chatBlocked} shots={shots} onShotsChange={setShots} onUpload={photoInput.onUploadShot} onNotify={photoInput.onNotify} onCleared={photoInput.onShotsCleared} onSubmissionState={(_scope,state)=>setPhotoState(state)} />
+          <ShotDropZone ref={shotRef} toolbarTarget={photoToolbarTarget} scopeKey={"assistant:"+scope} numbered addOutsideStrip disabled={chatBlocked} shots={shots} onShotsChange={setShots} onUpload={photoInput.onUploadShot} onNotify={photoInput.onNotify} onCleared={photoInput.onShotsCleared} onSubmissionState={(_scope,state)=>setPhotoState(state)} />
           <div className="backfill-photo-slot" ref={setPhotoToolbarTarget} />
           <div className="backfill-operation-group">
-            <button className="secondary-button ai-gear-button" type="button" aria-label={`思考强度：${gearLabel(gear)}`} aria-haspopup="menu" aria-expanded={gearMenu !== null} disabled={chatBlocked} title="思考强度" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setGearMenu({ x: rect.left, y: rect.top - 8 }); }}><ReasoningIcon /><span>{gearLabel(gear)}</span><ChevronDown size={14} aria-hidden="true" /></button>
-            {replying ? <button className="primary-button ai-send-button ai-stop-button" type="button" aria-label={stopping ? "正在停止回答" : "停止回答"} title="停止回答" disabled={stopping || pendingTurn === null} onClick={() => void stopReply()}><Square size={14} fill="currentColor" aria-hidden="true" /></button> : <button className="primary-button ai-send-button" type="submit" disabled={chatBlocked || photoState !== null || (!input.trim() && !shots.length)}>发送</button>}
+            <button className="secondary-button ai-gear-button" type="button" aria-label={`思考强度：${gearLabel(gear)}`} aria-haspopup="menu" aria-expanded={gearMenu !== null} disabled={disabled} title="思考强度" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setGearMenu({ x: rect.left, y: rect.top - 8 }); }}><ReasoningIcon /><span>{gearLabel(gear)}</span><ChevronDown size={14} aria-hidden="true" /></button>
+            {replying ? <button className="primary-button ai-send-button ai-stop-button" type="button" aria-label={stopping ? "正在停止回答" : "停止回答"} title="停止回答" disabled={stopping || pendingTurn === null} onClick={() => void stopReply()}><Square size={14} fill="currentColor" aria-hidden="true" /></button> : <button className={`primary-button ai-send-button${input.trim() || shots.length ? " is-sendable" : ""}`} type="submit" aria-label="发送" title="发送" disabled={chatBlocked || photoState !== null}><ArrowUp className="ai-send-icon" size={16} strokeWidth={2.2} aria-hidden="true" /><span className="ai-send-label">发送</span></button>}
           </div>
         </div>
       </form>
     </div>
     {menu === null ? null : createPortal(<div ref={menuRef} className="ai-assistant-menu" role="menu" aria-label="AI 管家的操作" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
-        <button type="button" role="menuitem" disabled={disabled || pendingTurn !== null} onClick={clearScreen}><Eraser size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">清屏</span></button>
-        <button type="button" role="menuitem" disabled={disabled || pendingTurn !== null} onClick={startNewConversation}><MessageSquarePlus size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">新对话</span></button>
+        <button type="button" role="menuitem" disabled={disabled} onClick={clearScreen}><Eraser size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">清屏</span></button>
+        <button type="button" role="menuitem" disabled={disabled} onClick={startNewConversation}><MessageSquarePlus size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">新对话</span></button>
+        <div className="action-menu-separator" role="separator" />
+        <AssistantPrivacyMenuItems access={privacyAccess} disabled={privacyDisabled} onBeforeUnlock={() => setMenu(null)} />
         <div className="action-menu-separator" role="separator" />
         <button type="button" role="menuitem" onClick={() => { setMenu(null); setHistoryOpen(true); }}><History size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">聊天记录</span></button>
         <button type="button" role="menuitem" onClick={() => { setMenu(null); onOpenSettings(); }}><Settings2 size={14} aria-hidden="true" /><span className="ai-assistant-menu-label">AI 设置</span></button>
     </div>, document.body)}
-    {gearMenu === null ? null : createPortal(<div ref={gearMenuRef} className="ai-assistant-menu ai-gear-menu" role="menu" aria-label="思考强度" style={{ left: gearMenu.x, top: gearMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+    {gearMenu === null ? null : createPortal(<div ref={gearMenuRef} className="ai-assistant-menu ai-gear-menu" role="menu" aria-label="推理程度" style={{ left: gearMenu.x, top: gearMenu.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+        {/* 视觉标题：说明这组单选是什么。菜单自己已经用 aria-label 报了同一个名字，
+            所以这里 aria-hidden，避免读屏把名字念两遍。 */}
+        <p className="ai-gear-menu-heading" aria-hidden="true">推理程度</p>
         {AI_GEARS.map((option) => <button type="button" role="menuitemradio" aria-checked={gear === option.id} key={option.id} onClick={() => { setGearMenu(null); pickGear(option.id); }}><span className="ai-gear-check" aria-hidden="true">{gear === option.id ? <Check size={14} /> : null}</span><span className="ai-assistant-menu-label">{option.label}</span></button>)}
     </div>, document.body)}
     {messageInfo}
     {shareRequest ? <AssistantShareDialog request={shareRequest} onClose={() => setShareRequest(null)} /> : null}
-    <AssistantHistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} actionsDisabled={disabled || pendingTurn !== null} onOpenAttachment={(id) => void openAttachment(id)} onContinue={(detail) => {
+    <AssistantHistoryDialog onUiCommand={onUiCommand} open={historyOpen} onClose={() => setHistoryOpen(false)} actionsDisabled={disabled || pendingTurn !== null} onOpenAttachment={(id) => void openAttachment(id)} onContinue={(detail) => {
       detailGeneration.current++;
       conversationRef.current = detail.id; setConversationId(detail.id);
       setClearedAt(detail.clearedAt);
@@ -673,5 +833,5 @@ export function AssistantBackfill({ photoInput, scope, configured, defaultGear, 
       // The current endpoint excludes messages hidden by a cleared screen.
     }} />
     {assetPreview === null ? null : createPortal(<AssetPreview assetIds={[assetPreview.id]} index={0} assets={[assetPreview.asset]} onClose={() => setAssetPreview(null)} onIndexChange={() => undefined} />, document.body)}
-  </div>;
+  </div></AssistantSourceProvider>;
 }

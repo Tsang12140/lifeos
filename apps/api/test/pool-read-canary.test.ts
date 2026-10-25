@@ -9,6 +9,7 @@ import type { Asset } from "@lifeos/core";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
 import { PoolConsumerBridge } from "../src/storage-pool.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 test("HTTP canary authenticates, reads verified copies, reuses previews, charges failures and rolls back offline",async t=>{
   const root=mkdtempSync(join(tmpdir(),"lifeos-read-canary-"));
@@ -43,7 +44,7 @@ test("HTTP canary authenticates, reads verified copies, reuses previews, charges
     const value: any=(response.headers.get("content-type")??"").includes("json")?await response.json():Buffer.from(await response.arrayBuffer());
     return {status:response.status,value,headers:response.headers};
   }
-  async function boot(){current=createHttpServer(config);current.server.listen(0,"127.0.0.1");await once(current.server,"listening");const address=current.server.address();assert.ok(address&&typeof address!=="string");base=`http://127.0.0.1:${address.port}`;const login=await call("/api/auth/login","POST",{username:"owner",password:"isolated-canary-password"},"");assert.equal(login.status,200);cookie=login.headers.get("set-cookie")!.split(";")[0]!;}
+  async function boot(){current=createHttpServer(config);await listenOnFetchablePort(current.server);const address=current.server.address();assert.ok(address&&typeof address!=="string");base=`http://127.0.0.1:${address.port}`;const login=await call("/api/auth/login","POST",{username:"owner",password:"isolated-canary-password"},"");assert.equal(login.status,200);cookie=login.headers.get("set-cookie")!.split(";")[0]!;}
   async function idle(){for(let i=0;i<300;i++){const result=await call("/api/admin/storage-pool/transition");if(!result.value.busy)return result.value;await new Promise(r=>setTimeout(r,20));}throw Error("copy did not settle");}
   await new PoolConsumerBridge().usage();
   await boot();

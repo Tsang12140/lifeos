@@ -1,5 +1,5 @@
-import { createContext, useEffect, useRef, useState } from "react";
-import { ContactRound, Edit3, LoaderCircle, X } from "lucide-react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { ContactRound, Edit3, LoaderCircle, UserRound, X } from "lucide-react";
 import type { Asset, Entity } from "@lifeos/core";
 import { apiRequest, apiUploadRequest } from "./api";
 import { avatarCrop } from "./contact-avatar-crop";
@@ -12,15 +12,23 @@ export function entityPhotoSrc(entity: Entity, scope: string): string | undefine
   return id ? `/api/assets/${encodeURIComponent(id)}/thumbnail?w=160&scope=${encodeURIComponent(scope)}` : entity.type === "place" ? entity.photoUrl : undefined;
 }
 
-export function ContactAvatar({ entity, scope, small = false, onEdit }: { entity: Entity; scope: string; small?: boolean; onEdit: (entity: Entity) => void }) {
+export function ContactAvatar({ entity, scope, small = false, dossier = false, onEdit }: { entity: Entity; scope: string; small?: boolean; dossier?: boolean; onEdit: (entity: Entity) => void }) {
   const id = entity.type === "person" || entity.type === "place" ? entity.avatarAssetId : undefined;
   const src = entityPhotoSrc(entity, scope);
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  return <button type="button" className={`contact-avatar ${small ? "is-small" : ""}`} onClick={() => onEdit(entity)} aria-label={`${id ? "更换" : "添加"}${entity.name}的${entity.type === "place" ? "照片" : "头像"}`} title={entity.type === "place" ? "设置地点照片" : id ? "更换头像" : "添加头像"}>
+  return <button type="button" className={`contact-avatar ${small ? "is-small" : ""} ${dossier ? "is-dossier" : ""} ${entity.type === "person" ? "is-person" : ""} ${src && !failed ? "has-photo" : "is-placeholder"}`} onClick={() => onEdit(entity)} aria-label={`${id ? "更换" : "添加"}${entity.name}的${entity.type === "place" ? "照片" : "头像"}`} title={entity.type === "place" ? "设置地点照片" : id ? "更换头像" : "添加头像"}>
     {src && !failed ? <img src={src} alt="" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <ContactRound size={small ? 20 : 25} strokeWidth={1.7} aria-hidden="true" />}
-    <span className="contact-avatar-edit"><Edit3 size={small ? 10 : 12} strokeWidth={1.8} aria-hidden="true" /></span>
+    {entity.type !== "person" ? <span className="contact-avatar-edit"><Edit3 size={small ? 10 : 12} strokeWidth={1.8} aria-hidden="true" /></span> : null}
   </button>;
+}
+
+/** Reuse the exact card URL so tiny mentions do not request another thumbnail size. */
+export function ContactMentionAvatar({ entity }: { entity: Entity }) {
+  const scope = useContext(EntityPhotoScopeContext);
+  const src = entity.type === "person" ? entityPhotoSrc(entity, scope) : undefined;
+  const [failedSrc, setFailedSrc] = useState<string>();
+  return src && failedSrc !== src ? <img className="contact-mention-avatar" src={src} alt="" aria-hidden="true" draggable={false} decoding="async" referrerPolicy="no-referrer" onError={() => setFailedSrc(src)} /> : <UserRound className="contact-mention-fallback" size={13} strokeWidth={1.7} aria-hidden="true" />;
 }
 
 export function ContactAvatarDialog({ entity, onClose, onSaved }: { entity: Entity | null; onClose: () => void; onSaved: (entity: Entity) => void }) {

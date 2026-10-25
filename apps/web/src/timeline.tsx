@@ -1,3 +1,5 @@
+import { isDreamRecord } from "@lifeos/core";
+import { RecordEditActions } from "./record-edit-actions";
 import { assetContentUrl, assetThumbUrl, type ThumbnailWidth } from "./asset-urls";
 export { assetContentUrl, assetThumbUrl, type ThumbnailWidth } from "./asset-urls";
 import type { PhotoPreviewHandler } from "./asset-preview-model";
@@ -22,7 +24,6 @@ import {
   Check,
   CheckCircle2,
   CircleHelp,
-  CloudSun,
   Dumbbell,
   Edit3,
   Eraser,
@@ -43,8 +44,8 @@ import {
   Sparkles,
   Tag,
   Trash2,
-  XCircle,
 } from "lucide-react";
+import { DreamIcon } from "./dream-icon";
 import {
   SUMMARY_MAX_LENGTH,
   clampSummaryText,
@@ -73,7 +74,6 @@ import type { AppView, CalendarMode, ComposerKind, CreateEntity, SettingsPageId 
 import { calendarDayInfo } from "./calendarData";
 import { peekCover, peekScore, photoSourceScore, storyWeight, type PhotoHints } from "./photoScore";
 import { getWeatherEmoji, type WeatherCategory, type WeatherDay, type WeatherPhase } from "./weather";
-import { weatherLocationDisplayName } from "./weather-locations";
 import { MoviePrompt } from "./movie";
 import { DateField, WEEKDAY_LABELS } from "./date-field";
 import {
@@ -102,9 +102,12 @@ import {
   weekCardRecords,
 } from "./app-meta";
 import { RecordText } from "./mention";
+import { AssistantMessageActions } from "./assistant-message-actions";
+import { TaskPageText } from "./task-page-text";
 import { JournalText } from "./journal-text";
 import "./timeline-tasks.css";
 import "./timeline-mobile.css";
+import { groupTaskRecords, taskScheduleLabels, type TaskSortMode } from "./task-presentation";
 import { DiagnosticsDrawer, EmptyState, ErrorState, LoadingState } from "./timeline-states";
 import type { TaskUndoEntry } from "./task-summary";
 import {
@@ -133,17 +136,29 @@ export function groupRecords(records: readonly RecordView[], fallbackDate: strin
   return [...groups.entries()].map(([date, items]) => ({ date, records: items }));
 }
 
-export function Timeline({ filtered = false, emptyTitle, records, assets, entities, loading, refreshing, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled, dataCurrent, focusRecordId = null }: { filtered?: boolean; emptyTitle?: string; records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; refreshing: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: PhotoPreviewHandler; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean; dataCurrent: boolean; focusRecordId?: string | null }) {
+export function Timeline({ headingId, filtered = false, emptyTitle, records, assets, entities, loading, refreshing, error, selectedDate, activeView, searchQuery, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onRetry, onDemo, creatingDemo, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled, dataCurrent, focusRecordId = null, taskPage = activeView === "tasks", taskSort = "planned", taskDensity = "standard" }: { taskPage?: boolean; taskSort?: TaskSortMode; taskDensity?: "standard" | "compact"; headingId?: string; filtered?: boolean; emptyTitle?: string; records: readonly RecordView[] | null; assets: readonly Asset[]; entities: readonly Entity[]; loading: boolean; refreshing: boolean; error: string | null; selectedDate: string; activeView: AppView; searchQuery: string; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onRetry: () => void; onDemo: () => void; creatingDemo: boolean; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: PhotoPreviewHandler; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean; dataCurrent: boolean; focusRecordId?: string | null }) {
   const title = filtered ? "筛选结果" : timelineHeading(activeView);
   const empty = emptyCopy(activeView, selectedDate, filtered || Boolean(searchQuery));
   if (emptyTitle !== undefined) empty.title = emptyTitle;
   const groups = records ? groupRecords(records, selectedDate) : [];
+  const taskRows = records && taskPage ? groupTaskRecords(records, taskSort) : [];
+  const compact = taskPage && taskDensity === "compact";
   const initialLoading = loading && records === null;
   const showUpdating = error === null && records !== null && (refreshing || !dataCurrent);
   const showEmpty = !initialLoading && dataCurrent && !error && records !== null && records.length === 0;
   /* `data-view` lets the compact rules tell the three surfaces apart without the
      component having to thread a class name through every branch. */
-  return <section className="timeline-section" data-view={activeView} aria-labelledby="timeline-title" aria-busy={showUpdating ? "true" : undefined}><div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div>{initialLoading ? <LoadingState /> : null}{showUpdating ? <div className="timeline-refresh-state" role="status"><LoaderCircle className="spin" size={16} aria-hidden="true" /><span>正在读取目标日期…</span></div> : null}{error ? <ErrorState message={error} onRetry={onRetry} /> : null}{showEmpty ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}{!initialLoading && records && records.length > 0 ? <div className={`timeline-list ${interactionDisabled ? "is-stale" : ""}`}>{groups.map((group) => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天，${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map((record) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={(ids, index, record) => onPreviewAsset(ids, index, record, records ?? [])} onOpenEntity={onOpenEntity} interactionDisabled={interactionDisabled} focused={record.id === focusRecordId} />)}</div>)}</div> : null}</section>;
+  const renderRecord = (record: RecordView) => <TimelineItem key={record.id} record={record} assets={assets} entities={entities} movieEnabled={movieEnabled} moviePromptHidden={moviePromptHidden} onMovieAttachToRecord={onMovieAttachToRecord} onMoviePromptSuppress={onMoviePromptSuppress} onEdit={onEdit} onDelete={onDelete} onTaskStatus={onTaskStatus} onPreviewAsset={(ids, index, record) => onPreviewAsset(ids, index, record, records ?? [])} onOpenEntity={onOpenEntity} interactionDisabled={interactionDisabled} focused={record.id === focusRecordId} showTaskCopy={taskPage} compact={compact} />;
+  return <section className="timeline-section" data-view={activeView} aria-labelledby={headingId ?? "timeline-title"} aria-busy={showUpdating ? "true" : undefined}>
+    {!headingId ? <div className="section-heading"><div><h2 id="timeline-title">{title}</h2></div>{records && records.length > 0 ? <span className="record-count">{records.length} 条</span> : null}</div> : null}
+    {initialLoading ? <LoadingState /> : null}
+    {showUpdating ? <div className="timeline-refresh-state" role="status"><LoaderCircle className="spin" size={16} aria-hidden="true" /><span>正在读取目标日期…</span></div> : null}
+    {error ? <ErrorState message={error} onRetry={onRetry} /> : null}
+    {showEmpty ? <EmptyState {...empty} onDemo={onDemo} creatingDemo={creatingDemo} /> : null}
+    {!initialLoading && records && records.length > 0 ? <div className={`timeline-list ${taskPage ? "task-page-cards" : ""} ${interactionDisabled ? "is-stale" : ""}`} data-density={taskPage ? taskDensity : undefined}>
+      {taskPage ? taskRows.map(row => <div className={`timeline-group task-page-row${row.label === undefined ? " is-unlabeled" : ""}`} key={row.key}>{row.label !== undefined ? <h3 className="timeline-group-title task-page-row-title">{row.label}</h3> : null}{row.records.map(renderRecord)}</div>) : groups.map(group => <div className="timeline-group" key={group.date}><h3 className="timeline-group-title">{group.date === localDateToday() ? `今天，${shortDate(group.date)}` : displayDate(group.date)}</h3>{group.records.map(renderRecord)}</div>)}
+    </div> : null}
+  </section>;
 }
 
 
@@ -393,7 +408,7 @@ export function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: rea
   </div>;
 }
 
-type TimelineItemProps = { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: PhotoPreviewHandler; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean; focused?: boolean };
+type TimelineItemProps = { record: RecordView; assets: readonly Asset[]; entities: readonly Entity[]; movieEnabled: boolean; moviePromptHidden: boolean; onMovieAttachToRecord: (record: RecordView, movie: MovieEntity) => void; onMoviePromptSuppress: () => void; onEdit: (record: RecordView) => void; onDelete: (record: RecordView) => void; onTaskStatus: (record: TaskRecordView, status: TaskStatus) => void; onPreviewAsset: PhotoPreviewHandler; onOpenEntity: (entity: Entity) => void; interactionDisabled: boolean; focused?: boolean; showTaskCopy?: boolean; compact?: boolean };
 type TimelineItemActions = Pick<TimelineItemProps, "onEdit" | "onDelete" | "onTaskStatus" | "onPreviewAsset" | "onOpenEntity" | "onMovieAttachToRecord" | "onMoviePromptSuppress">;
 
 export function TimelineItem(props: TimelineItemProps) {
@@ -412,17 +427,24 @@ export function TimelineItem(props: TimelineItemProps) {
   // Compare the full value so same-revision data or a tenant change is not hidden.
   const signature = useMemo(() => JSON.stringify(props.record), [props.record]);
   const record = useMemo(() => props.record, [signature]);
-  return <TimelineItemView record={record} assets={props.assets} entities={props.entities} movieEnabled={props.movieEnabled} moviePromptHidden={props.moviePromptHidden} interactionDisabled={props.interactionDisabled} focused={props.focused} {...actions} />;
+  return <TimelineItemView record={record} assets={props.assets} entities={props.entities} movieEnabled={props.movieEnabled} moviePromptHidden={props.moviePromptHidden} interactionDisabled={props.interactionDisabled} focused={props.focused} showTaskCopy={props.showTaskCopy} compact={props.compact} {...actions} />;
 }
 
-const TimelineItemView = memo(function TimelineItemView({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled, focused = false }: TimelineItemProps) {
+const TimelineItemView = memo(function TimelineItemView({ record, assets, entities, movieEnabled, moviePromptHidden, onMovieAttachToRecord, onMoviePromptSuppress, onEdit, onDelete, onTaskStatus, onPreviewAsset, onOpenEntity, interactionDisabled, focused = false, showTaskCopy = false, compact = false }: TimelineItemProps) {
   const deletion = useRecordDeletion(record.id);
-  const Icon = COMPOSER_META[record.kind].icon;
+  const Icon = isDreamRecord(record) ? DreamIcon : COMPOSER_META[record.kind].icon;
   const movies = record.entityRefs.flatMap((ref) => { const e = entities.find((entity) => entity.id === ref.entityId); return e?.type === "movie" ? [e] : []; });
   const task = isTaskRecord(record) ? record : undefined;
   const [taskExpanded, setTaskExpanded] = useState(false);
-  useEffect(() => setTaskExpanded(false), [record.id, task?.task.status]);
-  const taskFold = useTaskFold(task?.task.status === "done" && !taskExpanded, record.id, Boolean(deletion));
+  useEffect(() => setTaskExpanded(false), [record.id, task?.task.status, compact]);
+  const taskFold = useTaskFold((compact || task?.task.status === "done") && !taskExpanded, record.id, Boolean(deletion));
+  useEffect(() => {
+    if (!compact) return;
+    const card = taskFold.frame.current?.closest(".timeline-content");
+    const reveal = () => setTaskExpanded(true);
+    card?.addEventListener("lifeos:reveal-task", reveal);
+    return () => card?.removeEventListener("lifeos:reveal-task", reveal);
+  }, [compact, taskFold.frame]);
   const [revealed, setRevealed] = useState(record.isPrivate !== true);
   const masked = record.isPrivate === true && !revealed;
   const reveal = () => setRevealed(true);
@@ -436,7 +458,7 @@ const TimelineItemView = memo(function TimelineItemView({ record, assets, entiti
   const relationCount = footerEntityRefs.length + record.relatedRecordIds.length + chipAssetRefs.length;
   const vocabulary = useMemo(() => mentionVocabulary(record, entities), [record, entities]);
   const bodyText = recordText(record);
-  const showMoviePrompt = !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && bodyText.includes("电影") && !record.entityRefs.some(isMovieRef);
+  const showMoviePrompt = !isDreamRecord(record) && !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && bodyText.includes("电影") && !record.entityRefs.some(isMovieRef);
   const journalLayoutKey = `${record.id}\u0000${bodyText}\u0000${JSON.stringify(vocabulary)}`;
   const noteDetails = record.kind === "note" ? record.note : undefined;
   const noteLine = noteDetails !== undefined && (noteDetails.title || noteDetails.source)
@@ -446,11 +468,13 @@ const TimelineItemView = memo(function TimelineItemView({ record, assets, entiti
   const relationLine = relationCount > 0 ? masked
     ? <div className="relation-row" aria-label="关联"><PrivacyMask onReveal={reveal} className="relation-mask" /></div>
     : <div className="relation-row" aria-label="关联">{footerEntityRefs.map((ref) => <TimelineEntityChip key={`entity-${entityRefKey(ref)}`} refItem={ref} entity={entities.find((candidate) => candidate.id === ref.entityId)} relationKind={undefined} onOpenEntity={onOpenEntity} />)}{record.relatedRecordIds.length > 0 ? <span className="relation-chip"><Link2 size={12} strokeWidth={1.9} aria-hidden="true" />关联 {record.relatedRecordIds.length} 条记录</span> : null}{chipAssetRefs.map((ref) => { const asset = assets.find((candidate) => candidate.id === ref.assetId); return <span className="relation-chip" key={`asset-${ref.assetId}`}><ImageIcon size={12} strokeWidth={1.9} aria-hidden="true" />{asset?.originalName ?? ref.assetId}</span>; })}</div> : null;
-  const weatherLine = record.weather === undefined || masked ? null : <div className="record-weather-row" aria-label="记录天气"><span className={`weather-record-chip weather-record-chip--${record.weather.mode}`}><CloudSun size={13} strokeWidth={1.8} aria-hidden="true" /><span>{record.weather.mode === "realtime" ? "现场" : "当天"}，{record.weather.text}</span>{record.weather.temperature ? <strong>{record.weather.temperature}°</strong> : record.weather.tempMin || record.weather.tempMax ? <strong>{record.weather.tempMin ?? "—"}~{record.weather.tempMax ?? "—"}°</strong> : null}<small>{weatherLocationDisplayName({ id: record.weather.locationId, name: record.weather.city })}</small></span></div>;
   if (task) {
     const done = task.task.status === "done";
+    const schedule = showTaskCopy && !masked ? taskScheduleLabels(task) : [];
     const collapsed = taskFold.folded;
-    const text = <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled || done ? undefined : onOpenEntity} />;
+    const scheduleLine = schedule.length ? <div className={`task-record-schedule${compact ? " is-compact" : ""}`}>{schedule.map(item => <time key={item.label} dateTime={item.dateTime}><span>{item.label}</span> {item.value}</time>)}</div> : null;
+    const text = <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled || done || compact ? undefined : onOpenEntity} />;
+    const compactPhotos = compact && !masked ? photoAssetIds.filter(id => isPhotoAsset(assets.find(asset => asset.id === id))) : [];
     return <article className={`timeline-item timeline-task ${deletion ? "is-delete-pending" : ""} ${done ? "is-task-done" : ""} ${collapsed ? "is-task-collapsed" : ""} ${interactionDisabled ? "is-stale" : ""} ${focused ? "is-ui-focused" : ""}`} data-record-id={record.id}>
       <div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div>
       <div className="timeline-marker" aria-hidden="true"><span /></div>
@@ -458,27 +482,31 @@ const TimelineItemView = memo(function TimelineItemView({ record, assets, entiti
         <div className="task-record-body" ref={taskFold.frame}><div className="task-record-body-content" ref={taskFold.content} data-folded={collapsed}>
         <div className="task-record-head">
           <span className="kind-tag kind-task"><Icon size={13} strokeWidth={1.8} aria-hidden="true" />任务</span>
-          <div className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : done ? <button className="task-record-toggle" type="button" aria-expanded={taskExpanded} aria-label={taskExpanded ? "收起已完成任务全文" : "展开已完成任务全文"} disabled={interactionDisabled} onClick={() => setTaskExpanded(value => !value)}><span className="task-record-copy">{text}</span></button> : <span className="task-record-copy">{text}</span>}</div>
+          <div className="timeline-text">{masked ? <PrivacyMask onReveal={reveal} /> : compact ? <div className="task-compact-text" data-expanded={!collapsed}>
+            <button className="task-record-toggle" type="button" aria-expanded={taskExpanded} aria-label={taskExpanded ? "收起任务全文" : "展开任务全文"} disabled={interactionDisabled} onClick={() => setTaskExpanded(value => !value)}><span className="task-record-copy">{text}</span></button>
+            {compactPhotos.length ? <span className="task-summary-photos task-compact-photos">{compactPhotos.slice(0, 3).map((id, index) => <button key={id} className="task-summary-photo" type="button" disabled={interactionDisabled} aria-label={`查看任务照片 ${index + 1}，共 ${compactPhotos.length} 张`} onClick={() => onPreviewAsset(photoAssetIds, photoAssetIds.indexOf(id), record)}><img src={assetThumbUrl(id, 400)} alt="" loading="lazy" decoding="async" /></button>)}</span> : null}
+          </div> : done ? <button className="task-record-toggle" type="button" aria-expanded={taskExpanded} aria-label={taskExpanded ? "收起已完成任务全文" : "展开已完成任务全文"} disabled={interactionDisabled} onClick={() => setTaskExpanded(value => !value)}><span className="task-record-copy">{text}</span></button> : showTaskCopy ? <TaskPageText contentKey={`${record.id}\u0000${bodyText}`} disabled={interactionDisabled}>{text}</TaskPageText> : <span className="task-record-copy">{text}</span>}</div>
         </div>
-        {!collapsed ? <div className="task-record-details">
+        {!collapsed && !compact ? <div className="task-record-details">
+          {scheduleLine}
           <div className="task-record-metadata">{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>
           {!masked && movies.length ? <div className="timeline-movie-cards">{movies.map(movie => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={event => { event.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}
           {!masked && record.assetRefs.some(ref => ref.role === "attachment") ? <div className="record-attachments">{record.assetRefs.filter(ref => ref.role === "attachment").map(ref => <a key={ref.assetId} href={assetContentUrl(ref.assetId)} download>{assets.find(asset => asset.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}
-          {photoLine}{weatherLine}{relationLine}
+          {photoLine}{relationLine}
         </div> : null}
         </div></div>
         <div className="task-record-footer">
+          {compact ? scheduleLine : null}
           {masked ? <div className="timeline-status"><PrivacyMask onReveal={reveal} /></div> : <span className={`timeline-status status-${task.task.status}`}>{done ? <Check size={12} aria-hidden="true" /> : null}{statusLabel(task.task.status)}</span>}
           <div className="timeline-actions" aria-label="记录操作">
             <button className={`record-action task-action ${done ? "" : "task-action-complete"}`} type="button" aria-label={done ? "恢复待办" : "完成任务"} title={done ? "恢复待办" : "完成任务"} onClick={() => onTaskStatus(task, nextStatus)} disabled={interactionDisabled}>{done ? <RotateCcw size={14} aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}<span className="task-action-label">{done ? "恢复待办" : "完成"}</span></button>
-            {task.task.status !== "cancelled" && !done ? <button className="record-action" type="button" aria-label="取消任务" title="取消任务" onClick={() => onTaskStatus(task, "cancelled")} disabled={interactionDisabled}><XCircle size={14} aria-hidden="true" /><span className="task-action-label">取消</span></button> : null}
-            <button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button>
-            <button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button>
+            {showTaskCopy ? <AssistantMessageActions content={masked ? "" : bodyText} className="task-record-copy-action" disabled={interactionDisabled || masked} copyLabel="复制任务正文" copiedLabel="已复制任务正文" copiedMessage="已复制正文" failedMessage="复制失败，请重试或检查剪贴板权限" /> : null}
+            <RecordEditActions recordId={record.id} disabled={interactionDisabled} onEdit={() => onEdit(record)} onDelete={() => onDelete(record)} />
           </div>
         </div>
       </div>
       <RecordDeleteUndo id={record.id} />
     </article>;
   }
-  return <article className={`timeline-item ${deletion ? "is-delete-pending" : ""} ${record.kind === "journal" && !bodyText.trim() && photoAssetIds.length ? "is-photo-only" : ""} ${interactionDisabled ? "is-stale" : ""} ${focused ? "is-ui-focused" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content" inert={Boolean(deletion)}><div className="timeline-meta"><span className={`kind-tag kind-${record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{recordLabel(record.kind)}</span>{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} />}</div>{!masked && movies.length ? <div className="timeline-movie-cards">{movies.map((movie) => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}{record.assetRefs.some((ref) => ref.role === "attachment") && !masked ? <div className="record-attachments">{record.assetRefs.filter((ref) => ref.role === "attachment").map((ref) => <a key={ref.assetId} href={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} download>{assets.find((a) => a.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}{photoLine}{weatherLine}<div className="timeline-footer">{relationLine}<div className="timeline-footer-places">{!masked && record.kind === "journal" ? <PlaceRecordCards ids={record.entityRefs.filter(ref => ref.entityType === "place").map(ref => ref.entityId)} entities={entities} disabled={interactionDisabled} onOpen={onOpenEntity} /> : null}</div><div className="timeline-actions" aria-label="记录操作"><button className="record-action record-action-icon" type="button" onClick={() => onEdit(record)} disabled={interactionDisabled} aria-label="编辑记录" title="编辑记录"><Edit3 size={14} aria-hidden="true" /></button><button className="record-action record-action-icon record-action-danger" type="button" onClick={() => onDelete(record)} disabled={interactionDisabled} aria-label="删除记录" title="删除记录"><Trash2 size={14} aria-hidden="true" /></button></div></div></div><RecordDeleteUndo id={record.id} /></article>;
+  return <article className={`timeline-item ${deletion ? "is-delete-pending" : ""} ${record.kind === "journal" && !bodyText.trim() && photoAssetIds.length ? "is-photo-only" : ""} ${interactionDisabled ? "is-stale" : ""} ${focused ? "is-ui-focused" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content" inert={Boolean(deletion)}><div className="timeline-meta"><span className={`kind-tag kind-${isDreamRecord(record) ? "dream" : record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{isDreamRecord(record) ? "梦境" : recordLabel(record.kind)}</span>{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} />}</div>{!masked && movies.length ? <div className="timeline-movie-cards">{movies.map((movie) => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}{record.assetRefs.some((ref) => ref.role === "attachment") && !masked ? <div className="record-attachments">{record.assetRefs.filter((ref) => ref.role === "attachment").map((ref) => <a key={ref.assetId} href={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} download>{assets.find((a) => a.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}{photoLine}<div className="timeline-footer">{relationLine}<div className="timeline-footer-places">{!masked && record.kind === "journal" ? <PlaceRecordCards ids={record.entityRefs.filter(ref => ref.entityType === "place").map(ref => ref.entityId)} entities={entities} disabled={interactionDisabled} onOpen={onOpenEntity} /> : null}</div><div className="timeline-actions" aria-label="记录操作"><RecordEditActions recordId={record.id} disabled={interactionDisabled} onEdit={() => onEdit(record)} onDelete={() => onDelete(record)} /></div></div></div><RecordDeleteUndo id={record.id} /></article>;
 });

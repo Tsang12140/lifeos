@@ -10,6 +10,7 @@ import { locationClientIp, lookupAmapIp, publicAmapConfig, publicIpv4, readAmapC
 import { tenantConfigFor } from "../src/tenant-config.js";
 import type { AccountIdentity } from "../src/identity-store.js";
 import type { IncomingMessage } from "node:http";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 test("location previews do not change cities or profile keys; confirmation saves only the city", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-location-"));
@@ -17,7 +18,7 @@ test("location previews do not change cities or profile keys; confirmation saves
   process.env.LIFEOS_LOG_DIR = join(root, "logs");
   const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backups") });
   const { server } = createHttpServer(config);
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenOnFetchablePort(server);
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
   const originalFetch = globalThis.fetch;
@@ -70,7 +71,7 @@ test("location previews do not change cities or profile keys; confirmation saves
   assert.equal((await call("/api/weather/device/locate", { latitude: 999, longitude: 114, preview: true })).status, 400);
   assert.equal((await call("/api/location/config")).body.enabled, false);
   const saved = await call("/api/location/config", { enabled: true, apiKey: "amap-private-probe" });
-  assert.deepEqual(saved.body, { enabled: true, hasKey: true, keyUnreadable: false, keySource: "file" });
+  assert.deepEqual(saved.body, { enabled: true, photoAddress: true, hasKey: true, keyUnreadable: false, keySource: "file" });
   assert.equal(readFileSync(join(config.dataDirectory, "amap-config.json"), "utf8").includes("amap-private-probe"), false);
   assert.equal((await call("/api/location/config", { enabled: true, apiKey: "" })).body.hasKey, true);
   delete process.env.LIFEOS_TRUST_PROXY;
@@ -110,7 +111,7 @@ test("AMap environment key supports IP fallback, file precedence and isolated me
   try {
     const config = readConfig({ LIFEOS_DATA_DIR: root, LIFEOS_AMAP_API_KEY: " env-key-probe " });
     assert.equal(readConfig({ LIFEOS_AMAP_API_KEY: "  " }).amapApiKey, undefined);
-    assert.deepEqual(publicAmapConfig(config), { enabled: false, hasKey: true, keyUnreadable: false, keySource: "env" });
+    assert.deepEqual(publicAmapConfig(config), { enabled: false, photoAddress: true, hasKey: true, keyUnreadable: false, keySource: "env" });
     await assert.rejects(lookupAmapIp(config, "8.8.8.8"), /尚未启用/);
     saveAmapConfig(config, { enabled: true, apiKey: "" });
     assert.equal(readFileSync(join(root, "amap-config.json"), "utf8").includes("env-key-probe"), false, "blank save never copies the env secret to disk");

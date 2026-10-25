@@ -1,0 +1,100 @@
+/* Settings only: calendar quick markers keep their own confirmed appearance. */
+.cycle-settings-card .cycle-enable {
+  align-items: center;
+  min-height: 40px;
+  border-color: var(--control-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--control-ink);
+}
+.cycle-settings-card .cycle-enable input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--control-ink);
+}
+.cycle-settings-card .cycle-enable strong { font-weight: 400; color: var(--control-ink); }
+.cycle-settings-card .dialog-field > span { font-weight: 400; }
+.cycle-settings-card .dialog-field input { min-width: 0; outline: none; }
+.cycle-settings-card .cycle-subject { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--control-ink); }
+.cycle-settings-card .cycle-subject > strong { font-size: 14px; font-weight: 400; }
+.cycle-settings-card .cycle-subject > small { flex: 1 1 100%; color: var(--control-muted); }
+.cycle-settings-card .cycle-subject > button { min-height: 40px; margin: 0; }
+.cycle-settings-card .cycle-subject-search { width: 100%; min-height: 40px; padding: 9px 14px; border: 1px solid var(--control-line); border-radius: 10px; background: var(--surface); color: var(--control-ink); font: inherit; }
+.cycle-settings-card .cycle-subject-search:focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; }
+.cycle-settings-card .cycle-subject-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.cycle-settings-card .cycle-subject-options > button { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 9px 14px; border: 1px solid var(--control-line); border-radius: 10px; background: var(--surface); color: var(--control-ink); font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; }
+.cycle-settings-card .cycle-subject-options > button[aria-pressed="true"] { border-color: var(--control-muted); background: var(--control-tray); }
+.cycle-settings-card .cycle-subject-options > button:focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; }
+.cycle-settings-card .cycle-transfer { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--control-line); border-radius: 10px; }
+.cycle-settings-card .cycle-transfer > strong { font-size: 14px; font-weight: 400; color: var(--control-ink); }
+.cycle-settings-card .cycle-transfer > small { color: var(--control-muted); }
+.cycle-settings-card .cycle-transfer-groups { display: flex; flex-wrap: wrap; gap: 8px; max-height: 180px; overflow: auto; }
+.cycle-settings-card .cycle-transfer-groups > label { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 9px 12px; border: 1px solid var(--control-line); border-radius: 10px; color: var(--control-ink); }
+.cycle-settings-card .cycle-transfer-groups input { width: 18px; height: 18px; margin: 0; accent-color: var(--control-ink); }
+.cycle-settings-card .cycle-transfer select { min-height: 40px; border: 1px solid var(--control-line); border-radius: 10px; background: var(--surface); color: var(--control-ink); font: inherit; }
+.cycle-settings-card .cycle-transfer > button { justify-self: start; min-height: 40px; margin: 0; }
+.calendar-cycle-subject { margin: 0 0 8px; padding: 0 4px; color: var(--control-muted); font-size: 14px; line-height: 20px; }
+.cycle-settings-card .cycle-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--control-line);
+}
+.habit-management-card .habit-row > button {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  margin: 0;
+  border-radius: 10px;
+  color: var(--control-muted);
+  box-shadow: none;
+}
+.habit-management-card .habit-dialog { border-color: var(--control-line); }
+.habit-management-card :is(.habit-dialog-header, .habit-dialog-footer) { border-color: var(--control-line); }
+.habit-management-card .habit-dialog-header > button { width: 40px; height: 40px; min-height: 40px; margin: 0; color: var(--control-muted); box-shadow: none; }
+.habit-management-card .habit-field input { outline: none; }
+.habit-management-card .habit-dialog-footer { align-items: stretch; }
+.habit-management-card .habit-icon-categories > button {
+  min-height: 34px;
+  height: auto;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border-color: var(--control-line);
+  background: var(--surface);
+  color: var(--control-ink);
+  font: inherit;
+  font-size: .8125rem;
+  font-weight: 400;
+  line-height: 20px;
+  box-shadow: none;
+}
+.habit-management-card .habit-icon-grid > button {
+  border-color: var(--control-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--control-ink);
+  box-shadow: none;
+}
+.habit-management-card :is(.habit-icon-categories, .habit-icon-grid) > button[aria-pressed="true"] {
+  border-color: var(--control-muted);
+  background: var(--control-tray);
+  color: var(--control-ink);
+}
+@media (hover: hover) and (pointer: fine) {
+  .habit-management-card :is(.habit-icon-categories, .habit-icon-grid) > button:hover:not(:disabled),
+  .habit-management-card :is(.habit-row, .habit-dialog-header) > button:hover:not(:disabled) { background: var(--control-tray); }
+}
+@media (pointer: coarse) {
+  .habit-management-card .habit-icon-categories > button { min-height: 40px; padding: 9px 10px; }
+}
+@media (max-width: 480px) {
+  .habit-management-card .habit-dialog-footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; }
+  .habit-management-card .habit-dialog-footer > button { width: 100%; }
+}
+@media (max-width: 340px) {
+  .habit-management-card .habit-dialog-footer { grid-template-columns: minmax(0, 1fr); }
+}

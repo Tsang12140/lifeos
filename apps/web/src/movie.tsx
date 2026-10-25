@@ -186,7 +186,9 @@ export async function importMovie(candidate: MovieResolveCandidate): Promise<Mov
 }
 
 export async function upsertMovie(movie: MovieEntity): Promise<MovieEntity> {
-  const payload = await requestMovie<unknown>(MOVIE_ENDPOINTS.upsert, { method: "POST", body: JSON.stringify(movie) });
+  // Library entities also carry storage metadata such as createdAt. The movie
+  // endpoint accepts only movie fields, already defined by this normalizer.
+  const payload = await requestMovie<unknown>(MOVIE_ENDPOINTS.upsert, { method: "POST", body: JSON.stringify(normalizeMovie(movie) ?? movie) });
   return normalizeMovie(payload) ?? movie;
 }
 
@@ -342,6 +344,7 @@ export function MovieCardDialog({ entity, onClose, onSaved }: { readonly entity:
   useEffect(() => { const dialog = dialogRef.current; if (!dialog) return; if (entity && !dialog.open) dialog.showModal(); if (!entity && dialog.open) dialog.close(); }, [entity]);
   if (entity === null) return <dialog ref={dialogRef} className="modal-dialog" />;
   const poster = moviePoster(entity);
+  const close = () => { if (!busy) onClose(); };
   const save = async () => {
     if (busy) return;
     const parsed = rating.trim() === "" ? undefined : Number(rating);
@@ -353,10 +356,10 @@ export function MovieCardDialog({ entity, onClose, onSaved }: { readonly entity:
     } catch (cause) { setError(cause instanceof Error ? cause.message : "保存评分失败，请重试"); }
     finally { setBusy(false); }
   };
-  return <dialog ref={dialogRef} className="modal-dialog movie-card-dialog" data-movie-card={entity.id} aria-labelledby="movie-card-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
-    <div className="movie-card-hero">{poster ? <img className="movie-card-poster" src={poster} alt={`${entity.name} 海报`} onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <div className="movie-card-poster movie-card-poster-fallback" aria-hidden="true"><Film size={29} /></div>}<div className="movie-card-heading"><p className="eyebrow">{entity.mediaType === "tv" ? "剧集卡片" : "电影卡片"}</p><h2 id="movie-card-title">《{entity.name}》</h2>{movieMeta(entity) ? <p>{movieMeta(entity)}</p> : null}{entity.watched && !entity.watchedAt ? <small>已看，观看日期未记录</small> : null}{entity.watchedAt ? <small>观看于 {entity.watchedAt.slice(0, 10)}</small> : null}</div><button className="icon-button compact-icon-button" type="button" onClick={onClose} aria-label="关闭电影卡片"><X size={17} aria-hidden="true" /></button></div>
-    <div className="movie-card-body">{entity.overview ? <div className="movie-card-field"><small>简介</small><p>{entity.overview}</p></div> : null}<div className="movie-card-ratings">{entity.doubanRating === undefined ? null : <span><Star size={14} aria-hidden="true" />豆瓣 {entity.doubanRating}</span>}<label><span>我的评分</span><input type="number" min="0" max="10" step="0.5" value={rating} onChange={(event) => setRating(event.target.value)} aria-label="我的评分" /></label></div><label className="movie-card-field"><span>短评</span><textarea rows={3} value={review} onChange={(event) => setReview(event.target.value)} aria-label="电影短评" /></label>{entity.externalIds ? <div className="movie-card-external"><small>外部 ID</small><span>{entity.externalIds.tmdb ? `TMDb ${entity.externalIds.tmdb}` : null}{entity.externalIds.imdb ? `IMDb ${entity.externalIds.imdb}` : null}{entity.externalIds.douban ? `豆瓣 ${entity.externalIds.douban}` : null}</span></div> : null}{error ? <p className="movie-panel-error" role="alert">{error}</p> : null}</div>
-    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={onClose}>关闭</button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存评分与短评"}</span></button></div>
+  return <dialog ref={dialogRef} className="modal-dialog movie-card-dialog" data-movie-card={entity.id} aria-labelledby="movie-card-title" onCancel={(event) => { event.preventDefault(); close(); }} onClose={close}>
+    <div className="movie-card-hero">{poster ? <img className="movie-card-poster" src={poster} alt={`${entity.name} 海报`} onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <div className="movie-card-poster movie-card-poster-fallback" aria-hidden="true"><Film size={29} /></div>}<div className="movie-card-heading"><p className="eyebrow">{entity.mediaType === "tv" ? "剧集卡片" : "电影卡片"}</p><h2 id="movie-card-title">《{entity.name}》</h2>{movieMeta(entity) ? <p>{movieMeta(entity)}</p> : null}{entity.watched && !entity.watchedAt ? <small>已看，观看日期未记录</small> : null}{entity.watchedAt ? <small>观看于 {entity.watchedAt.slice(0, 10)}</small> : null}</div><button className="icon-button compact-icon-button" type="button" onClick={close} disabled={busy} aria-label="关闭电影卡片"><X size={17} aria-hidden="true" /></button></div>
+    <div className="movie-card-body">{entity.overview ? <div className="movie-card-field"><small>简介</small><p>{entity.overview}</p></div> : null}<div className="movie-card-ratings">{entity.doubanRating === undefined ? null : <span><Star size={14} aria-hidden="true" />豆瓣 {entity.doubanRating}</span>}<label><span>我的评分</span><input type="number" min="0" max="10" step="0.5" disabled={busy} value={rating} onChange={(event) => setRating(event.target.value)} aria-label="我的评分" /></label></div><label className="movie-card-field"><span>短评</span><textarea rows={3} disabled={busy} value={review} onChange={(event) => setReview(event.target.value)} aria-label="电影短评" /></label>{entity.externalIds ? <div className="movie-card-external"><small>外部 ID</small><span>{entity.externalIds.tmdb ? `TMDb ${entity.externalIds.tmdb}` : null}{entity.externalIds.imdb ? `IMDb ${entity.externalIds.imdb}` : null}{entity.externalIds.douban ? `豆瓣 ${entity.externalIds.douban}` : null}</span></div> : null}{error ? <p className="movie-panel-error" role="alert">{error}</p> : null}</div>
+    <div className="dialog-footer"><button className="secondary-button" type="button" onClick={close} disabled={busy}>关闭</button><button className="primary-button" type="button" onClick={() => void save()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存评分与短评"}</span></button></div>
   </dialog>;
 }
 

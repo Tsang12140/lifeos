@@ -71,8 +71,10 @@ function entityDecisionsField(value: unknown, text: string, repository: SqliteRe
 }
 
 export function buildRecord(input: JsonObject, repository: SqliteRecordRepository): TimelineRecord {
-  hasOnlyKeys(input, ["kind", "content", "entityMentions", "occurredAt", "dueAt", "isPrivate", "isDemo", "isBackfill", "weather", "note", "entityRefs", "relatedRecordIds", "assetRefs"]);
+  hasOnlyKeys(input, ["kind", "nature", "content", "entityMentions", "occurredAt", "dueAt", "isPrivate", "isDemo", "isBackfill", "weather", "note", "entityRefs", "relatedRecordIds", "assetRefs"]);
   const kind = enumField(input.kind, RECORD_KINDS, "kind");
+  const nature = input.nature === undefined ? undefined : enumField(input.nature, ["dream"] as const, "nature");
+  if (nature && kind !== "journal") throw new HttpError(400, "invalid_field", "梦境必须保存为日记记录");
   const content = stringField(input.content, "content");
   const decisions = input.entityMentions === undefined ? undefined : entityDecisionsField(input.entityMentions, content, repository);
   if (input.occurredAt !== undefined && input.occurredAt === null) throw new HttpError(400, "invalid_time", "occurredAt cannot be null on create");
@@ -97,7 +99,7 @@ export function buildRecord(input: JsonObject, repository: SqliteRecordRepositor
   const common = {
     id,
     createdAt: nowInstant(),
-    body: { original: content, ...(decisions === undefined ? {} : { entityMentions: decisions }) },
+    body: { original: content, ...(nature ? { nature } : {}), ...(decisions === undefined ? {} : { entityMentions: decisions }) },
     ...(occurredAt === undefined ? {} : { occurredAt }),
     ...(isPrivate === undefined ? {} : { isPrivate }),
     ...(isDemo === undefined ? {} : { isDemo }),

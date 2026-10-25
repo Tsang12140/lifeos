@@ -1,17 +1,25 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { loadAssistantConversation } from "./assistant-history-api";
-import { initialShareSelection, mergeShareMessages, needsEarlierShareWindow, type ShareMessage } from "./assistant-share-model";
-import { createAssistantShareArtwork, type AssistantShareArtwork } from "./assistant-share-image";
+import { initialShareSelection, mergeShareMessages, needsEarlierShareWindow, shareMessageParts, type ShareMessage, type ShareRedaction } from "./assistant-share-model";
+import { createAssistantShareArtwork, encodeAssistantShareCanvas, type AssistantShareArtwork } from "./assistant-share-image";
 import { copyShareImage, mobileImageSave, saveShareImage } from "./assistant-share-output";
 import { lockDialogScroll } from "./dialog-scroll-lock";
+import { AssistantSharePreview } from "./assistant-share-preview";
 import "./assistant-share.css";
 
 export interface AssistantShareRequest {
   readonly messages: readonly ShareMessage[];
   readonly initialIndex: number;
   readonly conversationId: string | null;
+}
+
+function ShareMessageCopy({ message }: { readonly message: ShareMessage }) {
+  const parts = shareMessageParts(message);
+  return <span className="assistant-share-choice-copy">{parts.map((part, index) => part.kind === "citation"
+    ? <span key={index} className="assistant-citation" aria-label={`引用 ${part.number}`}>{part.number}</span>
+    : part.strong ? <strong key={index}>{part.text}</strong> : <Fragment key={index}>{part.text}</Fragment>)}</span>;
 }
 
 export function AssistantShareDialog({ request, onClose }: { readonly request: AssistantShareRequest; readonly onClose: () => void }) {
@@ -22,10 +30,12 @@ export function AssistantShareDialog({ request, onClose }: { readonly request: A
   const [hasOlder, setHasOlder] = useState(Boolean(request.conversationId && request.messages[0]?.seq && request.messages[0].seq > 1));
   const [preview, setPreview] = useState<string | null>(null);
   const [artwork, setArtwork] = useState<AssistantShareArtwork | null>(null);
+  const [redactions, setRedactions] = useState<readonly ShareRedaction[]>([]);
+  const [editingRedactions, setEditingRedactions] = useState(false);
   const [mobile, setMobile] = useState(mobileImageSave), [outputBusy, setOutputBusy] = useState(false);
   const [status, setStatus] = useState(""), [saveHelp, setSaveHelp] = useState(false);
   const [initialLoading, setInitialLoading] = useState(Boolean(hasOlder && needsEarlierShareWindow(request.messages, request.messages[request.initialIndex]?.id ?? "")));
-  const alive = useRef(true), generation = useRef(0);
+  const alive = useRef(true), generation = useRef(0), photoCache = useRef(new Map<string, Promise<HTMLImageElement | null>>());
   useLayoutEffect(() => { alive.current = true; if (ref.current && !ref.current.open) ref.current.showModal(); const unlock = lockDialogScroll(); return () => { alive.current = false; generation.current++; unlock(); }; }, []);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   useEffect(() => {
@@ -65,7 +75,7 @@ export function AssistantShareDialog({ request, onClose }: { readonly request: A
     // The opening snapshot is immutable; manual selection never re-runs defaults.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
-  const chosen = messages.filter(message => selected.has(message.id));
+  const chosen = useMemo(() => messages.filter(message => selected.has(message.id)), [messages, selected]);
   const locked = busy || olderBusy || initialLoading || outputBusy;
   const allSelected = !hasOlder && messages.length > 0 && chosen.length === messages.length;
   const close = () => { generation.current++; onClose(); };
@@ -73,11 +83,22 @@ export function AssistantShareDialog({ request, onClose }: { readonly request: A
     if (locked || !chosen.length) return;
     const current = ++generation.current; setBusy(true); setError(""); setStatus(""); setSaveHelp(false);
     try {
-      const image = await createAssistantShareArtwork(chosen);
+      const image = await createAssistantShareArtwork(chosen, new Date(), [], photoCache.current);
       if (!alive.current || generation.current !== current) return;
-      setArtwork(image); setPreview(URL.createObjectURL(image.jpeg));
+      setArtwork(image); setPreview(URL.createObjectURL(image.jpeg)); setRedactions([]); setEditingRedactions(false);
     } catch (e) { if (alive.current && generation.current === current) setError(e instanceof Error ? e.message : "生成图片失败，请重试"); }
     finally { if (alive.current && generation.current === current) setBusy(false); }
+  };
+  const applyRedactions = async (masks: readonly ShareRedaction[], canvas: HTMLCanvasElement): Promise<boolean> => {
+    if (!artwork || locked) return false;
+    const current = ++generation.current; setOutputBusy(true); setError("");
+    try {
+      const result = await encodeAssistantShareCanvas(canvas, new Date(artwork.generatedAt));
+      if (!alive.current || generation.current !== current) return false;
+      setArtwork(result); setPreview(URL.createObjectURL(result.jpeg)); setRedactions(masks); setStatus("");
+      return true;
+    } catch (e) { if (alive.current && generation.current === current) setError(e instanceof Error ? e.message : "图片生成失败，请重试"); return false; }
+    finally { if (alive.current && generation.current === current) setOutputBusy(false); }
   };
   const loadOlder = async () => {
     if (!request.conversationId || locked || !messages[0]?.seq) return;
@@ -101,7 +122,7 @@ export function AssistantShareDialog({ request, onClose }: { readonly request: A
     finally { if (alive.current) setOlderBusy(false); }
   };
   const output = async (kind: "copy" | "save") => {
-    if (locked || !artwork || !preview) return;
+    if (locked || editingRedactions || !artwork || !preview) return;
     const current = generation.current; setOutputBusy(true); setError(""); setStatus(""); setSaveHelp(false);
     try {
       if (kind === "copy") {
@@ -120,13 +141,13 @@ export function AssistantShareDialog({ request, onClose }: { readonly request: A
   return createPortal(<dialog ref={ref} className="modal-dialog assistant-share-dialog" aria-labelledby="assistant-share-title" onCancel={event => { event.preventDefault(); close(); }} onKeyDown={event => event.stopPropagation()} onContextMenu={event => event.stopPropagation()}>
     <header className="assistant-share-header"><h2 id="assistant-share-title">{preview ? "图片预览" : "分享对话"}</h2><button className="icon-button" type="button" aria-label="关闭对话分享" onClick={close}><X size={18} /></button></header>
     <div className="assistant-share-body" aria-busy={locked}>
-      {preview ? <img className="assistant-share-preview" src={preview} alt="选中对话的图片预览" /> : <>
+      {preview && artwork ? <AssistantSharePreview messages={chosen} artwork={artwork} preview={preview} redactions={redactions} imageCache={photoCache.current} locked={locked} saveHelp={saveHelp} onEditingChange={setEditingRedactions} onApply={applyRedactions} /> : <>
         <p className="assistant-share-hint">{initialLoading ? "正在读取半小时内的对话…" : "默认勾选此前半小时的对话，可自由调整。"}</p>
         <div className="assistant-share-selection-tools"><button className="secondary-button assistant-share-toggle-all" type="button" disabled={locked} onClick={() => void toggleAll()}>{allSelected ? "取消全选" : "全选"}</button>
         {hasOlder ? <button className="secondary-button assistant-share-older" type="button" disabled={locked} onClick={() => void loadOlder()}>{olderBusy ? "正在加载…" : "加载更早消息"}</button> : null}</div>
         <div className="assistant-share-messages">{messages.map((message, index) => <label key={message.id} className={`assistant-share-choice is-${message.role}${selected.has(message.id) ? " is-selected" : ""}`}>
           <input type="checkbox" aria-label={`选择第${index + 1}条${message.role === "user" ? "我的消息" : "AI回答"}`} checked={selected.has(message.id)} disabled={locked} onChange={() => setSelected(current => { const next = new Set(current); if (next.has(message.id)) next.delete(message.id); else next.add(message.id); return next; })} />
-          <span className="assistant-share-choice-content"><small>{message.role === "user" ? "我" : "AI管家"}</small><span className="assistant-share-choice-copy">{message.text}</span>{message.attachments?.map(attachment => <span className="assistant-share-attachment" key={attachment.assetId}>{attachment.name}</span>)}</span>
+          <span className="assistant-share-choice-content"><small>{message.role === "user" ? "我" : "AI管家"}</small><ShareMessageCopy message={message} />{message.attachments?.map(attachment => <span className="assistant-share-attachment" key={attachment.assetId}>{attachment.name}</span>)}</span>
         </label>)}</div>
       </>}
     </div>
@@ -136,7 +157,7 @@ export function AssistantShareDialog({ request, onClose }: { readonly request: A
       {saveHelp ? <p className="assistant-share-save-help" role="status">长按上方图片，选择存储图像或保存到相册。</p> : null}
     </div> : null}
     <footer className="assistant-share-footer"><span aria-live="polite">已选 {chosen.length} 条</span><div className="assistant-share-operations">
-      {preview ? <><button className="secondary-button" type="button" disabled={locked} onClick={() => { setPreview(null); setArtwork(null); setStatus(""); setError(""); setSaveHelp(false); }}>重新选择</button><button className="secondary-button assistant-share-copy-image" type="button" disabled={locked} onClick={() => void output("copy")}>复制图片</button><button className="primary-button assistant-share-save-image" type="button" disabled={locked} onClick={() => void output("save")}>{mobile ? "保存图片" : "下载图片"}</button></> : <><button className="secondary-button" type="button" onClick={close}>取消</button><button className="primary-button" type="button" disabled={locked || !chosen.length} onClick={() => void generate()}>{busy ? "正在生成…" : "预览图片"}</button></>}
+      {preview ? <><button className="secondary-button" type="button" disabled={locked || editingRedactions} onClick={() => { setPreview(null); setArtwork(null); setRedactions([]); setStatus(""); setError(""); setSaveHelp(false); }}>重新选择</button><button className="secondary-button assistant-share-copy-image" type="button" disabled={locked || editingRedactions} onClick={() => void output("copy")}>复制图片</button><button className="primary-button assistant-share-save-image" type="button" disabled={locked || editingRedactions} onClick={() => void output("save")}>{mobile ? "保存图片" : "下载图片"}</button></> : <><button className="secondary-button" type="button" onClick={close}>取消</button><button className="primary-button" type="button" disabled={locked || !chosen.length} onClick={() => void generate()}>{busy ? "正在生成…" : "预览图片"}</button></>}
     </div></footer>
   </dialog>, document.body);
 }

@@ -200,8 +200,8 @@
   color: var(--control-ink);
 }
 .backfill-chat-composer .ai-gear-button:focus-visible {
-  outline: 1px solid var(--muted);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: none;
 }
 .backfill-chat-composer .ai-send-button {
   border-radius: 999px;

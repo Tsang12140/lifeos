@@ -8,7 +8,7 @@
 
 ## 你的任务
 
-对 `E:\Projects\motion-lab\lifeos` 做**恰好三轮**递进式 Debug 审计。每轮把已确认或高度可疑的缺陷
+对 `D:\apps\lifeos` 做**恰好三轮**递进式 Debug 审计。每轮把已确认或高度可疑的缺陷
 从「实例」提炼为「根因类别」，下一轮必须先执行这些类别的定向搜索，再扩大到相邻模块、相同数据流和反向边界。
 第三轮结束后写一份**可独立阅读的详细 Markdown 报告**，然后停止；**不要修任何 Bug**。
 
@@ -59,6 +59,12 @@
 
 ### 第 1 轮 · 模式库扫捕（已知坑的同类实例）
 
+- **原生弹窗初始焦点与恢复不能靠验收脚本补齐**：React在隐藏输入上的autoFocus可能早于showModal，原生初始焦点会落到前面的关闭按钮；必须在弹出后、不点击或调用focus的前提下直接键入验证。取消与成功不可无条件复用焦点返回：输PIN把交互模态切成键盘，鼠标开启的开关被强制focus后会出现意外focus-visible轮廓。保留真正Tab导航的可见焦点，不能全局隐藏outline。computed outlineWidth非零不代表可见，须同时查outlineStyle、颜色、boxShadow。参考.review/verify-app-lock-focus.mjs及app-lock-focus-before.txt。
+- **CDP按键模拟要区分真实键盘与测试错误**：Input.dispatchKeyEvent修饰位为Alt=1、Ctrl=2、Meta=4、Shift=8；把1当Shift会被应用正确的Alt组合键保护挡住，不能据此误改产品快捷键。Ctrl+A带KeyA及虚拟键码65；错误后聚焦在下一帧恢复，须等焦点条件再断言。PIN自动提交验证输入事件、防重复互斥及关闭／Tab路径，不能用脚本调用submit冒充第四位输入。参考.review/verify-app-lock-pin.mjs。
+- **预览重启前不能把权限过滤统计当完整索引覆盖**：AI memory/status会过滤当前锁定板块；底层25块、可见24块可以同时正确。按后台索引器的全部合格记录和当前内容hash核对覆盖，确认无待生成，再对比向量字节；不因数量差直接触发重索引或修改保护项目。共享serve-pids.json可能被另一个隔离档案实例占用，重启前须独立核对目标端口的完整命令、父子进程、数据路径；保留另一实例的PID元数据，不能按该文件停止非目标树。参考.review/lib/pin-preview-coverage.mjs及reload-app-lock-pin-preview.mjs的前置守卫；该更新器不是验收脚本，不为审计反复执行。
+
+- **旧通用类可能绕过现行设计**：先按AGENTS「UI 施工与交付门槛」定位DESIGN对应条款；检查新UI是否只复用primary-button／secondary-button／settings-card-icon，却未接入中性组件作用域。settings-service-forms.css按卡片覆盖，新增卡片不会自动获得其颜色、字重、圆角及焦点规则。对照条款预期量最终计算样式，不能只验按钮同高、不溢出或功能通过；局部8px圆角也不能扩成全站规格。检查助手实现参数是否被误写成「主人确认」，已完成标记是否掩盖设计待修。定位命令：`rg -n 'primary-button|secondary-button|settings-card-icon|app-lock-actions' apps/web/src/app-lock* apps/web/src/styles.css apps/web/src/settings-service-forms.css`；当前应用锁仅作已知问题线索，修复状态查docs/todo.md，禁止以旧报告作本轮视觉通过证据。
+
 - **人设不能靠单点禁令无限生长**：审查实际发给模型的整个提示链，不能只看persona文件；固定句数／项数、某种饮品／某个段子的示例、幽默禁令串、日期每次附星期或到秒、全禁编号／列表、旧问答入口的第二身份，以及强制附加查看建议，都可能把回复变成记录员。口吻收拢为少量通用正向原则，按用户问法安排主次、结论和必要依据、证据范围、自然幽默；需要完整清单可展开。保留JSON／plan、隐私、资料权限和明确确认，不用词语替换后处理伪造风格。检查真实上游请求而非只测常量；保护范围做前后比对；小样必须是虚构资料、凭证只读且不回显、不得发主人记录或写生产库。真实回复风格与schema成功分开报告，若仍铺开材料如实留样，不靠为样本新增专用禁令“修绿”。复验node .review/check-persona-boundaries.mjs、node .review/verify-persona-principles.mjs，真实只读node .review/probe-persona-principles-live.mjs。
 
 - **分享窗口、两屏和原生能力不能只测按钮存在**：固定30分钟以点击消息为结束点，不按相邻间隔无限扩张；默认窗口跨100条先补齐，全选要补齐完整会话，失败保留选择，迟到请求不能复活已关闭弹窗。两屏上限按图片高宽比和统一手机参考量最终尺寸，不能靠降像素倍率冒充高度限制；逐档真实字号重排，最小20px仍超限应保留选择报错，核对完整末段和照片。提问原时间与生成时刻分工、跨年及无效时间均验，生成时刻在同一预览的复制／下载期间不能漂移。原画布预先准备PNG，点击时立即写ClipboardItem；只在promise成功后提示，能力缺失／权限拒绝不假报成功。手机分享只证明传入图片，不能宣称已存相册；取消静默、不支持时原图长按，不退回文件下载。长图的成功／错误／帮助必须在固定可见区。320px三按钮可能比内宽多几像素而换行；同组全等宽、实量正常／忙碌／自定义字体中心和边线净距。复验node .review/verify-share-tools.mjs；真实只读node .review/probe-share-tools-live.mjs，仅虚构图内存导出，不实际改系统剪贴板或导出主人图片。
@@ -91,6 +97,7 @@
    - 验收脚本/夹具里是否**硬编码了具体日期**（会在午夜静默失效，失败形态像产品回归）
 2. **CSS 布局与动画**
    - **图片切换的已加载不等于已可见（2026-10-16）**：按URL给img换key会立即移除旧图；onLoad一触发就卸载占位，但新图opacity仍从0淡入，会造成前景空档，即使缓存命中、网络零图片请求也闪。加载时清空照片背景会额外制造整屏亮暗变化；相邻图未预取只会放大首次等待，不能解释暖缓存固定闪烁。分别记录冷/暖缓存的逐帧opacity、placeholder.complete/naturalWidth、背景图none、节点身份与真实HTTP；在隔离文档临时禁用transition作对照，不把改CSS实验当产品修复。排除dialog重挂载、开场动画重播与舞台矩形变化；下一图准备/解码完再交接、占位退场时点与背景连续性需独立验收。复现Node24 node .review/diagnose-photo-flash.mjs（合成API＋真实5199只读拦写，无截图）；证据.photo-flash-findings.txt及photo-flash-samples.json均在.review。
+   - **手机聊天页面、键盘和输入区（2026-10-17）**：独立导航页不可沿用浮层的背景inert/焦点圈；检查底栏选中、Back/Forward/刷新来源、相同聊天实例和跨页生成/阅读/附件保留。量visualViewport高度与offsetTop、键盘前后底栏/输入按钮真实矩形；照片+短可视区会把45%输入上限变成发送按钮裁切，不能只测空输入。新入口替换浮球时检查所有旧display覆盖；真实键盘与视口mock分开报告。复现Node24 node .review/verify-assistant-page.mjs（隔离API/假流式模型）、node .review/probe-assistant-page-live.mjs（真实GET只读拦写），无截图。
    - 瀑布流不能只验静态矩形：旧待删除样式的position:relative可能覆盖绝对定位；effect清理时短暂移除容器height，会立即夹掉scrollY，即使同次layout effect随后恢复高度也已经晚了。后台刷新期间用!loading卸载整墙也会造成同类回顶。须在长页真实滚动后用鼠标删除／撤销，量卡片坐标、容器DOM身份与scrollY，并延迟GET覆盖刷新。容器和卡片尺寸、字体就绪均要重排；测大字号先等字体完成。减少动态仍可能保留0.01ms过渡，负向transform夹具至少等下一帧，不能同帧读到identity就误判检测无效。复验node .review/verify-notes-paper.mjs（隔离），node .review/probe-notes-paper-live.mjs（生产只读、发送前拦全部非GET/HEAD）；最终报告notes-paper-browser/live.txt。
    - CSS网格定位必须核对真实父级 `display`：子项声明 `grid-column` 但父级仍为 flex 时该规则无效；成功／错误分支新增的同级 message／status 会成为额外 flex 项，挤压 `.settings-card-copy`，即使整页 `scrollWidth` 没溢出，copy仍可能为0px，标题逐字竖排。备份总览里的图标、copy和固定status同样有此模式，长状态在窄容器／20px根字号会把说明压窄。逐项量正常、空、长成功、长失败分支的父级display、copy实际宽度、Range.getClientRects()行盒和状态相对位置；容器足够宽时标题应一行，正文有可读宽度；将父级临时恢复旧flex做负向复现。数据ID、原件字节与无整页横溢都不能代替文本几何验收。复验 `node .review/verify-archive-upload-ui.mjs`、`node .review/probe-layout-collisions.mjs` 和只读 `node .review/archive-ui-integration/live-preview-probe.mjs`。
    - 长按照片日期后，浏览器的兼容鼠标事件可能把焦点从菜单送回日期格：菜单打开前须以该日期格作为来源焦点，确保Escape/方向键仍有效。真实数据只读探针需覆盖照片格，不能仅用无照片隔离夹具推断；探针要在发送前拦截所有标记/记录写入，背景观看心跳若被模拟应单独计数，不声称“没有非GET尝试”。复验node .review/probe-calendar-hold-live.mjs。

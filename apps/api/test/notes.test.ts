@@ -9,11 +9,11 @@ import { readConfig } from '../src/config.js';
 import { SqliteRecordRepository } from '../src/repository.js';
 import { spaceFingerprint } from '../src/portable-space.js';
 import { assertValidNoteDetails, createExportBundle, parseExportJson, serializeExportJson } from '@lifeos/core';
+import { listenOnFetchablePort } from './support/fetchable-port.js';
 test('note folders preserve hierarchy, CAS, history and portable JSON without mutating legacy notes', async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'lifeos-notes-'));
     const { server, app } = createHttpServer(readConfig({ LIFEOS_DATA_DIR: join(root, 'data'), LIFEOS_ASSET_ROOT: join(root, 'assets'), LIFEOS_HOST: '127.0.0.1' }));
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
+    await listenOnFetchablePort(server);
     t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
     const base = 'http://127.0.0.1:' + (server.address() as {
         port: number;
@@ -101,8 +101,7 @@ test('unified notes validate unsafe metadata shapes and export folder cycles ato
 test('folders and rich note history stay inside their authenticated account', async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'lifeos-notes-accounts-'));
     const { server } = createHttpServer(readConfig({ LIFEOS_HOST: '127.0.0.1', LIFEOS_DATA_DIR: root, LIFEOS_ASSET_ROOT: join(root, 'assets'), LIFEOS_PASSWORD: 'isolated-owner-password', LIFEOS_OWNER_USERNAME: 'owner', LIFEOS_ACCOUNT_MODE: '1', LIFEOS_ALLOWED_ORIGINS: 'https://example.invalid', LIFEOS_COOKIE_SECURE: 'true' }));
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
+    await listenOnFetchablePort(server);
     t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
     const base = 'http://127.0.0.1:' + (server.address() as {
         port: number;
@@ -134,8 +133,7 @@ test('folders and rich note history stay inside their authenticated account', as
 test('note shares enforce passwords, linked-image access, revocation and failed-attempt limits', async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'lifeos-note-shares-'));
     const { server, app } = createHttpServer(readConfig({ LIFEOS_DATA_DIR: join(root, 'data'), LIFEOS_ASSET_ROOT: join(root, 'assets'), LIFEOS_HOST: '127.0.0.1', LIFEOS_PASSWORD: 'owner-secret' }));
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
+    await listenOnFetchablePort(server);
     t.after(async () => { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
     const base = 'http://127.0.0.1:' + (server.address() as {
         port: number;
@@ -175,14 +173,17 @@ test('note shares enforce passwords, linked-image access, revocation and failed-
     assert.ok((await image.arrayBuffer()).byteLength > 0);
     assert.equal((await call(publicPath + '/assets/another-asset', undefined, unlocked.cookie)).status, 404);
     assert.equal((await call(publicPath, { content: 'overwrite' }, unlocked.cookie)).status, 405);
-    assert.equal((await call(publicPath,{revision:note.revision,title:'guest',html:'<p>guest</p>',content:'guest'},unlocked.cookie,'PUT')).status,403);
-    assert.equal((await call(endpoint,{revision:note.revision,canEdit:true},owner)).status,200);
-    const edited=await call(publicPath,{revision:note.revision,title:'访客修改',html:'<p>访客修改正文</p>',content:'访客修改正文'},unlocked.cookie,'PUT');assert.equal(edited.status,200);assert.equal(edited.body.canEdit,true);
-    assert.equal((await call(publicPath,{revision:note.revision,title:'stale',html:'<p>stale</p>',content:'stale'},unlocked.cookie,'PUT')).status,409);
-    note.revision=edited.body.revision;
-    assert.equal(app.repository.findById(note.id)?.isPrivate,true);assert.equal(app.repository.notes.versions(note.id).length,1);
-    assert.equal((await call(endpoint,{revision:note.revision,canEdit:false},owner)).status,200);
-    assert.equal((await call(publicPath,{revision:note.revision,title:'guest',html:'<p>guest</p>',content:'guest'},unlocked.cookie,'PUT')).status,403);
+    assert.equal((await call(publicPath, { revision: note.revision, title: 'guest', html: '<p>guest</p>', content: 'guest' }, unlocked.cookie, 'PUT')).status, 403);
+    assert.equal((await call(endpoint, { revision: note.revision, canEdit: true }, owner)).status, 200);
+    const edited = await call(publicPath, { revision: note.revision, title: '访客修改', html: '<p>访客修改正文</p>', content: '访客修改正文' }, unlocked.cookie, 'PUT');
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.canEdit, true);
+    assert.equal((await call(publicPath, { revision: note.revision, title: 'stale', html: '<p>stale</p>', content: 'stale' }, unlocked.cookie, 'PUT')).status, 409);
+    note.revision = edited.body.revision;
+    assert.equal(app.repository.findById(note.id)?.isPrivate, true);
+    assert.equal(app.repository.notes.versions(note.id).length, 1);
+    assert.equal((await call(endpoint, { revision: note.revision, canEdit: false }, owner)).status, 200);
+    assert.equal((await call(publicPath, { revision: note.revision, title: 'guest', html: '<p>guest</p>', content: 'guest' }, unlocked.cookie, 'PUT')).status, 403);
     const changed = await call(endpoint, { revision: note.revision, password: 'new-password' }, owner);
     assert.equal(changed.status, 200);
     assert.equal((await call(publicPath, undefined, unlocked.cookie)).status, 401, 'password rotation invalidates previous reader cookies');

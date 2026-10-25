@@ -1,0 +1,36 @@
+.contact-avatar-dialog .contact-avatar-crop { background: var(--control-tray); color: var(--control-muted); }
+.contact-avatar-dialog .contact-avatar-zoom { color: var(--control-muted); }
+.contact-avatar-dialog .contact-avatar-zoom input { min-height: 40px; accent-color: var(--control-ink); }
+.contact-avatar-dialog .contact-avatar-options { width: 100%; }
+.contact-avatar-dialog .contact-avatar-options > button {
+  display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+  min-width: 0; max-width: 100%; min-height: 40px; height: auto; margin: 0; padding: 9px 14px;
+  border: 1px solid var(--control-line); border-radius: 999px;
+  background: var(--surface); color: var(--control-muted); font: inherit;
+  font-size: .875rem; font-weight: 400; line-height: 20px; white-space: normal; overflow-wrap: anywhere;
+  box-shadow: none; transform: none;
+}
+.contact-avatar-dialog .contact-avatar-options > button:disabled { opacity: .52; cursor: not-allowed; }
+.contact-avatar-dialog.is-dragging .contact-avatar-crop { outline-color: var(--control-muted); }
+.contact-avatar-dialog :is(button, input, .contact-avatar-crop):focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; }
+.movie-card-dialog .movie-card-body { padding-bottom: 16px; }
+.movie-card-dialog :is(.movie-card-field > span, .movie-card-ratings label) { color: var(--control-muted); font-size: .8125rem; font-weight: 400; }
+.movie-card-dialog :is(.movie-card-field textarea, .movie-card-ratings input) {
+  box-sizing: border-box; min-width: 0; width: 100%; min-height: 40px; padding: 9px 10px;
+  border: 1px solid var(--control-line); border-radius: 10px;
+  background: var(--surface); color: var(--control-ink); font: inherit; font-size: .875rem; line-height: 20px;
+}
+.movie-card-dialog .movie-card-ratings label { min-width: 0; width: 110px; max-width: 100%; }
+.movie-card-dialog .movie-card-field textarea { resize: vertical; }
+.movie-card-dialog :is(.movie-card-field textarea, .movie-card-ratings input):focus { border-color: var(--control-muted); box-shadow: none; }
+.movie-card-dialog :is(button, input, textarea):focus-visible { outline: 2px solid var(--control-muted); outline-offset: 2px; }
+.movie-card-dialog :is(input, textarea):disabled { opacity: .52; cursor: not-allowed; }
+@media (hover: hover) and (pointer: fine) {
+  .contact-avatar-dialog .contact-avatar-options > button:hover:not(:disabled) { background: var(--control-tray); }
+}
+@media (max-width: 480px) {
+  .contact-avatar-dialog .contact-avatar-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 340px) {
+  .contact-avatar-dialog .contact-avatar-options { grid-template-columns: minmax(0, 1fr); }
+}

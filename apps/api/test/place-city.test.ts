@@ -1,0 +1,40 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { once } from "node:events";
+import { readConfig } from "../src/config.js";
+import { createHttpServer } from "../src/server.js";
+import { listenOnFetchablePort } from "./support/fetchable-port.js";
+
+test("search-city location converts GPS, selects only a real city, validates requests and leaves stored data unchanged", async t => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-place-city-"));
+  const config = readConfig({ LIFEOS_HOST: "127.0.0.1", LIFEOS_DATA_DIR: join(root, "data"), LIFEOS_ASSET_ROOT: join(root, "assets"), LIFEOS_BACKUP_DIR: join(root, "backup"), LIFEOS_AMAP_API_KEY: "fake-city-key" });
+  const app = createHttpServer(config); await listenOnFetchablePort(app.server);
+  const address = app.server.address(); assert(address && typeof address !== "string"); const base = `http://127.0.0.1:${address.port}`;
+  const originalFetch = globalThis.fetch, calls: URL[] = []; let component: unknown = { city: "佛山市", province: "广东省" }, fail = false;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input)); if (url.origin === base) return originalFetch(input, init);
+    assert.equal(url.origin, "https://restapi.amap.com"); assert.equal(init?.redirect, "error"); calls.push(url);
+    if (fail) throw Error("fake provider failure must not leak key");
+    return Response.json(url.pathname.endsWith("convert") ? { status: "1", locations: "113.2,23.1" } : { status: "1", regeocode: { addressComponent: component } });
+  };
+  t.after(async () => { globalThis.fetch = originalFetch; app.server.closeAllConnections(); await new Promise<void>(done => app.server.close(() => done())); rmSync(root, { recursive: true, force: true }); });
+  const call = async (body: unknown, headers = { "content-type": "application/json" }) => { const r = await originalFetch(base + "/api/places/locate", { method: "POST", headers, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() as any }; };
+  const configFiles = () => Object.fromEntries(readdirSync(config.dataDirectory).filter(name => name.endsWith("-config.json")).map(name => [name, readFileSync(join(config.dataDirectory, name), "utf8")]));
+  const stored = JSON.stringify(app.app.repository.listEntities({})), before = configFiles();
+  const point = { latitude: 23, longitude: 113, accuracy: 20 };
+  assert.deepEqual(await call(point), { status: 200, body: { city: "佛山市" } });
+  assert.equal(calls[0]!.searchParams.get("coordsys"), "gps"); assert.equal(calls[0]!.searchParams.get("locations"), "113.000000,23.000000");
+  assert.equal(calls[1]!.searchParams.get("location"), "113.2,23.1");
+  await call(point); assert.equal(calls.length, 2, "repeated button uses short-lived in-memory city cache");
+  component = { city: [], province: "北京市" }; assert.equal((await call({ ...point, longitude: 114 })).body.city, "北京市");
+  component = { city: [], province: "广东省" }; assert.equal((await call({ ...point, longitude: 115 })).status, 502, "province alone is not a selected city");
+  fail = true; const failure = await call({ ...point, longitude: 116 }); assert.equal(failure.status, 502); assert(!JSON.stringify(failure.body).includes("fake-city-key"));
+  const count = calls.length;
+  for (const invalid of [{}, { ...point, accuracy: -1 }, { ...point, accuracy: 100001 }, { ...point, latitude: 91 }, { ...point, longitude: "113" }, { ...point, query: "private" }, { ...point, latitude: null }]) assert.equal((await call(invalid)).status, 400);
+  assert.equal(calls.length, count, "invalid payloads never call provider");
+  assert.equal((await call(point, { "content-type": "text/plain" })).status, 415);
+  assert.equal(JSON.stringify(app.app.repository.listEntities({})), stored); assert.deepEqual(configFiles(), before, "does not change weather/profile configuration");
+});

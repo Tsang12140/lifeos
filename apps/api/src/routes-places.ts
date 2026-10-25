@@ -8,8 +8,10 @@ import { boundedIntegerField, hasOnlyKeys, jsonObject, stringField } from "./fie
 import type { RouteHandler } from "./route-context.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { handleStaticMap } from "./place-static-map.js";
+import { recommendPlaceRole } from "./place-role.js";
+import { locatePlaceCity } from "./place-city.js";
 
-export interface PlaceSearchItem extends PlaceDetails { name: string; address?: string; role?: string; distanceMeters?: number }
+export interface PlaceSearchItem extends PlaceDetails { name: string; address?: string; category?: string; role?: string; distanceMeters?: number }
 const searchCache = new Map<string, { expires: number; value: unknown }>();
 const limits = new Map<string, { time: number; count: number }>();
 const text = (value: unknown): string => typeof value === "string" ? value.trim() : "";
@@ -51,10 +53,28 @@ export function normalisePoi(value: unknown): PlaceSearchItem | null {
   const type = text(poi.typecode);
   const role = type.startsWith("05") ? "dining" : type.startsWith("06") ? "shopping" : type.startsWith("09") ? "medical" : /^(10|11)/.test(type) ? "travel" : type.startsWith("14") ? "school" : undefined;
   const fields = { phone: text(poi.business?.tel || poi.tel).slice(0, 200), city: text(poi.cityname).slice(0, 200), province: text(poi.pname).slice(0, 200), district: text(poi.adname).slice(0, 200), address: text(poi.address).slice(0, 500) };
-  return { name, amapId, ...Object.fromEntries(Object.entries(fields).filter(([, val]) => val)), ...(role ? { role } : {}), ...(photoUrl ? { photoUrl } : {}), ...(Number.isFinite(longitude) && Number.isFinite(latitude) && Math.abs(longitude!) <= 180 && Math.abs(latitude!) <= 90 ? { longitude: longitude!, latitude: latitude! } : {}) };
+  return { name, amapId, ...Object.fromEntries(Object.entries(fields).filter(([, val]) => val)), ...(text(poi.type) ? { category: text(poi.type).slice(0, 200) } : {}), ...(role ? { role } : {}), ...(photoUrl ? { photoUrl } : {}), ...(Number.isFinite(longitude) && Number.isFinite(latitude) && Math.abs(longitude!) <= 180 && Math.abs(latitude!) <= 90 ? { longitude: longitude!, latitude: latitude! } : {}) };
 }
 
 export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname, url) => {
+  if (pathname === "/api/places/locate" && req.method === "POST") {
+    ctx.checkRequestSecurity(req); requireJsonContentType(req);
+    const input = jsonObject(await readBody(req, ctx.config.bodyLimitBytes), "body"); hasOnlyKeys(input, ["latitude", "longitude", "accuracy"]);
+    for (const [field, max] of [["latitude", 90], ["longitude", 180], ["accuracy", 100_000]] as const) if (typeof input[field] !== "number" || !Number.isFinite(input[field]) || Math.abs(input[field] as number) > max || field === "accuracy" && (input[field] as number) < 0) throw new HttpError(400, "invalid_location", "当前位置无效，请重新定位");
+    const controller = new AbortController(), close = () => { if (!res.writableEnded) controller.abort(); }; res.on("close", close);
+    try { setJson(res, 200, await locatePlaceCity(ctx.config, input as unknown as SearchPoint, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))); } finally { res.off("close", close); }
+    return true;
+  }
+  if (pathname === "/api/places/role-suggestion" && req.method === "POST") {
+    ctx.checkRequestSecurity(req); requireJsonContentType(req);
+    const body = jsonObject(await readBody(req, ctx.config.bodyLimitBytes), "body");
+    hasOnlyKeys(body, ["name", "address", "category"]);
+    const input = { name: body.name === undefined ? "" : stringField(body.name, "name"), address: body.address === undefined ? "" : stringField(body.address, "address"), category: body.category === undefined ? "" : stringField(body.category, "category") };
+    if (input.name.length > 200 || input.address.length > 500 || input.category.length > 200) throw new HttpError(400, "invalid_field", "地点资料过长");
+    const controller = new AbortController(); const close = () => { if (!res.writableEnded) controller.abort(); }; res.on("close", close);
+    try { setJson(res, 200, await recommendPlaceRole(ctx.config, input, controller.signal)); } finally { res.off("close", close); }
+    return true;
+  }
   if (await handleStaticMap(ctx, req, res, pathname, url)) return true;
   if (pathname === "/api/places/cities" && req.method === "GET") {
     const places = new Map(ctx.repository.listEntities({ type: "place" }).filter((p): p is Place => p.type === "place").map(p => [p.id, p]));
@@ -114,7 +134,7 @@ export const handlePlacesRoutes: RouteHandler = async (ctx, req, res, pathname, 
   }
   const radius = input.radius === undefined ? 5000 : boundedIntegerField(input.radius, "radius", 1000, 50000);
   const runtime = readAmapConfig(ctx.config);
-  if (!runtime.apiKey) throw new HttpError(409, "amap_key_missing", "请先配置高德 Web 服务 Key，再搜索店铺或地址");
+  if (!runtime.apiKey) throw new HttpError(409, "amap_key_missing", "请先配置高德 Web 服务 Key，再搜索地址");
   const key = ctx.config.dataDirectory;
   const cacheKey = createHash("sha256").update(JSON.stringify([key, runtime.apiKey, query, city, page, location, radius])).digest("hex");
   const cached = searchCache.get(cacheKey);

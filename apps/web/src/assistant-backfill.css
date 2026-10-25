@@ -1,5 +1,31 @@
+/* =================================================================================
+   AI 管家格式阶梯（2026-10-19 收敛，只作用于管家范围）
+   ---------------------------------------------------------------------------------
+   字号 6 档（按语义，不按组件临时取值）：
+     11px  micro   时间戳、条数、极小注
+     12px  meta    次要说明、状态、日期分组、列表摘要、附件名
+     13px  body    对话正文、预览正文、按钮、字段、输入值
+     14px  note    引导／说明（2026-10-17 主人要求，不得再降）
+     15px  title   桌面面板标题（手机页 17px 见 mobile-input-layout.css）
+     18px  heading 中等弹窗标题（分享弹窗）
+     20px  heading 大弹窗标题（历史弹窗，沿用产品 .dialog-header h2 基准）
+   例外（有明确理由，不算漏网）：来源阅读器 15px 正文／19px 标题是阅读节奏；
+   操作菜单沿用共享菜单规范（约 14px 由 .ai-assistant-menu 之外的菜单基线决定，
+   与日历菜单同款），不在本阶梯内单独拉平。
+   圆角 4 档：
+     8px   control 按钮、输入控件、附件胶囊、小图标按钮
+     10px  card    预览卡、搜索框、列表项、范围按钮
+     14px  bubble  对话气泡（用户／助手同档）
+     20px  surface 面板、历史弹窗、输入托盘
+   特殊形状保留：胶囊 999px、圆形 50%、图片 6px（媒体不参与控件圆角）。
+   只改管家文件内的原值，不新增覆盖层；全局 `.secondary-button` 等仍走各自规范。
+   ================================================================================= */
 .ai-assistant-panel.has-backfill { width:min(390px,calc(100vw - 24px));height:auto;max-height:72dvh; }
 .ai-assistant-panel.has-backfill .ai-assistant-header { flex-shrink:0; }
+/* 私密授权状态：内凹长条，状态不可点；图标和小时数在窄栏也尽量保留。 */
+.ai-assistant-status { flex:none;display:inline-flex;align-items:center;justify-content:center;gap:3px;width:45.49px;height:16px;padding:1px 4.57px;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:7px;background:var(--surface-soft);box-shadow:inset 0 1px 2px rgb(32 36 37 / .16),inset 0 -1px 0 rgb(255 255 255 / .8);color:#202425;font-size:9px;font-weight:750;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums; }
+.ai-assistant-status-text { font-weight:850; }
+.ai-assistant-status-lock { flex:none;width:12px;height:12px; }
 .assistant-backfill { display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden; }
 .backfill-reading-area { position:relative;display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden; }
 .backfill-workspace-scroll { flex:1 1 auto;padding:14px 16px;overflow-y:auto;min-height:0;overscroll-behavior:contain;overflow-anchor:none; }
@@ -8,46 +34,66 @@
 .backfill-read-more:focus-visible { outline:2px solid var(--ink-soft);outline-offset:2px; }
 .backfill-chat-message.is-streaming { margin-top:11px; }
 .backfill-workspace-content { display:flow-root; }
-.backfill-intro,.backfill-explanation,.backfill-mode { font-size:13px;line-height:1.6;margin:0 0 12px;color:#5c6675;white-space:pre-wrap; }
+/* 顶部问候语／说明：2026-10-17 主人说「太小，参考输出正文的范例」。正文是 0.82rem(13.12px)，
+   这里提到 14px —— 提示语再小就白写了；顺带把行高放到 1.65 跟正文一致。 */
+.backfill-intro,.backfill-explanation,.backfill-mode { font-size:14px;line-height:1.65;margin:0 0 12px;color:#5c6675;white-space:pre-wrap; }
+/* 问候语同时带 `.ai-assistant-message`（正文 0.82rem=13.12px），而 styles.css 在本文档之后加载、
+   同为 (0,1,0) 会盖掉上面那条 ⇒ 这里用两个类压住它，否则「提到 14px」只写在纸上。 */
+.backfill-chat-copy.backfill-intro { font-size:14px;line-height:1.65; }
 .backfill-explanation,.backfill-evidence { user-select:text; }
 .backfill-field { display:flex;flex-direction:column;gap:6px;margin:0 0 12px;min-width:0; }
 .backfill-field > span { font-size:12px;color:#657080; }
-.backfill-field input,.backfill-field textarea,.backfill-field select { width:100%;min-width:0;min-height:36px;padding:8px;border:1px solid #d8dee8;border-radius:8px;background:white;color:#263345;font:inherit;font-size:13px;box-sizing:border-box; }
+.backfill-field input,.backfill-field textarea,.backfill-field select { width:100%;min-width:0;min-height:36px;padding:8px;border:1px solid var(--line);border-radius:8px;background:white;color:#263345;font:inherit;font-size:13px;box-sizing:border-box; }
 .backfill-field textarea { resize:vertical;line-height:1.65; }
 .backfill-field .secondary-button { align-self:flex-start; }
 .backfill-operation-group { display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px; }
 .assistant-backfill .backfill-operation-group > button,.assistant-backfill .backfill-field > button,.assistant-backfill .backfill-plan-fields > button { height:34px;min-height:34px;font-size:13px;line-height:20px;padding:6px 10px;border-radius:8px;margin:0; }
 .backfill-row { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
-.backfill-plan-fields { padding:12px 0;border:0;border-top:1px solid #e1e6ed;min-width:0;margin:16px 0 0; }
+.backfill-plan-fields { padding:12px 0;border:0;border-top:1px solid var(--line);min-width:0;margin:16px 0 0; }
 .backfill-plan-fields legend { font-size:13px;font-weight:600;padding:0 8px 0 0; }
-.backfill-draft-card { padding:12px;border:1px solid #e1e6ed;border-radius:10px;margin-bottom:12px;min-width:0; }
+.backfill-draft-card { padding:12px;border:1px solid var(--line);border-radius:10px;margin-bottom:12px;min-width:0; }
 .backfill-choice { display:flex;align-items:center;gap:8px;font-size:13px;line-height:1.6;margin-bottom:10px;overflow-wrap:anywhere; }
 .backfill-choice input { flex:none; }
 .backfill-material { display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;font-size:13px; }
 .backfill-evidence { font-size:12px;color:#687283;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere; }
 .backfill-draft-card summary { cursor:pointer;font-size:12px;margin:8px 0; }
-.backfill-warning { color:#9c4f27;font-size:12px;line-height:1.6;white-space:pre-wrap;margin:6px 0; }
+/* 失败提示：红色感叹号 + 正文级字号。以前是 12px 棕色纯文字，主人看不出「这是失败了、
+   要重试」，也看不出为什么旁边那排按钮（含推理程度）突然点不动（2026-10-17 提出）。
+   图标本身由 TSX 里的 CircleAlert 给出，这里只管排布与配色。 */
+.backfill-warning { display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;margin:8px 0;color:#c0392b;font-size:14px;line-height:1.55; }
+.backfill-warning-icon { flex:none;margin-top:2px;color:#c0392b; }
+.backfill-warning-text { min-width:0;overflow-wrap:anywhere;white-space:pre-wrap; }
+.backfill-warning > button { flex:none; }
 .backfill-movie-preview { display:flex;gap:12px;align-items:center;margin:12px 0; }
-.backfill-movie-preview img,.backfill-poster-fallback { width:54px;height:78px;object-fit:cover;border-radius:6px;background:#edf0f5;flex:none; }
+.backfill-movie-preview img,.backfill-poster-fallback { width:54px;height:78px;object-fit:cover;border-radius:6px;background:var(--surface-soft);flex:none; }
 .backfill-poster-fallback { display:grid;place-items:center;color:#768296; }
 .backfill-movie-preview small { display:block;font-size:12px;margin-top:4px; }
 .backfill-workspace-footer { flex:none;border-top:0;padding:8px;background:white;max-height:min(45dvh,320px);overflow:auto;box-sizing:border-box; }
-.backfill-workspace-footer p { font-size:12px;line-height:1.5;margin:0 0 8px; }
+/* 输入框上方那一排状态语（恢复中／失败／正在…／本地模式）统一到 14px：12px 在手机上太小。 */
+.backfill-workspace-footer p { font-size:14px;line-height:1.55;margin:0 0 8px; }
+.backfill-workspace-footer p.backfill-notice { color:#5c6675; }
 .backfill-workspace-footer .backfill-operation-group { margin:0; }
 .backfill-chat-composer.ai-assistant-composer { display:flex;flex-direction:column;gap:6px;margin:0;padding:8px;align-items:stretch;border:1px solid var(--line);border-radius:14px;background:var(--surface-soft); }
-.backfill-chat-composer.ai-assistant-composer:focus-within { border-color:#bdcbfa;box-shadow:none; }
+.backfill-chat-composer.ai-assistant-composer:focus-within { border-color:var(--line-strong);box-shadow:none; }
 .backfill-chat-composer.ai-assistant-composer textarea { flex:none;width:100%;height:32px;min-height:32px;max-height:80px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;box-sizing:border-box;resize:none;line-height:20px; }
 .backfill-chat-composer.ai-assistant-composer textarea:focus,.backfill-chat-composer.ai-assistant-composer textarea:focus-visible { border:0;outline:none;box-shadow:none; }
 .backfill-input-actions { display:flex;gap:8px;align-items:center;min-width:0; }
 .backfill-input-actions > .backfill-operation-group { flex:none; }
-.backfill-chat-composer .backfill-operation-group { flex-wrap:nowrap; }
-.backfill-chat-composer .ai-send-button { width:auto;min-width:52px;background:#07c160;color:white;box-shadow:none; }
-.backfill-chat-composer .ai-send-button:disabled { background:#bfebd1; }
+/* 输入框里的按钮组要贴住底：`.backfill-operation-group` 全局带 margin-bottom:12px，
+   那是给「计划预览／澄清卡片」那种一段段往下排的版式留的。放进输入框后它和 form 自己的
+   padding:8px 叠在一起，按钮行下面就空出 20px，比左右两侧的 8px 厚一倍多（2026-10-17 主人指出）。 */
+.backfill-chat-composer .backfill-operation-group { flex-wrap:nowrap; margin-bottom:0; }
+.backfill-chat-composer .ai-send-button { width:auto;min-width:52px;background:var(--control-ink);color:white;box-shadow:none; }
+.backfill-chat-composer .ai-send-button:disabled { background:#e6e8ea;color:#7c858e; }
+/* The arrow replaces the text label on phones only; keep the desktop send label unchanged. */
+.backfill-chat-composer .ai-send-icon { display:none; }
 /* 回答档位（2026-10-15）：与发送同组等高的次级按钮；菜单勾选列固定宽度对齐。 */
 .backfill-chat-composer .ai-gear-button { width:auto;min-width:0;gap:4px; }
 .backfill-chat-composer .ai-gear-button > svg { color:var(--muted); }
 .ai-assistant-menu .ai-gear-check { flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;color:var(--ink); }
-.backfill-conversation { display:flex;flex-direction:column;gap:11px;min-height:0; }
+/* 清屏后顶部问候语紧贴标题栏：滚动区自己的 14px padding 是「内容边距」，
+   对话本身再让出 8px，让第一行字不像是被标题栏压着（2026-10-17 主人指出）。 */
+.backfill-conversation { display:flex;flex-direction:column;gap:11px;min-height:0;padding-top:8px; }
 .backfill-chat-message { max-width:100%;min-width:0; }
 .backfill-chat-message.is-assistant { display:flex;flex-direction:column;align-items:flex-start;gap:2px; }
 .backfill-chat-message.is-assistant > .backfill-chat-copy { max-width:100%; }
@@ -57,18 +103,18 @@
    可选中只留给真正的对话正文（`.backfill-chat-message` 里那些）。
    守它的是 `.review/verify-selectability.mjs` 的全量扫描。 */
 .backfill-intro { user-select:none; }
-.backfill-chat-history { margin-bottom:12px;font-size:12px;color:#687283; }
+.backfill-chat-history { margin-bottom:12px;font-size:12px;color:var(--muted); }
 .backfill-chat-history .backfill-field { margin-top:8px; }
-.backfill-plan-preview { padding:12px;margin-top:12px;border:1px solid #e1e6ed;border-radius:10px; }
+.backfill-plan-preview { padding:12px;margin-top:12px;border:1px solid var(--line);border-radius:10px; }
 .backfill-plan-preview > strong { font-size:13px; }
 .backfill-preview-copy { margin:8px 0;font-size:13px;line-height:1.6;overflow-wrap:anywhere;white-space:pre-wrap;user-select:text; }
 .backfill-review { margin-top:12px; }
 .backfill-review > summary { font-size:12px;color:#687283;cursor:pointer;padding:8px 0; }
 .backfill-result-actions { margin-top:12px; }
 .timeline-movie-cards { display:flex;flex-wrap:wrap;gap:10px;margin:12px 0; }
-.timeline-movie-card { display:flex;gap:10px;align-items:center;text-align:left;border:1px solid #e1e6ed;border-radius:9px;background:transparent;padding:8px;max-width:100%;min-width:0;color:inherit; }
+.timeline-movie-card { display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);border-radius:10px;background:transparent;padding:8px;max-width:100%;min-width:0;color:inherit; }
 .timeline-movie-card img,.timeline-movie-card > .movie-poster-placeholder { width:42px;height:62px;object-fit:cover;border-radius:4px;flex:none; }
-.timeline-movie-card > .movie-poster-placeholder { display:grid;place-items:center;background:#edf0f5; }
+.timeline-movie-card > .movie-poster-placeholder { display:grid;place-items:center;background:var(--surface-soft); }
 .timeline-movie-card strong,.timeline-movie-card small { display:block;overflow-wrap:anywhere;font-size:12px; }
 .timeline-movie-card small { color:#687283;font-weight:normal;margin-top:4px; }
 @media(max-width:900px) { .ai-assistant-panel.has-backfill { width:calc(100% - 24px);max-width:calc(100% - 24px); } }
@@ -86,20 +132,22 @@
     position:fixed;left:var(--context-left);top:var(--context-top);bottom:24px;width:var(--context-width);z-index:5;
     display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0;
   }
-  .context-rail.is-dock-layout > .task-summary { flex:none;position:static;max-height:min(30dvh,240px);overflow-y:auto;scrollbar-width:auto; }
-  .context-rail.is-dock-layout > .task-summary::-webkit-scrollbar { width:6px; }
-  .context-rail.is-dock-layout > .task-summary::-webkit-scrollbar-track { background:transparent;margin-block:14px; }
-  .context-rail.is-dock-layout > .task-summary::-webkit-scrollbar-thumb { border-radius:6px;background:#d9dfe7; }
-  .context-rail.is-dock-layout > .task-summary:hover::-webkit-scrollbar-thumb { background:#b3bdca; }
+  .context-rail.is-dock-layout > .task-summary { flex:none;position:static;max-height:min(30dvh,240px);overflow:hidden; }
+  .task-summary > .task-list::-webkit-scrollbar,
+  .task-summary > .summary-heading::-webkit-scrollbar { width:6px; }
+  .task-summary > .task-list::-webkit-scrollbar-track { background:transparent;margin-block:8px; }
+  .task-summary > .task-list::-webkit-scrollbar-thumb { border-radius:6px;background:#d9dfe7; }
+  .task-summary > .task-list:hover::-webkit-scrollbar-thumb { background:#b3bdca; }
   @supports not selector(::-webkit-scrollbar) {
-    .context-rail.is-dock-layout > .task-summary { scrollbar-width:thin;scrollbar-color:#d9dfe7 transparent; }
-    .context-rail.is-dock-layout > .task-summary:hover { scrollbar-color:#b3bdca transparent; }
+    .task-summary > .task-list,
+    .task-summary > .summary-heading { scrollbar-width:thin;scrollbar-color:#d9dfe7 transparent; }
+    .task-summary > .task-list:hover { scrollbar-color:#b3bdca transparent; }
   }
   .ai-assistant-panel.has-backfill.is-docked {
     position:relative;top:auto;right:auto;bottom:auto;z-index:5;
     flex:0 1 auto; margin-top:auto; width:100%;max-width:100%;height:var(--assistant-height,320px);max-height:100%;
     min-height:0;
-    border-color:#dce3ed;border-radius:18px;
+    border-color:var(--line);border-radius:20px;
     box-shadow:0 4px 18px rgb(24 36 61 / .045);
     opacity:1;pointer-events:auto;transform:none;transition:none;
   }
@@ -107,6 +155,7 @@
   .ai-assistant-panel.is-docked .ai-assistant-title { min-width:0;gap:8px; }
   .ai-assistant-panel.is-docked .ai-assistant-title strong { color:#354256; }
   .ai-assistant-panel.is-docked .ai-assistant-logo { width:26px;height:26px;box-shadow:none; }
+  .ai-assistant-panel.is-docked .ai-assistant-title { gap:5px; }
   .ai-assistant-panel.is-docked .backfill-workspace-scroll { padding:12px;scrollbar-width:thin; }
   .ai-assistant-panel.is-docked .backfill-workspace-footer { padding:8px; }
   .ai-assistant-panel.is-docked .backfill-row { grid-template-columns:minmax(0,1fr); }
@@ -125,8 +174,8 @@
 .search-filter-chips { display:flex;flex-wrap:wrap;gap:8px; }
 
 .shot-number { position:absolute;left:4px;top:4px;z-index:3;padding:1px 5px;border-radius:4px;background:rgb(0 0 0 / .65);color:white;font-size:11px;line-height:16px;pointer-events:none; }
-.backfill-workspace-footer.is-dragging { outline:2px dashed var(--primary);outline-offset:-3px; }
-.backfill-confirm-card { border-top:1px solid #e1e6ed;padding:12px 0;min-width:0; }
+.backfill-workspace-footer.is-dragging { outline:2px dashed var(--ink-soft);outline-offset:-3px; }
+.backfill-confirm-card { border-top:1px solid var(--line);padding:12px 0;min-width:0; }
 .backfill-card-heading { display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px; }
 .backfill-preview-photos { display:flex;flex-wrap:wrap;gap:6px; }
 .backfill-preview-photos img { width:64px;height:64px;object-fit:cover;border-radius:6px; }
@@ -145,9 +194,9 @@
 .backfill-chat-composer .shot-strip-meta { flex-wrap:wrap;flex:0 1 auto;min-width:0;max-width:calc(100% - 86px);align-self:center;justify-content:flex-start;gap:6px;margin:0;padding:0; }
 .backfill-chat-composer .shot-strip-tally { margin:0; }
 .backfill-datetime { padding:0;border:0;background:transparent;color:var(--ink);font:inherit;font-weight:700;cursor:pointer;border-bottom:1px dotted #657080; }
-.backfill-datetime:focus-visible { outline:2px solid var(--primary);outline-offset:3px; }
+.backfill-datetime:focus-visible { outline:2px solid var(--ink-soft);outline-offset:3px; }
 .backfill-datetime-fields { display:flex;flex-wrap:wrap;gap:8px;max-width:100%; }
-.backfill-datetime-fields input { min-width:0;max-width:100%;min-height:34px;padding:4px 6px;border:1px solid #8a97ab;border-radius:6px;background:white;color:var(--ink);font:inherit; }
+.backfill-datetime-fields input { min-width:0;max-width:100%;min-height:34px;padding:4px 6px;border:1px solid var(--line-strong);border-radius:8px;background:white;color:var(--ink);font:inherit; }
 .backfill-plan-preview > .backfill-operation-group:last-child { margin-bottom:0;padding-bottom:0; }
 
 /* =================================================================================
@@ -161,60 +210,84 @@
    弹窗的 `user-select:none` 在 `styles.css` 那条全局弹窗规则里（top layer 不继承）。
    ================================================================================= */
 
-.ai-assistant-menu { position:fixed; z-index:62; display:grid; gap:1px; min-width:min(148px,calc(100vw - 16px)); max-width:calc(100vw - 16px); padding:4px; border:1px solid var(--line); border-radius:11px; background:var(--surface); box-shadow:var(--shadow-soft); }
+.ai-assistant-menu { position:fixed; z-index:62; display:grid; gap:1px; min-width:0; max-width:calc(100vw - 16px); padding:4px; border:1px solid var(--line); border-radius:11px; background:var(--surface); box-shadow:var(--shadow-soft); }
+/* 2026-10-23 主人：右键菜单文字右边不要硬撑出来的空。共用外壳 action-menu.css 的
+   148／180px 最小宽度与本文件同为 (0,1,0) 且后加载，这里用 :not(.ai-gear-menu) 提到
+   (0,2,0) 让宽度完全跟内容走；推理程度菜单本来就有自己的 (0,2,0) 规则，不受影响。 */
+.ai-assistant-menu:not(.ai-gear-menu) { width:max-content; min-width:0; }
+/* 「检索私密」的勾选列（2026-10-23 主人：左边得有一个好看明显的勾选框）：
+   始终画一颗 16px 小方框（与同菜单 16px 图标列同宽，文字左右不跳），
+   未勾＝空框，勾上＝深色实底 + 反白勾。 */
+.ai-assistant-menu .ai-assistant-menu-check { flex:none; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border:1.5px solid var(--line-strong); border-radius:4px; color:transparent; background:transparent; transition:background .12s ease,border-color .12s ease; }
+.ai-assistant-menu .ai-assistant-menu-check.is-checked { border-color:var(--ink); color:var(--surface); background:var(--ink); }
+.ai-assistant-menu .ai-assistant-menu-check > svg { width:11px; height:11px; }
+.ai-assistant-menu button:hover .ai-assistant-menu-check { border-color:var(--ink-soft); }
+.ai-assistant-menu button:hover .ai-assistant-menu-check.is-checked { border-color:var(--ink); }
+.ai-assistant-menu button:disabled .ai-assistant-menu-check { border-color:var(--line); background:transparent; }
 .ai-assistant-menu button { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; margin:0; padding:6px 9px; border:0; border-radius:7px; color:var(--ink-soft); background:transparent; cursor:pointer; font:inherit; font-size:0.8rem; line-height:1.2; text-align:left; }
 .ai-assistant-menu button > svg { flex:none; color:var(--muted); }
 .ai-assistant-menu button:hover,
 .ai-assistant-menu button:focus-visible { outline:none; color:var(--ink); background:var(--surface-soft); }
 .ai-assistant-menu .ai-assistant-menu-label { min-width:0; overflow-wrap:anywhere; }
 .ai-assistant-menu button:disabled { color:var(--muted); cursor:default; }
+/* 消息菜单里分隔「这条消息的操作」和「整个管家的操作」（2026-10-17）。
+   DESIGN.md 第 4 节：分组线只分隔语义不同的操作，行边缘与线至少留 8px。 */
+.ai-assistant-menu .ai-assistant-menu-divider { height:1px; margin:8px 2px; border:0; background:var(--line); }
+/* 推理程度菜单（2026-10-17 主人要求）：选项只有「关闭/低/高/极高」这么两三个字，
+   套用通用菜单的 148px 最小宽度和 40px 行高会撑成一个空荡荡的大块。这里宽度完全跟着
+   字走（min-width:0 才压得住第 166 行的 min-width:min(148px,…)），行高 30px，并在顶上
+   补一行说明「推理程度」，让人一眼知道这组单选是什么。 */
+.ai-assistant-menu.ai-gear-menu { width:max-content; min-width:0; max-width:min(180px,calc(100vw - 16px)); padding:4px; gap:0; }
+.ai-gear-menu-heading { margin:0; padding:4px 9px 5px; color:var(--muted); font-size:.7rem; font-weight:500; line-height:1.2; letter-spacing:.01em; }
+.ai-assistant-menu.ai-gear-menu button { min-height:30px; padding:4px 9px; gap:6px; font-size:.8rem; }
 
-.ai-configure-link { margin:0; padding:0; border:0; border-radius:0; color:var(--primary); background:transparent; cursor:pointer; font:inherit; font-size:inherit; text-decoration:underline; text-underline-offset:2px; }
-.ai-configure-link:hover { color:var(--primary-strong); }
+.ai-configure-link { margin:0; padding:0; border:0; border-radius:0; color:var(--ink); background:transparent; cursor:pointer; font:inherit; font-size:inherit; text-decoration:underline; text-underline-offset:2px; }
+.ai-configure-link:hover { color:var(--ink-soft); }
 
-.modal-dialog.assistant-history-dialog { width:min(calc(100vw - 32px),880px); }
+.modal-dialog.assistant-history-dialog { width:min(calc(100vw - 32px),880px); border-radius:20px; }
+.assistant-history-dialog .eyebrow { font-size:12px; }
 .assistant-history-dialog .dialog-header { padding:20px 22px 15px; }
 .assistant-history-search { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:14px 22px; border-bottom:1px solid var(--line); }
 .assistant-history-search-field { display:flex; flex:1 1 220px; align-items:center; gap:8px; min-width:0; min-height:40px; padding:0 12px; border:1px solid var(--line); border-radius:10px; color:var(--muted); background:var(--surface-soft); }
-.assistant-history-search-field input { flex:1 1 auto; min-width:0; border:0; background:transparent; color:var(--ink); font:inherit; font-size:0.85rem; }
+.assistant-history-search-field input { flex:1 1 auto; min-width:0; border:0; background:transparent; color:var(--ink); font:inherit; font-size:13px; }
 .assistant-history-search-field input:focus { outline:none; }
-.assistant-history-date-filter { display:flex; flex:1 1 132px; flex-direction:column; gap:3px; min-width:0; color:var(--muted); font-size:.64rem; line-height:1.2; }
-.assistant-history-date-filter input { width:100%; min-width:0; height:40px; padding:0 8px; border:1px solid var(--line); border-radius:9px; color:var(--ink); background:var(--surface-soft); font:inherit; font-size:.78rem; box-sizing:border-box; }
+.assistant-history-date-filter { display:flex; flex:1 1 132px; flex-direction:column; gap:3px; min-width:0; color:var(--muted); font-size:11px; line-height:1.2; }
+.assistant-history-date-filter input { width:100%; min-width:0; height:40px; padding:0 8px; border:1px solid var(--line); border-radius:10px; color:var(--ink); background:var(--surface-soft); font:inherit; font-size:13px; box-sizing:border-box; }
 .assistant-history-search-actions { display:flex; gap:8px; }
 
 /* 定高（不是 max-height）：只有容器高度确定，两个子面板才会各自滚动，
    否则网格行被内容撑高、容器一裁，里面就再也滚不动了。 */
 .assistant-history-body { display:grid; grid-template-columns:minmax(200px,264px) minmax(0,1fr); gap:0; height:min(56vh,520px); padding:0; overflow:hidden; }
 .assistant-history-days { display:flex; flex-direction:column; gap:14px; min-height:0; padding:16px 14px 18px; overflow-y:auto; border-right:1px solid var(--line); }
-.assistant-history-day > h3 { margin:0 0 7px; padding:0 6px; color:var(--muted); font-size:0.72rem; font-weight:600; }
+.assistant-history-day > h3 { margin:0 0 7px; padding:0 6px; color:var(--muted); font-size:12px; font-weight:600; }
 .assistant-history-day > ul { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
-.assistant-history-day button { display:grid; gap:3px; width:100%; min-height:44px; padding:7px 9px; border:0; border-radius:9px; color:var(--ink-soft); background:transparent; cursor:pointer; font:inherit; text-align:left; }
+.assistant-history-day button { display:grid; gap:3px; width:100%; min-height:44px; padding:7px 9px; border:0; border-radius:10px; color:var(--ink-soft); background:transparent; cursor:pointer; font:inherit; text-align:left; }
 .assistant-history-day button:hover { background:var(--surface-soft); }
 .assistant-history-day button.is-selected { color:var(--ink); background:var(--surface-soft); box-shadow:inset 0 0 0 1px var(--line); }
-.assistant-history-item-preview { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:0.8rem; line-height:1.45; overflow-wrap:anywhere; }
-.assistant-history-day button small { color:var(--muted); font-size:0.68rem; }
+.assistant-history-item-preview { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.assistant-history-day button small { color:var(--muted); font-size:11px; }
 .assistant-history-thread { display:flex; flex-direction:column; gap:12px; min-height:0; padding:16px 20px 18px; overflow-y:auto; }
-.assistant-history-thread-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0; color:var(--muted); font-size:0.75rem; }
+.assistant-history-thread-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0; color:var(--muted); font-size:12px; }
 .assistant-history-messages { display:grid; gap:10px; }
 .assistant-history-message { display:flex; }
 .assistant-history-message.is-user { justify-content:flex-end; }
-.assistant-history-message-copy { max-width:88%; margin:0; padding:8px 11px; border-radius:13px; color:var(--ink-soft); background:var(--surface-soft); font-size:0.82rem; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
-.assistant-history-message.is-user .assistant-history-message-copy { border-bottom-right-radius:4px; color:#3b4a63; background:var(--primary-soft); }
+.assistant-history-message-copy { max-width:88%; margin:0; padding:8px 11px; border-radius:14px; color:var(--ink-soft); background:var(--surface-soft); font-size:13px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.assistant-history-message.is-user .assistant-history-message-copy { border-bottom-right-radius:4px; color:var(--ink-soft); background:#f1f3f5; }
 .assistant-history-message.is-assistant .assistant-history-message-copy { border-bottom-left-radius:4px; }
 .assistant-history-message-copy mark { padding:0 1px; border-radius:3px; color:inherit; background:#fff0b3; }
-.assistant-history-note { display:flex; align-items:center; gap:6px; margin:0; padding:6px 4px; color:var(--muted); font-size:0.78rem; line-height:1.6; }
+.assistant-history-note { display:flex; align-items:center; gap:6px; margin:0; padding:6px 4px; color:var(--muted); font-size:12px; line-height:1.6; }
 .assistant-history-thread > .assistant-history-note { padding:24px 4px; }
-.assistant-history-error { margin:0; padding:8px 11px; border-radius:9px; color:#8a3b1f; background:#fdece3; font-size:0.78rem; }
+.assistant-history-error { margin:0; padding:8px 11px; border-radius:10px; color:#8a3b1f; background:#fdece3; font-size:12px; }
 .assistant-history-load-more,.assistant-history-load-older { align-self:flex-start; flex:none; margin:0; }
 .assistant-history-message-content { display:grid; justify-items:start; gap:5px; max-width:100%; min-width:0; }
 .assistant-history-message-copy { user-select:text; }
-.assistant-history-message-time { color:var(--muted); font-size:.65rem; line-height:1.3; }
+.assistant-history-message-time { color:var(--muted); font-size:11px; line-height:1.3; }
 .assistant-history-attachments,.backfill-chat-attachments { display:flex; flex-wrap:wrap; gap:6px; max-width:100%; }
-.assistant-history-attachments a,.backfill-chat-attachments button { display:inline-flex; align-items:center; min-width:0; max-width:100%; min-height:28px; padding:4px 8px; border:1px solid var(--line); border-radius:7px; color:var(--primary-strong); background:var(--surface); font:inherit; font-size:.72rem; line-height:1.35; overflow-wrap:anywhere; text-decoration:none; }
+.assistant-history-attachments a,.backfill-chat-attachments button { display:inline-flex; align-items:center; min-width:0; max-width:100%; min-height:28px; padding:4px 8px; border:1px solid var(--line); border-radius:8px; color:var(--ink-soft); background:var(--surface); font:inherit; font-size:12px; line-height:1.35; overflow-wrap:anywhere; text-decoration:none; }
 .backfill-chat-attachments button { cursor:pointer; }
 .assistant-history-attachments a:hover,.backfill-chat-attachments button:hover { background:var(--surface-soft); }
 .backfill-chat-copy p { margin:0; white-space:pre-wrap; }
-.backfill-chat-copy time { display:block; margin-top:5px; color:var(--muted); font-size:10px; line-height:1.3; }
+.backfill-chat-copy time { display:block; margin-top:5px; color:var(--muted); font-size:11px; line-height:1.3; }
 .backfill-reply-failure { margin-top:8px; }
 .backfill-reply-failure .assistant-message-actions { margin-top:6px; }
 .ai-stop-button { justify-content:center; }
@@ -241,8 +314,37 @@
 .backfill-ui-clarify { margin-top:8px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--surface-soft); }
 .backfill-ui-clarify p { margin:0 0 6px; font-size:12px; line-height:1.45; }
 .backfill-ui-clarify .backfill-operation-group { flex-wrap:wrap; }
-.backfill-ui-hint { display:block; margin-top:2px; color:var(--muted); font-size:10px; line-height:1.3; font-weight:400; }
+.backfill-ui-hint { display:block; margin-top:2px; color:var(--muted); font-size:11px; line-height:1.3; font-weight:400; }
 /* 隐私授权条：只在确实有记录被挡住时出现，必须显眼且可拒绝。 */
 .backfill-privacy-request { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin:0 0 8px; padding:8px 10px; border:1px solid #d9c9a8; border-radius:10px; color:#6b5530; background:#fdf9ef; font-size:12px; line-height:1.45; }
 .backfill-privacy-request p { flex:1 1 200px; min-width:0; margin:0; overflow-wrap:anywhere; }
 .backfill-privacy-request button { flex:none; min-height:34px; height:34px; padding:6px 10px; line-height:20px; margin:0; }
+
+/* =================================================================================
+   2026-10-19：管家里的次级操作改回中性描边
+   ---------------------------------------------------------------------------------
+   DESIGN.md 第 4 节：同组按钮只靠颜色／描边／文案表达优先级，并避免无处不在的
+   蓝色强调。「查看某人」「人物／地点／电影」「添加记录草稿」「查看辅记」都是次级
+   入口，不是主操作；原来套用全局 `.secondary-button` 的浅蓝底 + 蓝框 + 蓝字，
+   在一屏里能出现七八个，读起来像一排可点的链接。
+   只在管家（对话区 + 聊天记录弹窗）范围内覆盖，设置页等仍在用的全局蓝底次要
+   按钮不动 —— 那是另一轮全站收敛的事。
+   ================================================================================= */
+.assistant-backfill .secondary-button,
+.assistant-history-dialog .secondary-button {
+  border-color: var(--line);
+  color: var(--ink-soft);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.assistant-backfill .secondary-button:hover:not(:disabled),
+.assistant-history-dialog .secondary-button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.assistant-backfill .secondary-button > svg,
+.assistant-history-dialog .secondary-button > svg {
+  color: var(--muted);
+}

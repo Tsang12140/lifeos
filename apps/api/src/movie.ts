@@ -177,7 +177,7 @@ async function tmdbJson(config: ApiConfig, path: string, query: Record<string, s
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
   let response: Response;
   try {
-    response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+    response = await fetch(url, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(20_000) });
   } catch (error) {
     throw new MovieModuleError(502, "movie_tmdb_unavailable", error instanceof Error && error.name === "TimeoutError" ? "TMDb 请求超时（20 秒）" : "TMDb 暂时无法连接");
   }
@@ -244,7 +244,7 @@ export async function testMovieConfig(config: ApiConfig, apiKey?: string): Promi
   url.searchParams.set("language", "zh-CN");
   let response: Response;
   try {
-    response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+    response = await fetch(url, { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(20_000) });
   } catch (error) {
     throw new MovieModuleError(502, "movie_tmdb_unavailable", error instanceof Error && error.name === "TimeoutError" ? "TMDb 请求超时（20 秒）" : "TMDb 暂时无法连接");
   }

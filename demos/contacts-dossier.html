@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>LifeOS 联系人档案卡 Demo</title>
+  <link rel="stylesheet" href="./contacts-dossier.css">
+  <script src="./contacts-dossier.js" defer></script>
+</head>
+<body>
+  <main class="demo">
+    <header class="demo-header">
+      <div class="demo-brand"><img src="../apps/web/public/favicon.svg" alt="" width="26" height="26"><span>LifeOS</span><span class="demo-label">联系人设计小样</span></div>
+      <span class="demo-note">虚构人物与绘制头像，操作仅在本页生效</span>
+    </header>
+    <div class="demo-tools">
+      <div class="segmented" role="group" aria-label="卡片排版">
+        <button type="button" data-layout="grid" aria-pressed="true">整齐网格</button>
+        <button type="button" data-layout="masonry" aria-pressed="false">轻瀑布</button>
+      </div>
+      <p id="layout-caption">姓名与头像保持对齐，适合快速找人。</p>
+      <div class="segmented size-control" role="group" aria-label="预览尺寸">
+        <button type="button" data-size="desktop" aria-pressed="true">桌面</button>
+        <button type="button" data-size="phone" aria-pressed="false">手机</button>
+      </div>
+    </div>
+    <div class="preview" id="preview" data-size="desktop">
+      <div class="workspace">
+        <section class="directory" aria-labelledby="directory-title">
+          <header class="page-heading"><h1 id="directory-title">联系人</h1><span class="directory-total" id="directory-total"></span></header>
+          <div class="directory-toolbar">
+            <div class="segmented directory-tabs" role="group" aria-label="联系人范围"><button type="button" data-scope="all" aria-pressed="true">全部</button><button type="button" data-scope="common" aria-pressed="false">常用</button></div>
+            <div class="demo-search-box"><button type="button" id="toggle-demo-search" class="icon-button search-mobile-trigger" aria-label="搜索联系人" aria-expanded="false" aria-controls="demo-search-field"><span data-icon="search"></span></button><label class="search" id="demo-search-field"><span data-icon="search"></span><input type="search" id="search" aria-label="搜索全部联系人" autocomplete="off"><button type="button" id="clear-search" class="icon-button" aria-label="清空搜索" hidden><span data-icon="close"></span></button></label></div>
+          </div>
+          <div id="contact-groups" aria-live="polite"></div>
+          <p class="directory-empty" id="directory-empty" hidden>没有找到匹配的联系人</p>
+        </section>
+        <aside class="side-column">
+          <section class="journal-paper" aria-labelledby="journal-title">
+            <div class="section-top"><span>日记里的小头像</span></div>
+            <div class="journal-date"><span>10月16日</span><span>星期五</span></div>
+            <h2 id="journal-title">今天的小事</h2>
+            <div class="journal-copy" id="journal-preview"></div>
+            <div class="journal-controls"><div class="segmented" role="group" aria-label="日记关联显示"><button type="button" data-mentions="linked" aria-pressed="true">已关联</button><button type="button" data-mentions="plain" aria-pressed="false">原文</button></div><button type="button" class="text-button" id="edit-journal" aria-expanded="false" aria-controls="journal-editor">改改文字</button></div>
+            <div id="journal-editor" hidden><textarea id="journal-input" aria-label="编辑虚构日记" rows="4"></textarea><p class="editor-note">可试试小明、阿梨、老周、林夏。这里使用固定姓名匹配演示。</p></div>
+          </section>
+          <section class="face-paper" aria-labelledby="face-title">
+            <div class="section-top"><span id="face-title">人脸关联</span><span class="concept-label">流程示意</span></div>
+            <div class="face-strip" id="face-strip" aria-label="同一个人的三张示意照片"></div>
+            <p id="face-copy">这组照片里的人，可以关联到谁？</p>
+            <button type="button" class="outline-button" id="face-link">选择联系人</button>
+            <p class="face-boundary">仅演示确认与关联步骤，尚未接入人脸识别。</p>
+          </section>
+        </aside>
+      </div>
+    </div>
+    <footer class="demo-footer"><span>两种排版使用同一组联系人；点击卡片可查看小档案。</span><span>自定义头像 64px　正文内头像 16px</span></footer>
+  </main>
+  <input type="file" id="demo-avatar-file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" aria-label="选择Demo头像" hidden>
+  <dialog id="profile-dialog" class="profile-dialog" aria-labelledby="profile-name"><button type="button" class="icon-button dialog-close" aria-label="关闭人物档案" data-close="profile-dialog"><span data-icon="close"></span></button><div id="profile-content"></div></dialog>
+  <dialog id="related-journal-dialog" class="related-journal-dialog" aria-labelledby="related-journal-title"><header class="dialog-heading"><h2 id="related-journal-title">日记</h2><button type="button" class="icon-button" aria-label="关闭关联日记" data-close="related-journal-dialog"><span data-icon="close"></span></button></header><p id="related-journal-meta" class="dialog-subtitle"></p><p id="related-journal-body" class="related-journal-body"></p></dialog>
+  <dialog id="face-dialog" class="face-dialog" aria-labelledby="face-dialog-title"><header class="dialog-heading"><h2 id="face-dialog-title">这是谁？</h2><button type="button" class="icon-button" aria-label="关闭人脸关联" data-close="face-dialog"><span data-icon="close"></span></button></header><p class="dialog-subtitle">确认后，这组示意照片会出现在对应的小档案中。</p><div id="face-choices"></div><div class="dialog-actions"><button type="button" class="outline-button" data-close="face-dialog">取消</button><button type="button" class="solid-button" id="confirm-face" disabled>确认关联</button></div></dialog>
+</body>
+</html>

@@ -1,0 +1,39 @@
+/* Mobile AI is a navigation destination. Desktop retains its existing dock. */
+@media (max-width: 900px) {
+  .app-shell .ai-assistant-launcher { display: none; }
+  .app-shell[data-assistant-page="true"] {
+    position: fixed;
+    top: var(--assistant-page-top, 0px); left: var(--assistant-page-left, 0px);
+    width: var(--assistant-page-width, 100%); height: var(--assistant-page-height, 100dvh);
+    max-width: none; min-height: 0; margin: 0; padding: 0; gap: 0;
+    display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
+    background: var(--surface); z-index: 20; overflow: hidden;
+  }
+  .app-shell[data-assistant-page="true"] > .main-column {
+    grid-row: 1; width: 100%; max-width: none; min-width: 0; min-height: 0;
+    margin: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .app-shell[data-assistant-page="true"] .topbar,
+  .app-shell[data-assistant-page="true"] .content-column,
+  .app-shell[data-assistant-page="true"] .task-summary,
+  .app-shell[data-assistant-page="true"] > .back-to-top { display: none; }
+  .app-shell[data-assistant-page="true"] .content-grid,
+  .app-shell[data-assistant-page="true"] .context-rail {
+    display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0;
+    width: 100%; margin: 0; padding: 0; gap: 0;
+  }
+  .app-shell[data-assistant-page="true"] .ai-assistant-panel.is-mobile-page {
+    position: relative; inset: auto; display: flex; flex: 1 1 auto;
+    width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: none; max-height: none;
+    margin: 0; border: 0; border-radius: 0; box-shadow: none;
+    transform: none; transition: none; opacity: 1; pointer-events: auto; z-index: auto;
+  }
+  .app-shell[data-assistant-page="true"] > .mobile-nav { position: static; grid-row: 2; width: 100%; }
+  .app-shell[data-assistant-page="true"][data-assistant-keyboard="true"] > .mobile-nav { display: none; }
+  .app-shell[data-assistant-page="true"] .ai-assistant-header { padding-inline: max(16px, env(safe-area-inset-left)); }
+  .app-shell[data-assistant-page="true"] .backfill-workspace-scroll { padding: 20px 16px; scrollbar-width: thin; }
+  .app-shell[data-assistant-page="true"] .backfill-workspace-footer {
+    max-height: min(100%, 360px); padding: 10px 12px max(12px, env(safe-area-inset-bottom)); background: var(--surface);
+  }
+  .app-shell[data-assistant-page="true"][data-assistant-keyboard="true"] .backfill-workspace-footer { padding-bottom: 10px; }
+}

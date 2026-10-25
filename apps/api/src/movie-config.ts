@@ -8,7 +8,7 @@ export interface RuntimeMovieConfig {
   readonly enabled: boolean;
   readonly apiKey?: string;
   readonly apiBaseUrl: string;
-  readonly source: "env" | "file" | "none";
+  readonly source: "env" | "file" | "shared" | "none";
 }
 
 /** Safe status shape; it deliberately contains no key or encrypted material. */
@@ -76,27 +76,20 @@ function readStored(config: ApiConfig): StoredMovieConfig | undefined {
   }
 }
 
-function fromEnv(config: ApiConfig): RuntimeMovieConfig {
-  return {
-    enabled: false,
-    ...(config.tmdbApiKey === undefined ? {} : { apiKey: config.tmdbApiKey }),
-    apiBaseUrl: TMDB_API_BASE_URL,
-    source: config.tmdbApiKey === undefined ? "none" : "env",
-  };
-}
-
 export function readRuntimeMovieConfig(config: ApiConfig): RuntimeMovieConfig {
   const stored = readStored(config);
-  if (stored !== undefined) {
-    const apiKey = decrypt(config, stored.encryptedApiKey, stored.apiKeyIv, stored.apiKeyTag);
-    return {
-      enabled: stored.enabled,
-      ...(apiKey === undefined ? {} : { apiKey }),
-      apiBaseUrl: TMDB_API_BASE_URL,
-      source: apiKey === undefined ? "none" : "file",
-    };
-  }
-  return fromEnv(config);
+  const hasStoredKey = Boolean(stored?.encryptedApiKey || stored?.apiKeyIv || stored?.apiKeyTag);
+  const ownKey = stored === undefined ? undefined : decrypt(config, stored.encryptedApiKey, stored.apiKeyIv, stored.apiKeyTag);
+  // A preference-only save must keep resolving the current server key. An
+  // unreadable personal ciphertext remains explicit, rather than being erased.
+  const shared = !ownKey && !hasStoredKey && !config.tmdbApiKey ? config.sharedIntegrations?.movie?.() : undefined;
+  const apiKey = ownKey ?? (hasStoredKey ? undefined : config.tmdbApiKey ?? shared?.apiKey);
+  return {
+    enabled: stored?.enabled ?? false,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    apiBaseUrl: TMDB_API_BASE_URL,
+    source: ownKey ? "file" : !hasStoredKey && config.tmdbApiKey ? "env" : shared?.apiKey ? "shared" : "none",
+  };
 }
 
 export function publicMovieConfig(config: ApiConfig): MovieConfigStatus {
@@ -114,13 +107,19 @@ export function saveRuntimeMovieConfig(
   config: ApiConfig,
   input: { readonly enabled: boolean; readonly apiKey?: string; readonly clearApiKey?: boolean },
 ): MovieConfigStatus {
-  const current = readRuntimeMovieConfig(config);
-  const apiKey = input.clearApiKey ? undefined : input.apiKey?.trim() || current.apiKey;
-  const encrypted = apiKey === undefined ? undefined : encrypt(config, apiKey);
-  const stored: StoredMovieConfig = {
+  const previous = readStored(config);
+  const typed = input.apiKey?.trim();
+  const encrypted = input.clearApiKey || !typed ? undefined : encrypt(config, typed);
+  const stored = {
+    ...previous,
     enabled: input.enabled,
     ...(encrypted === undefined ? {} : { encryptedApiKey: encrypted.encrypted, apiKeyIv: encrypted.iv, apiKeyTag: encrypted.tag }),
   };
+  if (input.clearApiKey) {
+    delete stored.encryptedApiKey;
+    delete stored.apiKeyIv;
+    delete stored.apiKeyTag;
+  }
   mkdirSync(config.dataDirectory, { recursive: true });
   writeFileSync(configPath(config), `${JSON.stringify(stored, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return publicMovieConfig(config);

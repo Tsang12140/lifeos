@@ -1,3 +1,4 @@
+import { allowsPrivateAiAccess } from "./assistant-private-access.js";
 import { randomUUID } from "node:crypto";
 import {
   ASSISTANT_HISTORY_LIMITS,
@@ -8,8 +9,11 @@ import {
   type AssistantHistoryCurrent,
   type AssistantHistoryMessage,
   type AssistantHistoryPage,
+  type UiTurnPlan,
 } from "@lifeos/core";
+import { eligibleSource } from "./journal-retrieval.js";
 import { setJson, HttpError } from "./http-kit.js";
+import { ATTEMPT_RETAIN_DAYS } from "./assistant-attempt-log.js";
 import { readBody, requireJsonContentType } from "./http-body.js";
 import { enumField, hasOnlyKeys, jsonObject, parseDateQuery, stringField } from "./field-validate.js";
 import type { AssistantConversationCursor, AssistantConversationQuery, AssistantConversationRow, SqliteRecordRepository } from "./repository.js";
@@ -17,6 +21,17 @@ import type { RouteHandler } from "./route-context.js";
 
 const DAY_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" });
 const LIST_QUERY_KEYS = new Set(["q", "cursor", "from", "to"]);
+/** One page of failures. Far more than any diagnosis has needed; the response says when it clipped. */
+const ASSISTANT_LOG_LIMIT = 500;
+const ATTEMPT_STAGES = ["connection", "format", "service"] as const;
+/** 对话与 AI 小结共用一页；`source` 只筛不分组，主人点一下就只看一种。 */
+const ATTEMPT_SOURCES = ["chat", "summary"] as const;
+
+function isoInstant(raw: string, field: string): string {
+  const at = raw.length > 64 ? Number.NaN : Date.parse(raw);
+  if (!Number.isFinite(at)) throw new HttpError(400, "invalid_since", `${field} 不是有效时间`);
+  return new Date(at).toISOString();
+}
 
 /** Shanghai calendar day. A UTC slice would misfile anything written after 08:00. */
 function dayKey(at: string): string {
@@ -88,7 +103,18 @@ function listQuery(url: URL): { readonly query: string; readonly repositoryQuery
   };
 }
 
-function messagesPage(repository: SqliteRecordRepository, id: string, options: { readonly beforeSeq?: number; readonly afterSeq?: number } = {}): Pick<AssistantConversationDetail, "messages" | "hasMore" | "nextBeforeSeq"> {
+function readableSources(plan: UiTurnPlan, repository: SqliteRecordRepository, includePrivate = false): UiTurnPlan {
+  if (!plan.offers) return plan;
+  return { ...plan, offers: plan.offers.flatMap(offer => {
+    if (offer.command.type !== "record.focus" || !/^来源 \d+ \d{4}-\d{2}-\d{2}$/.test(offer.label)) return [offer];
+    const current = repository.findById(offer.command.params.recordId);
+    if (!eligibleSource(current, includePrivate)) return [];
+    if (!offer.source || current.revision === offer.source.revision) return [offer];
+    return [{ ...offer, source: { ...offer.source, excerpt: "" } }];
+  }) };
+}
+
+function messagesPage(repository: SqliteRecordRepository, id: string, options: { readonly beforeSeq?: number; readonly afterSeq?: number; readonly includePrivate?: boolean } = {}): Pick<AssistantConversationDetail, "messages" | "hasMore" | "nextBeforeSeq"> {
   const page = repository.assistantMessagePage(id, {
     ...options,
     limit: ASSISTANT_HISTORY_LIMITS.maxConversationMessages,
@@ -100,15 +126,17 @@ function messagesPage(repository: SqliteRecordRepository, id: string, options: {
     text: row.text,
     at: row.createdAt,
     attachments: row.attachments,
-    ...(row.ui === undefined ? {} : { ui: row.ui }),
+    ...(row.ui === undefined ? {} : { ui: readableSources(row.ui, repository, options.includePrivate) }),
     ...(row.turnId === undefined ? {} : { turnId: row.turnId }),
+    ...(row.draftBatchId === undefined ? {} : { draftBatchId: row.draftBatchId }),
     ...(row.turnStatus === undefined ? {} : { turnStatus: row.turnStatus }),
     ...(row.retryable === undefined ? {} : { retryable: row.retryable }),
+    ...(row.delivery === undefined ? {} : { delivery: row.delivery }),
   }));
   return { messages, hasMore: page.hasMore, nextBeforeSeq: page.nextBeforeSeq };
 }
 
-function detailOf(repository: SqliteRecordRepository, row: AssistantConversationRow, options: { readonly beforeSeq?: number; readonly afterSeq?: number } = {}): AssistantConversationDetail {
+function detailOf(repository: SqliteRecordRepository, row: AssistantConversationRow, options: { readonly beforeSeq?: number; readonly afterSeq?: number; readonly includePrivate?: boolean } = {}): AssistantConversationDetail {
   return {
     id: row.id,
     startedAt: row.startedAt,
@@ -169,6 +197,21 @@ function strictBeforeSeq(url: URL): number | undefined {
 /** The assistant archive. Browsing only reads stored rows and never calls a model. */
 export const handleAssistantHistoryRoutes: RouteHandler = async (ctx, req, res, pathname, url) => {
   const { config, repository } = ctx;
+  const includePrivate = allowsPrivateAiAccess(req.headers["x-lifeos-private-access"]);
+  const sourceMatch = /^\/api\/ai\/assistant\/sources\/([^/]+)$/.exec(pathname);
+  if (sourceMatch && req.method === "GET") {
+    assertQueryKeys(url, new Set(["preview"]));
+    if (url.searchParams.has("preview") && url.searchParams.get("preview") !== "1") throw new HttpError(400, "invalid_preview", "预览参数不正确");
+    let id: string;
+    try { id = decodeURIComponent(sourceMatch[1]!); } catch { throw new HttpError(400, "invalid_id", "来源编号不正确"); }
+    const record = repository.findById(id);
+    if (!eligibleSource(record, includePrivate)) throw new HttpError(404, "source_unavailable", "这条来源已删除或当前不可查看");
+    if (url.searchParams.get("preview") === "1") {
+      setJson(res, 200, { id: record.id, kind: record.kind, ...(isDreamRecord(record) ? { nature: "dream" } : {}), revision: record.revision, title: record.kind === "note" ? record.note?.title ?? "" : "", date: dayKey((record.occurredAt ?? record.createdAt).value), excerpt: (record.body.edited ?? record.body.original).slice(0, 1400) }); return true;
+    }
+    const assets = record.assetRefs.flatMap(ref => { const asset = repository.findAssetById(ref.assetId); return asset ? [asset] : []; });
+    setJson(res, 200, { record, assets }); return true;
+  }
   if (pathname === "/api/ai/assistant/history" && req.method === "GET") {
     const parsed = listQuery(url);
     const rows = repository.assistantConversations(parsed.repositoryQuery);
@@ -187,7 +230,7 @@ export const handleAssistantHistoryRoutes: RouteHandler = async (ctx, req, res, 
     assertQueryKeys(url, new Set());
     const row = repository.assistantCurrentConversation();
     const result: AssistantHistoryCurrent = {
-      conversation: row === null ? null : detailOf(repository, row, { afterSeq: row.clearSeq }),
+      conversation: row === null ? null : detailOf(repository, row, { afterSeq: row.clearSeq, includePrivate }),
     };
     setJson(res, 200, result); return true;
   }
@@ -221,13 +264,47 @@ export const handleAssistantHistoryRoutes: RouteHandler = async (ctx, req, res, 
     });
     setJson(res, 200, { conversationId: id, at }); return true;
   }
+  // Failure-only diagnostics. Read verbatim by an AI, so nothing is summarised
+  // on the way out — the whole point is that the raw model output survives.
+  // 2026-10-20: 对话失败与 AI 小结失败都在这一个端点里，靠 `source` 区分。
+  if (pathname === "/api/ai/assistant/log" && req.method === "GET") {
+    assertQueryKeys(url, new Set(["since", "stage", "source"]));
+    const rawSince = url.searchParams.get("since");
+    const since = rawSince === null ? new Date(Date.now() - ATTEMPT_RETAIN_DAYS * 86_400_000).toISOString() : isoInstant(rawSince, "since");
+    const rawStage = url.searchParams.get("stage");
+    const stage = rawStage === null ? undefined : enumField(rawStage, ATTEMPT_STAGES, "stage");
+    const rawSource = url.searchParams.get("source");
+    const source = rawSource === null ? undefined : enumField(rawSource, ATTEMPT_SOURCES, "source");
+    const rows = repository.assistantAttempts({ since, ...(stage === undefined ? {} : { stage }), ...(source === undefined ? {} : { source }), limit: ASSISTANT_LOG_LIMIT + 1 });
+    const counts = repository.assistantAttemptCounts(since);
+    setJson(res, 200, {
+      generatedAt: new Date().toISOString(),
+      since,
+      retentionDays: ATTEMPT_RETAIN_DAYS,
+      limit: ASSISTANT_LOG_LIMIT,
+      truncated: rows.length > ASSISTANT_LOG_LIMIT,
+      counts: { ...counts, total: counts.connection + counts.format + counts.service },
+      // 不受 stage/source 筛选影响，和 counts 一样是这个窗口的总量：筛选条上的数字不该随着筛选自己变。
+      sources: repository.assistantAttemptSourceCounts(since),
+      attempts: rows.slice(0, ASSISTANT_LOG_LIMIT),
+    });
+    return true;
+  }
+  if (pathname === "/api/ai/assistant/log/clear" && req.method === "POST") {
+    assertQueryKeys(url, new Set());
+    requireJsonContentType(req, true);
+    const input = jsonObject(await readBody(req, config.bodyLimitBytes), "body");
+    hasOnlyKeys(input, []);
+    setJson(res, 200, { cleared: repository.clearAssistantAttempts(), at: new Date().toISOString() });
+    return true;
+  }
   const match = /^\/api\/ai\/assistant\/history\/([a-zA-Z0-9-]+)(?:\/(clear|continue))?$/.exec(pathname);
   if (!match) return false;
   const id = match[1]!;
   const row = requireConversation(repository, id);
   if (req.method === "GET" && match[2] === undefined) {
     const beforeSeq = strictBeforeSeq(url);
-    setJson(res, 200, detailOf(repository, row, beforeSeq === undefined ? {} : { beforeSeq })); return true;
+    setJson(res, 200, detailOf(repository, row, { ...(beforeSeq === undefined ? {} : { beforeSeq }), includePrivate })); return true;
   }
   if (req.method === "POST" && match[2] === "clear") {
     assertQueryKeys(url, new Set());
@@ -249,3 +326,4 @@ export const handleAssistantHistoryRoutes: RouteHandler = async (ctx, req, res, 
   }
   return false;
 };
+import { isDreamRecord } from "@lifeos/core";
