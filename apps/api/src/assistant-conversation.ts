@@ -19,6 +19,7 @@ import type { ApiConfig } from "./config.js";
 import type { RecordView, SqliteRecordRepository } from "./repository.js";
 import { dateForTime, dateWithWeekdayForTime } from "./timeline-query.js";
 import { retrieveJournals, JOURNAL_RETRIEVAL_RULE, journalSourceOffers, localJournalReply, eligibleSource } from "./journal-retrieval.js";
+import { dreamTransferRequest, proposeDreamTransfer } from "./assistant-record-transfer.js";
 
 interface GeneratedChatReply {
   envelope: JsonObject;
@@ -138,6 +139,17 @@ export async function chatBackfill(config: ApiConfig, repository: SqliteRecordRe
   const privacyVisible = input.privacyVisible === undefined ? false : booleanField(input.privacyVisible, "privacyVisible");
   const includePrivate = allowsPrivateAiAccess(input.privateAccessUntil);
   const allRecords = repository.list();
+  const transferRequest = attached.length ? undefined : dreamTransferRequest(message, history);
+  if (transferRequest) {
+    if (appLockRepositoryPolicy(repository)?.locked("dreams")) return finish({ reply: "梦境页面已上锁，请先解锁再迁移或复制。记录没有改动。", action: "reply", mode: "rules" });
+    // Never let a transfer fall through into model-generated fragment drafts.
+    if (previous && !previous.plan.entries.some(e => e.transfer)) return finish({ reply: "请先处理或关闭当前拟写方案，再单独迁移整条日记。原方案已保留。", action: "reply", mode: "rules", batch: previous });
+    const preferredSourceId = previous?.plan.entries.length === 1 ? previous.plan.entries[0]?.transfer?.sourceId : undefined;
+    const proposal = proposeDreamTransfer(repository, transferRequest, message, currentDate, preferredSourceId);
+    if (!proposal.plan) return finish({ reply: proposal.reply, action: "reply", mode: "rules", ...(held ? { batch: existingReplyBatch()! } : {}) });
+    const batch = await storeBackfillDraft(config, repository, backfillMaterials(source, repository), proposal.plan, "rules", previous, signal);
+    return finish({ reply: proposal.reply, action: "draft", mode: "rules", batch });
+  }
   const pageContext = input.pageContext === undefined ? undefined : enumField(input.pageContext, ["dreams"] as const, "pageContext");
   const dreamQuestion = asksAboutDreams(message) || (pageContext === "dreams" && !/现实|实际生活|普通日记/.test(message));
   const visibleRecords = allRecords.filter((record) => (includePrivate || !record.isPrivate) && !record.isDemo && (dreamQuestion ? isDreamRecord(record) : !isDreamRecord(record)));
@@ -165,11 +177,12 @@ ${ASSISTANT_IDENTITY_CONTEXT}
 ${DREAM_CONTEXT_RULE}
 ${PLACE_ARCHIVE_RULE}
 ${JOURNAL_RETRIEVAL_RULE.replace("在 JSON 顶层 sourceIds", "在正文末尾lifeos附加块的sourceIds")}
+原文完整性：complete=true才代表该条content为全文；complete=false或没有完整性标记只能作为片段，totalChars是全文字符数。不能把片段的结尾说成原文到此结束。用户贴开头是在定位原记录时，不把它当作新经历或全文；整条迁移或复制必须定位原记录，不得凭片段拟写替代。
 ${UI_CONTRACT}`;
   // The date is what the answer gets read against, so it ships as the Shanghai
   // day plus its weekday. A raw UTC instant would leave the model to convert the
   // zone first, which is exactly the step where "上周二" turns into "上周三".
-  const recent = visibleRecords.slice(0, 6).map((r) => ({ id: r.id, revision: r.revision, kind: r.kind, ...(isDreamRecord(r) ? { nature: "dream" as const } : {}), date: dateWithWeekdayForTime(r.occurredAt ?? r.createdAt, "Asia/Shanghai"), content: (r.body.edited ?? r.body.original).slice(0, 400) }));
+  const recent = visibleRecords.slice(0, 6).map((r) => ({ id: r.id, revision: r.revision, kind: r.kind, ...(isDreamRecord(r) ? { nature: "dream" as const } : {}), date: dateWithWeekdayForTime(r.occurredAt ?? r.createdAt, "Asia/Shanghai"), content: (r.body.edited ?? r.body.original).slice(0, 400), complete: (r.body.edited ?? r.body.original).length <= 400, totalChars: Array.from(r.body.edited ?? r.body.original).length }));
   const citationContext = { ...retrieval, candidates: [...retrieval.candidates, ...visibleRecords.slice(0, 6).filter(record => eligibleSource(record, includePrivate) && !retrieval.candidates.some(hit => hit.id === record.id)).map(record => ({ id: record.id, revision: record.revision, date: dateForTime(record.occurredAt ?? record.createdAt, "Asia/Shanghai"), content: (record.body.edited ?? record.body.original).slice(0, 400) }))] };
   // The UI contract needs identities, not another copy of each source body.
   const context = [...retrieval.candidates.map(({ content: _content, ...hit }) => ({ ...hit, kind: hit.kind ?? "journal" })), ...recent.filter(record => !retrieval.candidates.some(hit => hit.id === record.id)).map(({ content: _content, ...record }) => record)];

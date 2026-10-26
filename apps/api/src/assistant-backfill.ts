@@ -15,8 +15,17 @@ import { booleanField, enumField, jsonObject, nowInstant, revisionField, stringF
 import type { ApiConfig } from "./config.js";
 import type { SqliteRecordRepository, RecordView } from "./repository.js";
 import { dateForTime } from "./timeline-query.js";
+import { requireAppTarget, appLockRepositoryPolicy } from "./app-lock-context.js";
 
 function occurredDay(record: TimelineRecord): string { return record.occurredAt ? dateForTime(record.occurredAt, "Asia/Shanghai") ?? "" : ""; }
+
+function transferSource(repository: SqliteRecordRepository, transfer: NonNullable<BackfillEntry["transfer"]>): RecordView {
+  requireAppTarget("dreams");
+  if (appLockRepositoryPolicy(repository)?.locked("dreams")) throw new HttpError(423, "app_locked", "请先解锁梦境后继续");
+  const source = repository.findById(transfer.sourceId);
+  if (!source || source.revision !== transfer.sourceRevision || source.kind !== "journal" || source.isPrivate || source.isDemo || isDreamRecord(source)) throw new HttpError(409, "record_changed", "原日记已改变或不可读取，请重新定位并核对完整记录");
+  return source;
+}
 
 function text(value: unknown, name: string, max = 20000): string {
   const valueText = value === undefined ? "" : stringField(value, name);
@@ -67,6 +76,14 @@ export function validateBackfillPlan(value: unknown, repository: SqliteRecordRep
   if (keys.size !== objects.length) throw new HttpError(400, "invalid_plan", "关联对象编号重复");
   const entries = list(raw.entries ?? [], "记录").map((v, index): BackfillEntry => {
     const e = jsonObject(v, "记录");
+    if (e.transfer !== undefined) {
+      const rawTransfer = jsonObject(e.transfer, "整条操作");
+      const transfer = { sourceId: text(rawTransfer.sourceId, "来源记录", 100), sourceRevision: revisionField(rawTransfer.sourceRevision), mode: enumField(rawTransfer.mode, ["move", "copy"] as const, "整条操作") };
+      const source = transferSource(repository, transfer);
+      const content = source.body.edited ?? source.body.original;
+      if (e.content !== content || e.kind !== "journal" || e.nature !== "dream" || e.date !== dateForTime(source.occurredAt ?? source.createdAt, "Asia/Shanghai") || e.targetId || strings(e.entityKeys, "关联对象").length || JSON.stringify(e.assetIds) !== JSON.stringify(source.assetRefs.map(ref => ref.assetId))) throw new HttpError(400, "invalid_transfer", "整条操作须保留原文、日期和附件；要编辑正文请先取消本次操作");
+      return { key: text(e.key, "记录编号", 100), selected: e.selected === undefined ? true : booleanField(e.selected, "selected"), kind: "journal", nature: "dream", content, date: String(e.date), time: "", evidence: text(e.evidence, "依据", 2000), questions: "", entityKeys: [], assetIds: source.assetRefs.map(ref => ref.assetId), transfer };
+    }
     const kind = enumField(e.kind ?? "journal", ["journal", "task", "event", "note"] as const, "记录类型");
     const nature = e.nature === undefined ? undefined : enumField(e.nature, ["dream"] as const, "内容性质");
     if (nature && kind !== "journal") throw new HttpError(400, "invalid_plan", "梦境不能拆成现实任务或事件");
@@ -91,6 +108,7 @@ export function validateBackfillPlan(value: unknown, repository: SqliteRecordRep
   });
   if (new Set(entries.map((e) => e.key)).size !== entries.length) throw new HttpError(400, "invalid_plan", "记录编号重复");
   const actions = validateAssistantActions(raw.actions, repository);
+  if (entries.some(e => e.transfer) && (objects.length || actions.length || entries.some(e => !e.transfer))) throw new HttpError(400, "invalid_transfer", "整条迁移或复制请单独确认，不与其他拟写混在一批");
   if (entries.some(e => e.nature === "dream") && (actions.length || objects.some(o => !o.existingId))) throw new HttpError(400, "invalid_plan", "梦境草稿不能新建现实对象或执行生活标记，请分开整理");
   if (new Set([...entries, ...actions].map(item => item.key)).size !== entries.length + actions.length) throw new HttpError(400, "invalid_plan", "记录与标记编号重复");
   return { entries, objects, explanation: text(raw.explanation, "整理说明", 4000), ...(actions.length ? { actions } : {}) };
@@ -218,6 +236,7 @@ export async function prepareBackfill(config: ApiConfig, repository: SqliteRecor
 }
 export function aiBackfillPlan(input: unknown, repository: SqliteRecordRepository, previous?: BackfillPlan, dreamContext = false): BackfillPlan {
   const raw = jsonObject(input, "plan");
+  if (Array.isArray(raw.entries) && raw.entries.some(e => jsonObject(e, "entry").transfer !== undefined)) throw new HttpError(400, "invalid_transfer", "整条操作只能由明确请求定位原记录后生成");
   const normalized = Array.isArray(raw.entries) ? { ...raw, entries: raw.entries.map(e => { const entry = jsonObject(e, "entry"); return dreamContext || previous?.entries.some(old => old.key === entry.key && old.nature === "dream") ? { ...entry, nature: "dream" } : entry; }) } : input;
   const plan = validateBackfillPlan(normalized, repository);
   // Provider identities and posters come from the movie resolver, never the language model.
@@ -251,11 +270,11 @@ export async function storeBackfillDraft(config: ApiConfig, repository: SqliteRe
   const generatedAt = new Date().toISOString();
   plan = { ...plan, entries: plan.entries.map(e => ({ ...e, time: backfillEntryTime(e, generatedAt) })) };
   const allowedAssets = new Set(materials.flatMap(m => m.assetId ? [m.assetId] : []));
-  if (plan.entries.some(e => e.assetIds.some(id => !allowedAssets.has(id)))) throw new HttpError(400, "unprovided_asset", "方案引用了未提供的附件，请重新核对");
+  if (plan.entries.some(e => !e.transfer && e.assetIds.some(id => !allowedAssets.has(id)))) throw new HttpError(400, "unprovided_asset", "方案引用了未提供的附件，请重新核对");
   const batch: BackfillBatch = { ...previous, ...(plan.actions?.some(a => !previous?.committedKeys?.includes(a.key)) ? { moduleSnapshot: repository.cycleIntimacyModule() } : {}), id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, status: "draft", createdAt: previous?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(), materials: materials.map(({ imageData: _, ...m }) => m), plan, mode, ...(previous?.conversation ? { conversation: previous.conversation } : {}) };
   // Re-read after the network wait; another tab may have saved or committed meanwhile.
   if (previous) { const latest = repository.assistantBatch(previous.id); if (!latest || latest.status !== "draft" || latest.revision !== previous.revision) throw new HttpError(409, "stale_draft", "草稿已在另一处改变，请重新读取"); }
-  else { const identical = repository.assistantBatches().find((existing) => existing.status !== "undone" && digest(existing.materials) === digest(materials)); if (identical) return identical; }
+  else { const identical = repository.assistantBatches().find((existing) => existing.status !== "undone" && digest(existing.materials) === digest(materials) && (!plan.entries.some(e => e.transfer) || JSON.stringify(existing.plan.entries.map(e => e.transfer)) === JSON.stringify(plan.entries.map(e => e.transfer)))); if (identical) return identical; }
   repository.saveAssistantBatch(batch);
   return batch;
 }
@@ -267,10 +286,11 @@ export function requireDraft(repository: SqliteRecordRepository, id: string, rev
 }
 export function saveBackfillPlan(repository: SqliteRecordRepository, batch: BackfillBatch, input: unknown): BackfillBatch {
   let plan = validateBackfillPlan(input, repository);
+  if (batch.plan.entries.some(e => e.transfer) && (plan.entries.length !== batch.plan.entries.length || plan.entries.some(e => JSON.stringify(e.transfer) !== JSON.stringify(batch.plan.entries.find(old => old.key === e.key)?.transfer)))) throw new HttpError(400, "invalid_transfer", "不能把整条操作改成片段拟写，请取消后重新发起");
   plan = retainReviewedPlan(plan, batch);
   plan = { ...plan, entries: plan.entries.map(e => ({ ...e, time: backfillEntryTime(e, new Date().toISOString()) })) };
   const allowed = new Set(batch.materials.flatMap(m => m.assetId ? [m.assetId] : []));
-  if (plan.entries.some(e => e.assetIds.some(id => !allowed.has(id)))) throw new HttpError(400, "unprovided_asset", "方案引用了未提供的附件");
+  if (plan.entries.some(e => !e.transfer && e.assetIds.some(id => !allowed.has(id)))) throw new HttpError(400, "unprovided_asset", "方案引用了未提供的附件");
   // Keep the preview's snapshot, rather than silently acknowledging concurrent edits.
   const objects = plan.objects.map((o) => { const old = batch.plan.objects.find((v) => v.key === o.key); return old?.existingId === o.existingId && old?.existingSnapshot ? { ...o, existingSnapshot: old.existingSnapshot } : o; });
   const next = { ...batch, plan: { ...plan, objects }, ...(plan.actions?.length ? { moduleSnapshot: repository.cycleIntimacyModule() } : {}), revision: batch.revision + 1, updatedAt: new Date().toISOString() };
@@ -295,7 +315,8 @@ export function commitBackfill(repository: SqliteRecordRepository, id: string, r
     throw new HttpError(400, "empty_selection", "请至少选择一条记录或一个关联对象");
   }
   if (entries.some((e) => !backfillEntryReady(e)) || objects.some((o) => o.questions.trim())) throw new HttpError(400, "unresolved_plan", "所选项目还有待确认内容，请补齐日期并处理待确认问题");
-  if (new Set(entries.flatMap((e) => e.targetId ? [e.targetId] : [])).size !== entries.filter((e) => e.targetId).length) throw new HttpError(400, "duplicate_target", "同一条已有记录只能在本批补充一次，请先合并草稿");
+  const targets = entries.flatMap(e => e.transfer ? [e.transfer.sourceId] : e.targetId ? [e.targetId] : []);
+  if (new Set(targets).size !== targets.length) throw new HttpError(400, "duplicate_target", "同一条已有记录只能在本批处理一次，请先合并草稿");
   return repository.atomic(() => {
     const undoBlocked = batch.undoBlocked || (batch.afterRecords ?? []).some(r => comparable(repository.findById(r.id)) !== comparable(r)) || (batch.afterEntities ?? []).some(e => comparable(repository.findEntityById(e.id)) !== comparable(e)) || Boolean(batch.afterModule && comparable(repository.cycleIntimacyModule()) !== comparable(batch.afterModule));
     const beforeEntities: Entity[] = [...(batch.beforeEntities ?? [])], afterEntities: Entity[] = [...(batch.afterEntities ?? [])], beforeRecords: TimelineRecord[] = [...(batch.beforeRecords ?? [])], afterRecords: RecordView[] = [...(batch.afterRecords ?? [])];
@@ -324,7 +345,20 @@ export function commitBackfill(repository: SqliteRecordRepository, id: string, r
       const entityRefs = e.entityKeys.map((key) => { const entity = links.get(key); if (!entity) throw new HttpError(400, "unselected_entity", "所选记录关联了未选择的对象，请一并选择或移除关联"); return { entityType: entity.type, entityId: entity.id, label: entity.name }; });
       const assetRefs = e.assetIds.map((assetId) => { const asset = repository.findAssetById(assetId); if (!asset) throw new HttpError(400, "unknown_asset", "附件已不存在"); return { assetId, role: asset.kind === "photo" ? "photo" : "attachment" }; });
       let record: TimelineRecord;
-      if (e.targetId) {
+      if (e.transfer) {
+        const current = transferSource(repository, e.transfer);
+        if ((current.body.edited ?? current.body.original) !== e.content) throw new HttpError(409, "record_changed", "原文已改变，请重新核对整条内容");
+        const { revision: _, ...snapshot } = current;
+        if (e.transfer.mode === "move") {
+          beforeRecords.push(snapshot);
+          record = { ...snapshot, body: { ...snapshot.body, nature: "dream" }, updatedAt: nowInstant() };
+        } else {
+          if (repository.list({ kind: "journal" }).some(r => !r.isPrivate && isDreamRecord(r) && (r.body.edited ?? r.body.original) === e.content && dateForTime(r.occurredAt ?? r.createdAt, "Asia/Shanghai") === e.date)) throw new HttpError(409, "duplicate_record", "已有同日期、同全文的梦境副本；原日记仍保留，本次没有重复复制");
+          const { updatedAt: __, ...copy } = snapshot;
+          const id = randomUUID();
+          record = { ...copy, id, createdAt: nowInstant(), occurredAt: copy.occurredAt ?? copy.createdAt, body: { ...copy.body, nature: "dream" }, aiDerived: copy.aiDerived.map(item => item.sourceRecordId === current.id ? { ...item, sourceRecordId: id } : item) };
+        }
+      } else if (e.targetId) {
         const current = repository.findById(e.targetId);
         if (!current || current.revision !== e.targetRevision || current.isPrivate || isDreamRecord(current) !== (e.nature === "dream")) throw new HttpError(409, "record_changed", "要补充的记录已改变，请重新核对");
         const { revision: _, ...before } = current; beforeRecords.push(before);
@@ -338,8 +372,8 @@ export function commitBackfill(repository: SqliteRecordRepository, id: string, r
         // The reviewed refs are authoritative; automatic mention matching must not add unreviewed people.
         record = { ...record, entityRefs };
       }
-      record = { ...record, aiDerived: [...record.aiDerived, { id: randomUUID(), kind: "classification", provider: "lifeos-assistant", model: batch.mode, generatedAt: nowInstant(), sourceRecordId: record.id, sourceRevision: createHash("sha256").update(e.evidence).digest("hex"), value: { type: "ai-assisted", batchId: batch.id, evidence: e.evidence, materials: batch.materials.map((m) => m.name) } }] };
-      if (e.targetId) { if (!repository.update(record, e.targetRevision!)) throw new HttpError(409, "record_changed", "记录已改变，整批没有写入"); }
+      if (!e.transfer) record = { ...record, aiDerived: [...record.aiDerived, { id: randomUUID(), kind: "classification", provider: "lifeos-assistant", model: batch.mode, generatedAt: nowInstant(), sourceRecordId: record.id, sourceRevision: createHash("sha256").update(e.evidence).digest("hex"), value: { type: "ai-assisted", batchId: batch.id, evidence: e.evidence, materials: batch.materials.map((m) => m.name) } }] };
+      if (e.targetId || e.transfer?.mode === "move") { if (!repository.update(record, e.transfer?.sourceRevision ?? e.targetRevision!)) throw new HttpError(409, "record_changed", "记录已改变，整批没有写入"); }
       else repository.insert(record);
       afterRecords.push(repository.findById(record.id)!);
     }

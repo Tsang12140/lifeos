@@ -19,6 +19,17 @@ export function journalDateRange(message: string, today: string): JournalDateRan
     const parsed = new Date(`${value}T12:00:00+08:00`); return Number.isFinite(parsed.getTime()) && day(parsed) === value;
   });
   if (dates?.length) return { from: dates[0]!, to: dates[1] ?? dates[0]! };
+  const weekday = message.match(/(上上|上|本|这)?(?:个)?(?:周|星期|礼拜)([一二三四五六日天])/);
+  if (weekday) {
+    const date = new Date(`${today}T12:00:00+08:00`);
+    const current = (date.getUTCDay() + 6) % 7;
+    const target = "一二三四五六日".indexOf(weekday[2] === "天" ? "日" : weekday[2]!);
+    let offset = target - current - (weekday[1] === "上上" ? 14 : weekday[1] === "上" ? 7 : 0);
+    // An unqualified weekday means the latest occurrence, including today.
+    if (!weekday[1] && offset > 0) offset -= 7;
+    date.setUTCDate(date.getUTCDate() + offset);
+    return { from: day(date), to: day(date) };
+  }
   const year = Number(today.slice(0, 4)), month = Number(today.slice(5, 7));
   const specific = message.match(/(?:(\d{4})年|(今年|去年|前年))\s*(?:(\d{1,2}|[一二三四五六七八九十]{1,2})月)?/);
   if (specific) {
@@ -42,14 +53,16 @@ export function journalDateRange(message: string, today: string): JournalDateRan
 const ignored = new Set(["以前", "之前", "过去", "最近", "当时", "现在", "今天", "昨天", "今年", "去年", "前年", "时候", "一次", "那次", "那个", "什么", "怎么", "为什么", "有没有", "是否", "哪些", "多少", "可以", "帮我", "帮忙", "记得", "记忆", "日记", "记录", "事情", "发生", "找找", "一下", "找出", "寻找", "有关", "关于", "告诉", "提到", "提过", "情况", "一共", "总共", "所有", "我们", "自己", "让我", "特别", "回忆"]);
 const segmenter = new Intl.Segmenter("zh-CN", { granularity: "word" });
 export function journalQueryTerms(message: string): readonly string[] {
+  message = message.replace(/(?:上上|上|本|这)?(?:个)?(?:周|星期|礼拜)[一二三四五六日天]/g, " ");
   const clean = message.replace(/\d{4}[-年]\d{1,2}(?:[-月]\d{1,2}日?)?|\d{4}年|[一二三四五六七八九十\d]{1,3}[年月日篇条]|(?:去|今|前)年|上个?月|本月|这个月|上(?:一)?周|本周|这(?:一)?周|回顾|笔记/g, " ");
   return [...new Set([...segmenter.segment(clean.toLowerCase())].filter(item => item.isWordLike).map(item => item.segment).filter(term => term.length >= 2 && !ignored.has(term)))].slice(0, 24);
 }
 export function wantsJournalMemory(message: string): boolean {
+  if (/(?:周|星期|礼拜)[一二三四五六日天]/.test(message)) return true;
   return asksAboutDreams(message) || /日记|笔记|记录|以前|之前|过去|最近|去年|前年|今年|\d{4}[-年]|上个?月|上(?:一)?周|这(?:一)?周|本周|昨天|前天|回忆|回顾|记得|记不清|上次|曾经|什么时候|哪(?:次|天|年|里)|那次|有没有|找(?:找|出|一下)|发生过|去过|看过|吃过|做过/.test(message);
 }
 export const eligibleSource = (record: RecordView | null, includePrivate = false): record is RecordView => !!record && (record.kind === "journal" || record.kind === "note") && (includePrivate || !record.isPrivate) && !record.isDemo;
-export interface JournalHit { readonly id: string; readonly revision: number; readonly date: string; readonly content: string; readonly kind?: "journal" | "note"; readonly title?: string; readonly nature?: "dream" }
+export interface JournalHit { readonly id: string; readonly revision: number; readonly date: string; readonly content: string; readonly complete?: boolean; readonly totalChars?: number; readonly kind?: "journal" | "note"; readonly title?: string; readonly nature?: "dream" }
 export interface JournalRetrieval {
   readonly requested: boolean;
   readonly mode: "hybrid" | "lexical";
@@ -128,7 +141,8 @@ export async function retrieveJournals(config: ApiConfig, repository: SqliteReco
     // Re-read after the network await: an edit, privacy change or deletion invalidates the snapshot.
     const current = repository.findById(chunk.record.id);
     if (!eligibleSource(current, includePrivate) || current.revision !== chunk.record.revision) continue;
-    candidates.push({ id: current.id, revision: current.revision, date: dateForTime(current.occurredAt ?? current.createdAt, "Asia/Shanghai"), content: chunk.text, kind: current.kind as "journal" | "note", ...(isDreamRecord(current) ? { nature: "dream" as const } : {}), ...(current.kind === "note" && current.note?.title ? { title: current.note.title } : {}) });
+    const fullText = current.body.edited ?? current.body.original;
+    candidates.push({ id: current.id, revision: current.revision, date: dateForTime(current.occurredAt ?? current.createdAt, "Asia/Shanghai"), content: chunk.text, complete: chunk.text === fullText, totalChars: Array.from(fullText).length, kind: current.kind as "journal" | "note", ...(isDreamRecord(current) ? { nature: "dream" as const } : {}), ...(current.kind === "note" && current.note?.title ? { title: current.note.title } : {}) });
     if (candidates.length === 8) break;
   }
   return { ...base, mode: queryVector ? "hybrid" : "lexical", candidates };

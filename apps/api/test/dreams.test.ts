@@ -9,10 +9,13 @@ import { isDreamRecord, exportRecordMarkdown, validateUiTurnPlan, type TimelineR
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
 import { SqliteRecordRepository } from "../src/repository.js";
-import { retrieveJournals, journalSourceOffers } from "../src/journal-retrieval.js";
+import { retrieveJournals, journalSourceOffers, journalDateRange } from "../src/journal-retrieval.js";
+import { dreamTransferRequest } from "../src/assistant-record-transfer.js";
+import { chatBackfill } from "../src/assistant-conversation.js";
+import { appLockRepository } from "../src/app-lock-context.js";
 import { collectSummarisableRecords } from "../src/summary-routes.js";
 import { summarySources } from "../src/summary.js";
-import { aiBackfillPlan, ruleBackfillPlan, validateBackfillPlan } from "../src/assistant-backfill.js";
+import { aiBackfillPlan, ruleBackfillPlan, validateBackfillPlan, commitBackfill, saveBackfillPlan, undoBackfill } from "../src/assistant-backfill.js";
 import { listenOnFetchablePort } from "./support/fetchable-port.js";
 
 async function fixture(t: TestContext, model?: (payload: any) => unknown) {
@@ -142,4 +145,132 @@ test("assistant dream drafts require confirmation and commit as dreams even when
   assert.equal(committed.status, 200); assert.equal(f.repository.list().length, 1); assert(isDreamRecord(f.repository.list()[0]!));
   const ui = validateUiTurnPlan({ commands: [{ type: "search.records", params: { nature: "dream" } }] }, { entityIds: new Set(), recordIds: new Set(), today: "2026-10-19" });
   assert.equal(ui.plan.commands?.[0]?.type, "search.records"); assert.deepEqual(ui.plan.commands?.[0]?.params, { nature: "dream" });
+});
+
+// Regression: a pasted opening identifies an existing source; it is never the replacement body.
+const wholeDream = 'A：做噩梦了，梦见测试灯塔。\n' + '中间B保留原话。'.repeat(250) + '\nC：醒来后的补充。\nD：最后一段不能丢。';
+const todayForTransfer = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+const transferMessage = '把我周三的日记 写梦的 迁移到梦境页面去';
+function transferRecord(id: string, body = wholeDream): TimelineRecord {
+  return journal(id, false, { body: { original: '最初的ABCD原文', edited: body }, occurredAt: { kind: 'instant', value: journalDateRange('周三', todayForTransfer())!.from + 'T23:45:00+08:00' }, isBackfill: false });
+}
+
+test('weekday retrieval resolves bare, explicit, relative and boundary dates before generation', () => {
+  for (const [q, today, date] of [
+    ['周三的日记', '2026-10-26', '2026-10-21'], ['星期三', '2026-10-21', '2026-10-21'],
+    ['本周三', '2026-10-26', '2026-10-28'], ['上周三', '2026-10-26', '2026-10-21'],
+    ['上上周日', '2026-01-05', '2025-12-28'], ['礼拜天', '2026-01-01', '2025-12-28'],
+    ['2026-10-14 周三', '2026-10-26', '2026-10-14'],
+  ]) assert.deepEqual(journalDateRange(q!, today!), { from: date, to: date });
+});
+
+test('move selects ordinary source despite dream page, previews ABCD, preserves record and can undo', async t => {
+  const f = await fixture(t, () => ({ action: 'new_draft', reply: '错误片段', plan: {} }));
+  f.repository.insertAsset({ id: 'transfer-photo', kind: 'photo', originalName: 'fictional.jpg', storageRefs: [{ sourceId: 'test', sourceRef: 'fictional.jpg' }] });
+  f.repository.insert(transferRecord('whole-source'));
+  let source = f.repository.findById('whole-source')!;
+  f.repository.update({ ...source, assetRefs: [{ assetId: 'transfer-photo', role: 'photo', label: '原照片' }] }, source.revision);
+  source = f.repository.findById('whole-source')!;
+  const draft = await chatBackfill(f.config, f.repository, { message: transferMessage, pageContext: 'dreams' });
+  assert.equal(draft.action, 'draft'); assert.equal(f.calls.length, 0);
+  const batch = draft.batch!, entry = batch.plan.entries[0]!;
+  assert.equal(entry.content, wholeDream); assert(entry.content.endsWith('D：最后一段不能丢。'));
+  assert.equal(entry.transfer?.sourceId, source.id); assert.deepEqual(entry.assetIds, ['transfer-photo']);
+  assert.deepEqual(f.repository.findById(source.id), source); assert.equal(f.repository.list().length, 1);
+  const saved = commitBackfill(f.repository, batch.id, batch.revision);
+  const moved = f.repository.findById(source.id)!;
+  assert(isDreamRecord(moved)); assert.equal(moved.revision, source.revision + 1); assert.equal(f.repository.list().length, 1);
+  for (const key of ['occurredAt', 'createdAt', 'assetRefs', 'entityRefs', 'relatedRecordIds', 'aiDerived', 'isBackfill'] as const) assert.deepEqual(moved[key], source[key]);
+  assert.deepEqual(moved.body, { ...source.body, nature: 'dream' });
+  assert.equal(commitBackfill(f.repository, batch.id, saved.revision).revision, saved.revision);
+  undoBackfill(f.repository, batch.id);
+  const restored = f.repository.findById(source.id)!; assert(!isDreamRecord(restored)); assert.deepEqual(restored.body, source.body); assert.deepEqual(restored.assetRefs, source.assetRefs);
+});
+
+test('ambiguous day requires identification and pasted A resolves full source across correction turns', async t => {
+  const f = await fixture(t); f.repository.insert(transferRecord('one')); f.repository.insert(transferRecord('two', '梦见另一个红色码头。'));
+  const first = await chatBackfill(f.config, f.repository, { message: transferMessage }); assert.equal(first.action, 'reply'); assert(!first.batch);
+  assert.equal(f.repository.assistantBatches().length, 0);
+  const fragment = 'A：做噩梦了，梦见测试灯塔。-------这不就是周三的日记？';
+  const second = await chatBackfill(f.config, f.repository, { message: fragment, history: [{ role: 'user', text: transferMessage }, { role: 'assistant', text: first.reply }] });
+  assert.equal(second.batch?.plan.entries[0]?.content, wholeDream); assert.equal(second.batch?.plan.entries[0]?.transfer?.mode, 'move');
+  const request = dreamTransferRequest('我让你整条复制不是一段！！！', [{ role: 'user', text: transferMessage }, { role: 'user', text: fragment }]);
+  assert.equal(request?.mode, 'move');
+  assert.equal(f.repository.list().length, 2);
+  const source = f.repository.findById('one')!;
+  f.repository.update({ ...source, body: { ...source.body, edited: wholeDream + '\n新增E' } }, source.revision);
+  const refreshed = await chatBackfill(f.config, f.repository, { message: transferMessage, batchId: second.batch!.id, revision: second.batch!.revision });
+  assert.equal(refreshed.batch?.plan.entries[0]?.content, wholeDream + '\n新增E');
+  assert.equal(refreshed.batch?.plan.entries[0]?.transfer?.sourceRevision, source.revision + 1);
+});
+
+test('weekday-only retrieval enumerates that day and marks truncated evidence explicitly', async t => {
+  const f = await fixture(t); f.repository.insert(transferRecord('weekday-source'));
+  const found = await retrieveJournals(f.config, f.repository, '周三的日记', todayForTransfer());
+  assert.equal(found.range?.from, journalDateRange('周三', todayForTransfer())!.from);
+  assert.equal(found.candidates[0]?.id, 'weekday-source'); assert.equal(found.candidates[0]?.complete, false);
+  assert.equal(found.candidates[0]?.totalChars, Array.from(wholeDream).length);
+});
+
+test('whole copy retains source and original time while duplicate copies are refused', async t => {
+  const f = await fixture(t); f.repository.insert(transferRecord('copy-source'));
+  const before = f.repository.findById('copy-source')!;
+  const request = { message: '把周三的整条日记复制到梦境，保留原日记' };
+  const draft = (await chatBackfill(f.config, f.repository, request)).batch!;
+  const saved = commitBackfill(f.repository, draft.id, draft.revision); const copied = f.repository.findById(saved.recordIds![0]!)!;
+  assert.equal(copied.body.edited, wholeDream); assert.equal(copied.body.original, before.body.original); assert.deepEqual(copied.occurredAt, before.occurredAt);
+  assert.notEqual(copied.id, before.id); assert.deepEqual(f.repository.findById(before.id), before);
+  const duplicate = (await chatBackfill(f.config, f.repository, { message: '复制周三的整条日记到梦境页面' })).batch!;
+  assert.throws(() => commitBackfill(f.repository, duplicate.id, duplicate.revision), /已有同日期/); assert.equal(f.repository.list().length, 2);
+});
+
+test('source edits, deletion and new privacy prevent stale whole-record operations', async t => {
+  for (const mode of ['edit', 'delete', 'private'] as const) {
+    const f = await fixture(t); f.repository.insert(transferRecord(mode));
+    const batch = (await chatBackfill(f.config, f.repository, { message: transferMessage })).batch!;
+    const source = f.repository.findById(mode)!;
+    if (mode === 'delete') f.repository.softDelete(source.id, source.revision, JSON.stringify({ kind: 'instant', value: new Date().toISOString() }));
+    else f.repository.update(mode === 'private' ? { ...source, isPrivate: true } : { ...source, body: { ...source.body, edited: '另一端最新正文' } }, source.revision);
+    assert.throws(() => commitBackfill(f.repository, batch.id, batch.revision), /已改变|不可读取/);
+    assert.equal(f.repository.assistantBatch(batch.id)?.status, 'draft'); assert(f.repository.list().every(r => !isDreamRecord(r)));
+  }
+});
+
+test('copy preserves the original fallback time when the source has no occurredAt', async t => {
+  const f = await fixture(t);
+  const { occurredAt: _, ...source } = journal('creation-time-source', false, { body: { original: wholeDream } });
+  f.repository.insert(source);
+  const before = f.repository.findById(source.id)!;
+  const batch = (await chatBackfill(f.config, f.repository, { message: '把2026-10-01的整条日记复制到梦境' })).batch!;
+  const saved = commitBackfill(f.repository, batch.id, batch.revision);
+  assert.deepEqual(f.repository.findById(saved.recordIds![0]!)?.occurredAt, before.createdAt);
+  assert.deepEqual(f.repository.findById(source.id), before);
+});
+
+test('private and locked records are excluded, locked destination refuses move and later commit', async t => {
+  const f = await fixture(t); f.repository.insert(transferRecord('public'));
+  const scoped = appLockRepository(f.repository, { protected: true, ai: true, locked: target => target === 'dreams' });
+  const denied = await chatBackfill(f.config, scoped, { message: transferMessage }); assert(!denied.batch); assert(denied.reply.includes('上锁'));
+  const batch = (await chatBackfill(f.config, f.repository, { message: transferMessage })).batch!;
+  assert.throws(() => commitBackfill(scoped, batch.id, batch.revision), /解锁/);
+  const source = f.repository.findById('public')!; f.repository.update({ ...source, isPrivate: true }, source.revision);
+  assert(!(await chatBackfill(f.config, f.repository, { message: transferMessage, privateAccessUntil: 'always' })).batch);
+});
+
+test('transfer preview cannot be shortened, converted to new draft or invented by model', async t => {
+  const f = await fixture(t); f.repository.insert(transferRecord('immutable'));
+  const batch = (await chatBackfill(f.config, f.repository, { message: transferMessage })).batch!;
+  const entry = batch.plan.entries[0]!;
+  assert.throws(() => saveBackfillPlan(f.repository, batch, { ...batch.plan, entries: [{ ...entry, content: '只有A' }] }), /保留原文/);
+  const { transfer: _, ...ordinary } = entry;
+  assert.throws(() => saveBackfillPlan(f.repository, batch, { ...batch.plan, entries: [ordinary] }), /不能把整条操作/);
+  assert.throws(() => aiBackfillPlan(batch.plan, f.repository), /明确请求/);
+  assert.equal(saveBackfillPlan(f.repository, batch, { ...batch.plan, entries: [{ ...entry, selected: false }] }).plan.entries[0]?.selected, false);
+  assert(!isDreamRecord(f.repository.findById('immutable')!));
+});
+
+test('cancelled, quoted, hypothetical and unrelated followups do not authorize a transfer', () => {
+  for (const text of ['不要把日记迁移到梦境', '怎么把日记迁移到梦境？', '能不能把日记迁移到梦境', '先讨论把日记迁移到梦境', '“把日记迁移到梦境”这句话', '> 把日记迁移到梦境']) assert.equal(dreamTransferRequest(text, []), undefined);
+  assert.equal(dreamTransferRequest('整条内容', [{ role: 'assistant', text: transferMessage }]), undefined);
+  assert.equal(dreamTransferRequest('整条内容', [{ role: 'user', text: transferMessage }, { role: 'user', text: '换个话题，谈天气' }]), undefined);
 });

@@ -8,6 +8,8 @@ export interface BackfillMaterial {
   readonly imageData?: string;
 }
 export interface BackfillEntry {
+  /** Reviewed whole-record operation; content is a preview, never generated replacement text. */
+  readonly transfer?: { readonly sourceId: string; readonly sourceRevision: number; readonly mode: "move" | "copy" };
   readonly nature?: "dream";
   readonly key: string;
   readonly selected: boolean;
