@@ -124,6 +124,33 @@ function printFirewallAdvice() {
   console.log("  双击一次 允许手机访问.cmd（会弹一次 UAC），之后就不用再管。");
 }
 
+// 局域网模式下少一层就不算「一键」：规则不在，就直接把那个提权脚本跑一遍，
+// 只弹一次 UAC。成败由 ps1 自己在父窗口里复述（提权那个窗口一关就没了）。
+// 拒绝提权不算失败 —— 电脑本机照样能用，只是手机进不来。
+function ensureFirewallRule() {
+  if (process.platform !== "win32" || !lanMode) return;
+  if (process.env.LIFEOS_NO_FIREWALL_PROMPT === "1") return;
+  if (firewallRulePresent()) return;
+  const script = resolve(root, "scripts", "allow-lan-firewall.ps1");
+  if (!existsSync(script)) {
+    printFirewallAdvice();
+    return;
+  }
+  banner("手机连不上的最后一层是 Windows 防火墙，正在请求一次管理员权限放行 5199。");
+  console.log("弹出来的 UAC 窗口点「是」。拒绝也没关系：电脑上照样用，只是手机打不开。\n");
+  try {
+    execFileSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], {
+      stdio: "inherit",
+      windowsHide: true,
+      timeout: 180_000,
+    });
+  } catch (error) {
+    if (typeof error?.status === "number") console.log(`\n防火墙脚本退出码 ${error.status}。`);
+  }
+  if (firewallRulePresent()) console.log("✓ 防火墙已放行，继续启动。\n");
+  else printFirewallAdvice();
+}
+
 function printLanBanner(verified, password) {
   const urls = lanPreviewUrls(webPort);
   console.log("");
@@ -312,6 +339,7 @@ if (planOnly) {
     urls: lanPreviewUrls(webPort),
     adminPage: lanMode ? "off" : "on",
     firewallRulePresent: firewallRulePresent(),
+    firewallAutoElevate: lanMode && !firewallRulePresent(),
     wouldRestart: healthy && lanMode && existingLan === null,
   }, null, 2));
   process.exit(0);
@@ -356,6 +384,8 @@ if (healthy || leftover.length > 0) {
   }
 }
 
+ensureFirewallRule();
+
 banner(`正在启动 LifeOS 预览（API 3011 / Web 5199，${lanMode ? "局域网可访问" : "仅本机"}）…`);
 console.log("首次启动或刚改过后端代码时，等十几秒是正常的。\n");
 
@@ -397,7 +427,7 @@ if (ready) {
   console.log("浏览器会自动打开；没弹出就手动点上面的地址。");
   console.log("");
   console.log("这个窗口 = 停止按钮：关掉窗口（或按 Ctrl+C）预览就停了。");
-  console.log("3011/5199 上是你自己的正式资料，不是测试数据。\n");
+  console.log("3011/5199 上跑的是仓库的 data/ —— 本机这份是调试用的副本，正式资料在宝塔那台。\n");
   openBrowser(previewUrl);
 } else if (childExited) {
   console.error(`\n预览进程退出了（exit ${childCode}）。最近的日志：\n`);
