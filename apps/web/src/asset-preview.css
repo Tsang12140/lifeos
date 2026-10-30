@@ -11,6 +11,19 @@ dialog.asset-preview.photo-reader:not([open]) { display: none; }
 .asset-preview.photo-reader .photo-reader-main .asset-preview-image-stage img { position: absolute; inset: auto; left: 50%; top: 50%; max-width: none; max-height: none; object-fit: contain; border-radius: 0; background: transparent; box-shadow: none; transform-origin: center; will-change: transform; }
 .asset-preview.photo-reader .asset-preview-full { opacity: 1; transition: none; }
 .asset-preview.photo-reader .asset-preview-image-stage video { height: 100%; width: 100%; max-width: 100%; max-height: 100%; }
+/* Poster frame + one obvious target. The triangle is a default-lucide shape filled
+   solid; the circle carries the hit area so the icon never doubles as the button size. */
+.asset-preview-play {
+  position: absolute; inset: 50% auto auto 50%; transform: translate(-50%, -50%);
+  box-sizing: border-box; display: grid; place-items: center; width: 64px; height: 64px;
+  padding: 0; border: 0; border-radius: 50%; cursor: pointer; color: #fff;
+  background: rgb(0 0 0 / .46); backdrop-filter: blur(2px);
+  transition: background 120ms ease, transform 120ms ease;
+}
+.asset-preview-play:hover { background: rgb(0 0 0 / .62); transform: translate(-50%, -50%) scale(1.04); }
+.asset-preview-play:active { transform: translate(-50%, -50%) scale(.97); }
+.asset-preview-play:focus-visible { outline: 2px solid #edf0f4; outline-offset: 3px; }
+.asset-preview-play > svg { margin-left: 3px; }
 .asset-preview.photo-reader .asset-preview-figure figcaption { color: #b7bdc7; font-size: 12px; line-height: 18px; max-height: none; }
 .asset-preview.photo-reader .photo-mini-gallery { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; }
 .photo-mini-slot { box-sizing: border-box; display: block; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 6px; background: transparent; }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { Asset } from "@lifeos/core";
-import { Download, Info, LoaderCircle, Maximize, Minus, Plus, RotateCcw, RotateCw, X } from "lucide-react";
+import { Download, Info, LoaderCircle, Maximize, Minus, Play, Plus, RotateCcw, RotateCw, X } from "lucide-react";
 import { apiRequest, type RecordView } from "./api";
 import { DateStepGlyph } from "./date-step-glyph";
 import { GalleryNavIcon } from "./gallery-nav-icon";
@@ -43,6 +43,11 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
   const entryTimer = useRef<number | null>(null);
   const entryPress = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const [saveError, setSaveError] = useState("");
+  // A still frame says nothing about being playable, and the native control bar
+  // only appears once playback starts. So the poster state gets one 64px button;
+  // `controls` follow the first play so pausing later never yanks the scrubber away.
+  const [videoStarted, setVideoStarted] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false), mounted = useRef(true);
   const derived = !video && !image;
@@ -114,7 +119,7 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
     query.addEventListener("change", change); return () => query.removeEventListener("change", change);
   }, []);
   useEffect(() => {
-    setSheet(false); setSaveError(""); setEntryPrompt(false); entryClick.current = null;
+    setSheet(false); setSaveError(""); setEntryPrompt(false); setVideoStarted(false); entryClick.current = null;
     if (entryTimer.current !== null) window.clearTimeout(entryTimer.current);
     pointers.current.clear(); gesture.current = null;
   }, [key]);
@@ -242,7 +247,10 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
         <div ref={stage} className="asset-preview-image-stage" data-zoom={view.zoom} data-rotation={entry.rotation} data-x={view.x} data-y={view.y} style={{cursor:video?"default":view.zoom>1?"grab":"default"}} onPointerDown={down} onPointerMove={move} onPointerUp={event=>up(event)} onPointerCancel={event=>up(event,true)} onDoubleClick={event=>{if(!video)changeView(view.zoom>1.001?fitTransform():zoomView(view,1/fit,point(event.clientX,event.clientY)));}} onClick={event=>{
           if(event.target===event.currentTarget&&!suppressClick.current){if(mobile&&sheet)setSheet(false);else if(!imagePress.current)onClose();}
         }}>
-          {video?<video className="asset-preview-full asset-preview-video" key={id} src={url} controls playsInline preload="metadata" onLoadedData={()=>setLoad({url,status:"loaded"})} onError={()=>setLoad({url,status:"error"})}/>:<>
+          {video?<>
+            <video ref={videoRef} className="asset-preview-full asset-preview-video" key={id} src={url} controls={videoStarted} playsInline preload="metadata" onPlay={()=>setVideoStarted(true)} onEnded={()=>setVideoStarted(false)} onLoadedData={()=>setLoad({url,status:"loaded"})} onError={()=>setLoad({url,status:"error"})}/>
+            {!videoStarted?<button type="button" className="asset-preview-play" aria-label="播放视频" onClick={()=>{void videoRef.current?.play();}}><Play size={26} fill="currentColor" aria-hidden="true"/></button>:null}
+          </>:<>
             {!presentation.photo?<img className="asset-preview-placeholder" src={placeholder} alt="" aria-hidden="true" draggable={false} style={imageStyle} onError={event=>{event.currentTarget.style.visibility="hidden";}}/>:null}
             <img ref={full} className="asset-preview-full" src={presentation.photo?.url} alt={presentation.photo ? painted.current.name : ""} aria-hidden={!presentation.photo} draggable={false} style={{ ...painted.current.style, visibility: presentation.photo ? "visible" : "hidden" }} />
           </>}

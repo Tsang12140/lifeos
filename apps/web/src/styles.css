@@ -3675,11 +3675,22 @@ h2 {
   transition: color 160ms ease;
 }
 
-.shot-tile-add button:hover:not(:disabled) {
+.shot-tile-add button:hover:not(:disabled):not([aria-disabled="true"]) {
   color: var(--primary);
 }
 
-.shot-tile-add button:disabled {
+/* Full band: the square keeps the dimmed look it had when it was a `disabled`
+   button, but it stays clickable so the tap can be answered with a sentence.
+   Without `aria-disabled` the square would look like an open door. */
+.shot-tile-add button:disabled,
+.shot-tile-add button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Same rule for the toolbar photo entry the phone layouts use instead of the
+   in-row square: greyed at nine, still answering the tap. */
+.composer-photo-trigger[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }
@@ -3797,6 +3808,44 @@ h2 {
   border-radius: 10px;
   color: var(--muted);
   background: var(--surface);
+}
+
+/*
+ * The photo-derived default has to say where it came from, and offer the way back
+ * to the clock. Unlabelled, the time simply looks wrong; with no button, the only
+ * escape is re-picking a date by hand, which is exactly the friction this was
+ * meant to remove.
+ *
+ * Geometry follows the tray in `date-controls.css`: the date pill, the privacy and
+ * backfill toggles are all 40px and 999px there, so this chip must be too — a
+ * 36px label beside a 40px pill reads as misalignment, not as hierarchy. The
+ * dashed edge is what separates "annotation" from "control" at equal size.
+ */
+.composer-time-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: #64707b;
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-time-source:hover {
+  border-style: solid;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.composer-time-source:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 /*
@@ -11954,6 +12003,25 @@ button.mention-review-context { cursor: pointer; }
   .composer.is-editing .composer-fields:has(.composer-status-field) { flex-wrap: wrap; }
   .composer-status-field { flex: 0 0 100%; padding: 2px 0 0 4px; }
 
+  /* The rail is icons only, so the source label collapses to its glyph — but it
+     stays tappable: hiding it entirely would mean the phone quietly changes the
+     time with no way back. */
+  .composer-fields .composer-time-source {
+    box-sizing: border-box;
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    border-style: solid;
+  }
+
+  .composer-fields .composer-time-source > span {
+    display: none;
+  }
+
   .composer-fields .place-anchor {
     display: inline-flex;
     flex: 0 0 auto;
@@ -12839,8 +12907,10 @@ dialog.asset-preview.has-photo-information { grid-template-columns: minmax(0, 1f
   .earlier-divider { gap: 12px; margin: 22px 0; }
 }
 .record-video-cell { position: relative; overflow: hidden; }
+/* 格子里只剩右下角的时长：不再叠「这是视频」的图标。原来的 Film 描线图标加了 fill
+   会渲染成一个白色实心方块，看着像停止按钮；而缩略图本身就是首帧，说不清它是什么。
+   能不能播由放大后的播放键回答，不在这里重复。 */
 .record-photo-cell > video { display: block; width: 100%; height: 100%; object-fit: cover; }
-.record-video-play { position: absolute; inset: 50% auto auto 50%; display: grid; place-items: center; width: 38px; height: 38px; transform: translate(-50%, -50%); border-radius: 50%; color: #fff; background: rgb(0 0 0 / .48); }
 .record-video-duration { position: absolute; right: 6px; bottom: 5px; padding: 1px 4px; border-radius: 4px; color: #fff; background: rgb(0 0 0 / .62); font-size: 11px; line-height: 1.3; }
 
 .startup-screen {
