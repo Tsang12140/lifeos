@@ -7,7 +7,14 @@
 //      → 自动收掉，再起一个新的；
 //   3. 端口空着 → 直接起；
 //   4. 就绪后自动打开 http://127.0.0.1:5199/ ，并把窗口留在原地当「停止按钮」。
-//      预览默认对局域网开放（手机可访问），登录密码由 accept-serve 打印。
+//
+// 两种模式，双击哪个就是哪种：
+//   启动预览.cmd        本机全功能（管理员页在），只开给 127.0.0.1，不用登录。
+//   启动局域网预览.cmd   同一个 5199，但绑 0.0.0.0 + 强制登录密码，手机同 Wi-Fi 能开。
+//                       代价是管理员页关闭（API 无法区分「手机」和「本机经 Vite 代理」，
+//                       见 apps/api/src/config.ts:206 的那条限制）。
+//
+// 带 `--lan` 就是局域网模式；再加 `--plan` 只打印计划、不碰端口（验收用）。
 //
 // ⚠️ 3011/5199 上跑的是仓库自带的 data/ —— 主人自己的正式记录。
 //    这个启动器只负责把服务打开/换新，不做任何数据清理或重置。
@@ -15,7 +22,14 @@ import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { resolve } from "node:path";
-import { preferredLanAddresses } from "./lib/lan-preview.mjs";
+import {
+  FIREWALL_RULE_NAME,
+  lanLaunchEnv,
+  lanPreviewUrls,
+  readEnvFile,
+  resolveLanPassword,
+  preferredLanAddresses,
+} from "./lib/lan-preview.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const acceptServe = resolve(root, ".review", "accept-serve.mjs");
@@ -26,7 +40,11 @@ const pidFile = resolve(runDir, "serve-pids.json");
 // 所以另记一份 preview.mjs 自己的 pid，双击时用它判断要不要接管。
 const previewPidFile = resolve(runDir, "preview.pid");
 const previewUrl = "http://127.0.0.1:5199/";
+const webPort = 5199;
 const READY_TIMEOUT_MS = 90_000;
+// `--lan`：绑 0.0.0.0 并强制登录，手机同 Wi-Fi 能开；`--plan`：只报告，不碰端口。
+const lanMode = process.argv.includes("--lan");
+const planOnly = process.argv.includes("--plan");
 
 // 双击时窗口可能一闪就没了（启动失败、或已有实例），控制台里的话谁也读不到。
 // 所以把本进程的每一行输出同时写进 launch.log —— 出问题直接看这个文件。
@@ -77,8 +95,63 @@ function printLanHint(url) {
     console.log("首次打开要登录，密码在 .review/run/lan-password.txt（启动窗口里也打印了）。");
     return;
   }
-  console.log("手机 / 平板：双击 启动局域网预览.cmd（5499，局域网可访问，要登录，不带管理员页）。");
-  console.log("这个 5199 是日常用的全功能实例，只开给本机。");
+  console.log("手机 / 平板：双击 启动局域网预览.cmd —— 同一个 5199 会换成局域网可访问（要登录，管理员页关闭）。");
+  console.log("现在这个实例只开给本机，带管理员页。");
+}
+
+// Windows 防火墙会先于 Vite 挡住手机：这台机器的网络被标成「公用」，而且
+// Node 一条入站规则都没有。只报告，不自动改 —— 加规则要 UAC。
+function firewallRulePresent() {
+  if (process.platform !== "win32") return true;
+  try {
+    execFileSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command",
+        `if (Get-NetFirewallRule -DisplayName '${FIREWALL_RULE_NAME}' -ErrorAction SilentlyContinue) { exit 0 } else { exit 3 }`],
+      { stdio: "ignore", windowsHide: true, timeout: 15_000 },
+    );
+    return true;
+  } catch (error) {
+    // 只有明确的「quit 3 = 没这条规则」才算缺；查询本身失败时别乱下结论。
+    return error?.status !== 3;
+  }
+}
+
+function printFirewallAdvice() {
+  if (firewallRulePresent()) return;
+  console.log("");
+  console.log("⚠ 手机大概率还是打不开：Windows 防火墙没有放行这个端口。");
+  console.log("  双击一次 允许手机访问.cmd（会弹一次 UAC），之后就不用再管。");
+}
+
+function printLanBanner(verified, password) {
+  const urls = lanPreviewUrls(webPort);
+  console.log("");
+  console.log("── 局域网预览模式 ────────────────────────────────────");
+  if (verified !== null) {
+    console.log(`手机 / 平板（同一 Wi-Fi）：${verified}`);
+  } else {
+    console.log("手机 / 平板：本机自己都连不上局域网地址，先把服务起稳再看。");
+  }
+  for (const url of urls.phones) {
+    if (`${url}` !== verified) console.log(`                         ${url}`);
+  }
+  console.log(`本机：${urls.local}`);
+  console.log(`登录密码：${password}`);
+  console.log("（同一个密码也记在 .review/run/lan-password.txt）");
+  console.log("本模式下管理员页关闭；要它就在本机用 启动预览.cmd。");
+  printFirewallAdvice();
+  console.log("─────────────────────────────────────────────────────");
+}
+
+// 密码来源：环境变量 > .env > 上次生成的 .review/run/lan-password.txt > 新生成一个。
+// 复用同一个密码，才能「双击就开、手机上不用每次改」。
+function resolvePassword() {
+  return resolveLanPassword({
+    env: process.env,
+    fileEnv: readEnvFile(resolve(root, ".env")),
+    directory: runDir,
+  });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -221,16 +294,43 @@ const before = await Promise.all([probe(targets.api), probe(targets.web)]);
 const healthy = before.every((r) => r.ok);
 const managed = previewManaged();
 const leftover = listeningPids();
+const existingLan = healthy ? await lanUrl() : null;
+
+if (planOnly) {
+  // 只报告、不动端口：验收用它证明「--lan 到底会做什么」，不必先杀掉主人的实例。
+  const password = lanMode ? resolvePassword() : null;
+  const env = lanMode ? { ...lanLaunchEnv(password.password), LIFEOS_LAN_PASSWORD: "<redacted>" } : { LIFEOS_LAN: "0" };
+  console.log(JSON.stringify({
+    mode: lanMode ? "lan" : "local",
+    ports: { api: targets.api.port, web: webPort },
+    running: healthy,
+    managed,
+    runningLanUrl: existingLan,
+    env,
+    passwordSource: password?.source ?? null,
+    passwordLength: password?.password.length ?? 0,
+    urls: lanPreviewUrls(webPort),
+    adminPage: lanMode ? "off" : "on",
+    firewallRulePresent: firewallRulePresent(),
+    wouldRestart: healthy && lanMode && existingLan === null,
+  }, null, 2));
+  process.exit(0);
+}
 
 if (healthy && managed) {
-  banner(`预览已经在运行，直接打开：${previewUrl}`);
-  const existingLan = await lanUrl();
-  printLanHint(existingLan);
-  console.log("要换成新实例的话：关掉那个预览窗口，再双击本文件。");
-  console.log("窗口 3 秒后自动关闭，页面已经在浏览器里了。\n");
-  openBrowser(previewUrl);
-  await sleep(3000);
-  process.exit(0);
+  const alreadyLan = existingLan !== null;
+  if (lanMode && !alreadyLan) {
+    banner("当前实例只开给本机（管理员页开着）。现在换成局域网模式 —— 会重启一次，之后手机就能开 5199。");
+  } else {
+    banner(`预览已经在运行，直接打开：${previewUrl}`);
+    if (lanMode) printLanBanner(existingLan, resolvePassword().password);
+    else printLanHint(existingLan);
+    console.log("要换成新实例的话：关掉那个预览窗口，再双击本文件。");
+    console.log("窗口 3 秒后自动关闭，页面已经在浏览器里了。\n");
+    openBrowser(previewUrl);
+    await sleep(3000);
+    process.exit(0);
+  }
 }
 
 if (healthy && !managed) {
@@ -256,12 +356,16 @@ if (healthy || leftover.length > 0) {
   }
 }
 
-banner("正在启动 LifeOS 本地预览（API 3011 / Web 5199）…");
+banner(`正在启动 LifeOS 预览（API 3011 / Web 5199，${lanMode ? "局域网可访问" : "仅本机"}）…`);
 console.log("首次启动或刚改过后端代码时，等十几秒是正常的。\n");
 
 try { writeFileSync(previewPidFile, String(process.pid), "utf8"); } catch { /* 没有它只是少一层接管判断 */ }
 
-const child = spawn(process.execPath, [acceptServe], { cwd: root, stdio: "inherit" });
+// 局域网模式必须带登录密码（Vite 的代理会把 5199 直接变成 API 的入口）；
+// 本机模式显式写 0，免得环境里残留的 LIFEOS_LAN=1 把端口悄悄开出去。
+const lanPassword = lanMode ? resolvePassword() : null;
+const childEnv = { ...process.env, ...(lanMode ? lanLaunchEnv(lanPassword.password) : { LIFEOS_LAN: "0" }) };
+const child = spawn(process.execPath, [acceptServe], { cwd: root, stdio: "inherit", env: childEnv });
 
 let childExited = false;
 let childCode = null;
@@ -287,8 +391,9 @@ while (!childExited && Date.now() - startedAt < READY_TIMEOUT_MS) {
 
 if (ready) {
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-  banner(`✓ 预览已就绪（${seconds}s）：${previewUrl}`);
-  printLanHint(await lanUrl());
+  banner(`✓ 预览已就绪（${seconds}s）${lanMode ? " · 局域网模式" : ""}：${previewUrl}`);
+  if (lanMode) printLanBanner(await lanUrl(), lanPassword.password);
+  else printLanHint(await lanUrl());
   console.log("浏览器会自动打开；没弹出就手动点上面的地址。");
   console.log("");
   console.log("这个窗口 = 停止按钮：关掉窗口（或按 Ctrl+C）预览就停了。");

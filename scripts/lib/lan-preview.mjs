@@ -63,6 +63,50 @@ export function lanOrigins(port, extra = []) {
   return [...origins];
 }
 
+// Windows Firewall blocks the phone long before Vite does: the owner's network
+// is classified "Public" and Node has no inbound rule at all, so a 0.0.0.0 bind
+// is still unreachable from the phone. `scripts/allow-lan-firewall.ps1` owns this
+// exact name; keep the two in sync.
+export const FIREWALL_RULE_NAME = "LifeOS LAN preview";
+
+/**
+ * Env a preview launcher must hand to accept-serve to open the LAN port.
+ * Blank passwords are refused rather than silently starting an open data port.
+ * Kept pure so the launcher's mapping can be asserted without binding a port.
+ */
+export function lanLaunchEnv(password) {
+  const value = typeof password === "string" ? password.trim() : "";
+  if (value === "") throw new Error("a LAN preview must require a login password");
+  return { LIFEOS_LAN: "1", LIFEOS_LAN_PASSWORD: value };
+}
+
+/** The URL for this machine plus the ones a phone on the same Wi-Fi can use. */
+export function lanPreviewUrls(port) {
+  return {
+    local: `http://127.0.0.1:${port}/`,
+    phones: preferredLanAddresses().map((address) => `http://${address}:${port}/`),
+  };
+}
+
+/**
+ * `.env` reader for launchers that need one value before spawning the API
+ * (accept-serve reads it itself; preview.mjs needs the password up front so it
+ * can print it in the window).
+ */
+export function readEnvFile(file) {
+  if (!existsSync(file)) return {};
+  const values = {};
+  // Strip the BOM: a Notepad/PowerShell-saved .env would otherwise mangle the
+  // first key name, and the failure is silent.
+  for (const line of readFileSync(file, "utf8").replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    if (/^\s*(#|$)/.test(line)) continue;
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (match === null) continue;
+    values[match[1]] = match[2].trim().replace(/^["'](.*)["']$/, "$1");
+  }
+  return values;
+}
+
 /**
  * Password for the LAN preview, in priority order: explicit env vars, `.env`,
  * a password persisted by an earlier launch, or a freshly generated one.
