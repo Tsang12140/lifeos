@@ -13,13 +13,17 @@ export function planVideo(meta: { width: number; height: number; duration: numbe
   if (![meta.width, meta.height, meta.duration, meta.frameRate].every(n => Number.isFinite(n) && n > 0)
       || meta.width < 2 || meta.height < 2) throw new VideoPreparationError('invalid_metadata', '无法可靠读取视频尺寸、时长或帧率');
   if (meta.duration > policy.maxDurationSeconds) throw new VideoPreparationError('duration_too_long', '视频超过3分钟，请先裁剪视频');
-  // HDR needs an explicitly verified tone-mapping path. Never silently wash out iPhone footage.
-  if (meta.hdr) throw new VideoPreparationError('hdr_needs_validation', '暂不支持HDR视频，请先在相册中导出普通色彩版本');
   const scale = Math.min(1, policy.maxLongEdge / Math.max(meta.width, meta.height), policy.maxShortEdge / Math.min(meta.width, meta.height));
   return {
     width: Math.max(2, Math.floor(meta.width * scale / 2) * 2),
     height: Math.max(2, Math.floor(meta.height * scale / 2) * 2),
     frameRate: Math.min(meta.frameRate, policy.maxFrameRate),
+    /**
+     * HDR (iPhone ships it by default) cannot go through the plain transcode path: the encoder
+     * would keep PQ/HLG sample values while the output claims BT.709, so the clip plays washed
+     * out. Those files get a canvas round trip instead, where the browser tone-maps to sRGB.
+     */
+    toneMap: meta.hdr,
   };
 }
 

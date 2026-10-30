@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 import { CappedOutput, VIDEO_POLICY as policy, planVideo, validateInputSize } from '../src/video/policy.ts';
 const meta = { width: 3840, height: 2160, duration: 10, frameRate: 60, hdr: false };
 test('4K and portrait obey both edges without stretching', () => {
-  assert.deepEqual(planVideo(meta, policy), { width: 1920, height: 1080, frameRate: 30 });
-  assert.deepEqual(planVideo({ ...meta, width: 2160, height: 3840 }, policy), { width: 1080, height: 1920, frameRate: 30 });
+  assert.deepEqual(planVideo(meta, policy), { width: 1920, height: 1080, frameRate: 30, toneMap: false });
+  assert.deepEqual(planVideo({ ...meta, width: 2160, height: 3840 }, policy), { width: 1080, height: 1920, frameRate: 30, toneMap: false });
 });
-test('small 24 fps clips are not upscaled or raised to 30 fps', () => assert.deepEqual(planVideo({ ...meta, width: 640, height: 360, frameRate: 24 }, policy), { width: 640, height: 360, frameRate: 24 }));
+test('small 24 fps clips are not upscaled or raised to 30 fps', () => assert.deepEqual(planVideo({ ...meta, width: 640, height: 360, frameRate: 24 }, policy), { width: 640, height: 360, frameRate: 24, toneMap: false }));
 test('invalid metadata and too-long clips fail', () => {
   for (const patch of [{ duration: 181 }, { duration: Infinity }, { frameRate: NaN }, { width: 0 }]) assert.throws(() => planVideo({ ...meta, ...patch }, policy));
 });
-test('HDR stops explicitly until tone mapping is tested', () => assert.throws(() => planVideo({ ...meta, hdr: true }, policy), { code: 'hdr_needs_validation' }));
+// iPhone records HDR by default, so it can no longer be a hard stop: same geometry, different encoder path.
+test('HDR asks for the canvas tone-map path instead of failing', () => {
+  assert.deepEqual(planVideo({ ...meta, hdr: true }, policy), { width: 1920, height: 1080, frameRate: 30, toneMap: true });
+});
 test('input bytes limit is independent of compressed size', () => { validateInputSize(policy.maxInputBytes, policy); for (const n of [0, -1, Infinity, policy.maxInputBytes + 1]) assert.throws(() => validateInputSize(n, policy)); });
 test('random access writes preserve patches and cross-block data', () => {
   const out = new CappedOutput(140000); out.write(65535, Uint8Array.of(1, 2, 3)); out.write(65536, Uint8Array.of(9)); out.write(0, Uint8Array.of(7));
