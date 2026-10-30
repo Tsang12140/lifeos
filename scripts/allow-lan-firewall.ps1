@@ -32,7 +32,26 @@ if (-not (Test-Elevated)) {
     Write-Host "修改防火墙规则需要管理员权限，正在请求提权……"
     $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
     if ($Remove) { $arguments += "-Remove" }
-    $process = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+    try {
+        $process = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+    } catch {
+        Write-Host "✗ 提权被取消，规则没有改动。要放行手机再双击一次 允许手机访问.cmd。"
+        exit 1
+    }
+    # 提权那个窗口一关就没影了，所以在这里把结果再说一遍 ——
+    # 不然主人只看到两个窗口闪一下，不知道到底成没成。
+    $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+    Write-Host ""
+    if ($Remove) {
+        if ($null -eq $rule) { Write-Host "✓ 规则「$ruleName」已删除，手机将无法再连接。" }
+        else { Write-Host "✗ 规则还在（提权那次的退出码 $($process.ExitCode)）。再试一次，或看上面那个窗口的红字。" }
+    } elseif ($null -ne $rule) {
+        $allowedPorts = ($rule | Get-NetFirewallPortFilter).LocalPort
+        Write-Host "✓ 已放行 TCP $($allowedPorts -join '/')，来源限同一网段。"
+        Write-Host "  现在双击 启动局域网预览.cmd，用窗口里的密码在手机上打开它打印的地址。"
+    } else {
+        Write-Host "✗ 规则没建成（提权那次的退出码 $($process.ExitCode)）。再试一次，或看上面那个窗口的红字。"
+    }
     exit $process.ExitCode
 }
 
