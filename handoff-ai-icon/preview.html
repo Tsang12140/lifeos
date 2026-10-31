@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 管家图标 · 现状预览</title>
+<style>
+  :root {
+    --muted: #5d6b82;
+    --primary: #315dfa;
+    --line: #d6dfeb;
+    --ink-soft: #364661;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 28px 72px;
+    background: #f4f6f9;
+    color: #222;
+    font: 14px/1.6 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { margin: 0 0 6px; font-size: 19px; }
+  .lead { margin: 0 0 28px; color: var(--muted); max-width: 720px; }
+  h2 { margin: 0 0 10px; font-size: 13px; font-weight: 700; letter-spacing: .02em; color: var(--ink-soft); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; max-width: 1120px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px 18px; }
+  .card p { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+  .stage { display: flex; align-items: center; justify-content: center; min-height: 96px; border-radius: 10px; background: #eef1f6; }
+  .stage.photo { background: linear-gradient(135deg, #c9b8a4, #8d7a66 55%, #6f6152); }
+  .caption { margin-top: 10px; font-size: 11px; color: #8b95a5; }
+
+  /* A / B：悬浮球（真实规则：56px 白底 + 44px 图标 + 细边 + 模糊 + 阴影） */
+  .launcher {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 56px; height: 56px;
+    padding: 0; border: 1px solid var(--line); border-radius: 50%;
+    background: rgb(255 255 255 / .86);
+    box-shadow: 0 4px 14px rgb(24 36 61 / .10), 0 1px 3px rgb(24 36 61 / .06);
+    backdrop-filter: blur(9px);
+  }
+  .launcher:hover { background: rgb(255 255 255 / .96); box-shadow: 0 6px 16px rgb(24 36 61 / .12), 0 0 0 3px rgb(24 36 61 / .05); }
+  .launcher svg { width: 44px; height: 44px; display: block; }
+
+  /* C：移动端裸图标（无底、无边框、opacity .7） */
+  .bare { width: 44px; height: 44px; display: grid; place-items: center; opacity: .7; }
+  .bare svg { width: 44px; height: 44px; display: block; }
+
+  /* D：面板标题栏 32px 圆 + 满铺图标 */
+  .header-logo { width: 32px; height: 32px; border-radius: 50%; box-shadow: 0 2px 6px rgb(24 36 61 / .10); overflow: hidden; }
+  .header-logo svg { width: 100%; height: 100%; display: block; }
+
+  /* E：移动底栏 */
+  .nav-demo { display: grid; justify-items: center; gap: 4px; font-size: .68rem; font-weight: 600; color: var(--muted); width: 72px; padding: 7px 2px 6px; background: #fff; border-radius: 8px; }
+  .nav-demo.is-active { color: var(--primary); }
+  .nav-demo svg { width: 19px; height: 19px; display: block; }
+
+  /* F：导出图页脚 20px 单色 */
+  .share-footer { display: flex; align-items: center; gap: 10px; color: #68717c; font-size: 14px; font-weight: 500; }
+  .share-footer svg { width: 20px; height: 20px; display: block; }
+
+  .zoom { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; }
+  .zoom svg { display: block; }
+</style>
+</head>
+<body>
+  <h1>AI 管家图标 · 现状预览</h1>
+  <p class="lead">这是产品里 5 个真实渲染位置与尺寸的复刻。把新路径替换进页面底部脚本里的 <code>FULL</code>（含圆盘）和 <code>GLYPH</code>（无圆盘）两个常量，就能在这里对照。<b>重点看 19px 单色是否还认得出。</b></p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>A · 桌面悬浮球</h2>
+      <p>56px 白底按钮 + 44px 图标，细边、模糊、中性阴影（hover 略提亮）。</p>
+      <div class="stage"><span class="launcher" data-icon="gradient" data-size="44"></span></div>
+      <div class="caption">图标 44 / 按钮 56 / 内边距 6</div>
+    </div>
+
+    <div class="card">
+      <h2>B · 面板标题栏</h2>
+      <p>32px 圆形容器，图标满铺，外圈有 0 2px 6px 阴影。</p>
+      <div class="stage"><span class="header-logo" data-icon="gradient" data-size="32"></span></div>
+      <div class="caption">32px 满铺</div>
+    </div>
+
+    <div class="card">
+      <h2>C · 移动端悬浮球</h2>
+      <p>没有白底、没有边框，图标直接浮在页面内容上（可能是照片），整体 70% 不透明度。</p>
+      <div class="stage photo"><span class="bare" data-icon="gradient" data-size="44"></span></div>
+      <div class="caption">44px 裸图标 / opacity .7</div>
+    </div>
+
+    <div class="card">
+      <h2>D · 移动底栏（最严苛）</h2>
+      <p>19px 单色 currentColor：左未选中灰、右选中蓝。周边图标是 lucide 线性图标（stroke 1.8）。</p>
+      <div class="stage" style="gap:28px">
+        <span class="nav-demo" data-icon="glyph" data-size="19">AI管家</span>
+        <span class="nav-demo is-active" data-icon="glyph" data-size="19">AI管家</span>
+      </div>
+      <div class="caption">19px / 单色 / 无圆盘</div>
+    </div>
+
+    <div class="card">
+      <h2>E · 导出图页脚</h2>
+      <p>Canvas 平涂 #68717c，20px，与「LifeOS AI管家」文字并排。</p>
+      <div class="stage" style="background:#fff"><span class="share-footer"><span data-icon="mono-full" data-size="20"></span>LifeOS AI管家</span></div>
+      <div class="caption">20px / #68717c / 含圆盘</div>
+    </div>
+
+    <div class="card">
+      <h2>F · 128px 放大</h2>
+      <p>用来看形状细节与视觉重心。</p>
+      <div class="stage" style="background:#eef1f6"><span class="zoom"><span data-icon="gradient" data-size="128"></span></span></div>
+      <div class="caption">128px</div>
+    </div>
+  </div>
+
+  <script>
+    /* ===== 现状路径：替换这两个常量即可预览新方案 ===== */
+    const FULL = "M512 0c282.773333 0 512 229.226667 512 512S794.773333 1024 512 1024 0 794.773333 0 512 229.226667 0 512 0z m-0.021333 170.666667c-19.818667 0-39.829333 4.010667-58.773334 12.394666a141.866667 141.866667 0 0 0-65.344 58.026667l-197.973333 336.938667-1.237333 2.154666c-37.845333 67.029333-14.122667 151.786667 53.717333 190.272 68.565333 38.890667 156.245333 15.786667 195.818667-51.584l104.682666-178.176h0.106667l27.904-46.805333a75.157333 75.157333 0 0 1 63.744-41.130667 75.456 75.456 0 0 1 67.498667 34.88l1.152 1.877334 71.701333 122.026666 1.002667 1.770667c19.242667 35.456 6.08 79.509667-29.610667 99.136-35.690667 19.605333-80.789333 7.552-101.44-27.114667l-59.114667 33.536 1.28 2.133334c40.149333 65.706667 126.698667 87.893333 194.538667 49.408l2.154667-1.258667 2.282666-1.344 2.090667-1.322667 2.730667-1.792 1.962666-1.344 3.072-2.197333 1.258667-0.917333a141.653333 141.653333 0 0 0 11.626667-9.770667l4.224-4.117333a140.970667 140.970667 0 0 0 23.509333-31.829334l1.002667-1.856c1.045333-1.984 2.005333-3.989333 2.944-6.016l1.450666-3.242666c2.730667-6.378667 4.992-12.928 6.762667-19.626667l0.597333-2.325333 0.512-2.154667c0.426667-1.92 0.853333-3.882667 1.194667-5.824l0.682667-3.925333a137.472 137.472 0 0 0-5.802667-65.834667l-0.896-2.602667a142.293333 142.293333 0 0 0-10.901333-23.082666l-197.973334-336.917334-1.28-2.133333a141.866667 141.866667 0 0 0-64.085333-55.914667l-4.202667-1.792A144.64 144.64 0 0 0 511.978667 170.666667z m0.832 67.072c10.410667 0.128 20.693333 2.368 30.186666 6.592 14.293333 6.336 26.197333 16.938667 34.026667 30.293333l65.216 111.018667a144.661333 144.661333 0 0 0-75.626667 18.837333 141.504 141.504 0 0 0-57.045333 59.904l-0.512-0.298667-129.984 221.226667-1.066667 1.770667c-21.632 34.069333-67.050667 44.906667-102.165333 24.32a73.066667 73.066667 0 0 1-26.837333-99.84l197.973333-336.917334 1.066667-1.749333c6.506667-10.453333 15.573333-19.136 26.410666-25.258667l1.792-0.981333a76.586667 76.586667 0 0 1 36.565334-8.917333z";
+    const GLYPH = "M511.978667 170.666667c-19.818667 0-39.829333 4.010667-58.773334 12.394666a141.866667 141.866667 0 0 0-65.344 58.026667l-197.973333 336.938667-1.237333 2.154666c-37.845333 67.029333-14.122667 151.786667 53.717333 190.272 68.565333 38.890667 156.245333 15.786667 195.818667-51.584l104.682666-178.176h0.106667l27.904-46.805333a75.157333 75.157333 0 0 1 63.744-41.130667 75.456 75.456 0 0 1 67.498667 34.88l1.152 1.877334 71.701333 122.026666 1.002667 1.770667c19.242667 35.456 6.08 79.509667-29.610667 99.136-35.690667 19.605333-80.789333 7.552-101.44-27.114667l-59.114667 33.536 1.28 2.133334c40.149333 65.706667 126.698667 87.893333 194.538667 49.408l2.154667-1.258667 2.282666-1.344 2.090667-1.322667 2.730667-1.792 1.962666-1.344 3.072-2.197333 1.258667-0.917333a141.653333 141.653333 0 0 0 11.626667-9.770667l4.224-4.117333a140.970667 140.970667 0 0 0 23.509333-31.829334l1.002667-1.856c1.045333-1.984 2.005333-3.989333 2.944-6.016l1.450666-3.242666c2.730667-6.378667 4.992-12.928 6.762667-19.626667l0.597333-2.325333 0.512-2.154667c0.426667-1.92 0.853333-3.882667 1.194667-5.824l0.682667-3.925333a137.472 137.472 0 0 0-5.802667-65.834667l-0.896-2.602667a142.293333 142.293333 0 0 0-10.901333-23.082666l-197.973334-336.917334-1.28-2.133333a141.866667 141.866667 0 0 0-64.085333-55.914667l-4.202667-1.792A144.64 144.64 0 0 0 511.978667 170.666667z m0.832 67.072c10.410667 0.128 20.693333 2.368 30.186666 6.592 14.293333 6.336 26.197333 16.938667 34.026667 30.293333l65.216 111.018667a144.661333 144.661333 0 0 0-75.626667 18.837333 141.504 141.504 0 0 0-57.045333 59.904l-0.512-0.298667-129.984 221.226667-1.066667 1.770667c-21.632 34.069333-67.050667 44.906667-102.165333 24.32a73.066667 73.066667 0 0 1-26.837333-99.84l197.973333-336.917334 1.066667-1.749333c6.506667-10.453333 15.573333-19.136 26.410666-25.258667l1.792-0.981333a76.586667 76.586667 0 0 1 36.565334-8.917333z";
+
+    let seed = 0;
+    document.querySelectorAll("[data-icon]").forEach((host) => {
+      const mode = host.dataset.icon;          // gradient | mono-full | glyph
+      const size = Number(host.dataset.size || 24);
+      const id = "g" + (++seed);
+      const d = mode === "glyph" ? GLYPH : FULL;
+      const fill = mode === "gradient" ? `url(#${id})` : mode === "mono-full" ? "#68717c" : "currentColor";
+      host.insertAdjacentHTML("afterbegin",
+        `<svg viewBox="0 0 1024 1024" aria-hidden="true" width="${size}" height="${size}">` +
+        (mode === "gradient"
+          ? `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#60A5FA"/><stop offset="100%" stop-color="#3370FF"/></linearGradient></defs>`
+          : "") +
+        `<path d="${d}" fill="${fill}"/></svg>`);
+    });
+  </script>
+</body>
+</html>

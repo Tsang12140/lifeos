@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 管家图标 · 新版「叠纸」对照</title>
+<style>
+  :root {
+    --muted: #5d6b82;
+    --primary: #315dfa;
+    --line: #d6dfeb;
+    --ink-soft: #364661;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 30px 26px 70px;
+    background: #f4f6f9;
+    color: #222;
+    font: 14px/1.6 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header { max-width: 1180px; margin: 0 auto 22px; }
+  h1 { margin: 0 0 6px; font-size: 19px; }
+  .lead { margin: 0; color: var(--muted); max-width: 780px; font-size: 13px; }
+  .notice { margin: 12px 0 0; padding: 8px 12px; border-left: 3px solid #c9b994; background: #fbf8ee; color: #6b5f45; font-size: 12px; border-radius: 4px; }
+  main { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px 18px; }
+  h2 { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: var(--ink-soft); letter-spacing: .02em; }
+  .hint { margin: 0 0 14px; font-size: 11.5px; color: #8b95a5; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .cell { border: 1px solid #e7ebf1; border-radius: 10px; overflow: hidden; }
+  .cell .tag { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 11px; color: #8b95a5; background: #fafbfd; border-bottom: 1px solid #eef1f6; }
+  .cell .tag b { color: #5b6577; font-weight: 600; }
+  .stage { display: flex; align-items: center; justify-content: center; min-height: 104px; background: #eef1f6; }
+  .stage.photo { background: linear-gradient(135deg, #cdbba5, #8d7a66 55%, #6f6152); }
+  .stage.paper { background: #f7f5ef; }
+
+  /* A 桌面悬浮球 */
+  .launcher {
+    display: grid; place-items: center;
+    width: 56px; height: 56px; border-radius: 50%;
+    border: 1px solid var(--line);
+    background: rgb(255 255 255 / .86);
+    box-shadow: 0 4px 14px rgb(24 36 61 / .10), 0 1px 3px rgb(24 36 61 / .06);
+    backdrop-filter: blur(9px);
+  }
+  .launcher.hover { background: rgb(255 255 255 / .96); box-shadow: 0 6px 16px rgb(24 36 61 / .12), 0 0 0 3px rgb(24 36 61 / .05); }
+  .launcher svg { width: 44px; height: 44px; display: block; }
+
+  /* B 面板标题 */
+  .header-logo { width: 32px; height: 32px; border-radius: 50%; box-shadow: 0 2px 6px rgb(24 36 61 / .10); overflow: hidden; }
+  .header-logo svg { width: 100%; height: 100%; display: block; }
+
+  /* C 移动裸图标 */
+  .bare { display: grid; place-items: center; width: 44px; height: 44px; opacity: .7; }
+  .bare svg { width: 44px; height: 44px; display: block; }
+
+  /* D 底部导航 */
+  .navrow { display: flex; gap: 8px; padding: 6px 10px; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgb(24 36 61 / .06); }
+  .navitem { display: grid; justify-items: center; gap: 3px; width: 68px; padding: 7px 2px 6px; font-size: .68rem; font-weight: 600; color: var(--muted); }
+  .navitem.is-active { color: var(--primary); }
+  .navitem svg { display: block; }
+
+  /* E 导出页脚 */
+  .share-footer { display: flex; align-items: center; gap: 9px; color: #68717c; font-size: 14px; font-weight: 500; }
+  .share-footer svg { width: 20px; height: 20px; display: block; }
+
+  /* F/G 尺寸阶梯 */
+  .ladder { display: flex; align-items: flex-end; gap: 26px; flex-wrap: wrap; }
+  .ladder figure { margin: 0; display: grid; justify-items: center; gap: 7px; }
+  .ladder figcaption { font-size: 10.5px; color: #93a0b2; }
+  .ladder .ink { color: #68717c; }
+
+  /* H 品牌同族 */
+  .family { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; }
+  .family figure { margin: 0; display: grid; justify-items: center; gap: 8px; }
+  .family img { width: 40px; height: 40px; display: block; }
+  .family .mark { width: 40px; height: 40px; }
+  .family .mark svg { width: 40px; height: 40px; display: block; }
+  .family figcaption { font-size: 10.5px; color: #93a0b2; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI 管家图标 · 新版「叠纸」对照</h1>
+  <p class="lead">左边是现行版本（蓝色圆盘 + 折线丝带），右边是它交回来的新版（深灰圆盘 + 镂空叠纸，与新品牌 mark 同族）。每个位置都按产品里的真实尺寸与颜色模式渲染。</p>
+  <p class="notice">新路径直接读自 <code>file/assistant-logo-path.ts</code> / <code>file/assistant-nav-icon.tsx</code>；本页只做展示，产品代码一行未改。</p>
+</header>
+
+<main>
+  <section>
+    <h2>A · 桌面悬浮球（56px 白底 + 44px 图标）</h2>
+    <p class="hint">右侧两张是常态与 hover：白底更实、外环一圈淡影。</p>
+    <div class="pair">
+      <div class="cell">
+        <div class="tag"><b>现行</b><span>蓝渐变 #60A5FA → #3370FF</span></div>
+        <div class="stage"><span class="launcher" data-icon="old-full" data-vb="0 0 1024 1024"></span></div>
+      </div>
+      <div class="cell">
+        <div class="tag"><b>新版</b><span>灰渐变 #5A6679 → #3F4651</span></div>
+        <div class="stage" style="gap:22px">
+          <span class="launcher" data-icon="new-full" data-vb="0 0 1024 1024"></span>
+          <span class="launcher hover" data-icon="new-full" data-vb="0 0 1024 1024"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>B · 助手面板标题栏（32px 满铺）</h2>
+    <p class="hint">外面是 32px 圆形容器 + 0 2px 6px 阴影。</p>
+    <div class="pair">
+      <div class="cell">
+        <div class="tag"><b>现行</b></div>
+        <div class="stage"><span class="header-logo" data-icon="old-full" data-vb="0 0 1024 1024"></span></div>
+      </div>
+      <div class="cell">
+        <div class="tag"><b>新版</b></div>
+        <div class="stage"><span class="header-logo" data-icon="new-full" data-vb="0 0 1024 1024"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>C · 移动端悬浮球（44px 裸图标，无白底、70% 不透明度）</h2>
+    <p class="hint">这是最容易「糊掉」的位置：图标直接压在照片上，没有任何底衬。</p>
+    <div class="pair">
+      <div class="cell">
+        <div class="tag"><b>现行</b></div>
+        <div class="stage photo"><span class="bare" data-icon="old-full" data-vb="0 0 1024 1024"></span></div>
+      </div>
+      <div class="cell">
+        <div class="tag"><b>新版</b></div>
+        <div class="stage photo"><span class="bare" data-icon="new-full" data-vb="0 0 1024 1024"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>D · 移动底栏（19px 单色 currentColor）· 最严苛</h2>
+    <p class="hint">中间那个是 AI 管家；左右是真实的 lucide 线性图标（19px、stroke 1.8）。重点看视觉重量是否合群、图形是否还认得出。</p>
+    <div class="pair">
+      <div class="cell">
+        <div class="tag"><b>现行</b><span>灰 #5d6b82 / 选中蓝 #315dfa</span></div>
+        <div class="stage"><div class="navrow" data-nav="old"></div></div>
+      </div>
+      <div class="cell">
+        <div class="tag"><b>新版</b><span>灰 #5d6b82 / 选中蓝 #315dfa</span></div>
+        <div class="stage"><div class="navrow" data-nav="new"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>E · 聊天记录导出图页脚（20px 平涂 #68717c）</h2>
+    <p class="hint">Canvas 里用 <code>Path2D</code> 单色填充，镂空处会直接露出浅色页脚背景。</p>
+    <div class="pair">
+      <div class="cell">
+        <div class="tag"><b>现行</b></div>
+        <div class="stage" style="background:#fff"><span class="share-footer"><span data-icon="old-full-mono" data-vb="0 0 1024 1024" style="color:#68717c"></span>LifeOS AI管家</span></div>
+      </div>
+      <div class="cell">
+        <div class="tag"><b>新版</b></div>
+        <div class="stage" style="background:#fff"><span class="share-footer"><span data-icon="new-full-mono" data-vb="0 0 1024 1024" style="color:#68717c"></span>LifeOS AI管家</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>F · 尺寸阶梯（单色灰）</h2>
+    <p class="hint">上排圆盘版用于悬浮球/标题栏/导出，下排无盘版用于底栏；看 16–24px 是否还立得住。</p>
+    <div class="ladder" data-ladder="new-full"></div>
+    <div style="height:18px"></div>
+    <div class="ladder" data-ladder="new-glyph"></div>
+  </section>
+
+  <section>
+    <h2>G · 与品牌 mark 是否同族</h2>
+    <p class="hint">左侧是已经上线的站点图标「叠纸」，右侧是新版 AI 管家。两枚并排时，是否像同一套系统。</p>
+    <div class="family">
+      <figure><img src="../apps/web/public/favicon.svg?v=3" alt="LifeOS 品牌"><figcaption>品牌 mark 40</figcaption></figure>
+      <figure><span class="mark" data-icon="new-full" data-vb="0 0 1024 1024"></span><figcaption>新 AI 管家 40</figcaption></figure>
+      <figure><span class="mark" data-icon="new-full-mono" data-vb="0 0 1024 1024" style="color:#4D5869"></span><figcaption>新 AI 管家 40（单色）</figcaption></figure>
+      <figure><span style="display:grid;place-items:center;width:40px;height:40px;background:#4D5869;border-radius:8px"><span data-icon="new-glyph-mono" data-vb="131 131 762 762" style="display:grid;place-items:center;width:26px;height:26px;color:#E3D3AE"></span></span><figcaption>反向试色：沙纸 26</figcaption></figure>
+    </div>
+  </section>
+</main>
+
+<script>
+const OLD_FULL = "M512 0c282.773333 0 512 229.226667 512 512S794.773333 1024 512 1024 0 794.773333 0 512 229.226667 0 512 0z m-0.021333 170.666667c-19.818667 0-39.829333 4.010667-58.773334 12.394666a141.866667 141.866667 0 0 0-65.344 58.026667l-197.973333 336.938667-1.237333 2.154666c-37.845333 67.029333-14.122667 151.786667 53.717333 190.272 68.565333 38.890667 156.245333 15.786667 195.818667-51.584l104.682666-178.176h0.106667l27.904-46.805333a75.157333 75.157333 0 0 1 63.744-41.130667 75.456 75.456 0 0 1 67.498667 34.88l1.152 1.877334 71.701333 122.026666 1.002667 1.770667c19.242667 35.456 6.08 79.509667-29.610667 99.136-35.690667 19.605333-80.789333 7.552-101.44-27.114667l-59.114667 33.536 1.28 2.133334c40.149333 65.706667 126.698667 87.893333 194.538667 49.408l2.154667-1.258667 2.282666-1.344 2.090667-1.322667 2.730667-1.792 1.962666-1.344 3.072-2.197333 1.258667-0.917333a141.653333 141.653333 0 0 0 11.626667-9.770667l4.224-4.117333a140.970667 140.970667 0 0 0 23.509333-31.829334l1.002667-1.856c1.045333-1.984 2.005333-3.989333 2.944-6.016l1.450666-3.242666c2.730667-6.378667 4.992-12.928 6.762667-19.626667l0.597333-2.325333 0.512-2.154667c0.426667-1.92 0.853333-3.882667 1.194667-5.824l0.682667-3.925333a137.472 137.472 0 0 0-5.802667-65.834667l-0.896-2.602667a142.293333 142.293333 0 0 0-10.901333-23.082666l-197.973334-336.917334-1.28-2.133333a141.866667 141.866667 0 0 0-64.085333-55.914667l-4.202667-1.792A144.64 144.64 0 0 0 511.978667 170.666667z m0.832 67.072c10.410667 0.128 20.693333 2.368 30.186666 6.592 14.293333 6.336 26.197333 16.938667 34.026667 30.293333l65.216 111.018667a144.661333 144.661333 0 0 0-75.626667 18.837333 141.504 141.504 0 0 0-57.045333 59.904l-0.512-0.298667-129.984 221.226667-1.066667 1.770667c-21.632 34.069333-67.050667 44.906667-102.165333 24.32a73.066667 73.066667 0 0 1-26.837333-99.84l197.973333-336.917334 1.066667-1.749333c6.506667-10.453333 15.573333-19.136 26.410666-25.258667l1.792-0.981333a76.586667 76.586667 0 0 1 36.565334-8.917333z";
+const OLD_GLYPH = "M511.978667 170.666667c-19.818667 0-39.829333 4.010667-58.773334 12.394666a141.866667 141.866667 0 0 0-65.344 58.026667l-197.973333 336.938667-1.237333 2.154666c-37.845333 67.029333-14.122667 151.786667 53.717333 190.272 68.565333 38.890667 156.245333 15.786667 195.818667-51.584l104.682666-178.176h0.106667l27.904-46.805333a75.157333 75.157333 0 0 1 63.744-41.130667 75.456 75.456 0 0 1 67.498667 34.88l1.152 1.877334 71.701333 122.026666 1.002667 1.770667c19.242667 35.456 6.08 79.509667-29.610667 99.136-35.690667 19.605333-80.789333 7.552-101.44-27.114667l-59.114667 33.536 1.28 2.133334c40.149333 65.706667 126.698667 87.893333 194.538667 49.408l2.154667-1.258667 2.282666-1.344 2.090667-1.322667 2.730667-1.792 1.962666-1.344 3.072-2.197333 1.258667-0.917333a141.653333 141.653333 0 0 0 11.626667-9.770667l4.224-4.117333a140.970667 140.970667 0 0 0 23.509333-31.829334l1.002667-1.856c1.045333-1.984 2.005333-3.989333 2.944-6.016l1.450666-3.242666c2.730667-6.378667 4.992-12.928 6.762667-19.626667l0.597333-2.325333 0.512-2.154667c0.426667-1.92 0.853333-3.882667 1.194667-5.824l0.682667-3.925333a137.472 137.472 0 0 0-5.802667-65.834667l-0.896-2.602667a142.293333 142.293333 0 0 0-10.901333-23.082666l-197.973334-336.917334-1.28-2.133333a141.866667 141.866667 0 0 0-64.085333-55.914667l-4.202667-1.792A144.64 144.64 0 0 0 511.978667 170.666667z m0.832 67.072c10.410667 0.128 20.693333 2.368 30.186666 6.592 14.293333 6.336 26.197333 16.938667 34.026667 30.293333l65.216 111.018667a144.661333 144.661333 0 0 0-75.626667 18.837333 141.504 141.504 0 0 0-57.045333 59.904l-0.512-0.298667-129.984 221.226667-1.066667 1.770667c-21.632 34.069333-67.050667 44.906667-102.165333 24.32a73.066667 73.066667 0 0 1-26.837333-99.84l197.973333-336.917334 1.066667-1.749333c6.506667-10.453333 15.573333-19.136 26.410666-25.258667l1.792-0.981333a76.586667 76.586667 0 0 1 36.565334-8.917333z";
+
+const NEW_FULL = "M512 0A512 512 0 1 1 512 1024A512 512 0 1 1 512 0ZM518.1 166.5L253.0 208.7L244.4 211.3L237.8 213.9L229.8 218.1L219.7 225.3L213.1 231.5L208.4 236.7L200.3 248.7L197.1 255.0L193.9 263.4L192.0 270.2L190.5 279.1L190.0 286.2L190.2 295.2L247.3 657.6L249.6 667.7L253.2 677.8L258.1 687.4L264.2 696.2L271.4 704.1L279.6 711.1L289.2 717.2L295.6 719.4L302.3 720.0L310.4 718.2L317.6 713.9L323.1 707.5L326.2 699.7L380.2 359.8L382.9 347.6L386.1 338.1L392.1 324.9L398.8 314.0L409.7 300.4L418.7 291.9L424.9 287.0L439.3 278.0L450.6 272.8L459.6 269.6L472.1 266.6L479.9 265.4L489.4 264.8L501.8 265.1L584.8 277.9L591.6 278.1L596.5 277.1L601.2 275.1L605.4 272.3L609.0 268.7L611.8 264.5L613.8 259.8L614.8 254.9L614.8 249.8L611.6 230.2L608.1 218.3L601.8 205.3L597.9 199.4L592.2 192.4L587.2 187.4L580.3 181.6L569.8 175.0L561.6 171.2L554.9 168.9L540.8 166.0L530.1 165.4ZM393.5 750.4L388.6 751.7L382.6 754.8L378.8 758.1L375.7 762.1L372.8 768.1L371.7 773.1L371.8 779.8L373.0 784.7L375.1 789.3L378.1 793.4L383.8 798.7L389.5 802.9L402.0 810.1L408.5 812.7L417.2 815.3L688.9 858.3L697.9 858.6L704.9 858.0L713.9 856.5L720.7 854.6L729.1 851.4L735.4 848.2L744.4 842.4L751.4 836.6L759.8 827.5L765.9 818.7L772.2 805.7L775.7 793.8L833.1 432.3L834.0 422.9L834.0 415.8L832.7 405.1L830.6 396.3L828.3 389.7L823.7 380.0L818.9 372.3L812.1 364.0L804.3 356.6L795.6 350.4L786.2 345.3L776.1 341.4L764.4 338.7L694.0 327.6L685.6 327.6L677.7 330.4L671.0 335.5L666.3 342.5L664.3 348.9L664.3 357.3L700.5 586.2L701.9 602.4L701.4 614.8L700.1 624.7L697.0 637.2L692.0 650.7L687.5 659.7L680.6 670.5L671.5 681.7L664.7 688.5L653.0 697.8L640.2 705.5L626.6 711.4L613.9 715.2ZM398.9 650.3L398.7 657.0L399.7 662.0L401.7 666.7L405.6 672.1L409.4 675.5L415.4 678.7L420.3 680.0L427.0 680.3L599.7 652.7L609.0 649.5L617.4 644.5L624.7 638.0L630.6 630.1L634.9 621.3L637.0 613.4L637.9 605.2L637.2 595.4L600.1 361.7L598.5 356.8L595.9 352.3L592.5 348.4L588.4 345.3L583.8 343.0L578.8 341.7L501.4 329.5L489.8 328.8L483.3 329.6L477.0 331.3L466.6 336.0L457.6 343.1L450.4 351.9L446.0 360.7L443.0 371.9Z";
+const NEW_GLYPH = NEW_FULL.slice(NEW_FULL.indexOf("M518.1"));
+
+const LUCIDE = {
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M17 14h-6"/><path d="M13 18H7"/><path d="M7 14h.01"/><path d="M17 18h.01"/>',
+  notebook: '<path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/>',
+  diary: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/><path d="M16 8h2"/><path d="M16 12h2"/><path d="M16 16h2"/>'
+};
+
+let seed = 0;
+const uid = () => "g" + (++seed);
+
+function svg({ d, vb = "0 0 1024 1024", fill, size }) {
+  const id = uid();
+  const defs = fill === "new-gradient"
+    ? `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#5A6679"/><stop offset="100%" stop-color="#3F4651"/></linearGradient></defs>`
+    : "";
+  const paint = fill === "new-gradient" ? `url(#${id})` : fill;
+  return `<svg viewBox="${vb}" aria-hidden="true"${size ? ` width="${size}" height="${size}"` : ""}>${defs}<path d="${d}" fill="${paint}"/></svg>`;
+}
+
+function renderOld(d, vb) {
+  const id = uid();
+  return `<svg viewBox="${vb}" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#60A5FA"/><stop offset="100%" stop-color="#3370FF"/></linearGradient></defs><path d="${d}" fill="url(#${id})"/></svg>`;
+}
+const renderNew = (d, vb) => svg({ d, vb, fill: "new-gradient" });
+
+function iconHtml(kind, vb) {
+  if (kind === "old-full") return renderOld(OLD_FULL, vb);
+  if (kind === "old-glyph") return renderOld(OLD_GLYPH, vb);
+  if (kind === "old-full-mono") return svg({ d: OLD_FULL, vb, fill: "currentColor" });
+  if (kind === "new-full") return renderNew(NEW_FULL, vb);
+  if (kind === "new-glyph") return renderNew(NEW_GLYPH, vb);
+  if (kind === "new-full-mono") return svg({ d: NEW_FULL, vb, fill: "currentColor" });
+  if (kind === "new-glyph-mono") return svg({ d: NEW_GLYPH, vb, fill: "currentColor" });
+  return "";
+}
+
+document.querySelectorAll("[data-icon]").forEach((host) => {
+  host.insertAdjacentHTML("afterbegin", iconHtml(host.dataset.icon, host.dataset.vb));
+});
+
+/* D · 移动底栏 */
+function navRow(kind) {
+  const glyph = kind === "old"
+    ? renderOldMono(OLD_GLYPH, "0 0 1024 1024")
+    : svg({ d: NEW_GLYPH, vb: "131 131 762 762", fill: "currentColor" });
+  const lucide = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  return `
+    <span class="navitem">${lucide(LUCIDE.diary)}<span>日记</span></span>
+    <span class="navitem">${lucide(LUCIDE.calendar)}<span>日历</span></span>
+    <span class="navitem is-active">${glyph}<span>AI管家</span></span>
+    <span class="navitem">${lucide(LUCIDE.notebook)}<span>笔记</span></span>`;
+}
+function renderOldMono(d, vb) {
+  return `<svg viewBox="${vb}" aria-hidden="true"><path d="${d}" fill="currentColor"/></svg>`;
+}
+document.querySelectorAll("[data-nav]").forEach((host) => {
+  host.innerHTML = navRow(host.dataset.nav);
+  host.querySelectorAll("svg").forEach((s) => { s.style.width = "19px"; s.style.height = "19px"; });
+});
+
+/* F · 尺寸阶梯 */
+document.querySelectorAll("[data-ladder]").forEach((host) => {
+  const kind = host.dataset.ladder;
+  const vb = kind.endsWith("glyph") ? "131 131 762 762" : "0 0 1024 1024";
+  const d = kind === "new-full" ? NEW_FULL : NEW_GLYPH;
+  host.innerHTML = [16, 19, 24, 32, 44, 64].map((size) =>
+    `<figure><span class="ink">${svg({ d, vb, fill: "currentColor", size }).replace("<svg ", `<svg style="width:${size}px;height:${size}px;display:block" `)}</span><figcaption>${size}px</figcaption></figure>`
+  ).join("");
+});
+</script>
+</body>
+</html>

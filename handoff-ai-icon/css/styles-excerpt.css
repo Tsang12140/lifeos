@@ -1,0 +1,134 @@
+/* =====================================================================
+   从 apps/web/src/styles.css 摘出的「AI 管家图标」相关实际生效规则。
+   仅摘录，不是完整样式表；行号对应源文件（2026-10-22 快照）。
+   ===================================================================== */
+
+/* 颜色变量（styles.css 55–73） */
+:root {
+  --surface: #ffffff;
+  --ink-soft: #364661;
+  --muted: #5d6b82;
+  --line: #d6dfeb;
+  --line-strong: #bdcadb;
+  --primary: #315dfa;
+  --shadow-soft: 0 14px 32px rgb(24 36 61 / 0.085);
+}
+
+/* ---------- 面板标题栏里的 logo，styles.css 6705–6718 ---------- */
+.ai-assistant-logo {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgb(24 36 61 / 0.10);
+}
+
+.ai-logo-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- 桌面悬浮球，styles.css 7031–7058 ---------- */
+/* 注意：3129 行还有一版旧的 pill 形状声明，已被下面这组覆盖。 */
+.ai-assistant-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 62px;
+  z-index: 61;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 4px 14px rgb(24 36 61 / 0.10), 0 1px 4px rgb(24 36 61 / 0.06);
+  cursor: pointer;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.ai-assistant-launcher .ai-logo-svg {
+  width: 44px;
+  height: 44px;
+}
+
+.ai-assistant-launcher.is-hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(12px) scale(0.72);
+}
+
+@media (max-width: 900px) {
+  .ai-assistant-launcher {
+    right: 14px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ---------- 悬浮球：白底 / 细边 / 中性阴影，styles.css 11917–11938 ---------- */
+.ai-assistant-launcher {
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.86);
+  box-shadow: 0 4px 14px rgb(24 36 61 / 0.10), 0 1px 3px rgb(24 36 61 / 0.06);
+  backdrop-filter: blur(9px);
+  cursor: grab;
+  touch-action: none;
+  transition: opacity 200ms ease, transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ai-assistant-launcher:hover:not(.is-dragging),
+.ai-assistant-launcher:focus-visible {
+  background: rgb(255 255 255 / 0.96);
+  box-shadow: 0 6px 16px rgb(24 36 61 / 0.12), 0 0 0 3px rgb(24 36 61 / 0.05);
+  transform: translateY(-1px);
+}
+
+.ai-assistant-launcher.is-dragging {
+  cursor: grabbing;
+  transform: none;
+}
+
+/* ---------- 移动端悬浮球：去掉白底，变成裸图标，assistant-launcher-mobile.css ---------- */
+@media (max-width: 900px) {
+  .ai-assistant-launcher {
+    bottom: calc(var(--mobile-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 12px);
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    opacity: .7;
+    translate: 0 var(--ai-launcher-lift, 0px);
+    transition: opacity 180ms ease, translate 240ms cubic-bezier(.22, .68, .2, 1) var(--ai-launcher-motion-delay, 180ms);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .ai-assistant-launcher:hover:not(.is-dragging),
+  .ai-assistant-launcher:focus-visible,
+  .ai-assistant-launcher.is-dragging {
+    background: transparent;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .ai-assistant-launcher:focus-visible { outline: 2px solid var(--ink-soft); outline-offset: 2px; }
+  .ai-assistant-launcher.is-dragging { transition: none; }
+  .ai-assistant-launcher.is-hidden { opacity: 0; }
+}
+
+/* ---------- 移动底栏，styles.css 11663–11675 ---------- */
+.mobile-nav-item {
+  min-width: 0;
+  min-height: var(--mobile-nav-height);
+  padding: 7px 2px 6px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.mobile-nav-item.is-active { color: var(--primary); background: transparent; }
