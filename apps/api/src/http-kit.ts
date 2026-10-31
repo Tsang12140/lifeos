@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { gzipSync } from "node:zlib";
 import type { ApiConfig } from "./config.js";
 import type { SqliteRecordRepository } from "./repository.js";
 import { readWeatherProfile, type WeatherLocationOverride } from "./weather-config.js";
@@ -22,14 +23,48 @@ export function backupHttpError(error: unknown): HttpError {
     : new HttpError(502, "backup_failed", error instanceof Error ? error.message : "备份失败");
 }
 
+/**
+ * JSON is the only thing this API ships in bulk and none of it left the process
+ * compressed: a record list is mostly repeated keys, so gzip costs a couple of
+ * milliseconds on a body that is already in memory and takes about a quarter of
+ * the bytes. Anything under a kilobyte is cheaper to send as it is.
+ */
+const GZIP_MIN_BYTES = 1024;
+const requestByResponse = new WeakMap<ServerResponse, IncomingMessage>();
+
+/** `setJson` only ever sees the response, so the request handler binds the pair here. */
+export function bindRequest(res: ServerResponse, req: IncomingMessage): void {
+  requestByResponse.set(res, req);
+}
+
+function acceptsGzip(req: IncomingMessage): boolean {
+  const header = req.headers["accept-encoding"];
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (value === undefined) return false;
+  return value.split(",").some((part) => {
+    const [name, ...params] = part.trim().toLowerCase().split(";");
+    if (name !== "gzip") return false;
+    const quality = params.map((param) => param.trim()).find((param) => param.startsWith("q="));
+    return quality === undefined || Number(quality.slice(2)) > 0;
+  });
+}
+
 export function setJson(res: ServerResponse, status: number, value: unknown, extraHeaders: Record<string, string> = {}): void {
-  const body = JSON.stringify(value);
-  res.writeHead(status, {
+  const raw = JSON.stringify(value);
+  const bytes = Buffer.byteLength(raw);
+  const request = requestByResponse.get(res);
+  const headers: Record<string, string> = {
     "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body),
     "cache-control": "no-store",
     ...extraHeaders,
-  });
+  };
+  if (request === undefined || bytes < GZIP_MIN_BYTES || extraHeaders["content-encoding"] !== undefined || !acceptsGzip(request)) {
+    res.writeHead(status, { ...headers, "content-length": String(bytes) });
+    res.end(raw);
+    return;
+  }
+  const body = gzipSync(raw);
+  res.writeHead(status, { ...headers, "content-length": String(body.length), "content-encoding": "gzip", vary: "accept-encoding" });
   res.end(body);
 }
 

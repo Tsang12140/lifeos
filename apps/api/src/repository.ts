@@ -463,7 +463,7 @@ export interface AssistantChatTurnRow {
   readonly status: AssistantChatTurnStatus;
   readonly userMessageId: string;
   readonly userMessageSeq: number;
-  readonly context: readonly { readonly role: "user" | "assistant"; readonly text: string }[];
+  readonly context: readonly import("@lifeos/core").BackfillChatMessage[];
   readonly result: unknown | null;
   readonly retryable: boolean;
   readonly errorCode: string | null;
@@ -583,7 +583,7 @@ export interface BeginAssistantChatTurnInput {
   readonly requestHash: string;
   readonly userText: string;
   readonly attachments: readonly AssistantHistoryAttachment[];
-  readonly context: readonly { readonly role: "user" | "assistant"; readonly text: string }[];
+  readonly context: readonly import("@lifeos/core").BackfillChatMessage[];
   readonly batchId: string | null;
   readonly batchRevision: number | null;
   readonly at: string;
@@ -629,7 +629,7 @@ function assistantChatTurnRow(row: Record<string, unknown>): AssistantChatTurnRo
     status,
     userMessageId: textColumn(row, "user_message_id"),
     userMessageSeq: numberColumn(row, "user_message_seq"),
-    context: context as readonly { readonly role: "user" | "assistant"; readonly text: string }[],
+    context: context as readonly import("@lifeos/core").BackfillChatMessage[],
     result: resultValue === null ? null : parseJson<unknown>(resultValue, "assistant_chat_turns.result_json"),
     retryable: booleanColumn(row, "retryable"),
     errorCode: nullableTextColumn(row, "error_code"),
@@ -1854,7 +1854,7 @@ export class SqliteRecordRepository {
     return { items, hasMore, nextBeforeSeq: hasMore ? (items[0]?.seq ?? null) : null };
   }
 
-  public assistantMessageContextBefore(conversationId: string, beforeSeq: number, afterSeq: number, limit: number): readonly { readonly role: "user" | "assistant"; readonly text: string }[] {
+  public assistantMessageContextBefore(conversationId: string, beforeSeq: number, afterSeq: number, limit: number): readonly import("@lifeos/core").BackfillChatMessage[] {
     return this.assistantMessagePage(conversationId, { beforeSeq, afterSeq, limit }).items.map(({ role, text }) => ({ role, text }));
   }
 

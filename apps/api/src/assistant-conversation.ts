@@ -13,17 +13,18 @@ import { askAssistantJson } from "./assistant-json.js";
 import { assistantPlaceContext, assistantSafePlan, PLACE_ARCHIVE_RULE } from "./assistant-place-context.js";
 import { defaultAiGear, readRuntimeAiConfig, runtimeWithGear, AI_GEARS } from "./ai-config.js";
 import { aiBackfillPlan, backfillMaterials, commitBackfill, requireDraft, ruleBackfillPlan, storeBackfillDraft, undoBackfill } from "./assistant-backfill.js";
-import { booleanField, enumField, jsonObject, stringField, type JsonObject } from "./field-validate.js";
+import { booleanField, enumField, jsonObject, revisionField, stringField, type JsonObject } from "./field-validate.js";
 import { HttpError } from "./http-kit.js";
 import type { ApiConfig } from "./config.js";
 import type { RecordView, SqliteRecordRepository } from "./repository.js";
 import { dateForTime, dateWithWeekdayForTime } from "./timeline-query.js";
 import { retrieveJournals, JOURNAL_RETRIEVAL_RULE, journalSourceOffers, localJournalReply, eligibleSource } from "./journal-retrieval.js";
-import { dreamTransferRequest, proposeDreamTransfer } from "./assistant-record-transfer.js";
+import { AssistantRecordTools, RECORD_TOOL_CONTRACT } from "./assistant-record-tools.js";
 
 interface GeneratedChatReply {
   envelope: JsonObject;
-  action: "reply" | "new_draft" | "update_draft";
+  action: "reply" | "new_draft" | "update_draft" | "lookup";
+  requests?: unknown;
   answer: string;
   plan: BackfillPlan | undefined;
   sources: ReturnType<typeof journalSourceOffers>;
@@ -73,10 +74,14 @@ function entityRecencyHint(records: readonly RecordView[], today: string): (enti
 const WRITE_MESSAGES = new Set(["确认记录", "确认全部", "确认全部记录", "确认写入", "确认补记", "就这样写进去", "就这样写入", "就这样记进去", "可以写入", "可以写进去", "按这个写入", "没问题记进去"]);
 const UNDO_MESSAGES = new Set(["撤销这次补记", "撤销本次补记", "撤销这批补记"]);
 const cleanCommand = (value: string) => value.replace(/[\s，,。.!！]/g, "");
+function historySourcesField(value: unknown): NonNullable<BackfillChatMessage["sources"]> {
+  if (!Array.isArray(value) || value.length > 6) throw new HttpError(400, "invalid_history", "历史来源格式不正确");
+  return value.map(raw => { const source = jsonObject(raw, "历史来源"); if (typeof source.number !== "number" || !Number.isInteger(source.number) || source.number < 1 || source.number > 6) throw new HttpError(400, "invalid_history", "历史来源编号不正确"); return { number: source.number, id: stringField(source.id, "id"), revision: revisionField(source.revision) }; });
+}
 function historyField(input: unknown): BackfillChatMessage[] {
   if (input === undefined) return [];
   if (!Array.isArray(input) || input.length > 20) throw new HttpError(400, "invalid_history", "对话历史格式不正确");
-  return input.map((raw) => { const item = jsonObject(raw, "对话"); const text = stringField(item.text, "text"); if (text.length > 12000) throw new HttpError(400, "history_too_long", "对话历史过长"); return { role: enumField(item.role, ["user", "assistant"] as const, "role"), text }; });
+  return input.map((raw) => { const item = jsonObject(raw, "对话"); const text = stringField(item.text, "text"); if (text.length > 12000) throw new HttpError(400, "history_too_long", "对话历史过长"); const sources = item.sources === undefined ? undefined : historySourcesField(item.sources); return { role: enumField(item.role, ["user", "assistant"] as const, "role"), text, ...(sources ? { sources } : {}) }; });
 }
 function explicitLocalMarker(message: string, repository: SqliteRecordRepository, today: string): BackfillAction | undefined {
   if (!/标记|打卡|记录|记下/.test(message)) return;
@@ -139,25 +144,15 @@ export async function chatBackfill(config: ApiConfig, repository: SqliteRecordRe
   const privacyVisible = input.privacyVisible === undefined ? false : booleanField(input.privacyVisible, "privacyVisible");
   const includePrivate = allowsPrivateAiAccess(input.privateAccessUntil);
   const allRecords = repository.list();
-  const transferRequest = attached.length ? undefined : dreamTransferRequest(message, history);
-  if (transferRequest) {
-    if (appLockRepositoryPolicy(repository)?.locked("dreams")) return finish({ reply: "梦境页面已上锁，请先解锁再迁移或复制。记录没有改动。", action: "reply", mode: "rules" });
-    // Never let a transfer fall through into model-generated fragment drafts.
-    if (previous && !previous.plan.entries.some(e => e.transfer)) return finish({ reply: "请先处理或关闭当前拟写方案，再单独迁移整条日记。原方案已保留。", action: "reply", mode: "rules", batch: previous });
-    const preferredSourceId = previous?.plan.entries.length === 1 ? previous.plan.entries[0]?.transfer?.sourceId : undefined;
-    const proposal = proposeDreamTransfer(repository, transferRequest, message, currentDate, preferredSourceId);
-    if (!proposal.plan) return finish({ reply: proposal.reply, action: "reply", mode: "rules", ...(held ? { batch: existingReplyBatch()! } : {}) });
-    const batch = await storeBackfillDraft(config, repository, backfillMaterials(source, repository), proposal.plan, "rules", previous, signal);
-    return finish({ reply: proposal.reply, action: "draft", mode: "rules", batch });
-  }
   const pageContext = input.pageContext === undefined ? undefined : enumField(input.pageContext, ["dreams"] as const, "pageContext");
   const dreamQuestion = asksAboutDreams(message) || (pageContext === "dreams" && !/现实|实际生活|普通日记/.test(message));
-  const visibleRecords = allRecords.filter((record) => (includePrivate || !record.isPrivate) && !record.isDemo && (dreamQuestion ? isDreamRecord(record) : !isDreamRecord(record)));
+  const usingModel = runtime.enabled && !!runtime.apiKey;
+  const visibleRecords = allRecords.filter((record) => (includePrivate || !record.isPrivate) && !record.isDemo && (usingModel || (dreamQuestion ? isDreamRecord(record) : !isDreamRecord(record))));
   const privateCount = allRecords.filter(record => record.isPrivate && !record.isDemo).length;
   const lockedLabels = APP_LOCK_TARGETS.filter(t => appLockRepositoryPolicy(repository)?.locked(t.id)).map(t => t.label);
   const countQuestion = /(?:多少|几)篇日记|日记.*(?:多少|几篇)/.test(message) && !/补记|帮我记|记下来/.test(message);
   const { journalEmbedding: _embeddingForCount, ...withoutEmbedding } = config;
-  const retrieval = await retrieveJournals(countQuestion ? withoutEmbedding : config, repository, message, currentDate, signal, dreamQuestion, includePrivate);
+  const retrieval = await retrieveJournals(countQuestion ? withoutEmbedding : config, repository, message, currentDate, signal, dreamQuestion, includePrivate, usingModel ? "all" : undefined);
   assertAssistantActive(signal);
   if (dreamQuestion && /多少|几条|几个|几次|几篇/.test(message) && !/记下来|帮我记|补记/.test(message)) {
     return finish({ reply: `当前范围内记录了 ${retrieval.dreamCount ?? 0} 条${includePrivate ? "" : "非隐私、"}非预置梦境；这是记录数量，不代表实际做梦次数。`, action: "reply", mode: "rules" });
@@ -178,7 +173,8 @@ ${DREAM_CONTEXT_RULE}
 ${PLACE_ARCHIVE_RULE}
 ${JOURNAL_RETRIEVAL_RULE.replace("在 JSON 顶层 sourceIds", "在正文末尾lifeos附加块的sourceIds")}
 原文完整性：complete=true才代表该条content为全文；complete=false或没有完整性标记只能作为片段，totalChars是全文字符数。不能把片段的结尾说成原文到此结束。用户贴开头是在定位原记录时，不把它当作新经历或全文；整条迁移或复制必须定位原记录，不得凭片段拟写替代。
-${UI_CONTRACT}`;
+${UI_CONTRACT}
+${RECORD_TOOL_CONTRACT}`;
   // The date is what the answer gets read against, so it ships as the Shanghai
   // day plus its weekday. A raw UTC instant would leave the model to convert the
   // zone first, which is exactly the step where "上周二" turns into "上周三".
@@ -207,16 +203,29 @@ ${UI_CONTRACT}`;
   const diagnose = (code: string, raw: unknown) => recorder.diagnose?.({ stage: "format", errorCode: code, errorDetail: "正文已交付，附加信息未采用", receivedChars: JSON.stringify(raw).length, rawText: JSON.stringify(raw) });
   const sourceContextCurrent = () => !retrieval.candidates.some(hit => { const record = repository.findById(hit.id); return !record || (!includePrivate && record.isPrivate) || record.isDemo || record.revision !== hit.revision; });
   if (includePrivate && !allowsPrivateAiAccess(input.privateAccessUntil)) throw new HttpError(409, "private_access_expired", "私密检索授权已到期，请重新开启后提问");
-  const generated = await askAssistantJson<GeneratedChatReply>(config, runtime, system, history.slice(-8), JSON.stringify({ message, attachments: attached.map(({ imageData: _, ...m }) => m), ...assistantPlaceContext(repository), cycleContext: assistantCycleContext(repository, includePrivate), journalRetrieval: retrieval, recentRecords: recent, recordStats: { readable: visibleRecords.length, journals: visibleRecords.filter(record => record.kind === "journal" && !isDreamRecord(record)).length, dreams: visibleRecords.filter(isDreamRecord).length, tasks: visibleRecords.filter(record => record.kind === "task").length }, existingRecords: context, currentPlan: assistantSafePlan(previous?.plan), previousMaterials: previous?.materials, committedKeys: previous?.committedKeys, deferredKeys: previous?.deferredKeys, existingHabits: repository.cycleIntimacyModule().config.habits ?? [], photoOrder: attached.filter(m => m.assetId && repository.findAssetById(m.assetId)?.kind === "photo").map((m,i) => ({number:i+1,assetId:m.assetId,name:m.name})) }), attached.flatMap((m) => m.imageData ? [m.imageData] : []), (raw) => {
+  const recordTools = new AssistantRecordTools(repository, currentDate, includePrivate, input.privateAccessUntil, signal);
+  const recordToolResults: unknown[] = [];
+  const historySources = history.filter(item => item.sources?.length).map(item => ({ text: item.text, sources: item.sources!.filter(source => eligibleSource(repository.findById(source.id), includePrivate)) }));
+  let generated: GeneratedChatReply | null = null;
+  for (let round = 0; round < 6; round++) {
+  generated = await askAssistantJson<GeneratedChatReply>(config, runtime, system, history.slice(-8), JSON.stringify({ message, recordToolResults, historySources, attachments: attached.map(({ imageData: _, ...m }) => m), ...assistantPlaceContext(repository), cycleContext: assistantCycleContext(repository, includePrivate), journalRetrieval: retrieval, recentRecords: recent, recordStats: { readable: visibleRecords.length, journals: visibleRecords.filter(record => record.kind === "journal" && !isDreamRecord(record)).length, dreams: visibleRecords.filter(isDreamRecord).length, tasks: visibleRecords.filter(record => record.kind === "task").length }, existingRecords: context, currentPlan: assistantSafePlan(previous?.plan), previousMaterials: previous?.materials, committedKeys: previous?.committedKeys, deferredKeys: previous?.deferredKeys, existingHabits: repository.cycleIntimacyModule().config.habits ?? [], photoOrder: attached.filter(m => m.assetId && repository.findAssetById(m.assetId)?.kind === "photo").map((m,i) => ({number:i+1,assetId:m.assetId,name:m.name})) }), attached.flatMap((m) => m.imageData ? [m.imageData] : []), (raw) => {
     const envelope = jsonObject(raw, "AI回复");
     const answer = stringField(envelope.reply, "reply");
     if (!answer.trim() || answer.length > 12000) throw new Error("Invalid reply length");
+    if (envelope.action === "lookup") return { envelope, action: "lookup", answer, plan: undefined, sources: [], requests: envelope.requests };
     let action: GeneratedChatReply["action"], plan: BackfillPlan | undefined;
     try {
       action = envelope.action === undefined ? "reply" : enumField(envelope.action, ["reply", "new_draft", "update_draft"] as const, "action");
-      plan = action === "reply" ? undefined : aiBackfillPlan(envelope.plan, repository, previous?.plan, dreamQuestion);
+      if (envelope.recordOperations !== undefined) {
+        plan = recordTools.plan(envelope.recordOperations);
+        if (previous && !previous.plan.entries.every(e => e.transfer)) throw new Error("Another draft is pending");
+        action = previous ? "update_draft" : "new_draft";
+      } else plan = action === "reply" ? undefined : aiBackfillPlan(envelope.plan, repository, previous?.plan, pageContext === "dreams");
       if (action === "update_draft" && !previous) { diagnose("ai_operation_ignored", raw); return replyOnly(answer, "operation"); }
-    } catch { diagnose("ai_operation_ignored", raw); return replyOnly(answer, "operation"); }
+    } catch (error) {
+      if (envelope.recordOperations !== undefined && error instanceof HttpError && error.code === "source_not_read") return { envelope, action: "lookup", answer: "正在读取拟操作记录的完整原文。", plan: undefined, sources: [], requests: recordTools.requiredReads(envelope.recordOperations) };
+      diagnose("ai_operation_ignored", raw); return replyOnly(answer, "operation");
+    }
     let sources: ReturnType<typeof journalSourceOffers> = [], delivery: AssistantReplyDelivery | undefined;
     try {
       const ids = envelope.sourceIds;
@@ -225,7 +234,7 @@ ${UI_CONTRACT}`;
       if (Array.isArray(ids)) sources = ids.slice(0, 6).flatMap((id, index) => {
         if (typeof id !== "string" || seen.has(id)) { invalidIds = true; return []; }
         seen.add(id);
-        try { return journalSourceOffers([id], citationContext, repository, includePrivate).map(offer => ({ ...offer, label: offer.label.replace(/^来源 1 /, `来源 ${index + 1} `) })); }
+        try { return journalSourceOffers([id], { ...citationContext, candidates: [...recordTools.hits(), ...citationContext.candidates.filter(hit => !recordTools.reads.has(hit.id))] }, repository, includePrivate).map(offer => ({ ...offer, label: offer.label.replace(/^来源 1 /, `来源 ${index + 1} `) })); }
         catch { invalidIds = true; return []; }
       });
       const verifiedNumbers = new Set(sources.map(offer => Number(/^来源 (\d+)/.exec(offer.label)?.[1])));
@@ -234,8 +243,14 @@ ${UI_CONTRACT}`;
     } catch { diagnose("ai_references_ignored", raw); delivery = { status: "recovered", issue: "references" }; sources = []; }
     return { envelope, action, answer, plan, sources, ...(delivery ? { delivery } : {}) };
   }, onPreview, signal, recorder, { recover: body => sourceContextCurrent() ? replyOnly(body.text, "format") : null });
+    if (generated?.action !== "lookup") break;
+    recordToolResults.push({ round: round + 1, results: await recordTools.execute(generated.requests) });
+    onPreview?.("");
+    if (round === 5) generated = replyOnly("本轮已完成部分查询，尚未形成可确认的操作。请缩小范围或继续说明要处理的记录；原记录没有改动。", "operation");
+  }
+  recordTools.assertCurrent();
   assertAssistantActive(signal);
-  if (generated) {
+  if (generated && generated.action !== "lookup") {
     if (visibleRecords.slice(0, 6).some(record => !repository.findById(record.id))) throw new HttpError(423, 'app_locked', '相关内容已上锁，请解锁后重新提问');
     if (includePrivate && !allowsPrivateAiAccess(input.privateAccessUntil)) throw new HttpError(409, "private_access_expired", "私密检索授权已到期，请重新开启后提问");
     if (retrieval.candidates.some(hit => {

@@ -76,3 +76,35 @@
 .assistant-message-actions__feedback.is-failed {
   color: #a24132;
 }
+
+/* Diary record cards reuse this control in the same footer row as the edit and
+   delete buttons, so it takes their 32px box (44px on touch) instead of the
+   24px hot area used under an assistant answer. The bubble opens to the left so
+   it stays inside the card at the right edge. */
+.record-copy-action {
+  position: relative;
+  flex: none;
+  margin: 0;
+}
+
+.record-copy-action .assistant-message-actions__copy {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.record-copy-action .assistant-message-actions__feedback {
+  left: auto;
+  right: 0;
+  max-width: 180px;
+}
+
+@media (pointer: coarse) {
+  .record-copy-action .assistant-message-actions__copy {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

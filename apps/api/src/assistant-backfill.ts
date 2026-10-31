@@ -20,10 +20,15 @@ import { requireAppTarget, appLockRepositoryPolicy } from "./app-lock-context.js
 function occurredDay(record: TimelineRecord): string { return record.occurredAt ? dateForTime(record.occurredAt, "Asia/Shanghai") ?? "" : ""; }
 
 function transferSource(repository: SqliteRecordRepository, transfer: NonNullable<BackfillEntry["transfer"]>): RecordView {
-  requireAppTarget("dreams");
-  if (appLockRepositoryPolicy(repository)?.locked("dreams")) throw new HttpError(423, "app_locked", "请先解锁梦境后继续");
   const source = repository.findById(transfer.sourceId);
-  if (!source || source.revision !== transfer.sourceRevision || source.kind !== "journal" || source.isPrivate || source.isDemo || isDreamRecord(source)) throw new HttpError(409, "record_changed", "原日记已改变或不可读取，请重新定位并核对完整记录");
+  if (!source || source.revision !== transfer.sourceRevision || !["journal", "note"].includes(source.kind) || source.isPrivate || source.isDemo) throw new HttpError(409, "record_changed", "原记录已改变或不可读取，请重新定位并核对完整记录");
+  const nature = transfer.targetNature ?? (source.kind === "journal" ? "dream" : undefined);
+  if (nature === "dream" || isDreamRecord(source)) {
+    requireAppTarget("dreams");
+    if (appLockRepositoryPolicy(repository)?.locked("dreams")) throw new HttpError(423, "app_locked", "请先解锁梦境后继续");
+  }
+  if (source.kind === "note" && (transfer.mode !== "copy" || nature)) throw new HttpError(400, "invalid_record_operation", "笔记支持保留原类型复制");
+  if (transfer.mode === "move" && isDreamRecord(source) === (nature === "dream")) throw new HttpError(400, "unchanged_record", "记录已经是目标性质");
   return source;
 }
 
@@ -78,11 +83,12 @@ export function validateBackfillPlan(value: unknown, repository: SqliteRecordRep
     const e = jsonObject(v, "记录");
     if (e.transfer !== undefined) {
       const rawTransfer = jsonObject(e.transfer, "整条操作");
-      const transfer = { sourceId: text(rawTransfer.sourceId, "来源记录", 100), sourceRevision: revisionField(rawTransfer.sourceRevision), mode: enumField(rawTransfer.mode, ["move", "copy"] as const, "整条操作") };
+      const transfer = { sourceId: text(rawTransfer.sourceId, "来源记录", 100), sourceRevision: revisionField(rawTransfer.sourceRevision), mode: enumField(rawTransfer.mode, ["move", "copy"] as const, "整条操作"), ...(rawTransfer.targetNature === undefined ? {} : { targetNature: enumField(rawTransfer.targetNature, ["real", "dream"] as const, "目标性质") }) };
       const source = transferSource(repository, transfer);
       const content = source.body.edited ?? source.body.original;
-      if (e.content !== content || e.kind !== "journal" || e.nature !== "dream" || e.date !== dateForTime(source.occurredAt ?? source.createdAt, "Asia/Shanghai") || e.targetId || strings(e.entityKeys, "关联对象").length || JSON.stringify(e.assetIds) !== JSON.stringify(source.assetRefs.map(ref => ref.assetId))) throw new HttpError(400, "invalid_transfer", "整条操作须保留原文、日期和附件；要编辑正文请先取消本次操作");
-      return { key: text(e.key, "记录编号", 100), selected: e.selected === undefined ? true : booleanField(e.selected, "selected"), kind: "journal", nature: "dream", content, date: String(e.date), time: "", evidence: text(e.evidence, "依据", 2000), questions: "", entityKeys: [], assetIds: source.assetRefs.map(ref => ref.assetId), transfer };
+      const nature = transfer.targetNature ?? (source.kind === "journal" ? "dream" : undefined);
+      if (e.content !== content || e.kind !== source.kind || (e.nature === "dream") !== (nature === "dream") || e.date !== dateForTime(source.occurredAt ?? source.createdAt, "Asia/Shanghai") || e.targetId || strings(e.entityKeys, "关联对象").length || JSON.stringify(e.assetIds) !== JSON.stringify(source.assetRefs.map(ref => ref.assetId))) throw new HttpError(400, "invalid_transfer", "整条操作须保留原文、日期和附件；要编辑正文请先取消本次操作");
+      return { key: text(e.key, "记录编号", 100), selected: e.selected === undefined ? true : booleanField(e.selected, "selected"), kind: source.kind as "journal" | "note", ...(nature === "dream" ? { nature: "dream" as const } : {}), content, date: String(e.date), time: "", evidence: text(e.evidence, "依据", 2000), questions: "", entityKeys: [], assetIds: source.assetRefs.map(ref => ref.assetId), transfer };
     }
     const kind = enumField(e.kind ?? "journal", ["journal", "task", "event", "note"] as const, "记录类型");
     const nature = e.nature === undefined ? undefined : enumField(e.nature, ["dream"] as const, "内容性质");
@@ -349,14 +355,17 @@ export function commitBackfill(repository: SqliteRecordRepository, id: string, r
         const current = transferSource(repository, e.transfer);
         if ((current.body.edited ?? current.body.original) !== e.content) throw new HttpError(409, "record_changed", "原文已改变，请重新核对整条内容");
         const { revision: _, ...snapshot } = current;
+        const { nature: _oldNature, ...body } = snapshot.body;
+        const targetNature = e.transfer.targetNature ?? (current.kind === "journal" ? "dream" : undefined);
+        const targetBody = { ...body, ...(targetNature === "dream" ? { nature: "dream" as const } : {}) };
         if (e.transfer.mode === "move") {
           beforeRecords.push(snapshot);
-          record = { ...snapshot, body: { ...snapshot.body, nature: "dream" }, updatedAt: nowInstant() };
+          record = { ...snapshot, body: targetBody, updatedAt: nowInstant() };
         } else {
-          if (repository.list({ kind: "journal" }).some(r => !r.isPrivate && isDreamRecord(r) && (r.body.edited ?? r.body.original) === e.content && dateForTime(r.occurredAt ?? r.createdAt, "Asia/Shanghai") === e.date)) throw new HttpError(409, "duplicate_record", "已有同日期、同全文的梦境副本；原日记仍保留，本次没有重复复制");
+          if (repository.list({ kind: current.kind }).some(r => r.id !== current.id && !r.isPrivate && isDreamRecord(r) === (targetNature === "dream") && (r.body.edited ?? r.body.original) === e.content && dateForTime(r.occurredAt ?? r.createdAt, "Asia/Shanghai") === e.date)) throw new HttpError(409, "duplicate_record", "已有同日期、同全文的副本；原记录仍保留，本次没有重复复制");
           const { updatedAt: __, ...copy } = snapshot;
           const id = randomUUID();
-          record = { ...copy, id, createdAt: nowInstant(), occurredAt: copy.occurredAt ?? copy.createdAt, body: { ...copy.body, nature: "dream" }, aiDerived: copy.aiDerived.map(item => item.sourceRecordId === current.id ? { ...item, sourceRecordId: id } : item) };
+          record = { ...copy, id, createdAt: nowInstant(), occurredAt: copy.occurredAt ?? copy.createdAt, body: targetBody, aiDerived: copy.aiDerived.map(item => item.sourceRecordId === current.id ? { ...item, sourceRecordId: id } : item) };
         }
       } else if (e.targetId) {
         const current = repository.findById(e.targetId);

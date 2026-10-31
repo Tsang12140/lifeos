@@ -69,7 +69,7 @@ export interface JournalRetrieval {
   readonly range?: JournalDateRange;
   readonly journalCount: number;
   readonly dreamCount?: number;
-  readonly scope?: "real" | "dream";
+  readonly scope?: "real" | "dream" | "all";
   readonly noteCount?: number;
   readonly candidates: readonly JournalHit[];
   readonly coverage: { readonly indexedChunks: number; readonly totalChunks: number };
@@ -77,7 +77,7 @@ export interface JournalRetrieval {
 type QueryCache = { entries: Map<string, readonly number[]>; retryAt: number };
 const queryCaches = new WeakMap<SqliteRecordRepository, QueryCache>();
 
-export async function retrieveJournals(config: ApiConfig, repository: SqliteRecordRepository, message: string, today: string, signal?: AbortSignal, dreamContext = false, includePrivate = false): Promise<JournalRetrieval> {
+export async function retrieveJournals(config: ApiConfig, repository: SqliteRecordRepository, message: string, today: string, signal?: AbortSignal, dreamContext = false, includePrivate = false, sourceScope?: "all"): Promise<JournalRetrieval> {
   assertAssistantActive(signal);
   const requested = dreamContext || wantsJournalMemory(message), range = journalDateRange(message, today);
   const readable = repository.list().filter(record => eligibleSource(record, includePrivate)).filter(record => {
@@ -88,7 +88,7 @@ export async function retrieveJournals(config: ApiConfig, repository: SqliteReco
   const journals = readable.filter(record => record.kind === "journal" && !isDreamRecord(record));
   const notes = readable.filter(record => record.kind === "note");
   const dreamQuery = dreamContext || asksAboutDreams(message);
-  const inScope = dreamQuery ? dreams : /日记/.test(message) && !/笔记/.test(message) ? journals : /笔记/.test(message) && !/日记/.test(message) ? notes : readable.filter(record => !isDreamRecord(record));
+  const inScope = sourceScope === "all" ? readable : dreamQuery ? dreams : /日记/.test(message) && !/笔记/.test(message) ? journals : /笔记/.test(message) && !/日记/.test(message) ? notes : readable.filter(record => !isDreamRecord(record));
   const terms = journalQueryTerms(dreamQuery ? message.replace(/梦境|梦见|梦到|做梦|噩梦|恶梦|解梦|梦里|梦中|我的梦/g, " ") : message);
   const entities = repository.listEntities();
   const named = entities.filter(entity => [entity.name, ...(entity.aliases ?? [])].some(name => name.length > 1 && message.includes(name)));
@@ -100,7 +100,7 @@ export async function retrieveJournals(config: ApiConfig, repository: SqliteReco
   const stored = embedding ? repository.journalMemory.list(embeddingIdentity(embedding)) : [];
   const indexed = new Map(stored.map(row => [`${row.recordId}/${row.index}/${row.hash}`, row.vector]));
   const covered = chunks.filter(chunk => indexed.has(`${chunk.record.id}/${chunk.index}/${chunk.hash}`));
-  const base = { requested, scope: dreamQuery ? "dream" as const : "real" as const, journalCount: journals.length, dreamCount: dreams.length, noteCount: notes.length, ...(range ? { range } : {}), coverage: { indexedChunks: covered.length, totalChunks: chunks.length } };
+  const base = { requested, scope: sourceScope === "all" ? "all" as const : dreamQuery ? "dream" as const : "real" as const, journalCount: journals.length, dreamCount: dreams.length, noteCount: notes.length, ...(range ? { range } : {}), coverage: { indexedChunks: covered.length, totalChunks: chunks.length } };
   if (!requested) return { ...base, mode: "lexical", candidates: [] };
   let queryVector: readonly number[] | undefined;
   if (embedding && covered.length) {

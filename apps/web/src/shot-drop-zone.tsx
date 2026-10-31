@@ -26,6 +26,10 @@ function assetThumbUrl(assetId: string, width: number): string {
  * show, so the badge never becomes a surprise.
  */
 export const SHOT_LIMIT = 9;
+/** One sentence for the full band, said both when files arrive and when the
+ *  add control is tapped: the control keeps its greyed look, but a tap that
+ *  cannot do anything still has to say why. */
+const FULL_MESSAGE = `已经 ${SHOT_LIMIT} 项了，先移除一项再加`;
 const BATCH_PROGRESS_DISMISS_MS = 3_000;
 export const SHOT_REORDER_TYPE = "application/x-lifeos-shot-order";
 
@@ -459,11 +463,15 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
     if (media.length < files.length) onNotify(onUploadVideo ? "已跳过不支持的文件，请选择图片或常见视频" : "已跳过非图片文件", "warn");
     const room = SHOT_LIMIT - shotsRef.current.length - pendingRef.current.length;
     if (room <= 0) {
-      onNotify(`最多添加 ${SHOT_LIMIT} 项，先移除一项再添加`, "warn");
+      onNotify(FULL_MESSAGE, "warn");
       return;
     }
     const batch = media.slice(0, room);
-    if (media.length > room) onNotify(`一次最多 ${SHOT_LIMIT} 项，只收下了前 ${room} 项`, "warn");
+    // A browser cannot limit how many files the picker dialog lets someone
+    // tick, so the cap can only be stated after the fact. Say all three
+    // numbers — how many were chosen, how many were kept, how many were not —
+    // because "只收下了前 9 项" leaves the owner guessing what they lost.
+    if (media.length > room) onNotify(`一次最多 ${SHOT_LIMIT} 项：你选了 ${media.length} 项，已收下前 ${room} 项，其余 ${media.length - room} 项没有添加`, "warn");
     const added: PendingShot[] = [];
     for (const file of batch) {
       try {
@@ -581,7 +589,14 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
   const zoneClass = `composer-shots ${empty ? "is-empty" : "has-shots"}`;
 
   const fileInput = <input ref={inputRef} className="shot-file-input" type="file" accept={onUploadVideo ? MEDIA_FILE_ACCEPT : "image/*"} multiple tabIndex={-1} aria-hidden="true" disabled={disabled} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; takeFiles(files); }} />;
-  const openPicker = () => { if (!disabled && remaining > 0) inputRef.current?.click(); };
+  const openPicker = () => {
+    if (disabled) return;
+    // The control is styled as unavailable when the band is full, but it stays
+    // tappable so the tap can be answered. A silently dead button reads as a
+    // broken button.
+    if (remaining === 0) { onNotify(FULL_MESSAGE, "warn"); return; }
+    inputRef.current?.click();
+  };
 
   /**
    * One strip, one component. Every photo is the same square and they run in the
@@ -616,14 +631,14 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
         {/* The same dashed square is the only photo slot when empty and stays
             at the end of the row after photos are added. */}
         {!addOutsideStrip ? <li className="shot-tile shot-tile-add">
-          <button type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label="添加照片或视频">
+          <button type="button" onClick={openPicker} disabled={disabled} aria-disabled={remaining === 0 || undefined} aria-label="添加照片或视频">
             <Plus size={18} strokeWidth={2} aria-hidden="true" />
           </button>
         </li> : null}
         {!addOutsideStrip && batchProgress !== null ? <li className="shot-progress-summary-slot"><span className="shot-progress-summary" role="status">已完成{batchProgress.completed}/{batchProgress.total}项</span></li> : null}
       </ul>
       {addOutsideStrip ? <div className="shot-tile shot-tile-add shot-tile-add-outside">
-        <button type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label="添加照片或视频">
+        <button type="button" onClick={openPicker} disabled={disabled} aria-disabled={remaining === 0 || undefined} aria-label="添加照片或视频">
           <Plus size={18} strokeWidth={2} aria-hidden="true" />
         </button>
       </div> : null}
@@ -643,7 +658,7 @@ export const ShotDropZone = forwardRef<ShotDropZoneHandle, ShotDropZoneProps>(fu
           </div> : null}
     </div>
     {fileInput}
-    {toolbarTarget ? createPortal(<button className="icon-button compact-icon-button composer-photo-trigger" type="button" onClick={openPicker} disabled={disabled || remaining === 0} aria-label={onUploadVideo ? "添加照片或视频" : "添加照片"} title={onUploadVideo ? "添加照片或视频" : "添加照片"}><PhotoIcon size={18} strokeWidth={1.8} aria-hidden="true" />{toolbarLabel ? <span>{toolbarLabel}</span> : null}</button>, toolbarTarget) : null}
+    {toolbarTarget ? createPortal(<button className="icon-button compact-icon-button composer-photo-trigger" type="button" onClick={openPicker} disabled={disabled} aria-disabled={remaining === 0 || undefined} aria-label={onUploadVideo ? "添加照片或视频" : "添加照片"} title={onUploadVideo ? "添加照片或视频" : "添加照片"}><PhotoIcon size={18} strokeWidth={1.8} aria-hidden="true" />{toolbarLabel ? <span>{toolbarLabel}</span> : null}</button>, toolbarTarget) : null}
     {preview ? createPortal(<AssetPreview assetIds={preview.images.map(image => image.id)} images={preview.images} index={preview.index} assets={previewAssets} onClose={closePreview} onIndexChange={index => setPreview(current => current ? { ...current, index } : null)} />, document.body) : null}
   </div>;
 });

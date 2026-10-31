@@ -596,9 +596,10 @@ export function CalendarView({ hideDemo = false, backgroundScope = "local", mode
   const [mobileCycleBusy, setMobileCycleBusy] = useState(false);
   const [mobileCyclePendingKind, setMobileCyclePendingKind] = useState<MobileCycleKind | null>(null);
   const [mobileCycleError, setMobileCycleError] = useState<{ readonly message: string; readonly conflict: boolean } | null>(null);
+  // 日期格天气图标默认隐藏（2026-10-26 主人：太花哨）。只有手动打开过（键值 "1"）才显示。
   const [weatherIconsEnabled, setWeatherIconsEnabled] = useState(() => {
-    try { return window.localStorage.getItem(MOBILE_CYCLE_WEATHER_KEY) !== "0"; }
-    catch { return true; }
+    try { return window.localStorage.getItem(MOBILE_CYCLE_WEATHER_KEY) === "1"; }
+    catch { return false; }
   });
   const [dateArtPreferences, setDateArtPreferences] = useState(readCalendarDateArtPreferences);
   const dateArtPreferencesRef = useRef(dateArtPreferences);

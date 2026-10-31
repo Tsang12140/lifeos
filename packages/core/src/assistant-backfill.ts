@@ -9,7 +9,7 @@ export interface BackfillMaterial {
 }
 export interface BackfillEntry {
   /** Reviewed whole-record operation; content is a preview, never generated replacement text. */
-  readonly transfer?: { readonly sourceId: string; readonly sourceRevision: number; readonly mode: "move" | "copy" };
+  readonly transfer?: { readonly sourceId: string; readonly sourceRevision: number; readonly mode: "move" | "copy"; readonly targetNature?: "real" | "dream" };
   readonly nature?: "dream";
   readonly key: string;
   readonly selected: boolean;
@@ -38,7 +38,7 @@ export function backfillEntryTime(entry: BackfillEntry, generatedAt: string): st
 }
 export function backfillEntryReady(entry: BackfillEntry): boolean {
   const acceptanceOnly = entry.questionKind === "confirmation" || (entry.questionKind === undefined && /^是否只保留[“「].+[”」][，,]\s*不写.+相关内容[？?]$/.test(entry.questions.trim()));
-  return entry.selected && Boolean(entry.content.trim()) && (entry.kind === "note" || Boolean(entry.date)) && (!entry.questions.trim() || acceptanceOnly);
+  return entry.selected && (Boolean(entry.content.trim()) || Boolean(entry.transfer && entry.assetIds.length)) && (entry.kind === "note" || Boolean(entry.date)) && (!entry.questions.trim() || acceptanceOnly);
 }
 export interface BackfillObject {
   readonly key: string;
@@ -101,6 +101,7 @@ export interface BackfillBatch {
 export interface BackfillChatMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
+  readonly sources?: readonly { readonly number: number; readonly id: string; readonly revision: number }[];
 }
 export interface AssistantReplyDelivery {
   readonly status: "recovered" | "incomplete";

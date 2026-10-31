@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Asset } from "@lifeos/core";
-import { assetThumbUrl } from "./asset-urls";
+import { assetThumbDensitySet, assetThumbUrl } from "./asset-urls";
 import type { DiaryPhotoOccurrence } from "./photo-gallery-model";
 import "./photo-gallery.css";
 
 const PAGE_SIZE = 24;
+/**
+ * Tiles are square (see `.diary-photo-tile`), so one file per screen density is exact:
+ * the phone grid measures 97–114px and the desktop column around 210px. Handing both
+ * sets to the browser is what stops a 114px square from downloading the 400px file.
+ */
+const PHONE_THUMBS = [160, 240, 400] as const;
+const DESKTOP_THUMBS = [240, 400] as const;
 
 function monthTitle(monthKey: string): string {
   const [year, month] = monthKey.split("-");
@@ -113,7 +120,16 @@ export function DiaryPhotoGallery({
                 aria-label={`${item.dateKey} 日记照片${originalName ? `：${originalName}` : ""}`}
                 disabled={interactionDisabled}
                 onClick={() => onPreview(index)}
-              ><img src={assetThumbUrl(item.assetId, 400)} alt="" loading="lazy" decoding="async" /></button>;
+              ><picture>
+                <source media="(max-width: 560px)" srcSet={assetThumbDensitySet(item.assetId, PHONE_THUMBS)} />
+                <img
+                  src={assetThumbUrl(item.assetId, 400)}
+                  srcSet={assetThumbDensitySet(item.assetId, DESKTOP_THUMBS)}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                />
+              </picture></button>;
             })}
           </div>
         </section>)}

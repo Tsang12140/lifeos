@@ -24,12 +24,13 @@ import sharp from "sharp";
  */
 
 /**
- * 160 covers avatars, 400 covers the timeline grid and composer tray, 1200 covers card backgrounds,
- * and 2048 bounds both dimensions of the opened photo preview.
+ * 160 covers avatars, 240 covers the gallery grid on a phone, 400 covers the timeline
+ * grid and composer tray, 1200 covers card backgrounds, and 2048 bounds both dimensions
+ * of the opened photo preview.
  * A `?w=` that is neither is refused rather than rounded down, so a stray value cannot
  * quietly fill the cache with a size nothing will ever request again.
  */
-export const THUMBNAIL_WIDTHS = [160, 400, 1200, 2048] as const;
+export const THUMBNAIL_WIDTHS = [160, 240, 400, 1200, 2048] as const;
 export type ThumbnailWidth = (typeof THUMBNAIL_WIDTHS)[number];
 export const DEFAULT_THUMBNAIL_WIDTH: ThumbnailWidth = 400;
 export const THUMBNAIL_FORMAT = "webp";

@@ -31,10 +31,22 @@
   gap: 22px;
 }
 
+/* A month that is scrolled out of view skips layout and paint entirely; with a
+   long history the page keeps every loaded month in the DOM, and each one costs
+   real layout work even though nobody is looking at it.
+   `contain-intrinsic-size: auto …` is the part that matters: the fallback is only
+   a placeholder for a month that has never been rendered, and once it has, the
+   browser remembers its real height and stops guessing. The fallbacks below are
+   measured heights of a one-page month (24 tiles) at each breakpoint — 1140px on
+   desktop, 700px in the 361–560 range, 860px at 360 and narrower — because a
+   month holds between 1 and 2 pages in practice, so the error stays small and
+   scroll anchoring absorbs the correction. */
 .diary-photo-month {
   display: grid;
   gap: 10px;
   min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1140px;
 }
 
 .diary-photo-month h2 {
@@ -63,6 +75,12 @@
   border-radius: 8px;
   background: var(--surface-soft);
   cursor: pointer;
+}
+
+.diary-photo-tile picture {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .diary-photo-tile img {
@@ -130,10 +148,20 @@
     grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
     gap: 6px;
   }
+
+  /* Three columns, so a one-page month runs about eight rows tall. */
+  .diary-photo-month {
+    contain-intrinsic-size: auto 860px;
+  }
 }
 
 @media (min-width: 361px) and (max-width: 560px) {
   .diary-photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  }
+
+  /* Four or five columns: shorter than the narrowest phone, taller than desktop. */
+  .diary-photo-month {
+    contain-intrinsic-size: auto 700px;
   }
 }

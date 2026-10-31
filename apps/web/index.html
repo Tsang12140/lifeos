@@ -9,6 +9,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <meta name="apple-mobile-web-app-title" content="LifeOS" />
+    <!-- Older iOS ignores the manifest and only honours these two. Without them a
+         home-screen icon opens in a Safari tab instead of as the app. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>LifeOS - 今天</title>
     <style>
       html { min-height: 100%; scrollbar-gutter: stable; }
@@ -54,7 +58,86 @@
         text-align: center;
       }
       .startup-feedback p { margin: 0; }
+      .startup-diagnostic-detail { color: #5d6b82; font-size: .78rem; overflow-wrap: anywhere; }
+      .startup-feedback button {
+        min-height: 36px;
+        padding: 0 16px;
+        border: 1px solid #cfd8e5;
+        border-radius: 8px;
+        background: #fff;
+        color: #18243d;
+        font: inherit;
+        font-size: .85rem;
+        cursor: pointer;
+      }
     </style>
+    <script>
+      /* A blank screen is the only failure mode this app has that cannot explain
+         itself. Safari shows a connection error, but an installed home-screen web
+         app on iOS shows nothing at all, and there is no console to open on a
+         phone. So the static startup screen doubles as a report: any error, any
+         unhandled rejection, and a watchdog that asks the API whether it is
+         reachable when the app has not taken over the root yet. */
+      (function () {
+        var reported = false;
+        function show(title, detail) {
+          if (reported) return;
+          var root = document.getElementById("root");
+          var content = root && root.querySelector(".startup-content");
+          if (!content) return;
+          reported = true;
+          var box = document.getElementById("startup-diagnostic");
+          if (!box) {
+            box = document.createElement("div");
+            box.id = "startup-diagnostic";
+            box.className = "startup-feedback";
+            box.setAttribute("role", "alert");
+            content.appendChild(box);
+          }
+          function line(text, className) {
+            if (!text) return;
+            var p = document.createElement("p");
+            if (className) p.className = className;
+            p.textContent = text;
+            box.appendChild(p);
+          }
+          line(title);
+          line(detail, "startup-diagnostic-detail");
+          line(window.location.href, "startup-diagnostic-detail");
+          var button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "重新加载";
+          button.onclick = function () { window.location.reload(); };
+          box.appendChild(button);
+        }
+        window.addEventListener("error", function (event) {
+          var target = event.target;
+          if (target && target.tagName && target.tagName !== "SCRIPT") return;
+          var message = event && event.message ? event.message : "脚本没能加载";
+          var source = target && target.src ? "来源：" + target.src : "";
+          show("页面脚本出错，没能启动。", message + (source ? "　" + source : ""));
+        }, true);
+        window.addEventListener("unhandledrejection", function (event) {
+          var reason = event && event.reason;
+          show("页面启动时出现异常。", reason && reason.message ? reason.message : String(reason));
+        });
+        window.setTimeout(function () {
+          var root = document.getElementById("root");
+          var stillStarting = Boolean(root && root.querySelector(".startup-screen"));
+          var emptied = !root || root.childElementCount === 0;
+          if (!stillStarting && !emptied) return;
+          var detail = "";
+          var probe = window.fetch ? window.fetch("/api/health", { cache: "no-store" }) : null;
+          if (!probe) { show("页面长时间没有启动完成。", "这台设备的浏览器可能太旧，或脚本被拦截。"); return; }
+          probe.then(function (response) {
+            detail = response.ok ? "服务可以连上，但页面脚本没有完成启动。" : "服务返回 " + response.status + "。";
+            show("页面 10 秒内没有启动完成。", detail);
+          }).catch(function () {
+            show("页面 10 秒内没有启动完成。", "连不上服务：/api/health 请求失败。多半是地址或网络变了。");
+          });
+        }, 10000);
+      })();
+    </script>
   </head>
   <body>
     <div id="root">

@@ -86,6 +86,12 @@ export interface ChatOutput { readonly value: unknown; readonly issue?: "metadat
 export function decodeChatOutput(source: string): ChatOutput | null {
   const split = splitChatMetadata(withoutThinking(source));
   const body = readableReply(source);
+  if (!body && split.metadata !== undefined) {
+    try {
+      const metadata: unknown = JSON.parse(split.metadata.trim());
+      if (metadata && typeof metadata === "object" && !Array.isArray(metadata) && "action" in metadata && metadata.action === "lookup") return { value: { ...metadata, reply: "正在读取相关记录。" } };
+    } catch { /* Incomplete metadata follows the existing format failure path. */ }
+  }
   if (!body) return null;
   if ((readReplyString(split.body)?.text.length ?? split.body.trim().length) > 12000) return { value: { action: "reply", reply: body.text }, limited: true };
   if (split.metadata !== undefined) {

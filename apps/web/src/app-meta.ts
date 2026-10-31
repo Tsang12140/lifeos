@@ -45,6 +45,8 @@ export const MOVIE_PROMPT_HIDDEN_STORAGE_KEY = scopedKey("lifeos.moviePromptHidd
 export const AI_ASSISTANT_VISIBLE_STORAGE_KEY = scopedKey("lifeos.ai.assistant-visible");
 export const COMPOSER_SHOTS_STORAGE_KEY = scopedKey("lifeos.composerShots");
 export const UI_FONT_STORAGE_KEY = scopedKey("lifeos.uiFont");
+/** Off is stored as "0"; anything else — including a missing key — means on. */
+export const PHOTO_TIME_DEFAULT_STORAGE_KEY = scopedKey("lifeos.photoTimeDefault");
 export const TASK_SORT_STORAGE_KEY = scopedKey("lifeos.taskSort");
 export const TASK_DENSITY_STORAGE_KEY = scopedKey("lifeos.taskDensity");
 /** A name typed by this user is normally Chinese; a token like `@a1b2` is not. */

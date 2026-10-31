@@ -3397,6 +3397,16 @@ h2 {
 .composer-edit-cancel { min-height: 34px; padding: 0 12px; }
 .composer-edit-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; color: #9b3030; font-size: 0.8rem; }
 .composer-edit-error button { border: 0; padding: 0; color: inherit; background: transparent; text-decoration: underline; cursor: pointer; }
+/* Two-sided body conflict. Sits where the error line sits, uses the same border
+   and surface as the composer's own fields so it reads as part of the editor
+   rather than as a modal. The server text is scrollable, not truncated — the
+   whole point is being able to see what would be overwritten. */
+.composer-conflict { display: grid; gap: 8px; margin: 0 12px 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.composer-conflict-body { display: grid; gap: 4px; }
+.composer-conflict-body strong { color: var(--muted); font-size: 0.72rem; font-weight: 600; }
+.composer-conflict-body p { margin: 0; max-height: 132px; overflow: auto; color: var(--ink); font-size: 0.82rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer-conflict-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.composer-conflict-actions button { min-height: 34px; }
 
 .composer-close {
   flex: 0 0 auto;

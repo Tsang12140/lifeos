@@ -86,13 +86,31 @@ function notModified(req: { headers: Record<string, string | string[] | undefine
   return cacheControl !== "no-store" && req.headers["if-none-match"] === etag;
 }
 
+/** Legacy originals carry no content hash, so their bytes have to be stamped from disk. */
+function localContentStamp(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset): string | undefined {
+  if (!asset.storageRefs.some(ref => ref.sourceId === "local" && ref.contentHash === undefined)) return undefined;
+  try {
+    const file = resolveAssetOriginal(ctx.config, ctx.repository, asset.id).file;
+    const stat = statSync(file);
+    return stat.size + ":" + stat.mtimeMs + ":" + stat.ctimeMs;
+  } catch { return "missing"; }
+}
+
 export function assetThumbnailVersion(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset, namespace = ctx.config.databasePath): string {
-  let stamp: string | undefined;
-  if (asset.storageRefs.some(ref => ref.sourceId === "local" && ref.contentHash === undefined)) {
-    try { const file = resolveAssetOriginal(ctx.config, ctx.repository, asset.id).file; const stat = statSync(file); stamp = stat.size + ":" + stat.mtimeMs + ":" + stat.ctimeMs; }
-    catch { stamp = "missing"; }
-  }
-  return calendarAssetVersion(namespace, asset, stamp);
+  return calendarAssetVersion(namespace, asset, localContentStamp(ctx, asset));
+}
+
+/**
+ * The version a browser may cache forever. Rotation is deliberately left out:
+ * it already rides in the URL as `r=`, so turning a photo must not invalidate a
+ * tag that every other tile on the page is still using. Sixteen hex characters
+ * is far more than enough to tell one set of bytes from another, and shipping
+ * all sixty-four for every photo in the library is the payload this is meant to
+ * shrink.
+ */
+export function assetThumbnailTag(ctx: Pick<RouteContext, "config" | "repository">, asset: Asset): string {
+  const { displayRotation: _rotation, ...unrotated } = asset;
+  return calendarAssetVersion(ctx.config.databasePath, unrotated, localContentStamp(ctx, asset)).slice(0, 16);
 }
 
 export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width: import("./derived-thumbs.js").ThumbnailWidth, upright = false, allowOriginalPng = true): Promise<{ file: string; source: string; canary: boolean; mediaType: string }> {
@@ -423,7 +441,15 @@ export const handleAssetsRoutes: RouteHandler = async (
   if (pathname === "/api/assets" && req.method === "GET") {
     const kindRaw = url.searchParams.get("kind");
     const kind = kindRaw === null || kindRaw === "" ? undefined : enumField(kindRaw, ASSET_KINDS, "kind");
-    setJson(res, 200, { items: repository.listAssets(kind === undefined ? {} : { kind }) });
+    const items = repository.listAssets(kind === undefined ? {} : { kind });
+    // A thumbnail URL without a version may only be cached for five minutes, so
+    // every visit asks for the same bytes again. The tag is what lets a caller
+    // build a URL that is safe to keep forever; only photos have one, because
+    // only photos are served through the thumbnail route here.
+    const thumbVersions = Object.fromEntries(items
+      .filter((asset) => asset.kind === "photo")
+      .map((asset) => [asset.id, assetThumbnailTag(ctx, asset)]));
+    setJson(res, 200, { items, thumbVersions });
     return true;
   }
   if (pathname === "/api/assets" && req.method === "POST") {
@@ -776,12 +802,16 @@ export const handleAssetsRoutes: RouteHandler = async (
     const asset = repository.findAssetById(id);
     if (asset === null) throw new HttpError(404, "not_found", "Asset not found");
     const version = url.searchParams.get("v");
-    if (version !== null && version !== assetThumbnailVersion(ctx, asset)) throw new HttpError(409, "asset_version_changed", "照片已更新，请刷新日历");
+    // Both spellings are accepted: the full version (what the calendar bakes into
+    // its cached URLs) and the short tag from `/api/assets` that the browser
+    // keeps forever. Anything else is a caller holding a stale picture.
+    const canonicalVersion = assetThumbnailVersion(ctx, asset);
+    if (version !== null && version !== canonicalVersion && version !== assetThumbnailTag(ctx, asset)) throw new HttpError(409, "asset_version_changed", "照片已更新，请刷新日历");
     const upright = url.searchParams.get("upright") === "1";
     const rotation = upright ? 0 : asset.displayRotation ?? 0;
     const { file, source, canary, mediaType } = await resolveAssetThumbnail(ctx, id, width, upright, version === null);
     const cacheControl = canary ? "no-store" : mediaCacheControl(ctx, version === null ? "private, max-age=300" : "private, max-age=31536000, immutable");
-    const etag = `"${assetThumbnailVersion(ctx, asset)}-${width}-${rotation}"`;
+    const etag = `"${canonicalVersion}-${width}-${rotation}"`;
     if (notModified(req, cacheControl, etag)) { res.writeHead(304, { "cache-control": cacheControl, etag }); res.end(); return true; }
     res.writeHead(200, {
       "content-type": mediaType,

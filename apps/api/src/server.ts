@@ -68,7 +68,7 @@ import { isLoopbackHost, type ApiConfig } from "./config.js";
 import { ConflictError, SqliteRecordRepository, type BackupRun, type BackupSchedule, type RecordView } from "./repository.js";
 import { IdentityStore, normalizeAccountUsername, type AccountIdentity, type PublicAccount } from "./identity-store.js";
 import { tenantConfigFor, tenantDirectoryFor, type SharedIntegrations } from "./tenant-config.js";
-import { HttpError, backupHttpError, setJson, setEmpty } from "./http-kit.js";
+import { HttpError, backupHttpError, bindRequest, setJson, setEmpty } from "./http-kit.js";
 import {
   type JsonObject,
   isJsonObject,
@@ -674,6 +674,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     assetGcScheduler,
     photoTextTrigger,
     handler: async function handler(req, res): Promise<void> {
+      bindRequest(res, req);
       const startedAt = Date.now();
       try {
         checkRequestSecurity(req);
@@ -1072,6 +1073,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     };
 
     const handleAccountRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      bindRequest(res, req);
       const startedAt = Date.now();
       let path = "/";
       try {

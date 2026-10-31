@@ -314,7 +314,15 @@ async function runChatBackfillWithHistory(config: ApiConfig, repository: SqliteR
   const boundBatchRevision = batch?.revision ?? null;
   const requestHash = stableHash(input, identity.message, identity.materials, boundBatchId, boundBatchRevision, requestedBatch, requestedRev);
   const page = repository.assistantMessagePage(identity.conversationId, { afterSeq: conversation.clearSeq, limit: 100 });
-  const context = page.items.slice(-20).map(({ role, text }) => ({ role, text }));
+  const context = page.items.slice(-20).map(({ role, text, ui }) => {
+    const sources = (ui?.offers ?? []).flatMap(offer => {
+      if (!offer.source || offer.command.type !== "record.focus") return [];
+      const number = Number(/^来源 (\d+)/.exec(offer.label)?.[1]);
+      const id = offer.command.params?.recordId;
+      return typeof id === "string" && Number.isInteger(number) && number >= 1 && number <= 6 ? [{ number, id, revision: offer.source.revision }] : [];
+    });
+    return { role, text, ...(sources.length ? { sources } : {}) };
+  });
   const attachments = attachmentsFor(identity.materials);
   const turn = repository.beginAssistantChatTurn({
     conversationId: identity.conversationId,

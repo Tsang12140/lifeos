@@ -21,6 +21,7 @@
 |---|---|---|
 | 设置导航、既有设置开关 | 设置导航与开关 | [settings-navigation.css](apps/web/src/settings-navigation.css) |
 | 设置服务表单与操作按钮 | 设置服务表单；周期／习惯局部细则 | [settings-service-forms.css](apps/web/src/settings-service-forms.css)、[settings-private-forms.css](apps/web/src/settings-private-forms.css)；当前只覆盖列明卡片，新增卡片不会自动纳入 |
+| 设置「本地缓存」卡片 | 字体与颜色；按钮、间距与网格；设置服务表单 | [local-cache.css](apps/web/src/local-cache.css)、[local-cache.ts](apps/web/src/local-cache.ts)；刻意不复用 `.settings-asset-trash-*` 的统计块（其底色 `#eef3fb` 是旧蓝） |
 | 中性控件变量及已迁移编辑操作 | 字体与颜色；按钮、间距与网格；相关组件条款 | [control-surfaces.css](apps/web/src/control-surfaces.css)；不能将其中某个控件的局部圆角扩成全站规则 |
 | 显示私密、AI私密检索开关及气泡 | 隐私显示与 AI 私密检索 | [privacy-access-control.tsx](apps/web/src/privacy-access-control.tsx)、[privacy-access.css](apps/web/src/privacy-access.css) |
 | 照片阅读器、篇内小画廊与导航 | 图片阅读器 | [asset-preview.tsx](apps/web/src/asset-preview.tsx)、[asset-preview.css](apps/web/src/asset-preview.css)；天气与照片阅读器共同引用 [date-step-glyph.tsx](apps/web/src/date-step-glyph.tsx) |
@@ -254,6 +255,7 @@
 - 日历首次进入：桌面布局（>720px）默认月视图，横向周卡布局（≤720px）保留周视图默认。用户主动切换周／月后，沿用现有档案卡作用域的浏览器偏好；离页、刷新及布局变化都尊重已选视图，不因默认值覆盖已保存选择。无有效偏好或存储不可用时按当前布局回退。
 - 周历空白日期大字随卡片方向：桌面竖卡竖排，≤720px横向周卡横排；本周与上一周遵循同一规则，月格自己的横排／竖排／大字设置独立保留。未来日期不能点击或键盘进入，即使已有待办。（2026-10-20 主人明确修订）
 - 月历不放固定“法定休息／调休上班”图例；实际日期标记继续保留。
+- **日期格天气图标默认隐藏（2026-10-26 主人明确：「太花哨了」）**：月／周日期格打开时都不画天气图标，日历标题旁的云朵按钮仍可手动打开，打开后按既有位置与尺寸渲染，选择仍按当前浏览器和档案卡记住。不给日期格补天气文字、温度或第二套图标来替代；天气卡本身（WeatherHeader）不受影响。
 - 保留方案中的月历工作区照片墙默认齐边拼贴、白蒙版 96%、阴影 60%、白边／间距／倾斜均 0、排布 1；当前整项搁置，设置入口不显示。（2026-10-15 主人修订）
 - **满9张起步，每增加6张一档**：9、15、21、27……，没有12张／60张上限。按有效照片数量所在的完整档位取图，例如18张拼15张、47张拼45张；“立即生成”也用当前档位，不沿用旧图的张数。保留方案删除“拼贴照片上限”，原设置可显示当前档位与距下一档还差几张；当前不开放设置入口。
 - **整月背景功能整体搁置（2026-10-15 主人追问后纠正范围）**：整月照片墙不渲染，整月背景设置、手动生成与预览入口全部收起；浏览器不再请求该模块。共享 PHOTO_WALL_ENABLED=false，API状态向旧客户端返回空图／valid=false，其余背景接口返回503 background_disabled，旧预览查询参数不能复活。定时器不启动、不排队并取消旧待执行时间。完整源码、外观配置与已有成品文件保留，未经主人要求不要复活；隔离回归显式enabled:true才能运行保留实现。日期小格子恢复统一白蒙版与旧布局，格内照片及独立蒙版滑条继续可用。此前“只停定时、现有图和手动继续”的解释已被主人否定。
@@ -836,3 +838,20 @@
 - 完成／取消：`未完成` 列表按第 7 节既有约定就地收起，时长取本节已确认的 240ms（`cubic-bezier(.22,.68,.25,1)`），只折叠即将离开的那一个盒子（整行只有它时连同行标题一起折），并把网格间距一起收掉，下方卡片才会连续上移而不是单帧跳。实现是 `Element.animate` 的原生高度动画：不逐帧更新 React、不常驻合成层、节点随即由 React 卸载，动画对象随节点释放。`prefers-reduced-motion: reduce` 时跳过动画直接移除；找不到卡片或高度为 0 时不硬演。
 - 复制按钮：写入剪贴板期间**不再** `disabled`。原实现会禁用 → 悬停底色与图标颜色瞬间回落 → 写完再淡回来，在指针正下方就是一次闪烁；重复点击由 `copyingRef` 拦住，`aria-busy` 照常表达进行中。空正文、未揭示的私密正文仍维持禁用。
 - 实现入口：`apps/web/src/main.tsx`（`collapseLeavingTaskCard` + `handleTaskStatus` 接线）、`apps/web/src/assistant-message-actions.tsx`（复制按钮禁用条件）。证据：`.review/task-complete-exit-design.txt`、`.review/task-complete-exit.txt`（隔离实例 17 条，含逐帧几何与反向用例）、`.review/verify-task-complete-exit.mjs`。
+
+## 2026-10-28 日记主界面加复制按钮（主人要求，参考任务页）
+
+- 触发：主人说「目前日记主界面的日记或任务 也要参考任务界面 加上复制按钮」。把任务页 2026-10-23 已有的复制控件扩到日记主界面的记录卡：不新增第二种复制控件，不改任务页，不改 AI 回答与历史那两处。
+- 位置与尺寸：放在日记卡底部操作栏里、编辑／删除的左侧，与它们同排同基线、间距沿用操作栏的 5px。桌面细指针 32×32（与 `.record-action-icon` 等高），粗指针 44×44；图标 14px、描线 1.8。默认无边框、无底色、颜色 `--muted`；hover 底色 `--surface-soft`、文字 `--ink-soft`；圆角 8px。
+- 反馈与禁用沿用「2026-10-22 复制反馈与编辑操作图标过渡」：只有真实写入成功才切圆环勾选，提示浮在操作栏上方且不挤动按钮，2400ms 复原；空正文不出现按钮；未揭示的私密正文维持禁用（与任务页同一个 `masked` 条件）。
+- 日记主界面里的任务卡复用任务页那枚按钮（复制任务正文、34px），文案与尺寸不变；任务页外观与行为不变。
+- 实现入口：`apps/web/src/timeline.tsx`（`TimelineItem` 新增 `showCopy`）、`apps/web/src/main.tsx`（日记主界面与筛选结果传 `showCopy`）、`apps/web/src/assistant-message-actions.css`（`.record-copy-action` 尺寸变体）。证据：`.review/diary-record-copy-design.txt`、`.review/diary-record-copy.txt`（41/41）、`.review/verify-diary-record-copy.mjs`。
+
+## 2026-10-28 照片选超 9 张不再静默吞掉（主人拍板）
+
+- 触发：主人报告「现在超过 9 张图，它不会提示不可以，直接让你传，但是也只能传 9 张，多的直接吞掉，这个不太好，应该最多只能勾选 9 张」。
+- 技术前提（已实测确认，不是推测）：`<input type="file" multiple>` 的系统文件对话框无法限制勾选数量，任何浏览器都做不到「勾到第 10 张就勾不上」。所以 9 张上限只能在**选完之后**处理，本轮把这一步做成"说清楚"而不是"悄悄截断"。
+- 超量时的处理（主人二选一里选「收下能放的，把话说全」）：仍然收下能放下的前 N 项，但提示必须同时给出三个数——「一次最多 9 项：你选了 12 项，已收下前 9 项，其余 3 项没有添加」。旧的「只收下了前 9 项」不报你选了几张，等于让人自己猜丢了什么。
+- 满 9 张时的加号（主人选「点了就说」）：视觉保持原来的灰态（`opacity .5`、`cursor: default`，与 `disabled` 时一致），但**不再用 `disabled`**，改用 `aria-disabled="true"` + 仍可点击，点一下给「已经 9 项了，先移除一项再加」。一个点了完全没反应的灰按钮读起来是坏按钮，不是"满了"。
+- 三处入口同一行为：照片带里的加号格、AI 管家外置的加号、手机布局的工具栏照片按钮（`.composer-photo-trigger`）都走同一个 `openPicker`。
+- 实现入口：`apps/web/src/shot-drop-zone.tsx`（`FULL_MESSAGE`、`takeFiles` 文案、`openPicker` 兜底、三处按钮改 `aria-disabled`）、`apps/web/src/styles.css`（`.shot-tile-add button[aria-disabled="true"]`、`.composer-photo-trigger[aria-disabled="true"]` 的灰态；`:hover` 不再给已满的加号上色）。证据：`.review/probe-shot-limit-toast.mjs`（只读，拦截全部上传请求，21/21）、`.review/shot-limit-toast.txt`。

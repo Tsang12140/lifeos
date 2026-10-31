@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { apiRequest } from "./api";
+import { randomId } from "./random-id";
 import { PHOTO_WALL_ENABLED, PHOTO_WALL_DEFAULTS, photoWallPreferences, type PhotoWallPreferences } from "@lifeos/core";
 import "./calendar-background.css";
 
@@ -96,7 +97,7 @@ function ActiveCalendarBackground({ scope, month, hideDemo, generation, enabled,
   }, [generation, enabled]);
   useEffect(() => {
     if (!viewing) return;
-    const token = crypto.randomUUID();
+    const token = randomId();
     const send = (active: boolean) => {
       void fetch("/api/calendar/background/viewing", { method: "POST", credentials: "same-origin", keepalive: true,
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, active }) }).catch(() => {});

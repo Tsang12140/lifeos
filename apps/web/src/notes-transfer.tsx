@@ -8,6 +8,7 @@ import { markdownToHtml } from './penmark/markdown.mjs';
 import { Editor } from './penmark/editor.js';
 import { noteHtmlText, sanitizeNoteHtml } from './note-html';
 import { scopedKey } from './storage-scope';
+import { randomId } from './random-id';
 export interface ImportFile {
     readonly path: string;
     readonly blob: Blob;
@@ -154,7 +155,25 @@ export async function planNoteImport(input: readonly ImportFile[]): Promise<Note
     }
     return { files, notes, warnings, directories: [...directories], ...(native ? { native } : {}) };
 }
-async function stableId(value: string): Promise<string> { const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, '0')).join(''); }
+async function stableId(value: string): Promise<string> {
+    const subtle = (globalThis as { readonly crypto?: Crypto }).crypto?.subtle;
+    if (subtle !== undefined) {
+        try {
+            const hash = await subtle.digest('SHA-256', new TextEncoder().encode(value));
+            return Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+        catch { /* Plain-HTTP LAN pages have no subtle; fall through to the deterministic hash. */ }
+    }
+    // Same input must give the same folder id on every device, so this cannot be
+    // a random id: two FNV-1a passes with different offsets, 64 bits total.
+    let first = 0x811c9dc5, second = 0x01000193;
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        first = Math.imul(first ^ code, 0x01000193) >>> 0;
+        second = Math.imul(second ^ (code + index), 0x85ebca6b) >>> 0;
+    }
+    return first.toString(16).padStart(8, '0') + second.toString(16).padStart(8, '0');
+}
 function findImage(plan: NoteImportPlan, note: ImportNote, source: string): ImportFile | null {
     let value = source;
     try {
@@ -308,7 +327,7 @@ export function NotesTransfer({ folders, records, onClose, onImported, scope = '
                 items: RecordView[];
             }>('/api/records')).items.map(record => record.id)) : new Set<string>();
             if (plan.native) {
-                const mapped = mapNativeNoteFolders(plan.native.folders, allFolders, () => crypto.randomUUID());
+                const mapped = mapNativeNoteFolders(plan.native.folders, allFolders, () => randomId());
                 if (mapped.folders.length) {
                     await apiRequest('/api/import', { method: 'POST', body: JSON.stringify({ bundle: { format: 'lifeos.export', version: 1, exportedAt: { kind: 'instant', value: new Date().toISOString() }, records: [], entities: [], assets: [], modules: { notes: { folders: mapped.folders } } } }) });
                     allFolders.push(...mapped.folders);

@@ -1,0 +1,113 @@
+/* ── 设置 · 本地缓存 ────────────────────────────────────────────────────────
+   Same shell as the photo-trash card (line, radius, soft shadow) but its own file,
+   because the figures here are neutral: the trash card's stat tiles still carry the
+   old pale blue `#eef3fb`, and DESIGN.md §3 asks new cards not to inherit that.
+   Every value below is an existing neutral variable, no new colour is introduced. */
+.local-cache-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 14px;
+  padding: 16px 17px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.local-cache-overview {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.local-cache-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-soft);
+  color: var(--ink-soft);
+}
+
+.local-cache-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.local-cache-copy strong {
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.local-cache-copy small {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.local-cache-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.local-cache-stats > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.local-cache-stats small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 400;
+}
+
+.local-cache-stats strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-cache-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.65;
+}
+
+.local-cache-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The button itself keeps the settings page's 40px rhythm (DESIGN §4: 普通组整体
+   40px) — `.settings-page button.danger-button` already sets it, and overriding it
+   here would put this card out of step with every other card on the page. Only the
+   armed ring is added, so the second click is visibly a different state. */
+.local-cache-actions .danger-button.is-armed {
+  outline: 2px solid rgb(186 77 90 / 0.24);
+  outline-offset: 1px;
+}
+
+/* No narrow-viewport rule on purpose. The two figures are a short label and a short
+   number ("条目 / 4 项"), and `minmax(0, 1fr)` plus ellipsis keeps them side by side
+   down to the narrowest card without ever overflowing — stacking them would only make
+   the card taller for nothing. */

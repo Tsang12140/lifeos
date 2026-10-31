@@ -103,6 +103,8 @@ import {
 } from "./app-meta";
 import type { SettingsPageId, UiFontId } from "./app-types";
 import { DateField } from "./date-field";
+import { clearLocalCache, readLocalCacheFootprint, type LocalCacheFootprint } from "./local-cache";
+import "./local-cache.css";
 import { assetThumbUrl } from "./timeline";
 import { USER_TIME_ZONE, localDateToday, localNowInput } from "./time";
 
@@ -691,6 +693,66 @@ export function ThumbnailCacheSettingsCard() {
 }
 
 /**
+ * The browser's own drawer, made visible for the same reason the thumbnail cache is:
+ * it grows without being asked and nobody can see it. What it holds is only the
+ * *reproducible* part — the interface font, task sort, the calendar view, the AI
+ * launcher's position, the private switches' grants. Emptying it costs nothing but
+ * a return to defaults, so the card says exactly that and offers one button.
+ *
+ * Unfinished writing is out of scope on purpose (`local-cache.ts` names it), and the
+ * card says so too — "清缓存" must never be the thing that ate a paragraph.
+ *
+ * The reload is not decoration: font, sort and view are read once at mount, so
+ * without it the page would keep showing the state that no longer exists.
+ */
+export function LocalCacheSettingsCard() {
+  const [footprint, setFootprint] = useState<LocalCacheFootprint | null>(null);
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  // Read on mount, then once more shortly after: the app writes a few of its own keys
+  // while it boots (`lifeos.uiFont`, `lifeos.ai.assistant-visible`), and a first read
+  // taken mid-boot undercounts — measured 2 where the drawer held 4. The second read is
+  // what the button will actually clear, so it is the one worth showing.
+  useEffect(() => {
+    setFootprint(readLocalCacheFootprint());
+    const settle = window.setTimeout(() => setFootprint(readLocalCacheFootprint()), 600);
+    return () => window.clearTimeout(settle);
+  }, []);
+
+  // Same two-step as every other irreversible button in settings: the first click only arms.
+  const clear = () => {
+    if (busy) return;
+    if (!armed) { setArmed(true); setMessage(null); return; }
+    setBusy(true);
+    const cleared = clearLocalCache();
+    setArmed(false);
+    setFootprint(readLocalCacheFootprint());
+    setMessage(cleared.entries === 0
+      ? "本来就没有缓存。"
+      : `已清掉 ${cleared.entries} 项，界面回到默认样子；正在刷新…`);
+    window.setTimeout(() => window.location.reload(), 1400);
+  };
+
+  return <div className="local-cache-card" data-local-cache>
+    <div className="local-cache-overview">
+      <div className="local-cache-icon"><Eraser size={18} aria-hidden="true" /></div>
+      <div className="local-cache-copy"><strong>本地缓存</strong><small>这台浏览器为界面存下的偏好和视图。清掉只是回到默认样子。</small></div>
+    </div>
+    <div className="local-cache-stats">
+      <div><small>条目</small><strong data-local-cache-entries>{footprint === null ? "—" : `${footprint.entries} 项`}</strong></div>
+      <div><small>占用</small><strong data-local-cache-bytes>{footprint === null ? "—" : formatBytes(footprint.bytes) ?? "0 B"}</strong></div>
+    </div>
+    <p className="local-cache-note">没写完的草稿、本机原片、登录状态，和你关掉的开关、给过的授权，都不会被清掉。</p>
+    <div className="local-cache-actions">
+      <button className={`danger-button ${armed ? "is-armed" : ""}`} type="button" data-local-cache-clear disabled={busy || footprint === null} onClick={clear}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}<span>{busy ? "清理中" : armed ? "再点一次清理" : "清理本地缓存"}</span></button>
+    </div>
+    {message !== null ? <p className="settings-inline-success" role="status">{message}</p> : null}
+  </div>;
+}
+
+/**
  * What the text pass has covered, as the stored entries report it. `alreadyDescribed`
  * counts photos that carry an answer — including the empty marker left for a picture
  * with no words in it, which is an answer too.
@@ -879,6 +941,15 @@ export function PhotoTextSettingsCard() {
 export function FontSettingsCard({ value, onChange }: { readonly value: UiFontId; readonly onChange: (value: UiFontId) => void }) {
   const selected = UI_FONT_OPTIONS.find((option) => option.id === value) ?? UI_FONT_OPTIONS[0];
   return <div className="settings-card settings-font-card"><div className="settings-card-icon"><Type size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>界面字体</strong></div><select className="settings-font-select" value={value} aria-label="界面字体" onChange={(event) => { if (isUiFontId(event.target.value)) onChange(event.target.value); }}><option value={selected.id}>{selected.label}</option>{UI_FONT_OPTIONS.filter((option) => option.id !== selected.id).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select></div>;
+}
+
+/**
+ * A photo's EXIF capture time answers 发生时间 better than the keyboard's clock, so
+ * it is the default. The switch exists because on some days the clock is what you
+ * want, and a guess should be switchable rather than argued with.
+ */
+export function PhotoTimeSettingsCard({ value, onChange }: { readonly value: boolean; readonly onChange: (value: boolean) => void }) {
+  return <div className="settings-card settings-photo-time-card"><div className="settings-card-icon"><ImageIcon size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>用照片时间填默认发生时间</strong><small>照片都在同一天、一小时内拍的，就填最后一张的拍摄时间；其他情况仍填现在。手动改过时间后不再自动调整。</small></div><label className="settings-switch" title="用照片时间填默认发生时间"><input type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} aria-label="用照片时间填默认发生时间" /><span aria-hidden="true" /></label></div>;
 }
 
 export function WeatherSimulatorCard() {
@@ -1070,7 +1141,7 @@ function InviteManagementCard() {
   </section>;
 }
 
-export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, admin = false, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, onAssetsChanged, cycleModule, entities, onCreateEntity, onSaveCycleConfig, onTransferPeriods }: { habitActions?: HabitActions; page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; admin?: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; entities: readonly Entity[]; onCreateEntity: CreateEntity; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; onTransferPeriods: (groupKeys: readonly string[], targetSubjectId?: string) => Promise<void> }) {
+export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, onImport, onLogout, logoutBusy, authRequired, accountMode, admin = false, account, aiStatusState, onAiStatusChange, onRetryAiStatus, assistantVisible, onAssistantVisibleChange, backupStatusState, backupBusy, onBackup, onBackupStatusChange, onRetryBackupStatus, onBackupReadFailed, weatherProfilesState, onWeatherStatusChange, onRetryWeatherProfiles, movieStatusState, onMovieStatusChange, onRetryMovieStatus, demoCount, hideDemo, demoBusy, demoDeleteArmed, onToggleDemo, onDeleteDemo, uiFont, onUiFontChange, photoTimeDefault, onPhotoTimeDefaultChange, onAssetsChanged, cycleModule, entities, onCreateEntity, onSaveCycleConfig, onTransferPeriods }: { habitActions?: HabitActions; page: SettingsPageId; mobileEntry: { readonly root: boolean; readonly version: number }; onNavigatePage: (page: SettingsPageId) => void; onImport: () => void; onLogout: () => void; logoutBusy: boolean; authRequired: boolean; accountMode: boolean; admin?: boolean; account: AccountSummary | undefined; aiStatusState: AiStatusState; onAiStatusChange: (status: AiStatus) => void; onRetryAiStatus: () => void; assistantVisible: boolean; onAssistantVisibleChange: (visible: boolean) => void; backupStatusState: BackupStatusState; backupBusy: boolean; onBackup: (action: "local" | "s3" | "test" | "dual") => void; onBackupStatusChange: (status: BackupStatus) => void; onRetryBackupStatus: () => void; onBackupReadFailed: (cause: unknown) => void; weatherProfilesState: WeatherProfilesState; onWeatherStatusChange: (status: WeatherStatus) => void; onRetryWeatherProfiles: () => void; movieStatusState: MovieModuleStatusState; onMovieStatusChange: (status: MovieModuleStatus) => void; onRetryMovieStatus: () => void; demoCount: number; hideDemo: boolean; demoBusy: boolean; demoDeleteArmed: boolean; onToggleDemo: () => void; onDeleteDemo: () => void; uiFont: UiFontId; onUiFontChange: (value: UiFontId) => void; photoTimeDefault: boolean; onPhotoTimeDefaultChange: (value: boolean) => void; onAssetsChanged: () => void; cycleModule: CycleIntimacyModuleData | null; entities: readonly Entity[]; onCreateEntity: CreateEntity; onSaveCycleConfig: (config: CycleIntimacyModuleConfig) => Promise<void>; onTransferPeriods: (groupKeys: readonly string[], targetSubjectId?: string) => Promise<void> }) {
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if ((page.startsWith("admin/") || page === "account/storage") && !admin) onNavigatePage("account/session"); }, [page, admin, onNavigatePage]);
   const isAdmin = admin;
@@ -1096,7 +1167,7 @@ export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, 
     "data/backup": "查看备份状态，并管理本地与对象存储策略。",
     "data/demo": "控制预置记录的显示与删除。",
     "data/photos": "管理照片回收站与可再生的缩略图缓存。",
-    "appearance/interface": "调整当前浏览器里的界面显示。",
+    "appearance/interface": "调整当前浏览器里的界面显示，也可以清掉它存下的缓存。",
     "integrations/weather": "定位或选择固定城市。",
     "integrations/ai": "AI 助手显示方式与服务配置。",
     "integrations/ai-log": "AI 对话与 AI 小结的失败都在这里；选中一段时间后一键复制给 AI 排查。",
@@ -1115,7 +1186,7 @@ export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, 
     : page === "data/backup" ? <><ArchiveTransferCard /><TimeMachineSettings /><BackupSettingsCard backupStatusState={backupStatusState} backupBusy={backupBusy} onBackup={onBackup} onChanged={onBackupStatusChange} onRetry={onRetryBackupStatus} onReadFailed={onBackupReadFailed} /></>
     : page === "data/demo" ? <div className="settings-card settings-demo-card"><div className="settings-card-icon"><Sparkles size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>{hideDemo ? "演示数据已隐藏" : `显示 ${demoCount} 条演示记录`}</strong><small>删除操作只会处理带有演示标记的记录，不会动你的个人内容。</small></div><label className="settings-switch" title="显示演示数据"><input type="checkbox" checked={!hideDemo} onChange={onToggleDemo} aria-label="显示演示数据" /><span aria-hidden="true" /></label><button className={`danger-button settings-demo-delete ${demoDeleteArmed ? "is-armed" : ""}`} type="button" onClick={onDeleteDemo} disabled={demoBusy || demoCount === 0}>{demoBusy ? "删除中…" : demoDeleteArmed ? `再次点击删除 ${demoCount} 条` : "删除全部演示数据"}</button></div>
     : page === "data/photos" ? <><AssetTrashSettingsCard onAssetsChanged={onAssetsChanged} /><ThumbnailCacheSettingsCard /></>
-    : page === "appearance/interface" ? <><FontSettingsCard value={uiFont} onChange={onUiFontChange} /><WeatherSimulatorCard /></>
+    : page === "appearance/interface" ? <><FontSettingsCard value={uiFont} onChange={onUiFontChange} /><PhotoTimeSettingsCard value={photoTimeDefault} onChange={onPhotoTimeDefaultChange} /><LocalCacheSettingsCard /><WeatherSimulatorCard /></>
     : page === "integrations/weather" ? <><WeatherSettingsCard profilesState={weatherProfilesState} tenantId={account?.tenantId ?? "local"} onChanged={onWeatherStatusChange} onRetry={onRetryWeatherProfiles} /><AmapLocationSettings /></>
     : page === "integrations/ai" ? <AiSettingsCard statusState={aiStatusState} open={false} assistantVisible={assistantVisible} onAssistantVisibleChange={onAssistantVisibleChange} onChanged={onAiStatusChange} onRetry={onRetryAiStatus} />
     : page === "integrations/ai-log" ? <AssistantAttemptLogCard />

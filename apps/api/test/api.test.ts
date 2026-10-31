@@ -4669,7 +4669,7 @@ test("a thumbnail is derived once, filed under the data directory, and rebuilt a
   equal(stats.response.status, 200);
   const statsBody = stats.body as { count: number; bytes: number; widths: number[]; directory: string };
   equal(statsBody.count, 2);
-  equal(statsBody.widths.join(","), "160,400,1200,2048");
+  equal(statsBody.widths.join(","), "160,240,400,1200,2048");
   equal(statsBody.directory, thumbsDirectory);
   ok(statsBody.bytes > 0, "the reported size must come from the files, not from a guess");
 
@@ -4809,6 +4809,46 @@ test("a thumbnail is rotated upright from EXIF, and an audio original is refused
   const refused = await request(harness.base, `/api/assets/${encodeURIComponent(audioId)}/thumbnail?w=400`);
   equal(refused.response.status, 415);
   equal((refused.body as { error: string }).error, "unsupported_thumbnail_type");
+});
+
+test("JSON leaves gzipped and a photo carries a tag its thumbnail URL can be cached by forever", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "lifeos-transfer-"));
+  const h = await startHarness(undefined, undefined, root, join(root, "assets")); t.after(() => h.stop());
+  const bytes = await sharp({ create: { width: 1200, height: 900, channels: 3, background: "teal" } }).png().toBuffer();
+  const upload = await fetch(h.base + "/api/assets/uploads?name=gallery.png", { method: "POST", headers: { "content-type": "image/png" }, body: bytes });
+  equal(upload.status, 201); const asset = await upload.json() as Asset;
+
+  const listed = await fetch(h.base + "/api/assets", { headers: { "accept-encoding": "gzip" } });
+  const payload = await listed.json() as { items: Asset[]; thumbVersions: Record<string, string> };
+  const tag = payload.thumbVersions[asset.id];
+  ok(typeof tag === "string" && /^[0-9a-f]{16}$/.test(tag), `a photo has to come back with a short cache tag, got ${String(tag)}`);
+
+  // With the tag the URL may be kept forever; without it the same bytes are only
+  // promised for five minutes, which is what made every visit re-ask for them.
+  const forever = await fetch(`${h.base}/api/assets/${asset.id}/thumbnail?w=240&v=${tag}`);
+  equal(forever.status, 200); equal(forever.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  equal((await sharp(Buffer.from(await forever.arrayBuffer())).metadata()).width, 240);
+  const shortLived = await fetch(`${h.base}/api/assets/${asset.id}/thumbnail?w=240`);
+  equal(shortLived.headers.get("cache-control"), "private, max-age=300"); await shortLived.arrayBuffer();
+  equal((await fetch(`${h.base}/api/assets/${asset.id}/thumbnail?w=240&v=0000000000000000`)).status, 409);
+
+  // Rotation rides in the URL as `r=`, so it must not invalidate a tag every other
+  // tile on the page is still using.
+  const rotated = await request(h.base, `/api/assets/${asset.id}/rotation`, { method: "PATCH", ...json({ rotation: 90, expectedRotation: 0 }) });
+  equal(rotated.response.status, 200);
+  const afterRotation = await (await fetch(h.base + "/api/assets")).json() as { thumbVersions: Record<string, string> };
+  equal(afterRotation.thumbVersions[asset.id], tag, "rotating a photo must keep the tag the grid is holding");
+  const rotatedThumb = await fetch(`${h.base}/api/assets/${asset.id}/thumbnail?w=240&r=90&v=${tag}`);
+  equal(rotatedThumb.status, 200); await rotatedThumb.arrayBuffer();
+
+  // A body under a kilobyte is cheaper to send as it is; the record list is the
+  // one that used to go out whole.
+  await request(h.base, "/api/records", { method: "POST", ...json({ kind: "journal", content: "长".repeat(2000) }) });
+  const compressed = await fetch(h.base + "/api/records", { headers: { "accept-encoding": "gzip" } });
+  equal(compressed.headers.get("content-encoding"), "gzip");
+  equal((await compressed.json() as { items: unknown[] }).items.length, 1, "the decoded body still has to parse");
+  const plain = await fetch(h.base + "/api/records", { headers: { "accept-encoding": "identity" } });
+  equal(plain.headers.get("content-encoding"), null); await plain.arrayBuffer();
 });
 
 test("the time machine reads a snapshot without touching it and sorts the drift three ways", async (t) => {

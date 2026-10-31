@@ -50,6 +50,8 @@ export interface EntitiesResponse {
 
 export interface AssetsResponse {
   readonly items: readonly Asset[];
+  /** Photo id → cache tag for its thumbnail URL. Absent on an older API build. */
+  readonly thumbVersions?: Readonly<Record<string, string>>;
 }
 
 /**
