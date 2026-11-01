@@ -12226,6 +12226,13 @@ button.mention-review-context { cursor: pointer; }
 
 .settings-about-card { align-items: flex-start; }
 .settings-about-card .settings-card-copy { display: grid; gap: 5px; }
+/* Two hashes, small and quiet — it is diagnostic information, not a feature.
+   `b` carries the hash itself so a mismatch can be read at a glance without
+   hunting for which side is which. */
+.settings-build-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: var(--muted); font-size: 0.72rem; line-height: 1.5; }
+.settings-build-info b { color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; font-weight: 500; }
+.settings-build-info strong { flex-basis: 100%; color: var(--danger); font-weight: 500; }
+.settings-build-info[data-build-mismatch] b { color: var(--danger); }
 
 .settings-ai-visibility {
   display: flex;

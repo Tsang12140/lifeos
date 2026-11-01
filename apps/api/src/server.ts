@@ -1,4 +1,5 @@
 import { handleNotesRoutes } from "./routes-notes.js";
+import { buildInfo } from "./build-info.js";
 import { AppLock } from './app-lock.js';
 import { appLockRepository } from './app-lock-context.js';
 import { handleNoteShareRoutes, handlePublicNoteRoutes, publicNoteSpace } from "./routes-note-shares.js";
@@ -536,7 +537,9 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     const welcomeRequest = pathname.startsWith("/api/ai/assistant/welcome") || pathname.startsWith("/api/admin/assistant-welcome");
     if (!welcomeRequest && ["POST", "PATCH", "PUT", "DELETE"].includes(req.method ?? "") && !pathname.startsWith("/api/calendar/background")) res.once("finish", () => { if (res.statusCode < 300) { calendarDays.schedule(); calendarBackgrounds.changed(); journalIndexer.schedule(); } });
     if (pathname === "/api/health" && req.method === "GET") {
-      setJson(res, 200, { ok: true });
+      // The version travels with health so a single curl answers "which build is
+      // live?" — the question that otherwise needs the UI, or git, or both.
+      setJson(res, 200, { ok: true, ...buildInfo() });
       return;
     }
     if (pathname === "/api/auth" && req.method === "GET") {

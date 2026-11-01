@@ -5,6 +5,7 @@ import { AssistantAttemptLogCard } from "./assistant-log-settings";
 import { AssistantWelcomeAdmin } from "./assistant-welcome-admin";
 import { AdminAttentionPanel } from "./admin-attention";
 import { CustomHabitPanel, type HabitActions } from "./habit-panel";
+import { BuildInfoLine } from "./build-info-line";
 import { EntityCreateForm } from "./entity-forms";
 import { ContactMentionAvatar } from "./contact-avatar";
 import type { CreateEntity } from "./app-types";
@@ -1193,7 +1194,7 @@ export function SettingsView({ habitActions, page, mobileEntry, onNavigatePage, 
     : page === "integrations/movie" ? <MovieSettingsCard statusState={movieStatusState} onChanged={onMovieStatusChange} onRetry={onRetryMovieStatus} />
     : page === "integrations/photo-text" ? <PhotoTextSettingsCard />
     : page === "private/cycle" ? <><CycleSettingsCard module={cycleModule} entities={entities} onCreateEntity={onCreateEntity} onSaveConfig={onSaveCycleConfig} onTransferPeriods={onTransferPeriods} />{habitActions && cycleModule ? <div className="settings-card habit-management-card"><CustomHabitPanel management habits={cycleModule.config.habits ?? []} date={localDateToday()} today={localDateToday()} actions={habitActions} /></div> : null}</>
-    : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS，本机优先</strong><small>记录与配置由当前 LifeOS 实例管理。</small></div></div>;
+    : <div className="settings-card settings-about-card"><div className="settings-card-icon"><Activity size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>LifeOS，本机优先</strong><small>记录与配置由当前 LifeOS 实例管理。</small><BuildInfoLine /></div></div>;
   return <section className="settings-page" data-mobile-level={mobileLevel} aria-labelledby="settings-title">
     <header className="settings-page-header"><h1 id="settings-title">设置</h1></header>
     <div className="settings-layout">
