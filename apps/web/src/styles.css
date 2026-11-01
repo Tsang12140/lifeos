@@ -3914,6 +3914,13 @@ h2 {
   white-space: nowrap;
 }
 
+/* 日期是这一行的「值」，时间是它的附属。原来日期吃的是继承来的 400，跟时间（600）
+   差两级，一行里最该先读到的数字反倒最轻。抬一级到 500，差一级，时间仍更重——它还
+   会被 --ink-soft 压淡，主次没有翻过来。 */
+.date-trigger-value {
+  font-weight: 500;
+}
+
 .date-trigger-time {
   color: var(--ink-soft);
   font-weight: 600;
@@ -12911,16 +12918,11 @@ dialog.asset-preview.has-photo-information { grid-template-columns: minmax(0, 1f
 .record-feed-empty { margin: 12px 0 18px 111px; color: var(--muted); font-size: .85rem; }
 .record-feed-day-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .record-feed-day-heading .timeline-group-title { margin-bottom: 0; }
-.record-feed-backfill { flex: none; min-height: 34px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: #5f6b7e; font: inherit; font-size: .75rem; cursor: pointer; }
-.record-feed-backfill:hover { background: #edf1f6; color: var(--ink); }
-.record-feed-backfill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.record-feed-backfill:disabled { opacity: .5; cursor: default; }
 .record-feed-more { display: flex; justify-content: center; margin-top: 22px; }
 .recording-date-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 12px 14px; border-radius: 12px; background: #f2f4f7; color: var(--ink); font-size: .85rem; }
 .recording-date-notice .secondary-button { min-height: 34px; padding: 0 12px; font-size: .8rem; }
 @media (max-width: 700px) {
   .record-feed-empty { margin-left: 30px; }
-  .record-feed-backfill { min-height: 40px; }
   .earlier-divider { gap: 12px; margin: 22px 0; }
 }
 .record-video-cell { position: relative; overflow: hidden; }

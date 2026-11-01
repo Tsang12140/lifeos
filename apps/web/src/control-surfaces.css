@@ -182,6 +182,14 @@
   font-weight: 500;
   line-height: 20px;
 }
+
+/* 「发送」加一级（2026-11-01）：它和思考档位共用上面那条 34px / 500 的壳，所以不能直接
+   改那条——齿轮会跟着变粗。这条 (0,4,0) 压过 (0,3,1)，只管发送。
+   顺带记一句：styles.css 的 `.ai-send-button { font-weight: 650 }` 从来没生效过，
+   它被上面那条带位置的选择器盖掉了——「发送」实测是 500，不是 650。 */
+.backfill-chat-composer .backfill-input-actions > .backfill-operation-group > .ai-send-button {
+  font-weight: 600;
+}
 .backfill-chat-composer .ai-gear-button {
   border-color: transparent;
   background: transparent;
@@ -210,7 +218,8 @@
   border-color: var(--control-ink);
   background: var(--control-ink);
   color: white;
-  font-weight: 500;
+  /* 字重在下面那条按位置写的规则里（.backfill-input-actions > … > .ai-send-button）：
+     这里写多少都会被它盖掉。 */
 }
 .backfill-chat-composer .ai-send-button:disabled {
   border-color: #e6e8ea;
