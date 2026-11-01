@@ -88,7 +88,8 @@
   border-color: transparent;
   background: transparent;
   color: var(--control-muted);
-  font-weight: 500;
+  /* 主人在 2026-11-01 要求分段控件字重整体加一级，与 .entities-tab 同步。 */
+  font-weight: 600;
   transition: background-color 180ms cubic-bezier(.2, 0, 0, 1), color 180ms cubic-bezier(.2, 0, 0, 1), border-color 180ms cubic-bezier(.2, 0, 0, 1);
 }
 .kind-option.is-active {
@@ -121,7 +122,8 @@
   background: transparent;
   box-shadow: none;
   font-size: .82rem;
-  font-weight: 500;
+  /* 主人 2026-11-01：「全部、未完成这种字重全都加一级」—— 分段控件从 500 起一档到 600。 */
+  font-weight: 600;
   line-height: 20px;
   transition: background-color 180ms cubic-bezier(.2, 0, 0, 1), color 180ms cubic-bezier(.2, 0, 0, 1), border-color 180ms cubic-bezier(.2, 0, 0, 1);
 }
