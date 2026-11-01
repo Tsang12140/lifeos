@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
+import buildStamp from "virtual:lifeos-build";
 
 /**
  * Two versions, side by side, because they can disagree.
  *
- * The bundle's own stamp is baked in at build time; the server's comes from
- * `/api/health`. Same commit on both means the browser is running what the server
- * serves. A mismatch means the browser is holding an old bundle — which is exactly
- * the state that makes a just-deployed fix look like it never happened.
+ * The bundle's own stamp is frozen in when the config loads; the server's comes
+ * from `/api/health`. Same commit on both means the browser is running what the
+ * server serves. A mismatch means the browser is holding an old bundle — which is
+ * exactly the state that makes a just-deployed fix look like it never happened.
  */
 interface HealthVersion {
   readonly version?: string;
@@ -14,8 +15,6 @@ interface HealthVersion {
   readonly dirty?: boolean;
   readonly builtAt?: string | null;
 }
-
-const bundle = typeof __LIFEOS_BUILD__ === "undefined" ? null : __LIFEOS_BUILD__;
 
 function stamp(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -43,11 +42,11 @@ export function BuildInfoLine() {
   }, []);
 
   const serverCommit = server?.commit ?? null;
-  const mismatch = server !== null && bundle !== null && serverCommit !== null && bundle.commit !== null && serverCommit !== bundle.commit;
-  const bundleStamp = bundle === null ? "" : stamp(bundle.builtAt);
+  const mismatch = serverCommit !== null && buildStamp.commit !== null && serverCommit !== buildStamp.commit;
+  const bundleStamp = stamp(buildStamp.builtAt);
 
   return <div className="settings-build-info" data-build-mismatch={mismatch || undefined}>
-    <span>界面 <b>{name(bundle?.commit, bundle?.dirty, "未知")}</b>{bundle === null || bundle.version === "" ? null : <> · v{bundle.version}</>}</span>
+    <span>界面 <b>{name(buildStamp.commit, buildStamp.dirty, "无提交")}</b>{buildStamp.version === "" ? null : <> · v{buildStamp.version}</>}</span>
     <span>服务端 <b>{failed ? "读不到" : server === null ? "读取中…" : name(serverCommit, server.dirty, "无提交")}</b></span>
     {bundleStamp ? <span>构建于 {bundleStamp}</span> : null}
     {mismatch ? <strong>浏览器在跑旧版本，刷新一次即可</strong> : null}
