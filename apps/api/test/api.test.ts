@@ -46,14 +46,19 @@ test("cycle subjects stay separate across transfer, switching, restart and assis
   deepEqual(partner.events.map(event => event.kind), ["period_start", "period_end"]);
   const repo = new SqliteRecordRepository(join(h.root, "lifeos.sqlite"));
   try {
-    const context = assistantCycleContext(repo, true);
+    // Every marker kind reaches the model; a filtered-out field used to read as "never recorded".
+    const context = assistantCycleContext(repo);
     equal(context.cycles[0]?.subject.name, "测试伴侣");
-    deepEqual(context.cycles[0]?.events.map(event => event.kind), ["period_start", "period_end"]);
+    deepEqual(context.cycles[0]?.events.map(event => event.kind), ["period_end", "period_start"]);
+    deepEqual(context.cycles[0]?.latest, { period_start: "2026-09-29", period_end: "2026-10-03" });
     equal(context.cycles[1]?.subject.name, "当前用户本人");
-    equal(context.cycles[1]?.events.length, 0);
-    const identityOnly = assistantCycleContext(repo);
-    equal(identityOnly.cycles[0]?.subject.name, "测试伴侣");
-    deepEqual(identityOnly.cycles[0]?.events, []);
+    equal(context.cycles[1]?.events.length, 1);
+    equal(context.cycles[1]?.latest.intimacy, "2026-10-01");
+    equal("locked" in context, false);
+    // A locked module must announce itself; an empty list would be read as "never recorded".
+    const lockedContext = assistantCycleContext(appLockRepository(repo, { locked: target => target === "cycle", ai: false, protected: true }));
+    equal(lockedContext.locked, true);
+    deepEqual(lockedContext.cycles[0]?.events, []);
   } finally { repo.close(); }
   const self = await request(h.base, path + "/config", { method: "PUT", ...json({ enabled: true, cycleLength: 28, periodLength: 7, subjectId: null }) });
   equal(self.response.status, 200);
@@ -208,6 +213,7 @@ import { BackupScheduler, backupScheduleRunKey, nextDailyBackupAt } from "../src
 import { assertValidBackupRetention, DEFAULT_BACKUP_RETENTION, describeBackupRetention, planBackupRetention, retentionHorizonDays } from "../src/backup-retention.js";
 import { SqliteRecordRepository } from "../src/repository.js";
 import { assistantCycleContext } from "../src/assistant-cycle-context.js";
+import { appLockRepository } from "../src/app-lock-context.js";
 import { isCollectableAsset, originalPathFor, planTrashPurge, planUnreferencedUploads, resolveWithinRoot, trashPathFor } from "../src/asset-gc.js";
 import { nextAssetGcAt } from "../src/asset-gc-scheduler.js";
 import { OBSERVATION_KEEP_LIMIT, selectDayObservations } from "../src/weather-selection.js";
@@ -674,6 +680,11 @@ test("assistant AI prepares structured plans, resolves posters, excludes privacy
       if (providerFailed) return new Response("unavailable", { status: 503 });
       return Response.json({ choices: [{ message: { content: JSON.stringify({ explanation: "保留评价原话", objects: [{ key: "movie1", selected: true, type: "movie", name: "定时拍摄", aliases: [], movie: { originalTitle: "Time Lapse", personalReview: "超级精彩", watched: true, watchedAt: "2026-09-15" } }, { key: "person1", selected: true, type: "person", name: "小张", aliases: ["阿张"] }, { key: "place1", selected: true, type: "place", name: "南海咖啡店", address: "" }], entries: [{ key: "r1", selected: true, kind: "journal", content: "和小张在南海咖啡店看了《定时拍摄》，超级精彩。", date: "2026-09-15", evidence: "原材料", entityKeys: ["movie1", "person1", "place1"], assetIds: [] }] }) } }] });
     }
+    if (url.startsWith("https://search.youku.com/")) {
+      // 优酷是本地库之后的第二道源。测试不打外网：明确回「问了但没有」，
+      // 这样才轮到 TMDb —— 否则真网络一有结果就提前 return，TMDb 永远问不到。
+      return Response.json({ originNodes: [] });
+    }
     if (url.startsWith("https://api.themoviedb.org/")) {
       movieQueries++;
       return Response.json({ results: [{ media_type: "movie", id: 1234, title: "定时拍摄", original_title: "Time Lapse", release_date: "2014-01-01", poster_path: "/controlled-poster.jpg" }, { media_type: "person", id: 999, name: "演员" }] });
@@ -1023,7 +1034,8 @@ test("SQLite API persists records, preserves original content, filters, conflict
 
   const health = await request(harness.base, "/api/health");
   equal(health.response.status, 200);
-  deepEqual(health.body, { ok: true });
+  // health carries the running build (version/builtAt/commit) since ae32b70; only `ok` is contractual.
+  equal((health.body as { ok: boolean }).ok, true);
 
   const auth = await request(harness.base, "/api/auth");
   equal(auth.response.status, 200);
@@ -3787,7 +3799,12 @@ test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and 
 
   const initial = await request(harness.base, "/api/movie/status");
   equal(initial.response.status, 200);
-  deepEqual(initial.body, {
+  // `catalog` 里带绝对路径（临时 data 目录），所以单独断言，不塞进 deepEqual。
+  const initialCatalog = (initial.body as { catalog: { available: boolean; titles: number; terms: number; sizeMb: number } }).catalog;
+  equal(initialCatalog.available, false);
+  equal(initialCatalog.titles, 0);
+  const { catalog: _catalog, ...initialRest } = initial.body as Record<string, unknown>;
+  deepEqual(initialRest, {
     enabled: false,
     configured: false,
     hasKey: false,
@@ -3798,6 +3815,9 @@ test("movie module is opt-in, keeps TMDb keys private, resolves candidates, and 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    // 本地库（临时 data 目录里没有）之后是优酷。测试不打外网：明确回「问了但没有」，
+    // 候选才轮到 TMDb —— 真网络一有结果就会提前 return，TMDb mock 永远用不上。
+    if (url.startsWith("https://search.youku.com/")) return new Response(JSON.stringify({ originNodes: [] }), { status: 200 });
     if (!url.startsWith("https://api.themoviedb.org/3")) return originalFetch(input, init);
     externalCalls += 1;
     equal(new URL(url).searchParams.get("api_key"), "movie-test-key");

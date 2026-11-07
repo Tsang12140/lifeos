@@ -86,6 +86,25 @@ export interface DaySummary {
   readonly retryCount?: number;
 }
 
+/** A separately cached, one-line summary for one visible calendar record. */
+export interface RecordSummary {
+  readonly recordId: RecordId;
+  readonly date: string;
+  readonly text: string;
+  readonly provider: string;
+  readonly model?: string;
+  readonly generatedAt: InstantTime;
+  readonly status: "generated" | "local" | "fallback";
+  /** Fingerprint of summary-relevant content and calendar day. */
+  readonly sourceRevision: string;
+  /** Latest stored record revision when this cached summary was bound. */
+  readonly recordRevision?: number;
+  /** Provider/model/independent record prompt version. */
+  readonly contextRevision: string;
+  readonly retryAfter?: string;
+  readonly retryCount?: number;
+}
+
 /**
  * Delays between automatic retries of a day that fell back to the offline rule:
  * tomorrow, then two days later, then a week later. After the fourth failure the

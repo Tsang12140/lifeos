@@ -10,6 +10,18 @@ html {
   z-index: 20;
   /* Keep the unrelated right rail interactive outside the weather region. */
   pointer-events: none;
+  /* Bilibili-style reveal: scrolling down lets the card step aside, scrolling
+     back up brings it in. Only transform is animated, so the reserved
+     scroll-padding height above stays correct while it is hidden. */
+  transition: transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.topbar.is-weather-hidden {
+  transform: translateY(calc(-100% - var(--weather-viewport-top, 0px)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar { transition: none; }
 }
 
 .weather-header-frame {

@@ -1,0 +1,82 @@
+/* Crash surface. Same neutral canvas and brand as the static startup screen in
+   index.html (DESIGN「启动期会话确认」), so a failure looks like the app talking
+   rather than a broken page. Values here mirror the inline fallback in index.html:
+   keep the two in step if either changes. */
+
+.startup-content:has(.startup-crash) {
+  gap: 20px;
+}
+
+.startup-crash {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(420px, calc(100vw - 48px));
+  color: #5d6b82;
+  font-size: .9rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.startup-crash p {
+  margin: 0;
+}
+
+.startup-crash-title {
+  color: #18243d;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.startup-crash-detail {
+  max-height: 5.1em;
+  overflow: auto;
+  color: #3d4a5e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+}
+
+.startup-crash-hint {
+  font-size: .82rem;
+}
+
+.startup-crash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.startup-crash-actions button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid #cfd8e5;
+  border-radius: 8px;
+  background: #fff;
+  color: #18243d;
+  font: inherit;
+  font-size: .85rem;
+  cursor: pointer;
+}
+
+.startup-crash-actions button:hover {
+  background: #f6f8fb;
+}
+
+.startup-crash-actions button:focus-visible {
+  outline: 2px solid #18243d;
+  outline-offset: 2px;
+}
+
+.startup-crash-note {
+  color: #1f6b3a;
+  font-size: .8rem;
+}
+
+.startup-crash-meta {
+  color: #8592a6;
+  font-size: .74rem;
+  font-variant-numeric: tabular-nums;
+}

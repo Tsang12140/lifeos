@@ -111,9 +111,24 @@
 .backfill-review { margin-top:12px; }
 .backfill-review > summary { font-size:12px;color:#687283;cursor:pointer;padding:8px 0; }
 .backfill-result-actions { margin-top:12px; }
-.timeline-movie-cards { display:flex;flex-wrap:wrap;gap:10px;margin:12px 0; }
-.timeline-movie-card { display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);border-radius:10px;background:transparent;padding:8px;max-width:100%;min-width:0;color:inherit; }
-.timeline-movie-card img,.timeline-movie-card > .movie-poster-placeholder { width:42px;height:62px;object-fit:cover;border-radius:4px;flex:none; }
+/* 影片卡住进 footer 的 places 区（2026-11-08 主人：**电影卡片也应该在地点卡片那儿 同高**）。
+   位置和地点卡一样：footer 第一列、与操作按钮同一行、底边对齐；两者同时存在时并排换行。
+   所以这里的 margin 归零 —— 间距由 `.timeline-footer` 的 gap 管，卡片自己再加 12px 就会
+   比地点卡矮一截（外边距不参与等高，但会把整行顶歪）。任务记录里没有 places 区，
+   那张卡仍在 `.task-record-details` 里，间距由下面的规则单独给。 */
+.timeline-movie-cards { display:flex;flex-wrap:wrap;gap:8px;margin:0;min-width:0; }
+.task-record-details > .timeline-movie-cards { margin:12px 0; }
+/* 卡片高度与地点卡严格同高（7+44+7+1×2 = 60），两种缩略卡并排时不打架（2026-11-08）。
+   高度锁死 44，**宽度交给原图比例**（2026-11-08 03:22 主人：竖屏那就不拉长）：
+   优酷的横剧照 448×252 吃满 78；TMDb 兜底的 2:3 竖版自然收到 ~29×44，
+   既不裁两侧也不拉伸，卡片自己变窄而不是把图拉变形。
+   `aspect-ratio: auto 16/9` 只在图片还没解码、拿不到内在比例时兜底 78 的占位宽，
+   加载完立刻按真实比例走 —— 少了它宽度会从 0 抖到 78。
+   `max-width` 是硬上限：比 16:9 更宽的图（偶尔的横幅剧照）靠 `object-fit: contain`
+   缩进框内，绝不让卡片横着撑开。识别面板候选仍是 34×46 竖框，两处不同是有意的。 */
+.timeline-movie-card { display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);border-radius:10px;background:transparent;padding:7px;max-width:100%;min-width:0;color:inherit; }
+.timeline-movie-card img { height:44px;width:auto;max-width:78px;aspect-ratio:auto 16/9;object-fit:contain;border-radius:4px;flex:none; }
+.timeline-movie-card > .movie-poster-placeholder { width:78px;height:44px;flex:none;border-radius:4px; }
 .timeline-movie-card > .movie-poster-placeholder { display:grid;place-items:center;background:var(--surface-soft); }
 .timeline-movie-card strong,.timeline-movie-card small { display:block;overflow-wrap:anywhere;font-size:12px; }
 .timeline-movie-card small { color:#687283;font-weight:normal;margin-top:4px; }

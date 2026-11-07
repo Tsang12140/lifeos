@@ -1,0 +1,55 @@
+@font-face { font-family: "Week Demo Serif"; src: url('/demo-fonts/summary-serif-regular.woff') format('woff'); font-style: normal; font-weight: 400; font-display: swap; }
+@font-face { font-family: "Week Demo Serif"; src: url('/demo-fonts/summary-serif-bold.woff') format('woff'); font-style: normal; font-weight: 700; font-display: swap; }
+@font-face { font-family: "Week Demo Huiwen"; src: url('/demo-fonts/summary-huiwen.woff') format('woff'); font-style: normal; font-weight: 400; font-display: swap; }
+body { margin: 0; min-width: 0; background: #edf2f7; }
+.week-tuner { width: min(100%, 760px); margin: auto; padding: 16px; color: #41484f; }
+.week-tuner h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+.week-tuner p { margin: 0 0 16px; color: #67717c; font-size: 13px; line-height: 20px; }
+.tune-panel { position: sticky; top: 8px; z-index: 5; padding: 16px; border: 1px solid #d7dce1; border-radius: 16px; background: #fff; box-shadow: 0 4px 16px rgb(24 36 61 / .06); }
+.tune-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 20px; margin-bottom: 12px; }
+.tune-fields label { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px; font-size: 14px; line-height: 20px; }
+.tune-fields output { font-size: 12px; color: #67717c; font-variant-numeric: tabular-nums; }
+.tune-fields input[type="range"] { grid-column: 1 / -1; width: 100%; height: 24px; margin: 0; accent-color: #626b74; cursor: pointer; }
+.tune-check { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 9px 10px; border: 1px solid #d7dce1; border-radius: 9px; background: #fff; cursor: pointer; }
+.tune-check input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: #626b74; cursor: pointer; }
+.tune-fields select { grid-column: 1 / -1; width: 100%; min-width: 0; height: 40px; padding: 9px 10px; border: 1px solid #d7dce1; border-radius: 9px; background: #fff; color: #41484f; font: inherit; font-size: 14px; line-height: 20px; }
+.paint-presets { display: flex; gap: 8px; margin-bottom: 12px; }
+.paint-presets button { min-height: 40px; margin: 0; padding: 9px 12px; border: 1px solid #d7dce1; border-radius: 9px; background: #fff; color: #41484f; font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; }
+.paint-presets button[aria-pressed="true"] { background: #41484f; border-color: #41484f; color: #fff; }
+.paint-presets button:hover { filter: brightness(.96); }
+.variant-note { margin: -6px 0 12px; color: #67717c; font-size: 12px; line-height: 18px; }
+.paint-status { margin-top: 4px; min-height: 18px; color: #67717c; font-size: 12px; line-height: 18px; }
+.paint-comparison { width: min(100%,366px); margin: 16px auto; padding: 0 4px; }
+.paint-comparison p { margin-bottom: 8px; font-size: 12px; }
+.paint-comparison-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.paint-comparison figure { margin: 0; min-width: 0; }
+.paint-comparison img { display: block; width: 100%; height: 64px; object-fit: cover; border-radius: 9px; }
+.paint-comparison figcaption { margin-top: 4px; text-align: center; color: #67717c; font-size: 12px; line-height: 18px; }
+.tune-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tune-actions button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; margin: 0; padding: 9px 12px; border: 1px solid #d7dce1; border-radius: 9px; background: #fff; color: #41484f; font: inherit; font-size: 14px; line-height: 20px; cursor: pointer; }
+.tune-actions button:first-child { background: #41484f; color: #fff; border-color: #41484f; }
+.tune-actions button:hover { filter: brightness(.96); }
+.tune-actions button:disabled { opacity: .5; cursor: wait; }
+.week-tuner :is(button,input,textarea,select):focus-visible { outline: 2px solid #8997a6; outline-offset: 2px; }
+.tune-status { min-height: 20px; margin-top: 8px; font-size: 12px; line-height: 20px; color: #67717c; }
+.week-demo { width: min(100%,366px); margin: 20px auto; padding: 0 4px; --weekday-size: 20px; --day-size: 40px; --day-digit-gap: -13px; --lunar-offset-x: 0px; --summary-size: 15px; --summary-line-height: 28px; --summary-row-gap: 4px; --photo-veil: .87; --demo-date-color: #172438; --demo-today-date-color: var(--primary); --demo-count-color: #67717c; --demo-border-color: var(--line); --demo-today-border-color: #b9c8fb; --calendar-date-art-foreground: #263647; --calendar-date-art-tone-4: #D1BDD2; }
+.demo-week-card { --demo-card-inset: 12px; --demo-column-gap: 12px; --demo-date-column: calc(var(--weekday-size) + 8px + var(--day-size) * 2 + var(--day-digit-gap)); position: relative; isolation: isolate; display: grid; grid-template-columns: var(--demo-date-column) minmax(0,1fr); align-items: center; gap: var(--demo-column-gap); width: 100%; height: 128px; min-height: 128px; max-height: 128px; padding: var(--demo-card-inset); margin-bottom: 11px; overflow: hidden; border: 1px solid var(--demo-border-color,var(--line)); border-radius: 15px; background: #f6f9fb; box-shadow: var(--shadow-soft); }
+.demo-week-card.is-today { border-color: var(--demo-today-border-color,#b9c8fb); }
+.demo-week-card.has-photo { background: #fff; }
+.demo-photo { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; object-fit: cover; }
+.demo-veil { position: absolute; inset: 0; z-index: -1; background: rgb(255 255 255 / var(--photo-veil)); }
+.demo-date { align-self: start; display: flex; align-items: center; justify-content: flex-start; gap: 8px; color: #4d5869; }
+.demo-weekday { display: flex; flex-direction: column; font-size: var(--weekday-size); }
+.demo-day { display: flex; column-gap: max(0px,var(--day-digit-gap)); font-size: var(--day-size); color: var(--demo-date-color,#172438); }
+.demo-day > .demo-outline + .demo-outline { margin-inline-start: min(0px,var(--day-digit-gap)); }
+.is-today .demo-day { color: var(--demo-today-date-color,var(--primary)); }
+.demo-outline { display: block; flex: none; width: 1em; height: 1em; overflow: visible; }
+.demo-summaries { display: flex; flex-direction: column; gap: var(--summary-row-gap,4px); align-self: center; justify-content: center; min-width: 0; min-height: 0; height: auto; margin: 0; padding: 0; list-style: none; color: var(--summary-ink, #514D48); }
+.demo-summary { display: block; flex: none; min-width: 0; height: var(--summary-line-height,28px); overflow: hidden; color: inherit; text-align: left; white-space: nowrap; text-overflow: ellipsis; font-family: var(--summary-font, inherit); font-size: var(--summary-size); font-weight: var(--summary-weight,400); font-synthesis: weight; line-height: var(--summary-line-height,28px); user-select: text; }
+.demo-count { position: absolute; left: 12px; bottom: 10px; color: var(--demo-count-color,#67717c); font-family: "Week Demo Huiwen", serif; font-size: 12px; font-weight: 700; font-synthesis: weight; line-height: 18px; }
+.demo-empty-art { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: -1; background: linear-gradient(180deg,#faf8fb,#efe8f0); }
+.demo-summaries.demo-empty-lunar { align-self: stretch; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 33px; color: #263647; opacity: .28; font-size: 40px; transform: translateX(var(--lunar-offset-x,0px)); }
+.demo-empty-lunar svg { width: 1em; height: 1em; }
+.tune-export-label { display: block; margin-bottom: 8px; font-size: 13px; }
+.tune-export { display: block; width: 100%; min-height: 310px; padding: 12px; border: 1px solid #d7dce1; border-radius: 9px; background: #fff; color: #41484f; font: 12px/20px ui-monospace,monospace; resize: vertical; user-select: text; }
+@media(max-width:400px) { .week-tuner { padding: 12px; } .tune-panel { padding: 12px; } .tune-fields { gap: 10px 12px; } }

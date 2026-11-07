@@ -19,8 +19,12 @@ export function findEntityCandidates(text: string, entities: readonly Entity[]):
     offset += char.length;
   }
   const vocabulary = new Map<string, Entity[]>();
+  // Movies ride the same pass as people and places: once a title is in the
+  // library, prose that already names it should be able to point at it. Nothing
+  // is guessed from prose — a match here is only a candidate the person confirms
+  // in 「检查标记」, and the panel still refuses unknown titles.
   for (const entity of entities) {
-    if (entity.type !== "person" && entity.type !== "place") continue;
+    if (entity.type !== "person" && entity.type !== "place" && entity.type !== "movie") continue;
     for (const raw of entitySearchTerms(entity)) {
       const term = normalizeEntitySearchTerm(raw);
       if (!term) continue;

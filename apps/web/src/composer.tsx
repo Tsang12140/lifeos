@@ -1,4 +1,5 @@
 import { PlaceSearch, placeDetailsOf } from "./place-search";
+import { ArchiveCheckIcon } from "./icon-archive";
 import { hasSavableRecordContent } from "./record-content";
 import { applyPlaceWording } from "./place-mention-wording";
 import type { VideoUpload } from "./video-ui";
@@ -22,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import type { Asset, AssetLink, Entity, EntityCandidate, TextEntityDecision, EntityRef, NoteFormat, PlacePeriod, PlaceRole, TaskStatus, WeatherAttachment } from "@lifeos/core";
-import { PLACE_MARKER, cleanMovieQuery, entitySearchTerms, normalizeEntitySearchTerm, findEntityCandidates } from "@lifeos/core";
+import { PLACE_MARKER, cleanMovieQuery, entitySearchTerms, normalizeEntitySearchTerm, findEntityCandidates, rebaseEntityDecisions } from "@lifeos/core";
 import type { ApiUploadProgress, MovieEntity, RecordView } from "./api";
 import type { ComposerKind, CreateEntity, EntityCreateRequest } from "./app-types";
 import type { ModuleCommand } from "./movie";
@@ -35,13 +36,14 @@ import {
   ENTITY_META,
   MAX_IMPLICIT_CJK_MENTION_NAME_LENGTH,
   NOTE_FORMATS,
+  asCoreEntity,
   entityRefKey,
   isMovieEntity,
   isMovieRef,
 } from "./app-meta";
 import { entityHint, mentionQueryAt, mentionSuggestions, slashQueryAt, slashSuggestions, type MentionQuery } from "./mention";
 import { localDateToday } from "./time";
-import { enabledModuleCommands, movieRef, MovieAddPanel } from "./movie";
+import { enabledModuleCommands, movieMentionDecisions, movieRef, MovieAddPanel } from "./movie";
 import { EntityCreateForm, MentionBox, type ContextAction } from "./entity-forms";
 import { ShotDropZone, type ShotDropZoneHandle, type ShotUpload } from "./shot-drop-zone";
 import { EntityMentionReview } from "./entity-mention-review";
@@ -57,12 +59,14 @@ export interface ComposerConflictActions { readonly theirsText: string; readonly
 
 interface MentionReviewProps { decisions: readonly TextEntityDecision[]; onDecisionsChange: (decisions: readonly TextEntityDecision[]) => void; }
 
-export interface ComposerProps extends MentionReviewProps { dream?: boolean; onOpenJournal?: () => void; searchControl?: ReactNode; kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; photoTimeHint?: { readonly value: string; readonly count: number } | null; onUseNow?: () => void; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; conflictActions?: ComposerConflictActions | null; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; placeIncludePrivate?: boolean; placeHideDemo?: boolean; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string, editRange?: { start: number; end: number }) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; assets: readonly Asset[]; onUploadVideo: VideoUpload; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
+export interface ComposerProps extends MentionReviewProps { mobilePage?: boolean; mobileFields?: ReactNode; onExitBlockedChange?: (blocked: boolean) => void; dream?: boolean; onOpenJournal?: () => void; searchControl?: ReactNode; kind: ComposerKind; content: string; occurredAt: string; occurredDirty?: boolean; photoTimeHint?: { readonly value: string; readonly count: number } | null; onUseNow?: () => void; dueAt: string; isPrivate: boolean; isBackfill: boolean; weather: WeatherAttachment | null; weatherBusy: boolean; selectedDate: string; saving: boolean; dismissible: boolean; editing?: boolean; error?: string | null; onReloadLatest?: () => void; conflictActions?: ComposerConflictActions | null; taskStatus?: TaskStatus; onTaskStatusChange?: (status: TaskStatus) => void; noteMeta?: NoteEditMeta | null; onNoteMetaChange?: (meta: NoteEditMeta) => void; entities: readonly Entity[]; recentPlaceIds?: readonly string[]; placeIncludePrivate?: boolean; placeHideDemo?: boolean; movieEnabled: boolean; movieRefs: readonly EntityRef[]; onMovieRefsChange: (refs: readonly EntityRef[]) => void; onMovieEntity: (movie: MovieEntity) => void; onCreateEntity: CreateEntity; onKindChange: (kind: ComposerKind) => void; onContentChange: (content: string, editRange?: { start: number; end: number }) => void; onOccurredAtChange: (value: string) => void; onDueAtChange: (value: string) => void; onPrivateChange: (value: boolean) => void; onBackfillChange: (value: boolean) => void; onCaptureWeather: () => void; onClearWeather: () => void; onSubmit: () => void; onClose: () => void; assets: readonly Asset[]; onUploadVideo: VideoUpload; shots: readonly AssetLink[]; onShotsChange: Dispatch<SetStateAction<readonly AssetLink[]>>; shotScopeKey: string; onShotSubmissionState: (scopeKey: string, state: "active" | "failed" | null) => void; onUploadShot: (file: File, signal: AbortSignal, onProgress: (progress: ApiUploadProgress) => void) => Promise<ShotUpload>; onNotify: (message: string, tone?: "ok" | "warn") => void; onShotsCleared: (cleared: readonly AssetLink[], restore: () => boolean, cancelledPending: number) => void; }
 
 interface ComposerSelection { readonly start: number; readonly end: number; readonly text: string; }
 interface SmartMentionPrompt { readonly source: "person" | "place" | "universal"; readonly selection: ComposerSelection; readonly personMatches: readonly Entity[]; readonly placeMatches: readonly Entity[]; }
 
-export function Composer({ dream = false, onOpenJournal, searchControl, decisions, onDecisionsChange, kind, content, occurredAt, photoTimeHint = null, onUseNow, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, conflictActions = null, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], placeIncludePrivate = false, placeHideDemo = false, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, assets, onUploadVideo, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
+function ComposerBody({ mobile, children }: { mobile: boolean; children: ReactNode }) { return mobile ? <div className="mobile-composer-scroll">{children}</div> : <>{children}</>; }
+
+export function Composer({ mobilePage = false, mobileFields, onExitBlockedChange, dream = false, onOpenJournal, searchControl, decisions, onDecisionsChange, kind, content, occurredAt, photoTimeHint = null, onUseNow, dueAt, isPrivate, isBackfill, weather, weatherBusy, selectedDate, saving, dismissible, editing = false, error, onReloadLatest, conflictActions = null, taskStatus, onTaskStatusChange, noteMeta, onNoteMetaChange, entities, recentPlaceIds = [], placeIncludePrivate = false, placeHideDemo = false, movieEnabled, movieRefs, onMovieRefsChange, onMovieEntity, onCreateEntity, onKindChange, onContentChange, onOccurredAtChange, onDueAtChange, onPrivateChange, onBackfillChange, onCaptureWeather, onClearWeather, onSubmit, onClose, assets, onUploadVideo, shots, onShotsChange, shotScopeKey, onShotSubmissionState, onUploadShot, onNotify, onShotsCleared }: ComposerProps) {
   const activeMeta = dream ? { ...COMPOSER_META.journal, label: "梦境", icon: DreamIcon } : COMPOSER_META[kind];
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const candidates = useMemo(() => {
@@ -84,6 +88,9 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
   const uncheckedCandidates = candidates.filter((candidate) => !decisions.some((decision) => decision.start === candidate.start && decision.end === candidate.end));
   const pendingPeople = new Set(uncheckedCandidates.flatMap((candidate) => candidate.entities.filter((entity) => entity.type === "person").map((entity) => entity.id))).size;
   const pendingPlaces = new Set(uncheckedCandidates.flatMap((candidate) => candidate.entities.filter((entity) => entity.type === "place").map((entity) => entity.id))).size;
+  // Without this the reminder strip still appears (it keys off
+  // uncheckedCandidates.length) but would say 「发现 可关联」 with no number.
+  const pendingMovies = new Set(uncheckedCandidates.flatMap((candidate) => candidate.entities.filter((entity) => entity.type === "movie").map((entity) => entity.id))).size;
   const reviewEntity = (entity: Entity, text = content, selection?: ComposerSelection) => {
     const vocabulary = entities.some((item) => item.id === entity.id) ? entities : [...entities, entity];
     const occurrences = (text === content ? candidates : findEntityCandidates(text, vocabulary)).filter((candidate) => candidate.entities.some((item) => item.id === entity.id));
@@ -97,6 +104,34 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
     setReview({ text, candidates: fresh, entity, selection, ...(entity.type === "place" && selection ? { wording: selection.text } : {}) });
     resetMentionTools();
   };
+  /**
+   * Creating a person or place from text that is already on screen *is* the
+   * decision about that occurrence, so it gets marked on the spot instead of
+   * opening the review dialog. The dialog judges against a snapshot of the body
+   * and refuses once the text has moved on, so demanding it before the record is
+   * finished only means doing the same work twice. Other occurrences stay
+   * unmarked and reach the reminder strip, where 检查标记 is one click whenever
+   * the writing is actually done.
+   */
+  const markCreatedEntity = (entity: Entity, nextText: string, occurrence: ComposerSelection, editRange?: { start: number; end: number }, textAlreadyApplied = false): boolean => {
+    if (nextText.slice(occurrence.start, occurrence.end) !== occurrence.text) {
+      // The body moved under the selection; marking whatever now sits at those
+      // offsets would be guessing. Say so instead of linking the wrong words.
+      if (!textAlreadyApplied && nextText !== content) onContentChange(nextText, editRange);
+      resetMentionTools();
+      onNotify("正文已变化，未自动标记。写完可以点上方提醒条核对", "warn");
+      return false;
+    }
+    const base = rebaseEntityDecisions(content, nextText, decisions, editRange);
+    const kept = base.filter((decision) => decision.end <= occurrence.start || occurrence.end <= decision.start);
+    // The @-picker has already pushed the new text up; rebasing it twice would
+    // shift the surviving decisions twice as well.
+    if (!textAlreadyApplied && nextText !== content) onContentChange(nextText, editRange);
+    onDecisionsChange([...kept, { start: occurrence.start, end: occurrence.end, text: occurrence.text, entityId: entity.id, entityType: entity.type === "place" ? "place" as const : entity.type === "movie" ? "movie" as const : "person" as const }].sort((a, b) => a.start - b.start));
+    resetMentionTools();
+    onNotify(`已关联「${entity.name}」`);
+    return true;
+  };
   const shotZoneRef = useRef<ShotDropZoneHandle>(null);
   const [photoToolbarTarget, setPhotoToolbarTarget] = useState<HTMLDivElement | null>(null);
   const [shotUploading, setShotUploading] = useState(false);
@@ -108,6 +143,7 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
     if (scope !== currentShotScopeRef.current) return;
     shotSubmissionStateRef.current = state;
     setShotSubmissionState(state);
+    onExitBlockedChange?.(state !== null);
     onShotSubmissionState(scope, state);
   };
   const futureJournal = kind === "journal" && (occurredAt.slice(0, 10) || selectedDate) > localDateToday();
@@ -141,6 +177,9 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
   const [smartHintVisible, setSmartHintVisible] = useState(false);
   const [moviePanelOpen, setMoviePanelOpen] = useState(false);
   const [movieQuery, setMovieQuery] = useState<string | undefined>(undefined);
+  // The words the panel was opened on. Picking a film marks them, so this has
+  // to outlive the panel's own state and be cleared with it.
+  const [movieSelection, setMovieSelection] = useState<ComposerSelection | null>(null);
   const composerRef = useRef<HTMLElement>(null);
   const smartHintTimerRef = useRef<number | null>(null);
   const selectionRef = useRef<ComposerSelection | null>(null);
@@ -270,12 +309,13 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
     const entity = await onCreateEntity(type, name, extras);
     if (entity === null) return false;
     const selection = selectionRef.current;
-    if (selection !== null) reviewEntity(entity, content, selection);
-    else {
-      const caret = inputRef.current?.selectionStart ?? content.length;
-      const next = `${content.slice(0, caret)}${entity.name}${content.slice(caret)}`;
-      onContentChange(next); reviewEntity(entity, next, entity.type === "place" ? { start: caret, end: caret + entity.name.length, text: entity.name } : undefined);
+    if (selection !== null) {
+      markCreatedEntity(entity, content, selection);
+      return true;
     }
+    const caret = inputRef.current?.selectionStart ?? content.length;
+    const next = `${content.slice(0, caret)}${entity.name}${content.slice(caret)}`;
+    markCreatedEntity(entity, next, { start: caret, end: caret + entity.name.length, text: entity.name }, { start: caret, end: caret });
     return true;
   };
   const smartPromptOpen = smartMentionPrompt !== null;
@@ -313,17 +353,27 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
       label: "识别为影片",
       hint: usable ? `用「${shown}」搜索` : "先选中一段片名",
       disabled: !usable,
-      onSelect: (selected) => { setMovieQuery(cleanMovieQuery(selected)); setMoviePanelOpen(true); },
+      onSelect: (selected, range) => { setMovieQuery(cleanMovieQuery(selected)); setMovieSelection({ ...range, text: selected }); setMoviePanelOpen(true); },
     }];
   }, [movieEnabled]);
   const attachMovie = (movie: MovieEntity) => {
     const ref = movieRef(movie) as unknown as EntityRef;
     onMovieRefsChange([...movieRefs.filter((item) => !isMovieRef(item)), ref]);
     onMovieEntity(movie);
+    // Naming the film is the mark: the words that pointed at it get their
+    // decision now, so 「检查标记」 is never asked to confirm the same thing twice.
+    const marked = movieMentionDecisions(content, entities, decisions, asCoreEntity(movie), movieSelection);
+    if (marked !== null) {
+      onDecisionsChange(marked);
+      onNotify(`已标记为影片《${movie.name}》`);
+    }
+    setMoviePanelOpen(false);
+    setMovieQuery(undefined);
+    setMovieSelection(null);
   };
   const removeMovie = (id: string) => onMovieRefsChange(movieRefs.filter((item) => !(isMovieRef(item) && item.entityId === id)));
-  return <section ref={composerRef} className={`composer surface composer-kind-${kind} ${editing ? "is-editing" : ""}`} aria-label="记录编辑器">
-    <div className="composer-toolbar">
+  return <section ref={composerRef} className={`composer surface composer-kind-${kind} ${editing ? "is-editing" : ""} ${mobilePage ? "is-mobile-composer" : ""}`} aria-label="记录编辑器">
+    {!mobilePage ? <div className="composer-toolbar">
       {editing ? <strong className="composer-edit-title">编辑{activeMeta.label}</strong> : <div className="kind-switcher" role={dream ? "group" : "tablist"} aria-label={dream ? "梦境记录与页面导航" : "记录类型"}>
         {dream ? <><button className="kind-option is-active" type="button" aria-pressed={true} disabled={saving}><DreamIcon size={15} /><span>梦境</span></button><button className="kind-option" type="button" onClick={onOpenJournal} disabled={saving || !onOpenJournal} aria-label="前往日记页面"><NotebookPen size={15} strokeWidth={1.8} aria-hidden="true" /><span>日记</span></button></> : (["journal", "task"] as const).map((item) => {
           const Icon = COMPOSER_META[item].icon;
@@ -334,7 +384,8 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
         {searchControl}
         {dismissible ? <button className={editing ? "secondary-button composer-edit-cancel" : "icon-button compact-icon-button composer-close"} type="button" onClick={onClose} aria-label={editing ? "取消编辑" : "关闭记录编辑器"}>{editing ? "取消" : <X size={17} strokeWidth={1.9} aria-hidden="true" />}</button> : null}
       </div>
-    </div>
+    </div> : null}
+    <ComposerBody mobile={mobilePage}>
     {editing && kind === "note" && noteMeta && onNoteMetaChange ? <div className="composer-note-fields">
       <div className="note-format-picker" role="tablist" aria-label="笔记格式">{NOTE_FORMATS.map((item) => <button className={`note-format-option ${noteMeta.format === item.value ? "is-active" : ""}`} data-note-format={item.value} type="button" role="tab" aria-selected={noteMeta.format === item.value} key={item.value} onClick={() => onNoteMetaChange({ ...noteMeta, format: item.value, metadataTouched: true })}><span className="note-format-option-title">{item.label}</span><small>{item.hint}</small></button>)}</div>
       {noteMeta.format === "article" ? <label className="composer-note-field"><span>标题</span><input data-note-title value={noteMeta.title} maxLength={300} onChange={(event) => onNoteMetaChange({ ...noteMeta, title: event.target.value, metadataTouched: true })} /></label> : null}
@@ -345,8 +396,8 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
         as well as width. The strip below is a flat 44px row and needs none of
         that, so the field goes back to two rows (about 81px) and the band adds
         its own height underneath. */}
-    <MentionBox disabled={saving} className="composer-input" value={content} onChange={onContentChange} entities={entities} candidates={candidates} decisions={decisions} onPickEntity={(entity, text) => reviewEntity(entity, text)} onInspectCandidate={(candidate) => setReview({ text: content, candidates: candidates.filter((item) => item.entities.some((entity) => candidate.entities.some((option) => option.id === entity.id))) })} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} rows={1} autoGrow autoGrowRows={2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => { setMovieQuery(undefined); setMoviePanelOpen(true); }} contextActions={movieContextActions} />
-    {uncheckedCandidates.length > 0 ? <div className="mention-review-reminder"><span>发现 {pendingPeople > 0 ? `${pendingPeople} 位人物` : ""}{pendingPeople > 0 && pendingPlaces > 0 ? "、" : ""}{pendingPlaces > 0 ? `${pendingPlaces} 处地点` : ""}可关联</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : candidates.length > 0 ? <div className="mention-review-reminder is-reviewed"><span>人物与地点已核对</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : null}
+    <MentionBox disabled={saving} className="composer-input" value={content} onChange={onContentChange} entities={entities} candidates={candidates} decisions={decisions} onPickEntity={(entity, text, occurrence, editRange) => occurrence === undefined ? reviewEntity(entity, text) : markCreatedEntity(entity, text, { start: occurrence.start, end: occurrence.end, text: text.slice(occurrence.start, occurrence.end) }, editRange, true)} onInspectCandidate={(candidate) => setReview({ text: content, candidates: candidates.filter((item) => item.entities.some((entity) => candidate.entities.some((option) => option.id === entity.id))) })} recentPlaceIds={recentPlaceIds} onCreateEntity={onCreateEntity} textareaRef={inputRef} rows={1} autoGrow autoGrowRows={mobilePage ? 5 : 2} ariaLabel={`${activeMeta.label}内容`} moduleCommands={moduleCommands} onSlashCommand={() => { setMovieQuery(undefined); setMoviePanelOpen(true); }} contextActions={movieContextActions} />
+    {uncheckedCandidates.length > 0 ? <div className="mention-review-reminder"><span>发现 {[{ n: pendingPeople, unit: "位人物" }, { n: pendingPlaces, unit: "处地点" }, { n: pendingMovies, unit: "部影片" }].filter((item) => item.n > 0).map((item) => `${item.n} ${item.unit}`).join("、")}可关联</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : candidates.length > 0 ? <div className="mention-review-reminder is-reviewed"><span>人物、地点与影片已核对</span><button className="text-button" type="button" disabled={saving} onClick={() => setReview({ text: content, candidates })}>检查标记</button></div> : null}
       {/* The photos sit flush under the text block, not under the room. The
           textarea is inset from the room's top by its own padding, so a floor on
           the room leaves that same inset stranded below the text instead — the
@@ -367,17 +418,24 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
         <button type="button" className="secondary-button" onClick={conflictActions.keepMine} disabled={saving}>保留我的正文</button>
       </div>
     </div> : null}
-    {moviePanelOpen ? <MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => { setMoviePanelOpen(false); setMovieQuery(undefined); }} initialQuery={movieQuery} /> : null}
     {movieRefs.filter(isMovieRef).length > 0 ? <div className="composer-movie-refs" aria-label="已添加电影">{movieRefs.filter(isMovieRef).map((ref) => { const entity = entities.find((item) => item.id === ref.entityId); const movie = isMovieEntity(entity) ? entity : undefined; return <span className="movie-ref-chip" key={entityRefKey(ref)}><Film size={13} aria-hidden="true" /><span>{movie?.name ?? ref.label ?? ref.entityId}</span><button type="button" onClick={() => removeMovie(ref.entityId)} aria-label={`移除电影 ${movie?.name ?? ref.label ?? ref.entityId}`}><X size={12} aria-hidden="true" /></button></span>; })}</div> : null}
-    <div className="composer-footer">
+    {mobilePage ? mobileFields : <div className="composer-footer">
       <div className="composer-fields">
         <div className="composer-photo-slot" ref={setPhotoToolbarTarget} />
         <div className="place-anchor">
           <button className={`icon-button compact-icon-button ${pickerKind === "person" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if (selectionRef.current !== null) openSmartMention("person"); else { setPickerKind((current) => (current === "person" ? null : "person")); setCreateOpen(false); setSmartMentionPrompt(null); } }} disabled={saving} aria-label="插入人物" aria-expanded={pickerKind === "person"}><User size={15} strokeWidth={1.9} aria-hidden="true" /></button>
           <button className={`icon-button compact-icon-button ${pickerKind === "place" ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { setPickerSearch(selectionRef.current?.text ?? ""); setPickerKind((current) => (current === "place" ? null : "place")); setCreateOpen(false); setSmartMentionPrompt(null); }} disabled={saving} aria-label="插入地点" aria-expanded={pickerKind === "place"}><MapPin size={15} strokeWidth={1.9} aria-hidden="true" /></button>
+          {/* 影片入口就长在地点旁边：同一个动作族（往这条记录上挂一样东西），
+              只是影片不在本地词表里，得先联网认一次，所以开的是识别面板而不是
+              下拉候选。选中一段文字再点，会把那段当成片名带进搜索框。 */}
+          {movieEnabled ? <button className={`icon-button compact-icon-button ${moviePanelOpen ? "is-active-tool" : ""}`} type="button" onMouseDown={(event) => { event.preventDefault(); rememberSelection(); }} onClick={() => { if (moviePanelOpen) { setMoviePanelOpen(false); setMovieQuery(undefined); setMovieSelection(null); return; } const selection = selectionRef.current; const picked = cleanMovieQuery(selection?.text ?? ""); setMovieQuery(picked === "" ? undefined : picked); setMovieSelection(picked === "" ? null : selection); setMoviePanelOpen(true); setPickerKind(null); setCreateOpen(false); setSmartMentionPrompt(null); }} disabled={saving} aria-label="插入影片" aria-expanded={moviePanelOpen}><Film size={15} strokeWidth={1.9} aria-hidden="true" /></button> : null}
+          {/* 影片面板跟地点走同一条浮层路子：锚在这排按钮下面、只有一列宽。
+              它原先挂在 footer 上方当整条长条，宽度跟着输入框一路撑开，「搜一部
+              片」被画得比整条记录还重（主人 2026-11-08：要下拉、不要太宽）。 */}
+          {moviePanelOpen ? <div className="place-popover entity-picker-popover movie-popover" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setMoviePanelOpen(false); setMovieQuery(undefined); setMovieSelection(null); } }}><MovieAddPanel enabled={movieEnabled} onAttach={attachMovie} onClose={() => { setMoviePanelOpen(false); setMovieQuery(undefined); setMovieSelection(null); }} initialQuery={movieQuery} /></div> : null}
           {smartHintVisible ? <p className="smart-mention-toast" role="status">先选中一段文字，再关联人物或地点</p> : null}
-          {smartPromptOpen ? <div className="place-popover smart-mention-popover"><div className="smart-mention-header"><Sparkles size={14} aria-hidden="true" /><strong>{smartPromptTitle}</strong></div>{smartChoices.length > 0 ? <div className="smart-choice-grid">{smartChoices.map(({ entity, type }) => { const KindIcon = type === "person" ? User : MapPin; const detail = entityHint(entity, entities) || (type === "person" ? "@ 人物" : "# 地点"); return <button className="smart-choice" key={`${type}-${entity.id}`} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => reviewEntity(entity, content, smartMentionPrompt?.selection)}>{type === "person" ? <ContactMentionAvatar entity={entity} /> : <KindIcon size={15} strokeWidth={1.9} aria-hidden="true" />}<span><strong>{entity.name}</strong><small>{detail}</small></span></button>; })}</div> : <div className="smart-choice-grid">{smartCreateTypes.map((type) => { const KindIcon = type === "person" ? User : MapPin; return <button className={`smart-choice smart-choice-${type}`} key={type} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => beginSmartCreate(type)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{type === "person" ? "人物" : "地点"}，{smartSelectionText}</strong><small>新建并核对标记</small></span></button>; })}</div>}</div> : null}
-          {pickerKind === "place" && !createOpen ? <div className="place-popover entity-picker-popover" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closePicker(); } }}><PlaceSearch onDismiss={closePicker} entities={entities} initialQuery={pickerSearch} recentPlaceIds={recentPlaceIds} includePrivate={placeIncludePrivate} hideDemo={placeHideDemo} onManual={name => { setPickerSearch(name); setCreateOpen(true); }} onPick={async choice => { if ("id" in choice) { if (selectionRef.current !== null) { reviewEntity(choice, content, selectionRef.current); return; } const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + choice.name + content.slice(caret); onContentChange(next); reviewEntity(choice, next, { start: caret, end: caret + choice.name.length, text: choice.name }); } else { if (!await submitCreateForm({ type: "place", name: choice.name, address: choice.address, role: choice.role, ...placeDetailsOf(choice) })) throw new Error("地点未能保存，请重试"); } }} /></div> : pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} aria-label={`查找${pickerKind === "place" ? "地点" : "人物"}`} autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建并核对标记" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + entity.name + content.slice(caret); onContentChange(next); reviewEntity(entity, next); }}>{entity.type === "person" ? <ContactMentionAvatar entity={entity} /> : <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />}<span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
+          {smartPromptOpen ? <div className="place-popover smart-mention-popover"><div className="smart-mention-header"><Sparkles size={14} aria-hidden="true" /><strong>{smartPromptTitle}</strong></div>{smartChoices.length > 0 ? <div className="smart-choice-grid">{smartChoices.map(({ entity, type }) => { const KindIcon = type === "person" ? User : MapPin; const detail = entityHint(entity, entities) || (type === "person" ? "@ 人物" : "# 地点"); return <button className="smart-choice" key={`${type}-${entity.id}`} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => reviewEntity(entity, content, smartMentionPrompt?.selection)}>{type === "person" ? <ContactMentionAvatar entity={entity} /> : <KindIcon size={15} strokeWidth={1.9} aria-hidden="true" />}<span><strong>{entity.name}</strong><small>{detail}</small></span></button>; })}</div> : <div className="smart-choice-grid">{smartCreateTypes.map((type) => { const KindIcon = type === "person" ? User : MapPin; return <button className={`smart-choice smart-choice-${type}`} key={type} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => beginSmartCreate(type)}><KindIcon size={15} strokeWidth={1.9} aria-hidden="true" /><span><strong>{type === "person" ? "人物" : "地点"}，{smartSelectionText}</strong><small>新建并标记这一处</small></span></button>; })}</div>}</div> : null}
+          {pickerKind === "place" && !createOpen ? <div className="place-popover entity-picker-popover" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closePicker(); } }}><PlaceSearch onDismiss={closePicker} entities={entities} initialQuery={pickerSearch} recentPlaceIds={recentPlaceIds} includePrivate={placeIncludePrivate} hideDemo={placeHideDemo} onManual={name => { setPickerSearch(name); setCreateOpen(true); }} onPick={async choice => { if ("id" in choice) { if (selectionRef.current !== null) { reviewEntity(choice, content, selectionRef.current); return; } const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + choice.name + content.slice(caret); onContentChange(next); reviewEntity(choice, next, { start: caret, end: caret + choice.name.length, text: choice.name }); } else { if (!await submitCreateForm({ type: "place", name: choice.name, address: choice.address, role: choice.role, ...placeDetailsOf(choice) })) throw new Error("地点未能保存，请重试"); } }} /></div> : pickerKind !== null ? <div className="place-popover entity-picker-popover"><input className="place-search" type="text" value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closePicker(); }} aria-label={`查找${pickerKind === "place" ? "地点" : "人物"}`} autoFocus />{createOpen ? <EntityCreateForm defaultType={pickerKind} defaultName={pickerSearch} onCreate={submitCreateForm} onCancel={() => setCreateOpen(false)} submitLabel="创建" /> : <><div className="place-options">{pickerOptions.map((entity) => { const KindIcon = ENTITY_META[entity.type].icon; return <button className="place-option" key={entity.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { const caret = inputRef.current?.selectionStart ?? content.length; const next = content.slice(0, caret) + entity.name + content.slice(caret); onContentChange(next); reviewEntity(entity, next); }}>{entity.type === "person" ? <ContactMentionAvatar entity={entity} /> : <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />}<span>{entity.name}</span>{entityHint(entity, entities) ? <small>{entityHint(entity, entities)}</small> : null}</button>; })}{pickerOptions.length === 0 ? <p className="place-empty">没有匹配的{pickerKind === "place" ? "地点" : "人物"}</p> : null}</div><button className="mention-option mention-option-create" type="button" disabled={createOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{pickerKind === "place" ? "地点" : "人物"}「{pickerSearch.trim() || "…"}」…</span></button></>}</div> : null}
         </div>
         {/* A task gets the range picker instead: both ends of a task can be in
             the future, and the occurrence field's cap at "now" is exactly what
@@ -394,7 +452,9 @@ export function Composer({ dream = false, onOpenJournal, searchControl, decision
         </div>
       </div>
       <button className="primary-button composer-desktop-save" type="button" disabled={!canSave} onClick={submitIfReady}>{saving ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : editing ? <Check size={17} strokeWidth={1.8} aria-hidden="true" /> : <Send size={17} strokeWidth={1.8} aria-hidden="true" />}<span>{saving ? "保存中" : editing ? "保存修改" : kind === "task" ? "添加" : "保存"}</span></button>
-    </div>
+    </div>}
+    </ComposerBody>
+    {mobilePage ? <footer className="mobile-composer-save"><button type="button" disabled={!canSave} onClick={submitIfReady}>{saving ? <LoaderCircle className="spin" size={17} /> : <ArchiveCheckIcon />}<span>{saving ? "保存中" : kind === "task" ? "添加任务" : "保存"}</span></button></footer> : null}
     {review !== null ? <EntityMentionReview text={review.text} candidates={review.candidates} decisions={review.selection ? decisions.filter(decision => decision.end <= review.selection!.start || decision.start >= review.selection!.end) : decisions} preferredEntity={review.entity} wording={review.wording === undefined ? undefined : { value: review.wording, onChange: value => setReview(current => current ? { ...current, wording: value } : null) }} onClose={() => setReview(null)} onConfirm={(next) => { if (content !== review.text) { setReview(null); onNotify("正文已变化，请重新检查标记", "warn"); return; } const result = review.wording !== undefined && review.selection ? applyPlaceWording(review.text, review.selection, review.wording, next) : { text: review.text, decisions: next }; if (result.text !== content) onContentChange(result.text, review.selection); onDecisionsChange(result.decisions); setReview(null); onNotify("人物与地点已核对"); }} /> : null}
   </section>;
 }

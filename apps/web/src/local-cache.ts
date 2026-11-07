@@ -6,7 +6,7 @@
  * switches' 24h grants. All of it is *reproducible*: the defaults come back and the
  * next click writes them again. That is the set this module counts and empties.
  *
- * Four things are deliberately out of reach:
+ * Five things are deliberately out of reach:
  *
  * - **Unfinished writing.** Composer drafts, note drafts, the AI backfill input and
  *   import receipts are the owner's own words or a record that a file was already
@@ -24,6 +24,9 @@
  *   A "back to defaults" that silently reverses a deliberate choice is not a default.
  * - **`sessionStorage`.** Everything there dies with the tab. Clearing it would buy
  *   nothing and could take a draft along, so this module never touches it.
+ * - **The offline mobile week-summary font.** Its complete bytes live in a dedicated,
+ *   profile-scoped IndexedDB font library. This action only enumerates `localStorage`
+ *   keys, so it cannot remove that library; browser-level site-data clearing can.
  *
  * The video originals (`lifeos-video-originals-v1`) are in IndexedDB, not here, so
  * they are untouched by construction — the card says so rather than guarding it.

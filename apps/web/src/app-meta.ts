@@ -49,6 +49,7 @@ export const UI_FONT_STORAGE_KEY = scopedKey("lifeos.uiFont");
 export const PHOTO_TIME_DEFAULT_STORAGE_KEY = scopedKey("lifeos.photoTimeDefault");
 export const TASK_SORT_STORAGE_KEY = scopedKey("lifeos.taskSort");
 export const TASK_DENSITY_STORAGE_KEY = scopedKey("lifeos.taskDensity");
+export const GALLERY_COLUMNS_STORAGE_KEY = scopedKey("lifeos.galleryColumns");
 /** A name typed by this user is normally Chinese; a token like `@a1b2` is not. */
 export const CJK_PATTERN = /[㐀-鿿]/;
 export const MAX_IMPLICIT_CJK_MENTION_NAME_LENGTH = 6;
@@ -252,10 +253,10 @@ export const MOBILE_NAV_ITEMS: readonly { id: AppView | "assistant"; label: stri
   { id: "today", label: "日记", icon: DiaryNavIcon },
   { id: "calendar", label: "日历", icon: CalendarRange },
   { id: "assistant", label: "AI管家", icon: AssistantNavIcon },
-  { id: "notes", label: "笔记", icon: NotebookPen },
 ];
 
 export const MOBILE_MORE_ITEMS: readonly { id: AppView; label: string; icon: LucideIcon }[] = [
+  { id: "notes", label: "笔记", icon: NotebookPen },
   { id: "gallery", label: "图库", icon: GalleryNavIcon },
   { id: "entities", label: "联系人与地点", icon: ContactRound },
   { id: "tasks", label: "任务", icon: ListChecks },

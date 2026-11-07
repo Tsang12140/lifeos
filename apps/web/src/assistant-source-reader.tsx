@@ -21,13 +21,15 @@ const sourcePath = (offer: UiOffer) => "/api/ai/assistant/sources/" + encodeURIC
 const sourceDate = (value: string) => value.replace(/^(\d{4})-(\d{2})-(\d{2})$/, (_, year: string, month: string, day: string) => `${year}年${Number(month)}月${Number(day)}日`);
 const hostOf = (trigger: HTMLElement) => trigger.closest<HTMLDialogElement>("dialog[open]") ?? document.body;
 const place = (node: HTMLElement, trigger: HTMLElement, reader = false) => {
-  const r = trigger.getBoundingClientRect(), p = node.getBoundingClientRect(), edge = 12;
+  const r = trigger.getBoundingClientRect(), p = node.getBoundingClientRect(), edge = reader ? 16 : 12;
+  // clientWidth/clientHeight 不含滚动条：用 innerWidth 会把面板右缘推到滚动条底下，看上去像被切掉一截。
+  const viewWidth = document.documentElement.clientWidth, viewHeight = document.documentElement.clientHeight;
   const panel = trigger.closest(".ai-assistant-panel,.assistant-history-dialog")?.getBoundingClientRect() ?? r;
   let x = (reader ? panel.right : r.right) + (reader ? 16 : 8), y = reader ? panel.top : r.top - p.height - 8;
-  if (!reader && x + p.width > innerWidth - edge) x = r.left - p.width - 8;
+  if (!reader && x + p.width > viewWidth - edge) x = r.left - p.width - 8;
   if (!reader && y < edge) y = r.bottom + 8;
-  node.style.left = `${Math.max(edge, Math.min(x, innerWidth - p.width - edge))}px`;
-  node.style.top = `${Math.max(edge, Math.min(y, innerHeight - p.height - edge))}px`;
+  node.style.left = `${Math.max(edge, Math.min(x, viewWidth - p.width - edge))}px`;
+  node.style.top = `${Math.max(edge, Math.min(y, viewHeight - p.height - edge))}px`;
 };
 
 export function AssistantSourceProvider({ children, onEnter }: { children: ReactNode; onEnter?: ((record: RecordView) => void) | undefined }) {
@@ -88,10 +90,13 @@ function SourceReader({ selection, onClose, onEnter }: { selection: Selection; o
       if (node instanceof HTMLDialogElement) { node.style.width = `${Math.min(680, innerWidth)}px`; node.style.maxWidth = `${innerWidth}px`; }
       else place(node, latest.current.trigger, true);
     };
-    if (node instanceof HTMLDialogElement) { resize(); node.showModal(); } else { node.showPopover(); resize(); }
+    let observer: ResizeObserver | undefined;
+    if (node instanceof HTMLDialogElement) { resize(); node.showModal(); }
+    // 面板高度现在跟着内容走：正文、照片陆续到达会改高，位置要跟着重算，否则会被夹在屏幕外。
+    else { node.showPopover(); resize(); observer = new ResizeObserver(resize); observer.observe(node); }
     const unlock = lockDialogScroll(); node.querySelector<HTMLButtonElement>(".assistant-source-close")?.focus({ preventScroll: true });
     addEventListener("resize", resize);
-    return () => { removeEventListener("resize", resize); if (node instanceof HTMLDialogElement) node.close(); unlock(); if (latest.current.trigger.isConnected) latest.current.trigger.focus({ preventScroll: true }); };
+    return () => { observer?.disconnect(); removeEventListener("resize", resize); if (node instanceof HTMLDialogElement) node.close(); unlock(); if (latest.current.trigger.isConnected) latest.current.trigger.focus({ preventScroll: true }); };
   }, [mobile, selection.host]);
   useEffect(() => {
     let outside = false;
@@ -143,10 +148,10 @@ function SourceReader({ selection, onClose, onEnter }: { selection: Selection; o
         <div ref={body} className="assistant-source-body" onClick={event => { if (event.target instanceof HTMLImageElement) { const i = photos.findIndex(a => event.target instanceof HTMLImageElement && event.target.src.includes(encodeURIComponent(a.id))); if (i >= 0) setPhotoIndex(i); } }}>
           {html ? <div className="assistant-source-rich" dangerouslySetInnerHTML={{ __html: html }} /> : <p className="assistant-source-copy">{quote && text.includes(quote) ? <>{text.slice(0, text.indexOf(quote))}<mark className="assistant-source-highlight">{quote}</mark>{text.slice(text.indexOf(quote) + quote.length)}</> : text}</p>}
         </div>
-        {gallery.length ? <div className="assistant-source-photos">{gallery.map(photo => <button type="button" key={photo.id} aria-label={`查看照片 ${photos.indexOf(photo) + 1}`} onClick={() => setPhotoIndex(photos.indexOf(photo))}><img src={assetContentUrl(photo.id)} alt={`原文照片 ${photos.indexOf(photo) + 1}`} loading="lazy" /></button>)}</div> : null}
+        {gallery.length ? <div className="assistant-source-photos" data-count={Math.min(3, gallery.length)}>{gallery.slice(0, 3).map((photo, index) => { const rest = gallery.length - 3, folded = index === 2 && rest > 0, position = photos.indexOf(photo); return <button type="button" key={photo.id} aria-label={folded ? `查看全部照片，另有 ${rest} 张` : `查看照片 ${position + 1}`} onClick={() => setPhotoIndex(position)}><img src={assetContentUrl(photo.id)} alt={`原文照片 ${position + 1}`} loading="lazy" />{folded ? <span className="assistant-source-photos-more" aria-hidden="true">+{rest}</span> : null}</button>; })}</div> : null}
       </>}
     </div>
-    <footer className="assistant-source-footer"><button className="secondary-button" type="button" onClick={onClose}>返回对话</button><button className="secondary-button assistant-source-enter" type="button" disabled={!record || !onEnter} onClick={() => { if (record) { onClose(); onEnter?.(record); } }}>打开原记录</button></footer>
+    <footer className="assistant-source-footer"><button className="secondary-button" type="button" onClick={onClose}>返回对话</button><button className="primary-button assistant-source-enter" type="button" disabled={!record || !onEnter} onClick={() => { if (record) { onClose(); onEnter?.(record); } }}>打开原记录</button></footer>
   </>;
   return <>{createPortal(mobile ? <dialog ref={node => { ref.current = node; }} className="assistant-source-reader is-mobile" aria-label="引用原文" onCancel={event => { event.preventDefault(); event.stopPropagation(); onClose(); }}>{content}</dialog> : <div ref={node => { ref.current = node; }} popover="manual" role="dialog" className="assistant-source-reader" aria-label="引用原文">{content}</div>, selection.host)}{photoIndex !== null && data ? createPortal(<AssetPreview assetIds={photos.map(p => p.id)} assets={data.assets} index={photoIndex} onIndexChange={setPhotoIndex} onClose={() => setPhotoIndex(null)} />, document.body) : null}</>;
 }

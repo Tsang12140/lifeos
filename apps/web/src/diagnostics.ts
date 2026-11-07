@@ -14,6 +14,8 @@ export interface DiagEntry {
 
 const CAPACITY = 200;
 export const COPY_COUNT = 50;
+/** Written by the crash boundary so the previous failure survives the reload that follows it. */
+export const LAST_CRASH_STORAGE_KEY = "lifeos.lastCrash.v1";
 const buffer: DiagEntry[] = [];
 const listeners = new Set<() => void>();
 
@@ -65,6 +67,13 @@ let installed = false;
 export function installDiagnostics(): void {
   if (installed) return;
   installed = true;
+  // A crash before this ran left no buffer behind; the boundary's stored report is
+  // the only record of it, so it becomes the first entry of the new session.
+  try {
+    const raw = window.localStorage.getItem(LAST_CRASH_STORAGE_KEY);
+    const previous = raw ? JSON.parse(raw) as Record<string, unknown> : null;
+    if (previous && typeof previous.message === "string") logEvent("error", `上次启动崩溃（${String(previous.at)}）：${previous.message}`, typeof previous.component === "string" ? previous.component : undefined);
+  } catch { /* unreadable or blocked storage is not itself worth reporting */ }
   window.addEventListener("error", (event) => {
     logEvent("error", `未捕获错误：${event.message}`, `${event.filename}:${event.lineno}`);
   });

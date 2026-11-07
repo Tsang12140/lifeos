@@ -72,3 +72,28 @@ test("storage denial is observable and preserves the in-memory draft", () => {
   assert.equal(writeComposerDraft("legacy", draft, denied), false);
   assert.doesNotThrow(() => clearComposerDraft("legacy", denied));
 });
+
+test("mobile record associations and explicit dates survive refresh without rewriting the body or crossing accounts", () => {
+  const store = storage();
+  const mobile = { ...draft, content: "河边坐了一会儿。", entityRefs: [{ entityId: "person-lin", entityType: "person" as const }, { entityId: "place-park", entityType: "place" as const }], occurredAt: "2026-10-31T18:20", occurredDirty: true, dueAt: "", recordingDate: "2026-10-31", isBackfill: true };
+  assert.equal(writeComposerDraft("account:owner", mobile, store), true);
+  assert.deepEqual(readComposerDraft("account:owner", store), mobile);
+  assert.equal(readComposerDraft("account:member", store), null);
+  assert.equal(readComposerDraft("account:owner:dreams", store), null);
+  const storageKey = [...store.data.keys()][0]!;
+  const raw = JSON.parse(store.data.get(storageKey)!);
+  raw.entityRefs.push({ entityId: 42, entityType: "person" }); raw.occurredAt = "invalid";
+  store.data.set(storageKey, JSON.stringify(raw));
+  assert.equal(readComposerDraft("account:owner", store)?.content, mobile.content);
+  assert.deepEqual(readComposerDraft("account:owner", store)?.entityRefs, mobile.entityRefs);
+  assert.equal(readComposerDraft("account:owner", store)?.occurredAt, "");
+});
+
+test("a location-only draft is kept until save clears it", () => {
+  const store = storage();
+  const metadata = { content: "", kind: "journal" as const, isPrivate: false, shots: [], entityRefs: [{ entityId: "park", entityType: "place" as const }] };
+  assert.equal(writeComposerDraft("legacy", metadata, store), true);
+  assert.deepEqual(readComposerDraft("legacy", store), metadata);
+  clearComposerDraft("legacy", store);
+  assert.equal(readComposerDraft("legacy", store), null);
+});

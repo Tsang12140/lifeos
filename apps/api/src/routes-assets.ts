@@ -68,6 +68,7 @@ import { readPhotoMetadata } from "./photo-metadata.js";
 import { photoLocation } from "./photo-location.js";
 import { MATERIAL_FORMATS } from "./assistant-material.js";
 import { handleVideoRoutes } from "./video-assets.js";
+import { PAINTERLY_BAND_COUNTS, PAINTERLY_STRENGTH, PAINTERLY_STYLE_VERSION, type PainterlyBandCount } from "./painterly-derivatives.js";
 
 /**
  * A locked app must not leave photo bytes in the browser cache, so unproven responses
@@ -172,6 +173,51 @@ export async function resolveAssetThumbnail(ctx: RouteContext, id: string, width
     }
   }
   return { file, source, canary: poolRead?.canary === true, mediaType };
+}
+
+/**
+ * Resolve and derive a mobile week-card band through the same asset, private-lock,
+ * pool-accounting, and local-root checks as an ordinary thumbnail request.
+ */
+export async function resolveAssetPainterly(ctx: RouteContext, id: string, bands: PainterlyBandCount, upright = false): Promise<{ file: string; source: string; canary: boolean; mediaType: string }> {
+  const { config, repository, thumbnails } = ctx;
+  const asset = repository.findAssetById(id);
+  if (asset === null || asset.kind !== "photo") throw new HttpError(404, "not_found", "照片不存在");
+  const rotation = upright ? 0 : asset.displayRotation ?? 0;
+  const options = { sourceVersion: assetThumbnailVersion(ctx, asset), rotation, bands };
+  const poolRead = assetPoolRead(ctx, asset);
+  if (poolRead !== undefined) {
+    poolObjectFor(ctx, asset, poolRead.reference, poolRead.ledgerAssetId);
+    const mime = asset.mediaType ?? poolRead.reference.mediaType ?? "";
+    const extension = Object.entries(ASSET_MEDIA_TYPES).find(([, value]) => value === mime)?.[0];
+    if (extension === undefined || !THUMBNAILABLE_ASSET_EXTENSIONS.has(extension)) {
+      throw new HttpError(415, "unsupported_thumbnail_type", "A painterly thumbnail can only be derived from a raster image");
+    }
+    const cached = thumbnails.painterly.cached(poolRead.reference, options);
+    if (cached !== null) {
+      return { file: cached, source: "derived-cache", canary: poolRead.canary === true, mediaType: "image/webp" };
+    }
+    try {
+      const file = await thumbnails.painterly.ensureFromSource(poolRead.reference, options, async () => {
+        const downloaded = await downloadPoolAsset(ctx, asset, poolRead.reference, poolRead.ledgerAssetId);
+        return { file: downloaded.file, dispose: () => rmSync(downloaded.directory, { recursive: true, force: true }) };
+      });
+      return { file, source: "pool-painterly", canary: poolRead.canary === true, mediaType: "image/webp" };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(500, "painterly_thumbnail_failed", "Could not derive painterly artwork from this original");
+    }
+  }
+  const original = resolveAssetOriginal(config, repository, id);
+  if (!THUMBNAILABLE_ASSET_EXTENSIONS.has(extname(original.file).toLowerCase())) {
+    throw new HttpError(415, "unsupported_thumbnail_type", "A painterly thumbnail can only be derived from a raster image");
+  }
+  try {
+    const file = await thumbnails.painterly.ensure(original.reference, original.file, options);
+    return { file, source: "local-painterly", canary: false, mediaType: "image/webp" };
+  } catch {
+    throw new HttpError(500, "painterly_thumbnail_failed", "Could not derive painterly artwork from this original");
+  }
 }
 
 const photoInfoCache = new WeakMap<RouteContext["repository"], Map<string, Promise<Awaited<ReturnType<typeof readPhotoMetadata>>>>>();
@@ -794,6 +840,26 @@ export const handleAssetsRoutes: RouteHandler = async (
   }
   const assetThumbnailMatch = /^\/api\/assets\/([^/]+)\/thumbnail$/.exec(pathname);
   if (assetThumbnailMatch !== null && req.method === "GET") {
+    const style = url.searchParams.get("style");
+    if (style !== null && style !== "painterly") throw new HttpError(400, "unsupported_thumbnail_style", "不支持的照片缩略图样式");
+    const painterly = style === "painterly";
+    const rawStrength = url.searchParams.get("strength");
+    const rawBands = url.searchParams.get("bands");
+    let bands: PainterlyBandCount = 1;
+    if (painterly) {
+      if (rawStrength !== null && rawStrength !== String(PAINTERLY_STRENGTH)) {
+        throw new HttpError(400, "unsupported_painterly_strength", `strength must be ${PAINTERLY_STRENGTH}`);
+      }
+      if (rawBands !== null) {
+        const parsedBands = Number(rawBands);
+        if (!Number.isInteger(parsedBands) || !(PAINTERLY_BAND_COUNTS as readonly number[]).includes(parsedBands)) {
+          throw new HttpError(400, "unsupported_painterly_bands", `bands must be one of ${PAINTERLY_BAND_COUNTS.join(", ")}`);
+        }
+        bands = parsedBands as PainterlyBandCount;
+      }
+    } else if (rawStrength !== null || rawBands !== null) {
+      throw new HttpError(400, "painterly_parameters_require_style", "strength and bands require style=painterly");
+    }
     const width = parseThumbnailWidth(url.searchParams.get("w"));
     if (width === null) {
       throw new HttpError(400, "unsupported_thumbnail_width", `w must be one of ${THUMBNAIL_WIDTHS.join(", ")}`);
@@ -809,9 +875,13 @@ export const handleAssetsRoutes: RouteHandler = async (
     if (version !== null && version !== canonicalVersion && version !== assetThumbnailTag(ctx, asset)) throw new HttpError(409, "asset_version_changed", "照片已更新，请刷新日历");
     const upright = url.searchParams.get("upright") === "1";
     const rotation = upright ? 0 : asset.displayRotation ?? 0;
-    const { file, source, canary, mediaType } = await resolveAssetThumbnail(ctx, id, width, upright, version === null);
+    const { file, source, canary, mediaType } = painterly
+      ? await resolveAssetPainterly(ctx, id, bands, upright)
+      : await resolveAssetThumbnail(ctx, id, width, upright, version === null);
     const cacheControl = canary ? "no-store" : mediaCacheControl(ctx, version === null ? "private, max-age=300" : "private, max-age=31536000, immutable");
-    const etag = `"${canonicalVersion}-${width}-${rotation}"`;
+    const etag = painterly
+      ? `"${canonicalVersion}-${PAINTERLY_STRENGTH}-${bands}-${PAINTERLY_STYLE_VERSION}-${rotation}"`
+      : `"${canonicalVersion}-${width}-${rotation}"`;
     if (notModified(req, cacheControl, etag)) { res.writeHead(304, { "cache-control": cacheControl, etag }); res.end(); return true; }
     res.writeHead(200, {
       "content-type": mediaType,

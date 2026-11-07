@@ -1,0 +1,4 @@
+Demo-only text subsets; regenerate when sample summary or count text changes.
+Source Han Serif Regular/Bold: https://github.com/adobe-fonts/source-han-serif (release/OTF/SimplifiedChinese), OFL license alongside.
+Huiwen Mincho: installed owner font; original metadata preserved in WOFF and local manifest.
+Huiwen subset includes the count label " 条" and digits. Huiwen only has Regular here;700 is synthesized by the browser.

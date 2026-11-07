@@ -55,7 +55,13 @@ export interface TextEntityDecision {
   readonly text: string;
   /** null means the owner deliberately left this occurrence as ordinary text. */
   readonly entityId: EntityId | null;
-  readonly entityType: "person" | "place";
+  /**
+   * Movies are here on purpose: a title already in the library can be pointed
+   * at in prose the same way a place is, and `RecordText` draws it as a chip.
+   * The other kinds stay out — a project or topic name in a sentence is not a
+   * thing the reader can open.
+   */
+  readonly entityType: "person" | "place" | "movie";
 }
 
 export function assertValidTextEntityDecisions(value: unknown, text: string): asserts value is readonly TextEntityDecision[] {
@@ -68,7 +74,7 @@ export function assertValidTextEntityDecisions(value: unknown, text: string): as
       || (decision.end as number) > text.length) throw new Error("entityMentions ranges must be ordered, disjoint and inside the text");
     if (typeof decision.text !== "string" || text.slice(decision.start as number, decision.end as number) !== decision.text) throw new Error("entityMentions text does not match its range");
     if (decision.entityId !== null) nonEmptyStringValue(decision.entityId, "entityMentions.entityId");
-    enumValue(decision.entityType, ["person", "place"], "entityMentions.entityType");
+    enumValue(decision.entityType, ["person", "place", "movie"], "entityMentions.entityType");
     previousEnd = decision.end as number;
   }
 }
@@ -1127,6 +1133,42 @@ export function assertValidCycleIntimacyModuleConfig(value: unknown, name = "cyc
 }
 
 /**
+ * The longest a recorded period can run. `periodLength` is itself validated up
+ * to 21 days, so an end further than that from its start cannot be that same
+ * period — it belongs to one whose start was never recorded (skipped month,
+ * only the last day marked). Without this ceiling the calendar chains such an
+ * end onto the previous start and paints the whole interval as one long period.
+ */
+export const MAX_PERIOD_SPAN_DAYS = 21;
+
+/** Calendar-day arithmetic on `YYYY-MM-DD`, timezone-free by construction. */
+function shiftDateOnly(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function daysBetweenDateOnly(from: string, to: string): number {
+  const [fromYear, fromMonth, fromDay] = from.split("-").map(Number) as [number, number, number];
+  const [toYear, toMonth, toDay] = to.split("-").map(Number) as [number, number, number];
+  return Math.round((Date.UTC(toYear, toMonth - 1, toDay) - Date.UTC(fromYear, fromMonth - 1, fromDay)) / 86_400_000);
+}
+
+/**
+ * Which recorded start this end can close: the closest one on or before it,
+ * provided the two are within `MAX_PERIOD_SPAN_DAYS`. `undefined` means the end
+ * is an orphan — the period it belongs to never got a start — and it must not
+ * be drawn as the tail of an older period.
+ */
+export function periodStartForEnd(events: readonly CycleIntimacyEvent[], endDate: string): string | undefined {
+  let start: string | undefined;
+  for (const event of events) {
+    if (event.kind !== "period_start" || event.date > endDate) continue;
+    if (start === undefined || event.date > start) start = event.date;
+  }
+  return start !== undefined && daysBetweenDateOnly(start, endDate) <= MAX_PERIOD_SPAN_DAYS - 1 ? start : undefined;
+}
+
+/**
  * The period a given end date belongs to: from the recorded start at or before
  * `date`, to the day before the next start (either side missing when nothing has
  * been recorded yet — that is the single implicit period).
@@ -1135,22 +1177,62 @@ export function assertValidCycleIntimacyModuleConfig(value: unknown, name = "cyc
  * this one replace". It exists because the calendar already read the data this
  * way — `periodRuns` takes the *first* end after the start — so a second end sat
  * in the store drawn by nothing while the panel still ticked it on its day.
+ *
+ * An end further than `MAX_PERIOD_SPAN_DAYS` from every start replaces nothing:
+ * it closes no recorded period, so taking other ends away with it would erase a
+ * real one. An end earlier than every start keeps its old answer — everything
+ * before the next start.
  */
 export function periodEndSpan(events: readonly CycleIntimacyEvent[], date: string): { readonly from?: string; readonly until?: string } {
-  let from: string | undefined;
+  let lastStart: string | undefined;
   let until: string | undefined;
   for (const event of events) {
     if (event.kind !== "period_start") continue;
     if (event.date <= date) {
-      if (from === undefined || event.date > from) from = event.date;
+      if (lastStart === undefined || event.date > lastStart) lastStart = event.date;
       continue;
     }
     if (until === undefined || event.date < until) until = event.date;
   }
-  return { ...(from === undefined ? {} : { from }), ...(until === undefined ? {} : { until }) };
+  if (lastStart === undefined) return until === undefined ? {} : { until };
+  if (daysBetweenDateOnly(lastStart, date) > MAX_PERIOD_SPAN_DAYS - 1) return {};
+  return { from: lastStart, ...(until === undefined ? {} : { until }) };
 }
 
-/** A transfer moves a whole recorded period, including its end across a month boundary. */
+export interface PeriodRun {
+  readonly start: string;
+  readonly end: string;
+}
+
+/**
+ * One run per recorded start, or a single run from the configured anchor when
+ * nothing has been recorded yet. A recorded end cuts the run short — confirm it
+ * on day five and days six and seven are gone — while the configured duration
+ * closes whatever is left open. An orphan end (no start within reach) closes
+ * nothing: its own day still gets a marker, but no interval is invented for it.
+ */
+export function periodRuns(config: Pick<CycleIntimacyModuleConfig, "periodLength" | "anchorStart">, events: readonly CycleIntimacyEvent[]): readonly PeriodRun[] {
+  const { periodLength, anchorStart } = config;
+  const starts = events.filter((event) => event.kind === "period_start").map((event) => event.date).sort();
+  const ends = events.filter((event) => event.kind === "period_end").map((event) => event.date).sort();
+  const runs: PeriodRun[] = [];
+  for (let index = 0; index < starts.length; index += 1) {
+    const start = starts[index]!;
+    const nextStart = starts[index + 1];
+    const explicitEnd = ends.find((end) => end >= start
+      && daysBetweenDateOnly(start, end) <= MAX_PERIOD_SPAN_DAYS - 1
+      && (nextStart === undefined || end < nextStart));
+    let end = explicitEnd ?? shiftDateOnly(start, periodLength - 1);
+    if (nextStart !== undefined && end >= nextStart) end = shiftDateOnly(nextStart, -1);
+    runs.push({ start, end });
+  }
+  if (runs.length === 0 && anchorStart !== undefined) runs.push({ start: anchorStart, end: shiftDateOnly(anchorStart, periodLength - 1) });
+  return runs;
+}
+
+/** A transfer moves a whole recorded period, including its end across a month boundary. An
+ *  end that sits beyond `MAX_PERIOD_SPAN_DAYS` from the open start is its own group: moving it
+ *  must not drag an unrelated four-week interval along. */
 export function periodTransferGroups(events: readonly CycleIntimacyEvent[]): readonly { readonly key: string; readonly start: string; readonly end?: string; readonly eventIds: readonly string[] }[] {
   const period = events.filter(event => event.kind === "period_start" || event.kind === "period_end").sort((a, b) => a.date.localeCompare(b.date) || (a.kind === "period_start" ? -1 : 1));
   const groups: { key: string; start: string; end?: string; eventIds: string[] }[] = [];
@@ -1158,8 +1240,10 @@ export function periodTransferGroups(events: readonly CycleIntimacyEvent[]): rea
     if (event.kind === "period_start") groups.push({ key: event.id, start: event.date, eventIds: [event.id] });
     else {
       const group = groups.at(-1);
-      if (group) { group.end = event.date; group.eventIds.push(event.id); }
-      else groups.push({ key: event.id, start: event.date, end: event.date, eventIds: [event.id] });
+      if (group !== undefined && group.end === undefined && daysBetweenDateOnly(group.start, event.date) <= MAX_PERIOD_SPAN_DAYS - 1) {
+        group.end = event.date;
+        group.eventIds.push(event.id);
+      } else groups.push({ key: event.id, start: event.date, end: event.date, eventIds: [event.id] });
     }
   }
   return groups;

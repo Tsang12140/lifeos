@@ -11,6 +11,11 @@
   outline-offset: 2px;
 }
 
+.diary-photo-column-option:focus-visible {
+  outline: 2px solid var(--ink-soft);
+  outline-offset: 2px;
+}
+
 .diary-photo-gallery {
   display: grid;
   gap: 16px;
@@ -24,6 +29,73 @@
   font-size: 20px;
   font-weight: 600;
   line-height: 1.4;
+}
+
+/* Title left, status and the column picker right; the group wraps as a whole on narrow
+   screens instead of stretching any single button. */
+.diary-photo-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.diary-photo-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.diary-photo-columns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--control-segment);
+}
+
+.diary-photo-column-option {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--control-muted);
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 600;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background-color 180ms cubic-bezier(.2, 0, 0, 1), color 180ms cubic-bezier(.2, 0, 0, 1), border-color 180ms cubic-bezier(.2, 0, 0, 1);
+}
+
+.diary-photo-column-auto {
+  padding: 0 12px;
+}
+
+.diary-photo-column-option:hover:not(.is-active) {
+  color: var(--ink);
+}
+
+.diary-photo-column-option.is-active {
+  border-color: var(--control-ink);
+  background: var(--control-ink);
+  color: #fff;
+}
+
+.diary-photo-column-option svg {
+  display: block;
 }
 
 .diary-photo-months {
@@ -65,7 +137,22 @@
   min-width: 0;
 }
 
+/* A picked count overrides the responsive minmax at every width; the owner chose the
+   count, so the phone must not silently add a column. */
+.diary-photo-grid[data-columns="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diary-photo-grid[data-columns="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.diary-photo-grid[data-columns="4"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .diary-photo-tile {
+  position: relative;
   display: block;
   min-width: 0;
   aspect-ratio: 1;
@@ -83,7 +170,11 @@
   height: 100%;
 }
 
-.diary-photo-tile img {
+.diary-photo-tile img,
+/* A clip has no derived thumbnail, so the tile shows the video element itself
+   with `preload="metadata"`: header only, first frame painted, `cover` cropped
+   the same way a photo tile is. */
+.diary-photo-tile video {
   display: block;
   width: 100%;
   height: 100%;
@@ -91,7 +182,23 @@
   transition: filter 120ms ease;
 }
 
-.diary-photo-tile:hover:not(:disabled) img {
+/* The one thing a clip says about itself: how long it runs, bottom right, and
+   no wording around it. Same badge as the timeline's video squares. */
+.diary-photo-duration {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgb(0 0 0 / 0.62);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.diary-photo-tile:hover:not(:disabled) img,
+.diary-photo-tile:hover:not(:disabled) video {
   filter: brightness(0.94);
 }
 

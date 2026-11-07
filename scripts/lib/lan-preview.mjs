@@ -89,6 +89,25 @@ export function lanPreviewUrls(port) {
 }
 
 /**
+ * Proxy variables that have to be in the **child process's environment**, not
+ * only in `.env`. Node reads `HTTPS_PROXY` / `NO_PROXY` during bootstrap for
+ * `--use-env-proxy`, which runs *before* `--env-file` is applied — so a `.env`
+ * only setting never reaches the proxy. Symptom when it breaks: every
+ * `POST /api/movie/resolve` answers 502 `movie_tmdb_unavailable`, because
+ * api.themoviedb.org is DNS-poisoned on this machine and needs the local proxy.
+ * The live environment wins (so a shell can override for one run); `.env` only
+ * fills the gaps.
+ */
+export function proxyLaunchEnv(env = process.env, fileEnv = {}) {
+  const picked = {};
+  for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"]) {
+    const value = (env[key] ?? fileEnv[key] ?? "").trim();
+    if (value !== "") picked[key] = value;
+  }
+  return picked;
+}
+
+/**
  * `.env` reader for launchers that need one value before spawning the API
  * (accept-serve reads it itself; preview.mjs needs the password up front so it
  * can print it in the window).

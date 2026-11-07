@@ -40,7 +40,11 @@ export interface ContextAction {
   readonly label: string;
   readonly hint?: string;
   readonly disabled?: boolean;
-  readonly onSelect: (text: string) => void;
+  /**
+   * `range` is the exact span the selection covered, so an action that marks
+   * the words themselves (识别为影片) does not have to search for them again.
+   */
+  readonly onSelect: (text: string, range: { readonly start: number; readonly end: number }) => void;
 }
 
 export interface MentionBoxProps {
@@ -67,7 +71,7 @@ export interface MentionBoxProps {
   readonly contextActions?: (text: string) => readonly ContextAction[];
   readonly candidates?: readonly EntityCandidate[];
   readonly decisions?: readonly TextEntityDecision[];
-  readonly onPickEntity?: (entity: Entity, text: string) => void;
+  readonly onPickEntity?: (entity: Entity, text: string, occurrence?: { start: number; end: number }, editRange?: { start: number; end: number }) => void;
   readonly onInspectCandidate?: (candidate: EntityCandidate) => void;
   readonly disabled?: boolean;
 }
@@ -278,7 +282,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
   const [activeIndex, setActiveIndex] = useState(0);
   const [createFormOpen, setCreateFormOpen] = useState(false);
   const [slash, setSlash] = useState<SlashQuery | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string; actions: readonly ContextAction[] } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; text: string; range: { start: number; end: number }; actions: readonly ContextAction[] } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   useActionMenu(contextMenuRef, contextMenu !== null, () => setContextMenu(null));
   const [contextPosition, setContextPosition] = useState({ x: 0, y: 0 });
@@ -341,20 +345,24 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     if (text.trim().length === 0) return false;
     const actions = contextActions(text);
     if (actions.length === 0) return false;
-    setContextMenu({ x: clientX, y: clientY, text, actions });
+    setContextMenu({ x: clientX, y: clientY, text, range, actions });
     return true;
   };
 
-  const insert = (name: string, markerOverride?: string, entity?: Entity) => {
+  // `mark` means the entity was created just now from this very text, so the
+  // occurrence it produced is already decided. Handing back its range lets the
+  // composer mark it without opening the review dialog mid-sentence.
+  const insert = (name: string, markerOverride?: string, entity?: Entity, mark = false) => {
     if (mention === null) return;
     const chosenName = entity && entitySearchTerms(entity).some((term) => normalizeEntitySearchTerm(term) === normalizeEntitySearchTerm(mention.query)) ? mention.query : name;
     const inserted = `${onPickEntity && entity ? "" : markerOverride ?? mention.marker}${chosenName}`;
+    const editRange = { start: mention.start, end: mention.end };
     const nextValue = `${value.slice(0, mention.start)}${inserted}${value.slice(mention.end)}`;
     const caret = mention.start + inserted.length;
-    onChange(nextValue, { start: mention.start, end: mention.end });
+    onChange(nextValue, editRange);
     setMention(null);
     setCreateFormOpen(false);
-    if (onPickEntity && entity) onPickEntity(entity, nextValue);
+    if (onPickEntity && entity) onPickEntity(entity, nextValue, mark ? { start: mention.start, end: caret } : undefined, editRange);
     window.requestAnimationFrame(() => {
       const element = ref.current;
       if (!element) return;
@@ -370,7 +378,7 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
     if (entity === null) return false;
     // The form decides the kind last — a ## trigger that was switched to a
     // person must still insert as @.
-    insert(entity.name, request.type === "place" ? PLACE_MARKER : "@", entity);
+    insert(entity.name, request.type === "place" ? PLACE_MARKER : "@", entity, true);
     return true;
   };
 
@@ -476,9 +484,9 @@ export function MentionBox({ value, onChange, entities, recentPlaceIds = [], onC
       parts.push(value.slice(cursor), "\n"); return parts;
     })()}</div></div> : null}
     <textarea disabled={disabled} ref={ref} className={className} value={value} autoFocus={autoFocus} rows={rows} aria-label={ariaLabel} onScroll={syncMirror} onDoubleClick={(event) => { const at = event.currentTarget.selectionStart; const candidate = candidates.find((item) => item.start <= at && at <= item.end); if (candidate) onInspectCandidate?.(candidate); }} onBeforeInput={(event) => { const el = event.currentTarget; let start = el.selectionStart, end = el.selectionEnd; const type = (event.nativeEvent as InputEvent).inputType; if (start === end && type === "deleteContentBackward") start = Math.max(0, start - (Array.from(el.value.slice(0, start)).at(-1)?.length ?? 1)); if (start === end && type === "deleteContentForward") end = Math.min(el.value.length, end + (Array.from(el.value.slice(end))[0]?.length ?? 1)); inputRangeRef.current = { start, end }; }} onChange={(event) => { onChange(event.target.value, inputRangeRef.current); inputRangeRef.current = undefined; syncMention(event.target); }} onKeyDown={handleKeyDown} onClick={(event) => syncMention(event.currentTarget)} onMouseDown={(event) => { const element = event.currentTarget; if (event.button !== 2) { pressedRange.current = null; return; } const start = element.selectionStart ?? 0; const end = element.selectionEnd ?? 0; pressedRange.current = end > start ? { start, end } : null; }} onContextMenu={(event) => { if (openContextMenu(event.currentTarget, event.clientX, event.clientY)) event.preventDefault(); }} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") syncMention(event.currentTarget); }} />
-    {contextMenu !== null ? <div ref={contextMenuRef} className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextPosition.x, top: contextPosition.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text; setContextMenu(null); if (action.disabled !== true) action.onSelect(text); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
+    {contextMenu !== null ? <div ref={contextMenuRef} className="mention-context-menu" role="menu" aria-label="选中文字的操作" style={{ left: contextPosition.x, top: contextPosition.y }} onPointerDown={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>{contextMenu.actions.map((action) => <button className={action.disabled === true ? "is-disabled" : ""} role="menuitem" type="button" aria-disabled={action.disabled === true} key={action.id} onClick={() => { const text = contextMenu.text, range = contextMenu.range; setContextMenu(null); if (action.disabled !== true) action.onSelect(text, range); }}><span className="mention-context-label">{action.label}</span>{action.hint ? <small>{action.hint}</small> : null}</button>)}</div> : null}
     {slash !== null && slashOptions.length > 0 ? <div className="slash-suggest" role="listbox" aria-label="模块命令">{slashOptions.map((command, index) => <button className={`slash-option ${index === activeIndex ? "is-active" : ""}`} type="button" role="option" aria-selected={index === activeIndex} key={command.id} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => { const next = `${value.slice(0, slash.start)}${value.slice(slash.end)}`; onChange(next); setSlash(null); setMention(null); onSlashCommand?.(command); window.requestAnimationFrame(() => { const element = ref.current; if (element) { element.focus(); element.setSelectionRange(slash.start, slash.start); } }); }}><span className="slash-option-label">{command.label}</span><small>{command.aliases.length > 0 ? `${command.aliases.join("、")}，` : ""}{command.description}</small></button>)}</div> : null}
-    {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={onPickEntity ? "创建并核对标记" : `创建并插入 ${mention.marker}`} /> : null}
+    {mention !== null && (createFormOpen || mention.forceNew === true) ? <EntityCreateForm defaultType={markerKind} defaultName={trimmedQuery} onCreate={submitCreateForm} onCancel={() => { setCreateFormOpen(false); setMention(null); }} submitLabel={onPickEntity ? "创建" : `创建并插入 ${mention.marker}`} /> : null}
     {mention !== null && !createFormOpen && mention.forceNew !== true && optionCount > 0 ? <div className="mention-suggest" role="listbox" aria-label="选择要关联的对象">
       {suggestions.map((entity, index) => <button className={`mention-option ${index === safeIndex ? "is-active" : ""}`} key={entity.id} type="button" role="option" aria-selected={index === safeIndex} onMouseEnter={() => setActiveIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => insert(entity.name, undefined, entity)}>{entity.type === "person" ? <ContactMentionAvatar entity={entity} /> : (() => { const KindIcon = ENTITY_META[entity.type].icon; return <KindIcon size={13} strokeWidth={1.8} aria-hidden="true" />; })()}<span className="mention-option-name">{entity.name}</span><small>{entityHint(entity)}</small></button>)}
       {wantsNew ? <button className="mention-option mention-option-create" type="button" role="option" aria-selected={safeIndex === suggestions.length} onMouseEnter={() => setActiveIndex(suggestions.length)} onMouseDown={(event) => event.preventDefault()} onClick={() => setCreateFormOpen(true)}><Plus size={13} aria-hidden="true" /><span className="mention-option-name">新建{kindLabel}「{trimmedQuery}」…</span></button> : null}

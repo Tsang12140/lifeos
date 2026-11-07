@@ -1,0 +1,139 @@
+@media (max-width: 720px) {
+  .calendar-section .week-grid-prev {
+    display: none;
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    height: 128px;
+    min-height: 128px;
+    max-height: 128px;
+    padding: 12px 12px 11px;
+    gap: 4px 9px;
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card-head {
+    display: none;
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card-foot {
+    display: none;
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card-mobile-heading {
+    position: relative;
+    z-index: 1;
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 8px;
+    min-width: 0;
+    color: #4d5869;
+  }
+
+  .calendar-section .week-card-mobile-weekday {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: center;
+    color: #4d5869;
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 20px;
+  }
+
+  .calendar-section .week-card-mobile-day {
+    display: flex;
+    flex: none;
+    align-items: flex-start;
+    color: #172438;
+    font-size: 40px;
+    font-weight: 400;
+    line-height: 40px;
+  }
+
+  .calendar-section .week-card.is-today .week-card-mobile-day {
+    color: var(--primary);
+  }
+
+  .calendar-section .week-card-mobile-glyph {
+    display: block;
+    flex: none;
+    width: 1em;
+    height: 1em;
+    overflow: visible;
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card-mobile-summary-group {
+    position: relative;
+    z-index: 1;
+    grid-column: 2;
+    grid-row: 1;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    color: #514d48;
+    font-family: system-ui, sans-serif;
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 28px;
+    text-align: left;
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card.has-weather-icons .week-card-mobile-summary:first-child {
+    padding-right: 30px;
+  }
+
+  .calendar-section .week-card-mobile-summary {
+    display: block;
+    flex: none;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    color: inherit;
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 28px;
+    text-align: left;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .calendar-section .week-card-mobile-summary[data-calendar-summary-font-ready="true"],
+  .calendar-section [data-calendar-summary-font-ready="true"] .week-card-mobile-summary {
+    font-family: var(--calendar-summary-font-family, system-ui, sans-serif);
+  }
+
+  .calendar-section .week-grid:not(.week-grid-prev) .week-card-mobile-count {
+    position: absolute;
+    z-index: 1;
+    left: 12px;
+    bottom: 10px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: #67717c;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 18px;
+    white-space: nowrap;
+  }
+
+  .calendar-section .week-card-art:not(.week-card-date-art) > .week-card-veil {
+    background: rgb(255 255 255 / var(--calendar-mobile-photo-veil, .8));
+  }
+}

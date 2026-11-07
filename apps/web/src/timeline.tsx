@@ -1,6 +1,7 @@
 import { isDreamRecord } from "@lifeos/core";
 import { RecordEditActions } from "./record-edit-actions";
 import { assetContentUrl, assetThumbUrl, type ThumbnailWidth } from "./asset-urls";
+import { formatMediaDuration } from "./media-duration";
 export { assetContentUrl, assetThumbUrl, type ThumbnailWidth } from "./asset-urls";
 import type { PhotoPreviewHandler } from "./asset-preview-model";
 import { useRecordDeletion, RecordDeleteUndo } from "./record-deletion";
@@ -49,6 +50,7 @@ import { DreamIcon } from "./dream-icon";
 import {
   SUMMARY_MAX_LENGTH,
   clampSummaryText,
+  periodRuns as computePeriodRuns,
   trimSummaryText,
   type Asset,
   type AssetLink,
@@ -59,10 +61,12 @@ import {
   type DaySummary,
   type Entity,
   type EntityRef,
+  type PeriodRun,
   type RelationKind,
   type TaskStatus,
   type WeatherAttachment,
 } from "@lifeos/core";
+export type { PeriodRun } from "@lifeos/core";
 import {
   apiRequest,
   type AiStatus,
@@ -246,11 +250,6 @@ export function monthCellPhoto(candidates: readonly DayPhotoCandidate[], aspect 
   return bestId;
 }
 
-export interface PeriodRun {
-  readonly start: string;
-  readonly end: string;
-}
-
 export interface PeriodMoonMarker {
   readonly forecast: boolean;
 }
@@ -259,24 +258,13 @@ export interface PeriodMoonMarker {
  * One run per recorded start, or a single run from the configured anchor when
  * nothing has been recorded yet. A recorded end cuts the run short — confirm it
  * on day five and days six and seven are gone — while the configured duration
- * closes whatever is left open.
+ * closes whatever is left open. The span ceiling lives in core: an end with no
+ * start within reach closes nothing, so a month whose start was skipped cannot
+ * stretch the previous period across it.
  */
 export function periodRuns(module: CycleIntimacyModuleData | null): readonly PeriodRun[] {
   if (!module?.config.enabled) return [];
-  const { periodLength, anchorStart } = module.config;
-  const starts = module.events.filter((event) => event.kind === "period_start").map((event) => event.date).sort();
-  const ends = module.events.filter((event) => event.kind === "period_end").map((event) => event.date).sort();
-  const runs: PeriodRun[] = [];
-  for (let index = 0; index < starts.length; index += 1) {
-    const start = starts[index]!;
-    const nextStart = starts[index + 1];
-    const explicitEnd = ends.find((end) => end >= start && (nextStart === undefined || end < nextStart));
-    let end = explicitEnd ?? shiftDate(start, periodLength - 1);
-    if (nextStart !== undefined && end >= nextStart) end = shiftDate(nextStart, -1);
-    runs.push({ start, end });
-  }
-  if (runs.length === 0 && anchorStart !== undefined) runs.push({ start: anchorStart, end: shiftDate(anchorStart, periodLength - 1) });
-  return runs;
+  return computePeriodRuns(module.config, module.events);
 }
 
 /**
@@ -399,9 +387,9 @@ export function RecordPhotoGrid({ assetIds, assets, onPreview }: { assetIds: rea
   const shown = assetIds.slice(0, PHOTO_GRID_LIMIT);
   const hidden = assetIds.length - shown.length;
   return <div className="record-photo-grid" data-shown={shown.length}>
-    {shown.map((assetId, index) => { const asset = assets.find((candidate) => candidate.id === assetId); const video = asset?.kind === "video"; return <button className={`record-photo-cell ${video ? "record-video-cell" : ""}`} key={assetId} type="button" onClick={() => onPreview(assetIds, index)} aria-label={`放大查看 ${asset?.originalName ?? assetId}`}>
+    {shown.map((assetId, index) => { const asset = assets.find((candidate) => candidate.id === assetId); const video = asset?.kind === "video"; const duration = video ? formatMediaDuration(asset?.videoMetadata?.durationSeconds) : null; return <button className={`record-photo-cell ${video ? "record-video-cell" : ""}`} key={assetId} type="button" onClick={() => onPreview(assetIds, index)} aria-label={`放大查看 ${asset?.originalName ?? assetId}`}>
       {video ? <video src={assetContentUrl(assetId)} muted playsInline preload="metadata" /> : <img src={assetThumbUrl(assetId, 400)} alt="" loading="lazy" decoding="async" />}
-      {video && asset?.videoMetadata?.durationSeconds ? <span className="record-video-duration">{Math.floor(asset.videoMetadata.durationSeconds / 60)}:{String(Math.floor(asset.videoMetadata.durationSeconds % 60)).padStart(2, "0")}</span> : null}
+      {duration === null ? null : <span className="record-video-duration">{duration}</span>}
       {hidden > 0 && index === shown.length - 1 ? <span className="record-photo-more">+{hidden}</span> : null}
     </button>; })}
   </div>;
@@ -452,12 +440,22 @@ const TimelineItemView = memo(function TimelineItemView({ record, assets, entiti
   const videoAssetIds: string[] = [];
   const chipAssetRefs = record.assetRefs.filter((ref) => !photoAssetIds.includes(ref.assetId) && !videoAssetIds.includes(ref.assetId));
   // People and places are already marked in the prose; keep their stored refs
-  // for filtering and editing without repeating them as footer chips.
-  const footerEntityRefs = record.entityRefs.filter(ref => ref.entityType !== "person" && ref.entityType !== "place");
+  // for filtering and editing without repeating them as footer chips. A film
+  // already has its own card above the footer, so the 《片名》 pill was printing
+  // the same sentence twice (2026-11-08 主人划掉)。它只作为兜底留下：引用还在、
+  // 影片实体却没加载出来时，卡片画不出来，那枚药丸是唯一的痕迹。
+  const movieCardIds = new Set(movies.map(movie => movie.id));
+  const footerEntityRefs = record.entityRefs.filter(ref => ref.entityType !== "person" && ref.entityType !== "place" && !(ref.entityType === "movie" && movieCardIds.has(ref.entityId)));
   const relationCount = footerEntityRefs.length + record.relatedRecordIds.length + chipAssetRefs.length;
   const vocabulary = useMemo(() => mentionVocabulary(record, entities), [record, entities]);
   const bodyText = recordText(record);
-  const showMoviePrompt = !isDreamRecord(record) && !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && bodyText.includes("电影") && !record.entityRefs.some(isMovieRef);
+  // A 《title》 in the prose is a film the owner already named, so the panel
+  // opens with it instead of asking him to retype it. 「电影」 stays as the
+  // fallback for entries that mention a film without ever writing its title.
+  const titleMatch = record.kind === "journal" ? bodyText.match(/《([^》\n]{1,60})》/u) : null;
+  const movieTitleHint = titleMatch ? titleMatch[1]!.trim() : "";
+  const hasMovieMention = (record.body.entityMentions ?? []).some((decision) => decision.entityType === "movie" && decision.entityId !== null);
+  const showMoviePrompt = !isDreamRecord(record) && !masked && movieEnabled && !moviePromptHidden && record.kind === "journal" && !hasMovieMention && (movieTitleHint !== "" || bodyText.includes("电影")) && !record.entityRefs.some(isMovieRef);
   const journalLayoutKey = `${record.id}\u0000${bodyText}\u0000${JSON.stringify(vocabulary)}`;
   const noteDetails = record.kind === "note" ? record.note : undefined;
   const noteLine = noteDetails !== undefined && (noteDetails.title || noteDetails.source)
@@ -507,5 +505,5 @@ const TimelineItemView = memo(function TimelineItemView({ record, assets, entiti
       <RecordDeleteUndo id={record.id} />
     </article>;
   }
-  return <article className={`timeline-item ${deletion ? "is-delete-pending" : ""} ${record.kind === "journal" && !bodyText.trim() && photoAssetIds.length ? "is-photo-only" : ""} ${interactionDisabled ? "is-stale" : ""} ${focused ? "is-ui-focused" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content" inert={Boolean(deletion)}><div className="timeline-meta"><span className={`kind-tag kind-${isDreamRecord(record) ? "dream" : record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{isDreamRecord(record) ? "梦境" : recordLabel(record.kind)}</span>{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} />}</div>{!masked && movies.length ? <div className="timeline-movie-cards">{movies.map((movie) => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}{record.assetRefs.some((ref) => ref.role === "attachment") && !masked ? <div className="record-attachments">{record.assetRefs.filter((ref) => ref.role === "attachment").map((ref) => <a key={ref.assetId} href={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} download>{assets.find((a) => a.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}{photoLine}<div className="timeline-footer">{relationLine}<div className="timeline-footer-places">{!masked && record.kind === "journal" ? <PlaceRecordCards ids={record.entityRefs.filter(ref => ref.entityType === "place").map(ref => ref.entityId)} entities={entities} disabled={interactionDisabled} onOpen={onOpenEntity} /> : null}</div><div className="timeline-actions" aria-label="记录操作">{showCopy && bodyText.trim().length > 0 ? <AssistantMessageActions content={masked ? "" : bodyText} className="record-copy-action" disabled={interactionDisabled || masked} copyLabel="复制正文" copiedLabel="已复制正文" copiedMessage="已复制正文" failedMessage="复制失败，请重试或检查剪贴板权限" /> : null}<RecordEditActions recordId={record.id} disabled={interactionDisabled} onEdit={() => onEdit(record)} onDelete={() => onDelete(record)} /></div></div></div><RecordDeleteUndo id={record.id} /></article>;
+  return <article className={`timeline-item ${deletion ? "is-delete-pending" : ""} ${record.kind === "journal" && !bodyText.trim() && photoAssetIds.length ? "is-photo-only" : ""} ${interactionDisabled ? "is-stale" : ""} ${focused ? "is-ui-focused" : ""}`} data-record-id={record.id}><div className="timeline-time"><time dateTime={record.occurredAt?.value ?? record.createdAt.value}>{lifeTimeTime(record.occurredAt ?? record.createdAt)}</time></div><div className="timeline-marker" aria-hidden="true"><span /></div><div className="timeline-content" inert={Boolean(deletion)}><div className="timeline-meta"><span className={`kind-tag kind-${isDreamRecord(record) ? "dream" : record.kind}`}><Icon size={13} strokeWidth={1.8} aria-hidden="true" />{isDreamRecord(record) ? "梦境" : recordLabel(record.kind)}</span>{isAiAssisted(record) ? <span className="backfill-tag assisted-tag"><History size={12} aria-hidden="true" />辅记</span> : null}{isBackfilled(record) ? <span className="backfill-tag"><History size={12} aria-hidden="true" />补记</span> : null}{record.isPrivate === true ? <span className="privacy-tag"><LockKeyhole size={12} aria-hidden="true" />隐私</span> : null}{record.body.edited ? <span className="edited-tag">已编辑</span> : null}</div>{noteLine}<div className="timeline-text" data-expandable={!masked && record.kind === "journal" ? "true" : undefined}>{masked ? <PrivacyMask onReveal={reveal} /> : record.kind === "journal" ? <><JournalText contentKey={journalLayoutKey}><RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} /></JournalText>{showMoviePrompt ? <MoviePrompt enabled={movieEnabled} initialQuery={movieTitleHint || undefined} onAttach={(movie) => { if (!interactionDisabled) onMovieAttachToRecord(record, movie); }} onSuppress={onMoviePromptSuppress} /> : null}</> : <RecordText text={bodyText} entities={vocabulary} decisions={record.body.entityMentions} onOpenEntity={interactionDisabled ? undefined : onOpenEntity} />}</div>{record.assetRefs.some((ref) => ref.role === "attachment") && !masked ? <div className="record-attachments">{record.assetRefs.filter((ref) => ref.role === "attachment").map((ref) => <a key={ref.assetId} href={`/api/assets/${encodeURIComponent(ref.assetId)}/content`} download>{assets.find((a) => a.id === ref.assetId)?.originalName ?? "附件"}</a>)}</div> : null}{photoLine}<div className="timeline-footer">{relationLine}<div className="timeline-footer-places">{!masked && movies.length ? <div className="timeline-movie-cards">{movies.map((movie) => <button className="timeline-movie-card" type="button" key={movie.id} disabled={interactionDisabled} onClick={() => onOpenEntity(movie)}>{movie.posterUrl ? <img src={movie.posterUrl} alt={`${movie.name} 海报`} loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} /> : <span className="movie-poster-placeholder"><Film size={20} /></span>}<span><strong>{movie.name}</strong><small>{movie.releaseYear} {movie.watched || movie.watchedAt ? "已看" : ""}</small></span></button>)}</div> : null}{!masked && record.kind === "journal" ? <PlaceRecordCards ids={record.entityRefs.filter(ref => ref.entityType === "place").map(ref => ref.entityId)} entities={entities} disabled={interactionDisabled} onOpen={onOpenEntity} /> : null}</div><div className="timeline-actions" aria-label="记录操作">{showCopy && bodyText.trim().length > 0 ? <AssistantMessageActions content={masked ? "" : bodyText} className="record-copy-action" disabled={interactionDisabled || masked} copyLabel="复制正文" copiedLabel="已复制正文" copiedMessage="已复制正文" failedMessage="复制失败，请重试或检查剪贴板权限" /> : null}<RecordEditActions recordId={record.id} disabled={interactionDisabled} onEdit={() => onEdit(record)} onDelete={() => onDelete(record)} /></div></div></div><RecordDeleteUndo id={record.id} /></article>;
 });

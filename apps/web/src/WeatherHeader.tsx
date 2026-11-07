@@ -138,6 +138,60 @@ export function WeatherHeader({ selectedDate, status, onOpenSettings, onDateChan
       root.style.removeProperty("--weather-sticky-height");
     };
   }, []);
+  // Bilibili-style search-box reveal: scrolling down lets the sticky card step
+  // aside, and the first upward scroll brings it back. Near the top it always
+  // stays visible. Keyboard focus and viewport changes force it back so the
+  // date and refresh controls never remain hidden.
+  useLayoutEffect(() => {
+    const topbar = headerRef.current?.closest<HTMLElement>(".topbar");
+    if (!topbar) return;
+    let lastY = window.scrollY;
+    let hidden = false;
+    let downTravel = 0;
+    let upTravel = 0;
+    const setHidden = (next: boolean) => {
+      if (hidden === next) return;
+      hidden = next;
+      topbar.classList.toggle("is-weather-hidden", next);
+    };
+    const update = () => {
+      const y = Math.max(0, window.scrollY);
+      const delta = y - lastY;
+      lastY = y;
+      if (y <= 8) {
+        downTravel = 0;
+        upTravel = 0;
+        setHidden(false);
+        return;
+      }
+      if (delta > 0) {
+        downTravel += delta;
+        upTravel = 0;
+      } else if (delta < 0) {
+        upTravel -= delta;
+        downTravel = 0;
+      }
+      // A few pixels of hysteresis keeps trackpad momentum from flickering the
+      // card at the moment the reader reverses direction.
+      if (downTravel >= 6 && y > topbar.getBoundingClientRect().height + 24) {
+        setHidden(true);
+      } else if (upTravel >= 6) {
+        setHidden(false);
+      }
+    };
+    const show = () => setHidden(false);
+    window.addEventListener("scroll", update, { passive: true });
+    topbar.addEventListener("focusin", show);
+    window.addEventListener("resize", show);
+    update();
+    return () => {
+      window.removeEventListener("scroll", update);
+      topbar.removeEventListener("focusin", show);
+      window.removeEventListener("resize", show);
+      topbar.classList.remove("is-weather-hidden");
+    };
+  }, []);
+
   const [payload, setPayload] = useState<WeatherPayload>({ weatherSnapshot: null, location: null });
   const [loading, setLoading] = useState(false);
   // Only a manual press spins the refresh button. Stepping through dates also

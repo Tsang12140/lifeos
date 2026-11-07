@@ -8,7 +8,10 @@ import { CalendarBackgrounds } from "./calendar-backgrounds.js";
 import { backgroundNamespace, legacyBackgroundNamespaces } from "./calendar-background-source.js";
 import { handleCalendarBackgroundRoutes } from "./routes-calendar-backgrounds.js";
 import { assetThumbnailVersion, resolveAssetThumbnail } from "./routes-assets.js";
+import { handleVolumeRoutes } from "./volume/volume-routes.js";
 import { CalendarTaskLabels } from "./calendar-task-labels.js";
+import { runDailyRecordSummarySweep } from "./record-summaries.js";
+import { RecordSummaryScheduler } from "./record-summary-scheduler.js";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, type WriteStream } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -427,6 +430,15 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     },
   });
   assetGcScheduler.start();
+  const recordSummaryScheduler = new RecordSummaryScheduler({
+    repository,
+    run: async (date) => {
+      const count = await runDailyRecordSummarySweep(config, repository, date);
+      if (count > 0) console.log(`[record-summary] daily sweep considered ${count} pending record(s)`);
+    },
+    onError: (error) => console.error("[record-summary] daily sweep failed:", error),
+  });
+  recordSummaryScheduler.start();
   // The summary provider is built per request from the AI settings (see
   // createDaySummaryProvider): the key lives in a file, so one provider frozen at
   // boot would keep using whatever key the process happened to start with. The
@@ -606,7 +618,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (/^\/api\/(export|import|archive)(\/|$)/.test(pathname) || /^\/api\/backup\/(snapshot|restore|download|files)/.test(pathname)) need(thisLockTargets());
     if (/^\/api\/assets\/(trash|resolve)(\/|$)/.test(pathname)) need(thisLockTargets());
     if (pathname === '/api/calendar/tasks/labels' && policy.locked('tasks')) { setJson(res, 200, { items: [] }); return; }
-    if (restrictedContent && req.method === 'GET' && (pathname === '/api/calendar/days' || pathname === '/api/summaries')) { setJson(res, 200, { items: [] }); return; }
+    if (restrictedContent && req.method === 'GET' && (pathname === '/api/calendar/days' || pathname === '/api/calendar/record-summaries' || pathname === '/api/summaries')) { setJson(res, 200, { items: [] }); return; }
     if (restrictedContent && pathname.startsWith('/api/calendar/background') && !pathname.endsWith('/viewing')) need(['tasks', 'notes', 'dreams', 'privacy-display']);
     if (pathname.startsWith("/api/admin/") && !ctx.poolAdmin) throw new HttpError(403, "administrator_required", "仅环境配置指定的管理员账号可访问");
     if (await handleAssistantWelcomeRoutes(ctx, req, res, pathname, url)) return;
@@ -626,6 +638,9 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
     if (await handlePlacesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleEntitiesRoutes(ctx, req, res, pathname, url)) return;
     if (await handleAssetsRoutes(ctx, req, res, pathname, url)) return;
+    // Optional, removable module: `/api/volume/*` serves an external (SMB) folder
+    // read-only. Deleting `src/volume/` and the next line leaves nothing behind.
+    if (await handleVolumeRoutes(ctx, req, res, pathname, url)) return;
     throw new HttpError(404, "not_found", "API route not found");
   }
 
@@ -723,6 +738,7 @@ function createApp(config: ApiConfig, repository = new SqliteRecordRepository(co
       clearVideoDownloadCache(repository);
       weatherArchiveScheduler.stop();
       assetGcScheduler.stop();
+      recordSummaryScheduler.stop();
       photoTextTrigger.stop();
       calendarDays.close();
       calendarBackgrounds.close();
@@ -934,7 +950,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     },
   });
   const apps = new Map<string, { readonly app: LifeosApp; lastUsedAt: number }>();
-  let poolReadiness: () => Promise<PoolPreflight> = async () => { throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪"); };
+  let poolReadiness: (accountId: string) => Promise<PoolPreflight> = async () => { throw new HttpError(503, "storage_pool_unavailable", "存储池尚未就绪"); };
   const appFor = (account: AccountIdentity | PublicAccount): LifeosApp => {
     const key = account.tenantId;
     const existing = apps.get(key);
@@ -948,7 +964,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
       store: poolStore,
       accountId: account.id,
       admin: isEnvironmentAdmin(account),
-      preflight: () => poolReadiness(),
+      preflight: () => poolReadiness(account.id),
       transition: poolTransition,
       welcomeStore,
     });
@@ -956,7 +972,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
     return app;
   };
 
-  const poolAdminSnapshot = async () => {
+  const poolAdminSnapshot = async (legacyAccountId?: string) => {
     if (!poolBridge.enabled || poolStore === null) throw new StoragePoolError("storage_pool_disabled", "存储池尚未启用", 503);
     const projectUsage = await poolBridge.usage();
     const accounts = identity.listAccounts();
@@ -1021,14 +1037,19 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
         storageBytes: unassignedStorageBytes,
         trafficBytes: unassignedTrafficBytes,
       },
-      legacyInventoryComplete: userRows.every((user) => user.legacyComplete),
+      // Daily operations only depend on this account's local originals. Admin
+      // inventory and quota changes omit the ID and still require every space.
+      // Shared pool accounting and pending operations remain project-wide.
+      legacyInventoryComplete: legacyAccountId === undefined
+        ? userRows.every((user) => user.legacyComplete)
+        : userRows.some((user) => user.accountId === legacyAccountId && user.legacyComplete),
       ...(accountingMismatch.storageBytes > 0 || accountingMismatch.trafficBytes > 0 ? { accountingMismatch } : {}),
       poolObjectIssues: poolStore.objectIssues().map(({ accountId, assetId, bytes, state }) => ({ accountId, assetId, bytes, state })),
       poolDownloadIssues: poolStore.downloadIssues(),
     };
   };
-  poolReadiness = async () => {
-    const snapshot = await poolAdminSnapshot();
+  poolReadiness = async (accountId) => {
+    const snapshot = await poolAdminSnapshot(accountId);
     if (!snapshot.legacyInventoryComplete || snapshot.accountingMismatch !== undefined || snapshot.poolObjectIssues.length > 0 || snapshot.poolDownloadIssues.length > 0
       || snapshot.unassigned.storageBytes !== 0 || snapshot.unassigned.trafficBytes !== 0) {
       throw new HttpError(409, "pool_accounting_unreconciled", "历史文件或存储池账目尚未核实，暂停新的上传和下载");
@@ -1279,7 +1300,7 @@ function createAccountModeApp(config: ApiConfig): LifeosApp {
             const assetId = stringField(input.assetId,"assetId",{ nonEmpty: true });
             const asset = appFor(session.account).repository.findAssetById(assetId);
             if (asset === null) throw new HttpError(404,"not_found","照片不存在");
-            try { await poolReadiness(); await poolTransition.startReadCanary(session.account.id,asset); }
+            try { await poolReadiness(session.account.id); await poolTransition.startReadCanary(session.account.id,asset); }
             catch (error) {
               if (error instanceof StoragePoolError) throw new HttpError(error.status,error.code,error.message);
               throw error;

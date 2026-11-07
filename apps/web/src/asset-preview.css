@@ -73,24 +73,71 @@ dialog.asset-preview.photo-reader:not([open]) { display: none; }
   .photo-reader .asset-preview-nav { width: 36px; height: 40px; }
 }
 @media (max-width: 760px) {
-  dialog.asset-preview.photo-reader { grid-template-columns: minmax(0, 1fr); padding: calc(60px + env(safe-area-inset-top, 0px)) 8px calc(58px + env(safe-area-inset-bottom, 0px)); gap: 0; }
-  .photo-reader .photo-reader-main { gap: 8px; }
+  dialog.asset-preview.photo-reader { grid-template-columns: minmax(0, 1fr); padding: calc(60px + env(safe-area-inset-top, 0px)) 8px calc(10px + env(safe-area-inset-bottom, 0px)); gap: 0; }
+  /* Photo, gallery, caption, tools stack in one column; the photo keeps whatever is left. */
+  .photo-reader .photo-reader-main { display: flex; flex-direction: column; gap: 8px; }
+  .photo-reader .photo-reader-main > .asset-preview-figure { flex: 1 1 auto; min-height: 0; }
   .asset-preview.photo-reader .photo-mini-gallery { gap: 6px; min-height: 36px; }
   .photo-mini-slot { flex-basis: 36px; width: 36px; height: 36px; }
   .asset-preview.photo-reader .photo-toolbar { gap: 2px; padding: 0; }
   .photo-reader .photo-tool { min-height: 44px; height: 44px; padding: 0 7px; min-width: 34px; }
   .photo-reader .photo-zoom-value { min-width: 52px; }
-  .photo-reader .asset-preview-nav-next { right: 8px; }
-  .photo-reader .asset-preview-nav-prev { left: 8px; }
-  .photo-reader .asset-preview-nav { width: 36px; height: 44px; }
-  .photo-reader.has-reading-sheet .asset-preview-nav { visibility: hidden; }
-  .photo-reader .photo-reader-sidebar { position: absolute; z-index: 5; left: 12px; right: 12px; top: calc(72px + env(safe-area-inset-top, 0px)); bottom: calc(140px + env(safe-area-inset-bottom, 0px)); max-height: 60dvh; padding: 14px 18px; border-radius: 16px; background: rgb(14 19 30 / .9); backdrop-filter: blur(20px); box-shadow: 0 -6px 28px rgb(0 0 0 / .16); }
+  /* One set of arrows only on a phone. Swiping and the thumbnail strip already
+     move between photos, so the photo-side arrows fold away and the date row
+     keeps the glyph for its own axis (previous/next diary). Two identical arrow
+     pairs a few pixels apart read as a duplicate. */
+  .photo-reader .asset-preview-nav { display: none; }
+
+  /* The diary body sits under the photo instead of behind a tap. Its height is
+     pinned to exactly three lines whether the diary runs one line or thirty: a
+     body that grows with its text resizes the photo on every flip, so the whole
+     screen jumps. Zooming past fit folds it away so the photo gets the stage back.
+     The date row is deliberately NOT in here — see the pinned bar below. */
+  .photo-mobile-caption { --body-size: 16px; --body-leading: 1.85; --line-box: calc(var(--body-size) * var(--body-leading)); display: block; flex: none; height: calc(3 * var(--line-box)); padding: 0 16px; overflow: hidden; transition: height 180ms ease, opacity 140ms ease; }
+  .photo-mobile-caption[data-open="true"] { height: auto; max-height: 38dvh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+  .photo-mobile-caption[data-open="true"]::-webkit-scrollbar { display: none; }
+  .photo-reader.is-zoomed .photo-mobile-caption,
+  .photo-reader.is-zoomed .photo-mobile-caption[data-open="true"] { height: 0; max-height: 0; opacity: 0; pointer-events: none; overflow: hidden; }
+
+  /* Pinned right above the toolbar with a fixed 44px height: one-line, three-line
+     and expanded bodies all put the arrows on the same y, so they stay tappable
+     one after another. Growing the body moves the photo's bottom edge, never the
+     arrows. Zooming folds this row away together with the caption — otherwise the
+     collapsing caption would shove the arrows upwards. */
+  .photo-mobile-datebar { display: grid; flex: none; grid-template-columns: 40px minmax(0, 1fr) 40px; align-items: center; gap: 2px; height: 44px; max-height: 44px; padding: 0 12px; overflow: hidden; transition: max-height 180ms ease, opacity 140ms ease; }
+  .photo-reader.is-zoomed .photo-mobile-datebar { max-height: 0; opacity: 0; pointer-events: none; }
+  .photo-mobile-datebar time { overflow: hidden; color: #9aa3b1; font-size: 13px; line-height: 1.6; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+  .photo-mobile-step { position: relative; display: inline-grid; place-items: center; width: 40px; height: 44px; margin: 0; padding: 0; border: 0; border-radius: 8px; color: #c9d0da; background: transparent; cursor: pointer; }
+  .photo-mobile-step:disabled { opacity: .35; cursor: default; }
+  .photo-mobile-step:focus-visible { outline: 2px solid #d4dbe5; outline-offset: 2px; }
+  .photo-mobile-step .material-date-arrow { width: 22px; height: 28px; color: inherit; }
+  /* "全文" is floated into the end of the third line instead of owning a line:
+     the zero-width anchor holds the first two lines clear, then the button clears
+     below it and lands on line three, where the text wraps around it. Hence no
+     -webkit-line-clamp — a clamped -webkit-box is not a block formatting context
+     and the float would escape it. */
+  .asset-preview.photo-reader .photo-mobile-body { font-size: var(--body-size); line-height: var(--body-leading); height: calc(3 * var(--line-box)); overflow: hidden; }
+  .asset-preview.photo-reader .photo-mobile-caption[data-open="true"] .photo-mobile-body { height: auto; overflow: visible; }
+  .photo-mobile-anchor { float: right; clear: right; width: 0; height: calc(2 * var(--line-box)); }
+  /* The float carries the ellipsis too: an isolated "全文" hanging off the right
+     edge reads as a separate widget rather than the end of the sentence. The
+     ellipsis is set at body size and body colour so the line looks cut off, and
+     the label stays 13px grey so it still reads as the action. Its left edge
+     lands within one character of the last glyph, which is as close as a float
+     can get without measuring the break point in JS. */
+  .photo-mobile-more { float: right; clear: right; display: block; height: var(--line-box); margin: 0; padding: 0; border: 0; color: #9aa3b1; background: transparent; font-family: inherit; font-size: var(--body-size); line-height: var(--line-box); white-space: nowrap; text-align: right; cursor: pointer; }
+  .photo-mobile-ellipsis { color: #e2e6ec; }
+  .photo-mobile-more-label { font-size: 13px; }
+  .photo-mobile-caption[data-open="true"] .photo-mobile-more { float: none; clear: none; display: inline; height: auto; margin-left: 8px; line-height: inherit; }
+  .photo-mobile-more:hover { color: #d4dbe5; }
+  .photo-mobile-more:focus-visible { outline: 2px solid #d4dbe5; outline-offset: 2px; border-radius: 3px; }
+
+  /* Parameters move behind the ⓘ next to close; the float only carries them now. */
+  .asset-preview-info-button { box-sizing: border-box; display: inline-grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; margin: 0; padding: 0; border: 1px solid rgb(255 255 255 / .4); border-radius: 50%; color: #fff; background: rgb(18 22 30 / .88); box-shadow: 0 2px 12px rgb(0 0 0 / .3); cursor: pointer; }
+  .asset-preview-info-button:hover, .asset-preview-info-button[aria-expanded="true"] { background: #303846; }
+  .asset-preview-info-button:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+  .photo-reader .photo-reader-sidebar { position: absolute; z-index: 5; left: 12px; right: 12px; top: auto; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); max-height: 58dvh; padding: 16px 18px 4px; border-radius: 16px; background: rgb(14 19 30 / .9); backdrop-filter: blur(20px); box-shadow: 0 -6px 28px rgb(0 0 0 / .16); }
   .asset-preview.photo-reader .photo-information-host { position: static; width: auto; max-height: none; margin: 0; padding: 0; border-radius: 0; background: transparent; backdrop-filter: none; box-shadow: none; overflow: visible; }
-  .asset-preview.photo-reader .photo-reading + .photo-information-host { padding-top: 24px; }
-  .photo-reader .photo-reading-toggle { position: absolute; left: 12px; right: 12px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); display: flex; align-items: center; justify-content: center; gap: 10px; height: 44px; margin: 0; padding: 0 8px; border: 0; background: transparent; color: #d6dce5; font: inherit; font-size: 12px; cursor: pointer; }
   .photo-reader .photo-save-state { bottom: 52px; z-index: 6; }
-  .photo-entry-toast { bottom: calc(154px + env(safe-area-inset-bottom, 0px)); }
-}
-@media (max-width: 350px) {
-  .photo-reader .photo-reader-sidebar { bottom: calc(184px + env(safe-area-inset-bottom, 0px)); }
+  .photo-entry-toast { bottom: calc(106px + env(safe-area-inset-bottom, 0px)); }
 }

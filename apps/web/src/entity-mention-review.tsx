@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Check, MapPin, User, X } from "lucide-react";
+import { Check, Film, MapPin, User, X } from "lucide-react";
 import type { Entity, EntityCandidate, TextEntityDecision } from "@lifeos/core";
 import { groupMentionContexts, type MentionContextGroup } from "./entity-mention-groups";
 import { MentionCheckIcon } from "./entity-mention-check-icon";
@@ -8,8 +8,11 @@ import "./entity-mention-context.css";
 import { ContactMentionAvatar } from "./contact-avatar";
 
 function optionLabel(entity: Entity): string {
-  const detail = entity.type === "place" && entity.address ? entity.address : entity.description || (entity.aliases ?? []).join("、");
-  return `${entity.name}（${entity.type === "person" ? "人物" : "地点"}${detail ? `，${detail}` : ""}）`;
+  const kind = entity.type === "person" ? "人物" : entity.type === "place" ? "地点" : entity.type === "movie" ? "影片" : "关联";
+  const detail = entity.type === "place" && entity.address ? entity.address
+    : entity.type === "movie" && entity.releaseYear !== undefined ? String(entity.releaseYear)
+    : entity.description || (entity.aliases ?? []).join("、");
+  return `${entity.name}（${kind}${detail ? `，${detail}` : ""}）`;
 }
 
 export const occurrenceKey = (candidate: Pick<EntityCandidate, "start" | "end">) => `${candidate.start}:${candidate.end}`;
@@ -108,6 +111,7 @@ export function EntityMentionReview({ text, candidates, decisions, preferredEnti
       <strong>{candidate.text.replace(/^[@#]/u, "")}</strong>
       {types.includes("person") ? entity?.type === "person" ? <ContactMentionAvatar entity={entity} /> : <User className="mention-review-type-icon" size={15} strokeWidth={1.9} aria-hidden="true" /> : null}
       {types.includes("place") ? <MapPin className="mention-review-type-icon" size={15} strokeWidth={1.9} aria-hidden="true" /> : null}
+{types.includes("movie") ? <Film className="mention-review-type-icon" size={15} strokeWidth={1.9} aria-hidden="true" /> : null}
     </label>;
   };
   return <dialog ref={dialogRef} className="modal-dialog mention-review-dialog" aria-labelledby="mention-review-title" onCancel={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }}>
@@ -131,7 +135,7 @@ export function EntityMentionReview({ text, candidates, decisions, preferredEnti
       })}</ol>
     </div>
     <div className="dialog-footer mention-review-actions"><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="button" disabled={candidates.length === 0 || (wording !== undefined && !wording.value.trim())} onClick={() => {
-      const changed = candidates.map((candidate): TextEntityDecision => { const id = choices.get(occurrenceKey(candidate)) || null; const entity = candidate.entities.find((item) => item.id === id) ?? candidate.entities[0]!; return { start: candidate.start, end: candidate.end, text: candidate.text, entityId: id, entityType: entity.type as "person" | "place" }; });
+      const changed = candidates.map((candidate): TextEntityDecision => { const id = choices.get(occurrenceKey(candidate)) || null; const entity = candidate.entities.find((item) => item.id === id) ?? candidate.entities[0]!; return { start: candidate.start, end: candidate.end, text: candidate.text, entityId: id, entityType: entity.type as "person" | "place" | "movie" }; });
       const untouched = decisions.filter((decision) => !candidates.some((candidate) => candidate.start < decision.end && decision.start < candidate.end));
       onConfirm([...untouched, ...changed].sort((a, b) => a.start - b.start));
     }}>确认标记</button></div>

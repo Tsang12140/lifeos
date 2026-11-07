@@ -32,13 +32,32 @@ test("diary photo occurrences are scoped, date-ordered and preserve each record 
   ];
   const assets = [photo("shared"), { ...photo("video"), kind: "video" }, photo("avatar", "avatar"), { ...photo("remote"), storageRefs: [{ sourceId: "remote", sourceRef: "https://example.test/photo.jpg" }] } as Asset];
   const occurrences = diaryPhotoOccurrences(records, assets, new Set(["old"]));
-  assert.deepEqual(occurrences.map((item) => item.record.id), ["new"]);
+  // A clip filed in a diary is gallery material too, so the record that carries one
+  // contributes two items — and the deleted record still contributes none.
+  assert.deepEqual(occurrences.map((item) => [item.record.id, item.assetId, item.kind]), [
+    ["new", "shared", "photo"],
+    ["new", "video", "video"],
+  ]);
 
   const sharedTwice = diaryPhotoOccurrences([records[0], records[3]], assets);
   assert.deepEqual(sharedTwice.map((item) => [item.assetId, item.record.id, item.monthKey]), [
     ["shared", "new", "2026-10"],
+    ["video", "new", "2026-10"],
     ["shared", "old", "2026-09"],
   ]);
+});
+
+test("a clip is kept only when the app owns the file, and only in a real diary", () => {
+  const records = [
+    journal("kept", "2026-10-20", [{ assetId: "local-clip", role: "video" }]),
+    journal("remote-clip", "2026-10-20", [{ assetId: "remote-clip", role: "video" }]),
+    journal("dream-clip", "2026-10-20", [{ assetId: "local-clip", role: "video" }], "dream"),
+  ];
+  const assets = [
+    { ...photo("local-clip"), kind: "video" } as Asset,
+    { ...photo("remote-clip"), kind: "video", storageRefs: [{ sourceId: "remote", sourceRef: "https://example.test/clip.mp4" }] } as Asset,
+  ];
+  assert.deepEqual(diaryPhotoOccurrences(records, assets).map((item) => [item.record.id, item.kind]), [["kept", "video"]]);
 });
 
 test("date order wins over input order and same-day attachment order stays stable", () => {

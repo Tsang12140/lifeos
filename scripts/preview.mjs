@@ -11,8 +11,10 @@
 // 两种模式，双击哪个就是哪种：
 //   启动预览.cmd        本机全功能（管理员页在），只开给 127.0.0.1，不用登录。
 //   启动局域网预览.cmd   同一个 5199，但绑 0.0.0.0 + 强制登录密码，手机同 Wi-Fi 能开。
-//                       代价是管理员页关闭（API 无法区分「手机」和「本机经 Vite 代理」，
-//                       见 apps/api/src/config.ts:206 的那条限制）。
+//                       代价是管理员页关闭（API 无法区分「手机」和「本机经 Web 代理」，
+//                       见 apps/api/src/config.ts:206 的那条限制），而且发的是
+//                       vite build 的产物 —— 手机拉 3 个请求，不是 250 个。改过前端
+//                       代码就要重新双击一次，没有热更新。
 //
 // 带 `--lan` 就是局域网模式；再加 `--plan` 只打印计划、不碰端口（验收用）。
 //
@@ -26,6 +28,7 @@ import {
   FIREWALL_RULE_NAME,
   lanLaunchEnv,
   lanPreviewUrls,
+  proxyLaunchEnv,
   readEnvFile,
   resolveLanPassword,
   preferredLanAddresses,
@@ -45,6 +48,9 @@ const READY_TIMEOUT_MS = 90_000;
 // `--lan`：绑 0.0.0.0 并强制登录，手机同 Wi-Fi 能开；`--plan`：只报告，不碰端口。
 const lanMode = process.argv.includes("--lan");
 const planOnly = process.argv.includes("--plan");
+// 局域网模式会先 vite build 一次才开端口（手机拿生产构建，不是 dev server），
+// 所以等待窗口要宽：构建慢一点，启动器就不该喊「端口没应答」。
+const readyTimeoutMs = lanMode ? 240_000 : READY_TIMEOUT_MS;
 
 // 双击时窗口可能一闪就没了（启动失败、或已有实例），控制台里的话谁也读不到。
 // 所以把本进程的每一行输出同时写进 launch.log —— 出问题直接看这个文件。
@@ -338,6 +344,9 @@ if (planOnly) {
     passwordLength: password?.password.length ?? 0,
     urls: lanPreviewUrls(webPort),
     adminPage: lanMode ? "off" : "on",
+    // 手机那一扇门发的是构建产物，本机这一扇是 dev server。验收靠这个字段
+    // 断言「局域网模式确实不再跑 Vite dev」。
+    webServer: lanMode ? "static-dist" : "vite-dev",
     firewallRulePresent: firewallRulePresent(),
     firewallAutoElevate: lanMode && !firewallRulePresent(),
     wouldRestart: healthy && lanMode && existingLan === null,
@@ -387,14 +396,20 @@ if (healthy || leftover.length > 0) {
 ensureFirewallRule();
 
 banner(`正在启动 LifeOS 预览（API 3011 / Web 5199，${lanMode ? "局域网可访问" : "仅本机"}）…`);
-console.log("首次启动或刚改过后端代码时，等十几秒是正常的。\n");
+if (lanMode) console.log("局域网模式会先把前端打包成生产版本（约半分钟；改过前端代码就要重打）。\n");
+else console.log("首次启动或刚改过后端代码时，等十几秒是正常的。\n");
 
 try { writeFileSync(previewPidFile, String(process.pid), "utf8"); } catch { /* 没有它只是少一层接管判断 */ }
 
-// 局域网模式必须带登录密码（Vite 的代理会把 5199 直接变成 API 的入口）；
-// 本机模式显式写 0，免得环境里残留的 LIFEOS_LAN=1 把端口悄悄开出去。
+// 局域网模式必须带登录密码（Web 端会把 5199 上的 /api 转给 API，等于把 API
+// 摆到了同一张脸上）；本机模式显式写 0，免得环境里残留的 LIFEOS_LAN=1 把端口
+// 悄悄开出去。
 const lanPassword = lanMode ? resolvePassword() : null;
-const childEnv = { ...process.env, ...(lanMode ? lanLaunchEnv(lanPassword.password) : { LIFEOS_LAN: "0" }) };
+// 代理三件套：`.env` 里的 HTTPS_PROXY / NO_PROXY 必须落到**子进程环境**里。
+// Node 的 `--use-env-proxy` 在 bootstrap 阶段读它们，比 `--env-file` 生效更早，
+// 只写进 .env 等于没写 —— 双击启动的预览里 TMDb 会一路 502（见 docs/todo.md §39）。
+const proxyEnv = proxyLaunchEnv(process.env, readEnvFile(resolve(root, ".env")));
+const childEnv = { ...process.env, ...proxyEnv, ...(lanMode ? lanLaunchEnv(lanPassword.password) : { LIFEOS_LAN: "0" }) };
 const child = spawn(process.execPath, [acceptServe], { cwd: root, stdio: "inherit", env: childEnv });
 
 let childExited = false;
@@ -410,7 +425,7 @@ child.once("error", (error) => {
 
 const startedAt = Date.now();
 let ready = false;
-while (!childExited && Date.now() - startedAt < READY_TIMEOUT_MS) {
+while (!childExited && Date.now() - startedAt < readyTimeoutMs) {
   const [api, web] = await Promise.all([probe(targets.api), probe(targets.web)]);
   if (api.ok && web.ok) {
     ready = true;
@@ -437,7 +452,7 @@ if (ready) {
   if (webLog) console.error(`--- web.log ---\n${webLog}\n`);
   process.exit(typeof childCode === "number" && childCode !== 0 ? childCode : 1);
 } else {
-  console.error(`\n等了 ${READY_TIMEOUT_MS / 1000}s 端口还没应答。服务进程还在，日志尾部：\n`);
+  console.error(`\n等了 ${readyTimeoutMs / 1000}s 端口还没应答。服务进程还在，日志尾部：\n`);
   const apiLog = logTail("api");
   const webLog = logTail("web");
   if (apiLog) console.error(`--- api.log ---\n${apiLog}\n`);

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>手机周卡调节</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <link rel="stylesheet" href="/src/calendar-week.css" />
+  <link rel="stylesheet" href="/week-card-demo.css" />
+</head>
+<body>
+  <main class="week-tuner">
+    <header><h1>手机周卡调节</h1><p>在“我的参数”和“建议版”间切换；调好后复制参数发给我。</p></header>
+    <section class="tune-panel" aria-label="周卡参数">
+      <div class="variant-switcher paint-presets" role="group" aria-label="参数版本"><button type="button" data-variant="my" aria-pressed="true">我的参数</button><button type="button" data-variant="suggested" aria-pressed="false">建议版</button></div>
+      <p id="variant-note" class="variant-note" aria-live="polite">建议版压缩第2、3条样例标题；切回“我的参数”会恢复原文和整套基准参数。</p>
+      <div class="tune-fields">
+        <label for="weekday">周几大小<output id="weekday-value" for="weekday"></output><input id="weekday" type="range" min="14" max="30" step="1" value="20" /></label>
+        <label for="day">日期大小<output id="day-value" for="day"></output><input id="day" type="range" min="28" max="54" step="1" value="40" /></label>
+        <label for="digitGap">日期数字字间距<output id="digitGap-value" for="digitGap"></output><input id="digitGap" type="range" min="-24" max="8" step="1" value="-13" /></label>
+        <label for="lunarX">农历水平微调<output id="lunarX-value" for="lunarX"></output><input id="lunarX" type="range" min="-12" max="12" step="1" value="0" /></label>
+        <label for="summary">摘要字号<output id="summary-value" for="summary"></output><input id="summary" type="range" min="12" max="24" step="1" value="15" /></label>
+        <label for="veil">照片白蒙版<output id="veil-value" for="veil"></output><input id="veil" type="range" min="0" max="100" step="1" value="87" /></label>
+        <label for="brush" class="tune-brush">油画笔触<output id="brush-value" for="brush"></output><input id="brush" type="range" min="0" max="250" step="5" value="220" /></label>
+        <label for="ink">摘要字色<select id="ink"><option value="warm">暖墨灰</option><option value="charcoal">炭灰</option><option value="blue">原灰蓝</option></select></label>
+        <label for="face">摘要字体<select id="face"><option value="system">当前黑体</option><option value="serif">思源宋体</option><option value="huiwen" selected>汇文明朝体</option></select></label>
+        <label class="tune-weight" for="bold"><span>摘要字重</span><span class="tune-check"><input id="bold" type="checkbox" />加粗</span></label>
+      </div>
+      <div class="paint-presets" role="group" aria-label="笔触强度"><button type="button" data-brush="0">原图</button><button type="button" data-brush="25">轻</button><button type="button" data-brush="55">中</button><button type="button" data-brush="85">强</button></div>
+      <div class="tune-actions"><button type="button" id="copy">复制参数</button><button type="button" id="reset">恢复我的参数</button><button type="button" id="choose">换背景图</button></div>
+      <input type="file" id="photo" accept="image/*" hidden />
+      <div class="tune-status" role="status" aria-live="polite"></div>
+      <div class="paint-status" role="status" aria-live="polite">正在读取示例照片…</div>
+    </section>
+    <section class="paint-comparison" aria-label="同一照片笔触对比"><p>同一照片对比（未加白蒙版）</p><div class="paint-comparison-grid"></div></section>
+    <section class="week-demo calendar-section" aria-label="移动版周卡预览"></section>
+    <p class="tune-note">照片读取自当前应用；摘要仍为排版样例，尚未接入逐篇 AI 生成。所选本地图片只用于当前预览。</p>
+    <label class="tune-export-label" for="params">当前参数</label>
+    <textarea id="params" class="tune-export" readonly spellcheck="false"></textarea>
+  </main>
+  <script type="module" src="/week-card-demo.js"></script>
+</body>
+</html>

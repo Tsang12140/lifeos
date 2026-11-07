@@ -34,12 +34,13 @@ export const WEEKDAY_LABELS: readonly string[] = ["一", "二", "三", "四", "�
 const DAY_STEP_LONG_PRESS = 6;
 const DAY_STEP_REPEAT_MS = 90;
 
-export function DateField({ value, onChange, label, showTime = false, capped = false, className = "composer-date-control" }: { readonly value: string; readonly onChange: (value: string) => void; readonly label: string; readonly showTime?: boolean; readonly capped?: boolean; readonly className?: string }) {
+export function DateField({ value, onChange, label, showTime = false, capped = false, sheet = false, className = "composer-date-control" }: { readonly value: string; readonly onChange: (value: string) => void; readonly label: string; readonly sheet?: boolean; readonly showTime?: boolean; readonly capped?: boolean; readonly className?: string }) {
   const [open, setOpen] = useState(false);
   const [monthAnchor, setMonthAnchor] = useState(value || localDateToday());
   const [gridOpen, setGridOpen] = useState(false);
   const [longPressStepping, setLongPressStepping] = useState(false);
   const [fineMinutes, setFineMinutes] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useDatePopover(open, rootRef, panelRef, showTime);
@@ -122,7 +123,8 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
   }, []);
 
   const commitDate = (next: string) => {
-    onChange(showTime ? combineDateTime(next, time === "" ? "09:00" : time) : next);
+    const proposed = showTime ? combineDateTime(next, time === "" ? "09:00" : time) : next;
+    onChange(sheet && capped && proposed > localNowInput() ? localNowInput() : proposed);
   };
   const commitTime = (next: string) => {
     if (next === "") return;
@@ -150,36 +152,38 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
   };
   const openPanel = () => {
     setMonthAnchor(day);
-    setGridOpen(false);
+    setGridOpen(sheet);
     /*
      * An empty time gets the most recent whole hour rather than the exact
      * minute. It is the value a person actually means: the entry is usually
      * "this morning", not "07:54". Existing values are never touched — coming
      * back to a panel you already set must show what you set, not reset it.
      */
-    if (capped && showTime && time === "") {
+    if (!sheet && capped && showTime && time === "") {
       const seed = lastWholeHour(localNowInput());
       if (seed !== "") onChange(combineDateTime(day, seed));
     }
     setOpen((current) => !current);
   };
 
-  return <div className={`date-field ${className} ${open ? "is-open" : ""}`} ref={rootRef} data-date-value={value} data-date-time={showTime ? "on" : "off"} data-date-capped={capped ? "on" : "off"}>
+  return <div className={`date-field ${className} ${open ? "is-open" : ""} ${sheet ? "mobile-date-field" : ""}`} ref={rootRef} data-date-value={value} data-date-time={showTime ? "on" : "off"} data-date-capped={capped ? "on" : "off"}>
     {/* A button, not a text input. The native field was typed into by accident
         and cleared by accident with it; a button opens the panel and nothing
         else, and it is the only thing in here that can take focus. */}
     <button type="button" className="date-trigger" onClick={openPanel} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}：${displayDate(day)}${showTime && time ? ` ${time}` : ""}`}>
       <CalendarDays size={15} strokeWidth={1.8} aria-hidden="true" />
+      {sheet ? <span className="mobile-field-label">{label}</span> : null}
       <span className="date-trigger-value">{dayLabel(day)}</span>
       {showTime ? <span className="date-trigger-time">{time || "全天"}</span> : null}
     </button>
-    {open ? createPortal(<div ref={panelRef} className={`date-panel date-control-popover ${showTime ? "has-time" : ""}`} role="dialog" aria-label={`${label}选择器`}>
-      <div className="date-panel-head">
+    {open ? createPortal(<div ref={panelRef} data-mobile-sheet={sheet || undefined} className={`date-panel date-control-popover ${showTime && (!sheet || timeOpen) ? "has-time" : ""}`} role="dialog" aria-label={`${label}选择器`}>
+      {sheet ? <div className="mobile-date-quick"><button type="button" onClick={() => commitDate(localDateToday())}>今天</button><button type="button" onClick={() => commitDate(shiftDate(localDateToday(), -1))}>昨天</button><button type="button" onClick={() => setOpen(false)}>完成</button></div> : null}
+      {!sheet ? <div className="date-panel-head">
         <button type="button" className={`date-panel-step ${longPressStepping ? "is-fast" : ""}`} onClick={() => commitDate(shiftDate(day, -1))} onPointerDown={() => startDayStep(-1)} onPointerUp={endDayStep} onPointerLeave={endDayStep} aria-label="前一天"><ChevronLeft size={15} aria-hidden="true" /></button>
         <button type="button" className="date-panel-title" onClick={() => setGridOpen((current) => !current)} aria-expanded={gridOpen} title="选择其他日期"><span>{monthTitle(monthAnchor)}</span><ChevronDown size={14} aria-hidden="true" /></button>
         <button type="button" className={`date-panel-step ${longPressStepping ? "is-fast" : ""}`} onClick={() => commitDate(shiftDate(day, 1))} onPointerDown={() => startDayStep(1)} onPointerUp={endDayStep} onPointerLeave={endDayStep} aria-label="后一天"><ChevronRight size={15} aria-hidden="true" /></button>
         <button type="button" className="date-panel-today" onClick={() => commitDate(localDateToday())} disabled={day === localDateToday()}>今天</button>
-      </div>
+      </div> : null}
         {gridOpen ? <div className="date-panel-grid">
           <div className="date-grid-head">
             <button type="button" className="date-panel-step" onClick={() => setMonthAnchor((current) => shiftMonth(current, -1))} aria-label="上个月"><ChevronLeft size={15} aria-hidden="true" /></button>
@@ -198,7 +202,7 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
                 className={`date-grid-day ${date === day ? "is-selected" : ""} ${date === localDateToday() ? "is-today" : ""} ${date.slice(0, 7) === monthAnchor.slice(0, 7) ? "" : "is-outside"} ${locked ? "is-locked" : ""}`}
                 key={date}
                 disabled={locked}
-                onClick={() => { commitDate(date); setGridOpen(false); }}
+                onClick={() => { commitDate(date); if (!sheet) setGridOpen(false); }}
                 aria-pressed={date === day}
                 aria-label={displayDate(date)}
               >{Number(date.slice(8, 10))}</button>;
@@ -220,7 +224,8 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
             </button>;
           })}
         </ScrollSlotStrip>}
-        {showTime ? <div className="date-panel-time">
+        {sheet && showTime ? <button className="mobile-time-detail" type="button" onClick={() => setTimeOpen(value => !value)} aria-expanded={timeOpen}>具体时间 {time || "未设置"}</button> : null}
+        {showTime && (!sheet || timeOpen) ? <div className="date-panel-time">
           <div className="date-time-wheels">
           <ScrollSlotStrip className="date-time-column" scrollKey={`${day}-${time.slice(0, 2)}`}>
             {hourOptions().map((hour) => {
@@ -247,7 +252,7 @@ export function DateField({ value, onChange, label, showTime = false, capped = f
             <button type="button" className="text-button" onClick={() => commitDate(localDateToday())}>今天</button>
           </div>
         </div> : null}
-        {showTime && capped ? <label className="date-panel-fine">
+        {showTime && capped && (!sheet || timeOpen) ? <label className="date-panel-fine">
           <input type="checkbox" checked={fineMinutes} onChange={(event) => setFineMinutes(event.target.checked)} />
           <span>精细到分钟</span>
           <span className="date-panel-fine-note">{capNow === "" ? "" : `不能晚于 ${capNow.slice(11)}`}</span>

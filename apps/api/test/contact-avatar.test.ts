@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import sharp from "sharp";
@@ -9,6 +9,7 @@ import type { Asset, Entity, ExportBundleV1 } from "@lifeos/core";
 import { readConfig } from "../src/config.js";
 import { createHttpServer } from "../src/server.js";
 import { listenOnFetchablePort } from "./support/fetchable-port.js";
+import { StoragePoolStore } from "../src/storage-pool-store.js";
 
 test("avatars normalise, remain protected without diary records, and round trip through exports", async t => {
   const root = mkdtempSync(join(tmpdir(), "lifeos-contact-avatar-"));
@@ -93,7 +94,7 @@ test("avatar object storage uses quotas, authenticated access and cached reads w
     import {randomUUID} from 'node:crypto';import {readFileSync,writeFileSync} from 'node:fs';
     const path=${JSON.stringify(statePath)},root=${JSON.stringify(root)};let raw='';for await(const part of process.stdin)raw+=part;
     const req=JSON.parse(raw),s=JSON.parse(readFileSync(path,'utf8')),month=new Date().toISOString().slice(0,7),limit=10000000;
-    const send=result=>process.stdout.write(JSON.stringify({ok:true,result})+'\\n'),save=()=>writeFileSync(path,JSON.stringify(s));
+    const send=result=>process.stdout.write(JSON.stringify({ok:true,result})),save=()=>writeFileSync(path,JSON.stringify(s));
     if(req.op==='usage'){const used=Object.values(s.objects).reduce((n,x)=>n+x.bytes,0);send({consumer:'2',storage_used:used,storage_limit:limit,storage_free:limit-used,traffic_month:month,traffic_used:s.traffic,traffic_limit:limit,traffic_free:limit-s.traffic});}
     else if(req.op==='put'){const b=readFileSync(req.path),key='pool/2/'+randomUUID(),file=root+'/'+randomUUID()+'.object';writeFileSync(file,b);s.objects[key]={file,bytes:b.length};s.puts++;save();send({key});}
     else if(req.op==='download'){const x=s.objects[req.key];writeFileSync(req.path,readFileSync(x.file));s.traffic+=x.bytes;save();send({month,bytes:x.bytes});}
@@ -107,10 +108,12 @@ test("avatar object storage uses quotas, authenticated access and cached reads w
   let cookie = "";
   const call = (path: string, method = "GET", body?: unknown, auth = cookie) => fetch(base + path, { method, headers: { cookie: auth, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const login = await call("/api/auth/login", "POST", { username: "owner", password: "isolated-avatar-password" }); assert.equal(login.status, 200); cookie = login.headers.get("set-cookie")!.split(";")[0]!;
-  const pool: any = await (await call("/api/admin/storage-pool")).json(); const ownerId = pool.users.find((u: any) => u.role === "owner").accountId;
+  const poolResponse = await call("/api/admin/storage-pool");
+  const pool: any = await poolResponse.json(); assert.equal(poolResponse.status, 200, JSON.stringify(pool));
+  const ownerId = pool.users.find((u: any) => u.role === "owner").accountId;
   assert.equal((await call(`/api/admin/accounts/${ownerId}/pool-quota`, "PUT", { storageLimitBytes: 1000000, trafficLimitBytes: 1000000 })).status, 200);
   const bytes = await sharp({ create: { width: 160, height: 160, channels: 3, background: "#9cbdb9" } }).png().toBuffer();
-  const upload = (auth = cookie) => fetch(base + "/api/assets/uploads?purpose=avatar", { method: "POST", headers: { cookie: auth, "content-type": "image/png" }, body: bytes });
+  const upload = (auth = cookie, input = bytes) => fetch(base + "/api/assets/uploads?purpose=avatar", { method: "POST", headers: { cookie: auth, "content-type": "image/png" }, body: input });
   assert.equal((await upload("")).status, 401);
   const response = await upload(); assert.equal(response.status, 201); const asset = await response.json() as Asset;
   assert.equal(asset.storageRefs[0]!.sourceId, "lifeos-pool");
@@ -126,7 +129,63 @@ test("avatar object storage uses quotas, authenticated access and cached reads w
   assert.equal(state().traffic, asset.sizeBytes);
   assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`)).headers.get("x-lifeos-asset-source"), "derived-cache"); assert.equal(state().traffic, asset.sizeBytes);
   const member = await call("/api/admin/accounts", "POST", { username: "member", password: "isolated-member-password", displayName: "Member", spaceName: "Member" }); assert.equal(member.status, 201);
+  const memberAccount = (await member.json() as { account: { id: string; tenantId: string } }).account;
+  assert.equal((await call(`/api/admin/accounts/${memberAccount.id}/pool-quota`, "PUT", { storageLimitBytes: 1000000, trafficLimitBytes: 1000000 })).status, 200);
   const otherLogin = await call("/api/auth/login", "POST", { username: "member", password: "isolated-member-password" });
   const otherCookie = otherLogin.headers.get("set-cookie")!.split(";")[0]!;
   assert.equal((await call(`/api/assets/${asset.id}/thumbnail?w=160`, "GET", undefined, otherCookie)).status, 404);
+
+  const freshBytes = await sharp({ create: { width: 160, height: 160, channels: 3, background: "#123456" } }).png().toBuffer();
+  const memberUpload = await upload(otherCookie); assert.equal(memberUpload.status, 201);
+  const memberAsset = await memberUpload.json() as Asset;
+  await call("/api/assets/thumbnails", "DELETE", undefined, otherCookie);
+  const orphanDirectory = join(root, "data", "tenants", memberAccount.tenantId, "assets", "uploads");
+  mkdirSync(orphanDirectory, { recursive: true });
+  const orphanFile = join(orphanDirectory, "retained-original.bin");
+  const retained = Buffer.from("original retained after a space replacement");
+  writeFileSync(orphanFile, retained);
+  const snapshot: any = await (await call("/api/admin/storage-pool")).json();
+  assert.equal(snapshot.legacyInventoryComplete, false, "admin inventory remains global");
+  assert.equal(snapshot.users.find((u: any) => u.accountId === memberAccount.id).unassignedLegacyBytes, retained.length);
+  const blocked = async (response: Response) => {
+    assert.equal(response.status, 409);
+    assert.equal((await response.json() as { error: string }).error, "pool_accounting_unreconciled");
+  };
+  await blocked(await upload(otherCookie, freshBytes));
+  await blocked(await call(`/api/assets/${memberAsset.id}/thumbnail?w=160`, "GET", undefined, otherCookie));
+  await blocked(await call(`/api/admin/accounts/${ownerId}/pool-quota`, "PUT", { storageLimitBytes: 1000000, trafficLimitBytes: 1000000 }));
+  const putsBefore = state().puts;
+  const ownerFresh = await upload(cookie, freshBytes);
+  assert.equal(ownerFresh.status, 201, "another space's local files cannot block this fresh upload");
+  const freshAsset = await ownerFresh.json() as Asset;
+  assert.equal(state().puts, putsBefore + 1);
+  await call("/api/assets/thumbnails", "DELETE");
+  assert.equal((await call(`/api/assets/${freshAsset.id}/thumbnail?w=160`)).status, 200, "uncached owner download also ignores other spaces' local files");
+
+  // Shared ledger problems still block the healthy owner, in both directions.
+  const blockedBytes = await sharp({ create: { width: 160, height: 160, channels: 3, background: "#654321" } }).png().toBuffer();
+  const workerState = state();
+  writeFileSync(statePath, JSON.stringify({ ...workerState, traffic: workerState.traffic + 1 }));
+  await blocked(await upload(cookie, blockedBytes));
+  writeFileSync(statePath, JSON.stringify({ ...workerState, traffic: workerState.traffic - 1 }));
+  await blocked(await upload(cookie, blockedBytes));
+  writeFileSync(statePath, JSON.stringify({ ...workerState, objects: { ...workerState.objects, unknown: { bytes: 1 } } }));
+  await blocked(await upload(cookie, blockedBytes));
+  writeFileSync(statePath, JSON.stringify({ ...workerState, objects: {} }));
+  await blocked(await upload(cookie, blockedBytes));
+  writeFileSync(statePath, JSON.stringify(workerState));
+  const ledger = new StoragePoolStore(config.databasePath);
+  try {
+    const pending = ledger.reserveUpload(memberAccount.id, "pending-avatar", 1, 1000000);
+    await blocked(await upload(cookie, blockedBytes));
+    ledger.releaseUploadReservation(pending);
+    const pendingDownload = ledger.reserveDownload(memberAccount.id, memberAsset.id, memberAsset.storageRefs[0]!.sourceRef, snapshot.month, 1000000);
+    await blocked(await upload(cookie, blockedBytes));
+    ledger.markDownloadUncertain(pendingDownload.id);
+    await blocked(await upload(cookie, blockedBytes));
+    ledger.finishDownload(pendingDownload.id, snapshot.month, pendingDownload.bytes);
+    writeFileSync(statePath, JSON.stringify({ ...workerState, traffic: workerState.traffic + pendingDownload.bytes }));
+  } finally { ledger.close(); }
+  assert.deepEqual(readFileSync(orphanFile), retained, "no original may be moved or deleted by preflight");
+  assert.equal((await upload(cookie, blockedBytes)).status, 201, "owner recovers once shared accounting is healthy");
 });

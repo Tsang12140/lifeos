@@ -1,4 +1,4 @@
-import { assertValidTextEntityDecisions, type AssetLink, type TextEntityDecision } from "@lifeos/core";
+import { assertValidEntityRef, assertValidTextEntityDecisions, type AssetLink, type EntityRef, type TextEntityDecision } from "@lifeos/core";
 import type { ComposerKind } from "./app-types";
 import type { AuthState } from "./api";
 import { scopedKey } from "./storage-scope.ts";
@@ -15,6 +15,12 @@ export interface ComposerDraft {
   readonly isPrivate: boolean;
   readonly shots: readonly AssetLink[];
   readonly entityMentions?: readonly TextEntityDecision[];
+  readonly entityRefs?: readonly EntityRef[];
+  readonly occurredAt?: string;
+  readonly occurredDirty?: boolean;
+  readonly dueAt?: string;
+  readonly recordingDate?: string;
+  readonly isBackfill?: boolean;
 }
 
 export function composerDraftScope(authResolved: boolean, auth: AuthState): string | null {
@@ -55,14 +61,17 @@ export function readComposerDraft(scope: string, storage: Pick<Storage, "getItem
       || typeof draft.isPrivate !== "boolean") return null;
     let mentions = (value as { entityMentions?: unknown }).entityMentions;
     if (mentions !== undefined) { try { assertValidTextEntityDecisions(mentions, draft.content); } catch { mentions = undefined; } }
-    return { content: draft.content, kind: draft.kind as ComposerKind, isPrivate: draft.isPrivate, shots: shotsOf(draft.shots), ...(mentions === undefined ? {} : { entityMentions: mentions as readonly TextEntityDecision[] }) };
+    const metadata = value as Partial<ComposerDraft>;
+    const refs = Array.isArray(metadata.entityRefs) && metadata.entityRefs.length <= 128 ? metadata.entityRefs.filter(ref => { try { assertValidEntityRef(ref); return true; } catch { return false; } }) : [];
+    const time = (input: unknown) => typeof input === "string" && /^(?:\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)?$/.test(input) ? input : "";
+    return { content: draft.content, kind: draft.kind as ComposerKind, isPrivate: draft.isPrivate, shots: shotsOf(draft.shots), ...(mentions === undefined ? {} : { entityMentions: mentions as readonly TextEntityDecision[] }), ...(metadata.entityRefs === undefined ? {} : { entityRefs: refs }), ...(metadata.occurredAt === undefined ? {} : { occurredAt: time(metadata.occurredAt) }), ...(metadata.occurredDirty === undefined ? {} : { occurredDirty: metadata.occurredDirty === true }), ...(metadata.dueAt === undefined ? {} : { dueAt: time(metadata.dueAt) }), ...(metadata.recordingDate === undefined ? {} : { recordingDate: time(metadata.recordingDate).slice(0, 10) }), ...(metadata.isBackfill === undefined ? {} : { isBackfill: metadata.isBackfill === true }) };
   } catch { return null; }
 }
 
 export function writeComposerDraft(scope: string, draft: ComposerDraft, storage: Pick<Storage, "setItem" | "removeItem"> = window.localStorage): boolean {
   try {
     const storageKey = key(scope);
-    if (!draft.content && draft.shots.length === 0) { storage.removeItem(storageKey); return true; }
+    if (!draft.content && draft.shots.length === 0 && !draft.entityRefs?.length && !draft.occurredDirty && !draft.dueAt) { storage.removeItem(storageKey); return true; }
     if (draft.content.length > MAX_CONTENT || draft.shots.length > MAX_SHOTS) return false;
     if (draft.entityMentions !== undefined) assertValidTextEntityDecisions(draft.entityMentions, draft.content);
     storage.setItem(storageKey, JSON.stringify({ version: 1, scope, ...draft, savedAt: new Date().toISOString() }));

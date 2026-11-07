@@ -6,7 +6,7 @@ import { DateStepGlyph } from "./date-step-glyph";
 import { GalleryNavIcon } from "./gallery-nav-icon";
 import { assetContentUrl, assetThumbUrl, viewerThumbUrl } from "./asset-urls";
 import { boundPhoto, fitPhoto, fitTransform, zoomPhoto, type PhotoTransform } from "./asset-preview-model";
-import { PhotoInformation, photoSummary, usePhotoInfo, type PhotoInfo } from "./photo-info";
+import { PhotoInformation, usePhotoInfo, type PhotoInfo } from "./photo-info";
 import { lockDialogScroll } from "./dialog-scroll-lock";
 import { recordText } from "./app-meta";
 import { lifeTimeDate, lifeTimeTime } from "./time";
@@ -39,6 +39,11 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 760px)").matches);
   const [sheet, setSheet] = useState(false);
   const [entryPrompt, setEntryPrompt] = useState(false);
+  // The owner's body rides under the photo on phones instead of hiding behind a
+  // tap. Three lines by default; the rest stays one tap away, not one screen away.
+  const [captionOpen, setCaptionOpen] = useState(false);
+  const [captionClamped, setCaptionClamped] = useState(false);
+  const captionBody = useRef<HTMLParagraphElement | null>(null);
   const entryClick = useRef<{ ownerId: string; until: number } | null>(null);
   const entryTimer = useRef<number | null>(null);
   const entryPress = useRef<{ x: number; y: number; moved: boolean } | null>(null);
@@ -119,10 +124,16 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
     query.addEventListener("change", change); return () => query.removeEventListener("change", change);
   }, []);
   useEffect(() => {
-    setSheet(false); setSaveError(""); setEntryPrompt(false); setVideoStarted(false); entryClick.current = null;
+    setSheet(false); setSaveError(""); setEntryPrompt(false); setVideoStarted(false); entryClick.current = null; setCaptionOpen(false);
     if (entryTimer.current !== null) window.clearTimeout(entryTimer.current);
     pointers.current.clear(); gesture.current = null;
   }, [key]);
+  // Only the third line's overflow earns a "全文" button; short captions keep none.
+  useLayoutEffect(() => {
+    if (!mobile || captionOpen) { setCaptionClamped(false); return; }
+    const element = captionBody.current; if (!element) return;
+    setCaptionClamped(element.scrollHeight - element.clientHeight > 2);
+  }, [mobile, captionOpen, key, size.width, size.height]);
   useEffect(() => () => { if (entryTimer.current !== null) window.clearTimeout(entryTimer.current); }, []);
   useEffect(() => { if (reading.current) reading.current.scrollTop = 0; }, [owner?.id]);
   useEffect(() => {
@@ -227,7 +238,6 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
     if (entryTimer.current !== null) window.clearTimeout(entryTimer.current);
     entryTimer.current = window.setTimeout(() => { entryClick.current = null; setEntryPrompt(false); entryTimer.current = null; }, 1600);
   };
-  const summary = video ? [] : photoSummary(info.value);
   const scale = fit * view.zoom;
   const imageStyle: CSSProperties = { width: dimensions.width * scale, height: dimensions.height * scale, transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) rotate(${entry.rotation}deg)` };
   const painted = useRef<{ style: CSSProperties; name: string }>({ style: imageStyle, name: "照片" });
@@ -235,13 +245,18 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
   const backgroundUrl = video ? undefined : presentation.photo?.url;
   const zoom = (factor:number) => changeView(zoomView(view,view.zoom*factor,{x:0,y:0}));
   const button = (label:string, icon:ReactNode, action:()=>void, disabled=false) => <button type="button" className="photo-tool" aria-label={label} title={label} onClick={action} disabled={disabled}>{icon}</button>;
-  return <dialog ref={dialog} className={`asset-preview photo-reader${mobile && sheet ? " has-reading-sheet" : ""}`} aria-label="照片预览" aria-modal="true" onCancel={event=>{event.preventDefault();event.stopPropagation();if(mobile&&sheet)setSheet(false);else onClose();}}
+  // Rendered inside the body paragraph so it can float into the last line; it must
+  // stop propagation or the tap would also fire the paragraph's "open the diary".
+  const moreButton = captionOpen || captionClamped
+    ? <button type="button" className="photo-mobile-more" aria-expanded={captionOpen} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();setCaptionOpen(value=>!value);}}>{captionOpen ? null : <span className="photo-mobile-ellipsis" aria-hidden="true">…</span>}<span className="photo-mobile-more-label">{captionOpen ? "收起" : "全文"}</span></button>
+    : null;
+  return <dialog ref={dialog} className={`asset-preview photo-reader${!video && view.zoom > 1.001 ? " is-zoomed" : ""}`} aria-label="照片预览" aria-modal="true" onCancel={event=>{event.preventDefault();event.stopPropagation();if(mobile&&sheet)setSheet(false);else onClose();}}
     onPointerDown={event=>{blankPress.current=event.target===event.currentTarget&&event.isPrimary&&event.button===0?{x:event.clientX,y:event.clientY,moved:false}:null;}}
     onPointerMove={event=>{const press=blankPress.current;if(press&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>6)press.moved=true;}}
     onPointerCancel={()=>{blankPress.current=null;}}
     onClick={event=>{const press=blankPress.current;blankPress.current=null;if(event.target===event.currentTarget&&press&&!press.moved){if(mobile&&sheet)setSheet(false);else onClose();}}}>
     <span className="asset-preview-backdrop" aria-hidden="true" style={{"--preview-photo":backgroundUrl?`url(${JSON.stringify(backgroundUrl)})`:"none"} as CSSProperties}/>
-    <div className="asset-preview-top-actions"><button type="button" className="asset-preview-close" aria-label="关闭预览" onClick={onClose}><X size={20}/></button></div>
+    <div className="asset-preview-top-actions">{mobile && !video ? <button type="button" className="asset-preview-info-button" aria-label={sheet?"收起照片信息":"照片信息"} aria-expanded={sheet} aria-controls="photo-reader-details" onClick={()=>setSheet(value=>!value)}><Info size={20}/></button> : null}<button type="button" className="asset-preview-close" aria-label="关闭预览" onClick={onClose}><X size={20}/></button></div>
     <section className="photo-reader-main" aria-label="照片查看区">
       <figure className="asset-preview-figure" data-load-state={status}>
         <div ref={stage} className="asset-preview-image-stage" data-zoom={view.zoom} data-rotation={entry.rotation} data-x={view.x} data-y={view.y} style={{cursor:video?"default":view.zoom>1?"grab":"default"}} onPointerDown={down} onPointerMove={move} onPointerUp={event=>up(event)} onPointerCancel={event=>up(event,true)} onDoubleClick={event=>{if(!video)changeView(view.zoom>1.001?fitTransform():zoomView(view,1/fit,point(event.clientX,event.clientY)));}} onClick={event=>{
@@ -266,6 +281,19 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
           })}
         </figcaption>
       </figure>
+        {mobile && owner && recordText(owner) ? <div className="photo-mobile-caption" data-open={captionOpen ? "true" : "false"}>
+          <p ref={captionBody} className="photo-reading-body photo-mobile-body" role="link" tabIndex={0} aria-label="日记正文，连按两次进入时间轴" onPointerDown={event => { entryPress.current = { x: event.clientX, y: event.clientY, moved: false }; }} onPointerMove={event => { const press = entryPress.current; if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 6) press.moved = true; }} onPointerCancel={() => { entryPress.current = null; }} onClick={() => { enterDiary(); entryPress.current = null; }} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); entryPress.current = null; enterDiary(); } }}>
+            {captionOpen || !moreButton ? null : <span className="photo-mobile-anchor" aria-hidden="true" />}
+            {captionOpen ? null : moreButton}
+            {recordText(owner)}
+            {captionOpen ? moreButton : null}
+          </p>
+        </div> : null}
+      {mobile && owner ? <div className="photo-mobile-datebar">
+        <button type="button" className="photo-mobile-step" aria-label="上一篇日记" title="上一篇日记" disabled={saving || previousDiary < 0} onClick={() => onIndexChange(previousDiary)}><DateStepGlyph direction="left" /></button>
+        <time>{lifeTimeDate(owner.occurredAt ?? owner.createdAt)}{lifeTimeTime(owner.occurredAt ?? owner.createdAt) ? ` ${lifeTimeTime(owner.occurredAt ?? owner.createdAt)}` : ""}</time>
+        <button type="button" className="photo-mobile-step" aria-label="下一篇日记" title="下一篇日记" disabled={saving || nextDiary < 0} onClick={() => onIndexChange(nextDiary)}><DateStepGlyph direction="right" /></button>
+      </div> : null}
       <div className="photo-toolbar" role="group" aria-label="图片工具">
         {!video?<>
           {button("向左旋转",<RotateCcw size={18}/>,()=>void rotate(-90),saving)}
@@ -283,14 +311,13 @@ export function AssetPreview({ assetIds, index, assets, images, owners, onClose,
     </section>
     {index>0?<button type="button" className="asset-preview-nav asset-preview-nav-prev" disabled={saving} aria-label="上一张" title="上一张（←）" onClick={()=>navigate(-1)}><DateStepGlyph direction="left" /></button>:null}
     {index<assetIds.length-1?<button type="button" className="asset-preview-nav asset-preview-nav-next" disabled={saving} aria-label="下一张" title="下一张（→）" onClick={()=>navigate(1)}><DateStepGlyph direction="right" /></button>:null}
-    <aside className="photo-reader-sidebar" id="photo-reader-details" hidden={mobile&&!sheet} aria-label="日记与照片信息">
-      {owner?<div className="photo-diary-navigation" role="group" aria-label="切换日记"><button type="button" className="photo-tool" aria-label="上一篇日记" title="上一篇日记" disabled={saving||previousDiary<0} onClick={()=>onIndexChange(previousDiary)}><DateStepGlyph direction="left" /></button><time>{lifeTimeDate(owner.occurredAt??owner.createdAt)}{lifeTimeTime(owner.occurredAt??owner.createdAt)?` ${lifeTimeTime(owner.occurredAt??owner.createdAt)}`:""}</time><button type="button" className="photo-tool" aria-label="下一篇日记" title="下一篇日记" disabled={saving||nextDiary<0} onClick={()=>onIndexChange(nextDiary)}><DateStepGlyph direction="right" /></button></div>:null}
+    <aside className="photo-reader-sidebar" id="photo-reader-details" hidden={mobile&&!sheet} aria-label={mobile?"照片信息":"日记与照片信息"}>
+      {owner&&!mobile?<div className="photo-diary-navigation" role="group" aria-label="切换日记"><button type="button" className="photo-tool" aria-label="上一篇日记" title="上一篇日记" disabled={saving||previousDiary<0} onClick={()=>onIndexChange(previousDiary)}><DateStepGlyph direction="left" /></button><time>{lifeTimeDate(owner.occurredAt??owner.createdAt)}{lifeTimeTime(owner.occurredAt??owner.createdAt)?` ${lifeTimeTime(owner.occurredAt??owner.createdAt)}`:""}</time><button type="button" className="photo-tool" aria-label="下一篇日记" title="下一篇日记" disabled={saving||nextDiary<0} onClick={()=>onIndexChange(nextDiary)}><DateStepGlyph direction="right" /></button></div>:null}
       <div className="photo-reader-scroll" ref={reading}>
-        {owner?<article className="photo-reading" key={owner.id} data-record-id={owner.id}>{recordText(owner)?<p className="photo-reading-body" role="link" tabIndex={0} aria-label="日记正文，连按两次进入时间轴" onPointerDown={event=>{entryPress.current={x:event.clientX,y:event.clientY,moved:false};}} onPointerMove={event=>{const press=entryPress.current;if(press&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>6)press.moved=true;}} onPointerCancel={()=>{entryPress.current=null;}} onClick={event=>{enterDiary();entryPress.current=null;}} onKeyDown={event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();entryPress.current=null;enterDiary();}}}>{recordText(owner)}</p>:null}</article>:null}
+        {owner&&!mobile?<article className="photo-reading" key={owner.id} data-record-id={owner.id}>{recordText(owner)?<p className="photo-reading-body" role="link" tabIndex={0} aria-label="日记正文，连按两次进入时间轴" onPointerDown={event=>{entryPress.current={x:event.clientX,y:event.clientY,moved:false};}} onPointerMove={event=>{const press=entryPress.current;if(press&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>6)press.moved=true;}} onPointerCancel={()=>{entryPress.current=null;}} onClick={event=>{enterDiary();entryPress.current=null;}} onKeyDown={event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();entryPress.current=null;enterDiary();}}}>{recordText(owner)}</p>:null}</article>:null}
         {!video?<div className="photo-information-host"><PhotoInformation key={id} info={info} mobile={mobile}/></div>:null}
       </div>
     </aside>
     {entryPrompt?<div className="photo-entry-toast" role="status">再点击一次就进入正文</div>:null}
-    {mobile?<button className="photo-reading-toggle" type="button" aria-label={sheet?"收起阅读面板":"查看日记与照片信息"} aria-expanded={sheet} aria-controls="photo-reader-details" onClick={()=>setSheet(v=>!v)}><span>{owner?lifeTimeDate(owner.occurredAt??owner.createdAt):summary.find(s=>s.kind==="time")?.text??"照片信息"}</span>{owner?<span>日记与照片信息</span>:null}<Info size={17}/></button>:null}
   </dialog>;
 }

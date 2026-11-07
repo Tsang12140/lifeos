@@ -7,6 +7,7 @@ import type {
   AssetRole,
   CycleIntimacyModuleData,
   DaySummary,
+  RecordSummary,
   Entity,
   EntityKind,
   EntityRef,
@@ -63,6 +64,10 @@ export interface SummariesResponse {
   readonly provider: string;
   readonly model?: string;
   readonly ai: boolean;
+}
+
+export interface CalendarRecordSummariesResponse {
+  readonly items: readonly RecordSummary[];
 }
 
 export interface AuthState {
@@ -345,6 +350,15 @@ export interface MovieEntityRef {
   readonly label?: string;
 }
 
+export interface MovieCatalogStatus {
+  /** 库存在且能打开。false 时界面要告诉主人怎么建库，而不是假装「没搜到」。 */
+  readonly available: boolean;
+  readonly path: string;
+  readonly titles: number;
+  readonly terms: number;
+  readonly sizeMb: number;
+}
+
 export interface MovieModuleStatus {
   readonly enabled: boolean;
   readonly configured: boolean;
@@ -352,6 +366,8 @@ export interface MovieModuleStatus {
   readonly connected: boolean;
   readonly provider?: string;
   readonly message?: string;
+  /** 本地 IMDb 片库：有它就不需要 TMDb Key 也能搜片。 */
+  readonly catalog?: MovieCatalogStatus;
 }
 
 export interface MovieResolveCandidate extends Partial<MovieEntity> {

@@ -5,11 +5,24 @@
 .record-place-photo { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; border-radius: 8px; overflow: hidden; background: var(--chip-bg, #eeede8); color: var(--muted); }
 .record-place-photo img { width: 100%; height: 100%; object-fit: cover; }
 .record-place-copy { min-width: 0; display: grid; gap: 4px; }
-.timeline-footer .timeline-footer-places { grid-column: 1; min-width: 0; }
+/* 底部缩略卡区：地点卡与影片卡同住一格、同高、并排换行（2026-11-08）。
+   两张卡的高度各自锁在 60（44 内容 + 7×2 内边距 + 1×2 边框），所以并排时不用任何对齐把戏。
+   `align-items: flex-start` 是给「一条记录挂了两个地点」那种多行情形的：子容器不互相拉伸，
+   否则地点卡会被影片卡那一行拽高。 */
+.timeline-footer .timeline-footer-places { grid-column: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
 .timeline-footer .timeline-footer-places:empty { display: none; }
-.timeline-footer:has(.record-place-card) { grid-template-columns: minmax(0, 1fr) max-content; align-items: end; }
-.timeline-footer:has(.record-place-card) > .relation-row { grid-column: 1 / -1; }
-.timeline-footer:has(.record-place-card) > .timeline-actions { grid-column: 2; grid-row: auto; }
+/* 判据从 `.record-place-card` 放宽到「places 区里有东西」—— 影片卡不在这条记录里也算。
+   只判地点卡的话，一条只有影片卡的记录会退回单列，卡片就和按钮分居两行了。 */
+.timeline-footer:has(.timeline-footer-places:not(:empty)) { grid-template-columns: minmax(0, 1fr) max-content; align-items: end; }
+.timeline-footer:has(.timeline-footer-places:not(:empty)) > .relation-row { grid-column: 1 / -1; }
+.timeline-footer:has(.timeline-footer-places:not(:empty)) > .timeline-actions { grid-column: 2; grid-row: auto; }
+/* 手机（560 以下）footer 已经退回单列、按钮默认回第 1 列，但上面那条 `grid-column:2`
+   特异性比 styles.css 里的媒体查询高，会把它又推回第 2 列 —— 单列网格没有第 2 列，
+   浏览器现造一条隐式轨道，按钮被挤到卡片右侧外面（375px 实测按钮 y 跑到视口上方 639px）。
+   显式放开一次，别删：这条是给「有缩略卡的记录」擦屁股的。 */
+@media (max-width: 560px) {
+  .timeline-footer:has(.timeline-footer-places:not(:empty)) > .timeline-actions { grid-column: 1; }
+}
 .record-place-copy strong, .record-place-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .record-place-copy strong { font-size: 14px; font-weight: 600; }
 .record-place-copy small { font-size: 12px; color: var(--muted); }

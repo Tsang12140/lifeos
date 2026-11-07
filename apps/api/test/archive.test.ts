@@ -116,6 +116,10 @@ test("full encrypted archive round trip includes originals, deleted/private reco
   const download = await fetch(source.base + `/api/archive/jobs/${started.id}/download`); const encrypted = Buffer.from(await download.arrayBuffer()); equal(Number(download.headers.get("content-length")), encrypted.length); equal(exported.bytes, encrypted.length); ok(!encrypted.includes(Buffer.from("非常私密"))); ok(!encrypted.includes(bytes));
   equal((await fetch(target.base + `/api/archive/jobs/${started.id}/download`)).status, 404, "job belongs only to source space");
   await json(target.base, "/api/records", { kind: "journal", content: "目标当前内容" });
+  const previousRef = "uploads/previous-import.jpg";
+  mkdirSync(join(target.dir, "assets", "uploads"), { recursive: true });
+  writeFileSync(join(target.dir, "assets", previousRef), bytes);
+  target.app.repository.insertAsset({ id: "previous-import", kind: "photo", mediaType: "image/jpeg", storageRefs: [{ sourceId: "local", sourceRef: previousRef }] });
   const before = spaceFingerprint(target.app.repository.portableSpace());
   const wrong = await upload(target.base, encrypted, "wrong-test-password"); equal(wrong.phase, "failed"); equal(spaceFingerprint(target.app.repository.portableSpace()), before); await fetch(target.base + `/api/archive/jobs/${wrong.id}`, { method: "DELETE" });
   const tampered = Buffer.from(encrypted); tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 1;
@@ -124,6 +128,8 @@ test("full encrypted archive round trip includes originals, deleted/private reco
   equal((await json(target.base, "/api/archive/commit", { id: prepared.id })).response.status, 400, "replacement needs explicit confirmation");
   const committed = await json(target.base, "/api/archive/commit", { id: prepared.id, replaceConfirmed: true }); equal(committed.response.status, 200, JSON.stringify(committed.value));
   const data = target.app.repository.exportData(); equal(data.records.length, 1); equal(data.records[0]!.id, privateRecord.id); equal(data.records[0]!.isPrivate, true);
+  equal(target.app.repository.findAssetById("previous-import"), null, "replacement removes the previous space's asset rows");
+  deepEqual(readFileSync(join(target.dir, "assets", previousRef)), bytes, "previous originals remain for the pre-import backup, outside current asset rows");
   equal(target.app.repository.portableSpace().records.rows.length, 2); equal(target.app.repository.portableSpace().day_summaries.rows.length, 1);
   const asset = target.app.repository.findAssetById("photo")!; ok(asset.storageRefs[0]!.sourceRef.startsWith("uploads/archive-")); deepEqual(readFileSync(join(target.dir, "assets", asset.storageRefs[0]!.sourceRef)), bytes);
   const trash = target.app.repository.findAssetTrash("discarded")!; equal(trash.restoredAt, undefined); deepEqual(readFileSync(join(target.dir, "assets", trashPathFor(trash.relativePath)!)), bytes);

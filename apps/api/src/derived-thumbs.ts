@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { dirname, resolve } from "node:path";
 import type { StorageReference } from "@lifeos/core";
 import sharp from "sharp";
+import { createPainterlyDerivativeCache, type PainterlyDerivativeCache } from "./painterly-derivatives.js";
 
 /**
  * Derived thumbnails — the "regenerable derived data" `docs/requirements.md` asks
@@ -91,6 +92,8 @@ export interface ThumbnailStats {
 }
 
 export interface ThumbnailCache {
+  /** Durable, versioned oil-paint derivatives for mobile week-card photo bands. */
+  readonly painterly: PainterlyDerivativeCache;
   /** The file holding `width` px of `sourceFile`, derived on first use. */
   ensure(reference: StorageReference, sourceFile: string, width: ThumbnailWidth, rotation?: number): Promise<string>;
   /** Returns an existing cache entry without needing to open the original. */
@@ -102,12 +105,14 @@ export interface ThumbnailCache {
 
 export function createThumbnailCache(dataDirectory: string): ThumbnailCache {
   const directory = thumbnailDirectory(dataDirectory);
+  const painterly = createPainterlyDerivativeCache(dataDirectory);
   // A nine-square grid fires nine requests at once, and the browser asks for the two
   // widths of one background separately; without this map each arrival would decode
   // the same original again.
   const pending = new Map<string, Promise<string>>();
 
   return {
+    painterly,
     cached(reference, width, rotation = 0) {
       // Pool references are created only by the upload route and always carry a
       // content hash, so their cache key does not require an original download.

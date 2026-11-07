@@ -27,6 +27,9 @@ import {
   isNoteOnlyDay,
   parseExportJson,
   periodEndSpan,
+  periodRuns,
+  periodStartForEnd,
+  periodTransferGroups,
   ruleSummaryText,
   serializeExportJson,
   summaryFingerprint,
@@ -86,6 +89,27 @@ test("candidate review preserves spaced aliases, longest names and ambiguous ide
   equal(findEntityCandidates("B\n咖啡店", entities).length, 0);
 });
 
+test("a library title is offered as a candidate exactly like a place", () => {
+  const entities: Entity[] = [
+    { id: "dream", type: "movie", name: "盗梦空间", releaseYear: 2010 },
+    { id: "shop", type: "place", name: "云堤岸咖啡" },
+  ];
+  // 《》 stays outside the candidate: the stored decision text has to equal the
+  // entity name, because rebaseEntityDecisions drops anything that no longer
+  // matches the prose byte for byte.
+  const candidates = findEntityCandidates("今晚重看《盗梦空间》，顺手记下云堤岸咖啡。", entities);
+  deepStrictEqual(candidates.map((item) => item.text), ["盗梦空间", "云堤岸咖啡"]);
+  deepStrictEqual(candidates.map((item) => item.entities.map((entity) => entity.type)), [["movie"], ["place"]]);
+  const text = "今晚重看《盗梦空间》。";
+  const decisions = [{ start: 5, end: 9, text: "盗梦空间", entityId: "dream", entityType: "movie" as const }];
+  const mentions = resolveTextEntityMentions(text, entities, decisions);
+  equal(mentions.length, 1);
+  equal(mentions[0]!.entityType, "movie");
+  equal(text.slice(mentions[0]!.start, mentions[0]!.end), "盗梦空间");
+  // Movies get no typing marker of their own: `#` still resolves places only.
+  equal(findEntityMentions("#盗梦空间", entities).length, 0);
+});
+
 test("confirmed and dismissed occurrences survive surrounding edits without rewriting text", () => {
   const entities: Entity[] = [{ id: "li", type: "person", name: "小李" }];
   const text = "小李来了，小李走了。";
@@ -132,6 +156,48 @@ test("a recorded period end replaces only the ends inside its own period", () =>
   deepStrictEqual(periodEndSpan([], "2026-09-25"), {});
   // An end before the first recorded start still belongs to that implicit period.
   deepStrictEqual(periodEndSpan(events, "2026-09-10"), { until: "2026-09-20" });
+});
+
+test("an end that skipped a month's start closes nothing instead of a whole cycle", () => {
+  const events = [
+    { id: "s1", date: "2026-09-22", kind: "period_start" as const },
+    { id: "e1", date: "2026-09-28", kind: "period_end" as const },
+    { id: "e2", date: "2026-10-26", kind: "period_end" as const },
+  ];
+  // 9 月那次已经结束；10/26 这期没记开始，不能反过来收尾 9/22 那次。
+  equal(periodStartForEnd(events, "2026-10-26"), undefined);
+  equal(periodStartForEnd(events, "2026-09-28"), "2026-09-22");
+  // 因此它不替换任何结束 —— 尤其不能把 9/28 带走。
+  deepStrictEqual(periodEndSpan(events, "2026-10-26"), {});
+  // 21 天上限的两端：20 天差算同一期，21 天差不算。
+  const edge = [{ id: "s", date: "2026-10-01", kind: "period_start" as const }];
+  equal(periodStartForEnd(edge, "2026-10-21"), "2026-10-01");
+  equal(periodStartForEnd(edge, "2026-10-22"), undefined);
+  deepStrictEqual(periodEndSpan(edge, "2026-10-22"), {});
+  // 日历只画一个月亮段：9/22–9/28，10/26 落单。
+  deepStrictEqual(periodRuns({ periodLength: 7 }, events), [
+    { start: "2026-09-22", end: "2026-09-28" },
+  ]);
+  // 同一份数据里若那期记了开始，结束就正常收尾，且不越到下一期。
+  deepStrictEqual(periodRuns({ periodLength: 7 }, [
+    { id: "a", date: "2026-09-22", kind: "period_start" },
+    { id: "b", date: "2026-10-20", kind: "period_start" },
+    { id: "c", date: "2026-10-26", kind: "period_end" },
+  ]), [
+    { start: "2026-09-22", end: "2026-09-28" },
+    { start: "2026-10-20", end: "2026-10-26" },
+  ]);
+});
+
+test("transfer groups keep an orphan end apart from the previous period", () => {
+  deepStrictEqual(periodTransferGroups([
+    { id: "s1", date: "2026-09-22", kind: "period_start" },
+    { id: "e1", date: "2026-09-28", kind: "period_end" },
+    { id: "e2", date: "2026-10-26", kind: "period_end" },
+  ]).map((group) => [group.start, group.end ?? null, group.eventIds.length]), [
+    ["2026-09-22", "2026-09-28", 2],
+    ["2026-10-26", "2026-10-26", 1],
+  ]);
 });
 
 const originalText = "今天试记一段原文：\"引号\"、冒号:、井号 #、反斜杠 \\\\，以及\n第二行。";

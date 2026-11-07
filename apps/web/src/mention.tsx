@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { BriefcaseBusiness, House, MapPin } from "lucide-react";
+import { BriefcaseBusiness, Film, House, MapPin } from "lucide-react";
 import {
   MENTION_MARKERS,
   entitySearchTerms,
@@ -169,8 +169,11 @@ export function RecordText({ text, entities, decisions, onOpenEntity }: { readon
     if (mention.start > cursor) parts.push(text.slice(cursor, mention.start));
     const entity = entitiesById.get(mention.entityId);
     const PlaceIcon = entity?.type === "place" && entity.role === "home" ? House : entity?.type === "place" && entity.role === "work" ? BriefcaseBusiness : MapPin;
-    const content = <>{mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : entity?.type === "person" ? <ContactMentionAvatar entity={entity} /> : null}{mention.matched}</>;
-    const props = { className: `mention-chip ${mention.entityType === "place" ? "is-place" : ""}`, title: entity ? `当前名称：${entity.name}\n本文称呼：${mention.matched}` : undefined };
+    // A movie reads like a title, not a link: same capsule as a place, the warm
+    // film tint, and the icon carries the type so nothing gets bolder.
+    const isMovie = mention.entityType === "movie";
+    const content = <>{mention.entityType === "place" ? <PlaceIcon size={13} strokeWidth={1.9} aria-hidden="true" /> : isMovie ? <Film size={13} strokeWidth={1.9} aria-hidden="true" /> : entity?.type === "person" ? <ContactMentionAvatar entity={entity} /> : null}{mention.matched}</>;
+    const props = { className: `mention-chip ${mention.entityType === "place" ? "is-place " : ""}${isMovie ? "is-movie" : ""}`.trim(), title: entity ? `当前名称：${entity.name}\n本文称呼：${mention.matched}` : undefined };
     parts.push(entity && onOpenEntity ? <button key={`${mention.entityId}-${mention.start}-${index}`} {...props} type="button" onClick={() => onOpenEntity(entity)}>{content}</button> : <span key={`${mention.entityId}-${mention.start}-${index}`} {...props}>{content}</span>);
     cursor = mention.end;
   });

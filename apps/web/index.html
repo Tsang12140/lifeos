@@ -52,6 +52,8 @@
         gap: 12px;
         width: max-content;
         max-width: calc(100vw - 48px);
+        max-height: min(62vh, 460px);
+        overflow: auto;
         transform: translateX(-50%);
         color: #5d6b82;
         font-size: .9rem;
@@ -60,7 +62,7 @@
       .startup-feedback p { margin: 0; }
       .startup-diagnostic-detail { color: #5d6b82; font-size: .78rem; overflow-wrap: anywhere; }
       .startup-feedback button {
-        min-height: 36px;
+        min-height: 40px;
         padding: 0 16px;
         border: 1px solid #cfd8e5;
         border-radius: 8px;
@@ -83,8 +85,36 @@
         function show(title, detail) {
           if (reported) return;
           var root = document.getElementById("root");
-          var content = root && root.querySelector(".startup-content");
-          if (!content) return;
+          if (!root) return;
+          var content = root.querySelector(".startup-content");
+          if (!content) {
+            // React had already taken over the root and then threw: React empties the
+            // element on unmount, taking this startup screen with it. Rebuild the frame
+            // here instead of returning — an unexplained white page is the one failure
+            // this app cannot afford, because a phone has no console to open.
+            root.textContent = "";
+            var shell = document.createElement("main");
+            shell.className = "startup-screen";
+            shell.setAttribute("role", "alert");
+            shell.setAttribute("aria-label", "LifeOS");
+            content = document.createElement("div");
+            content.className = "startup-content";
+            var brand = document.createElement("div");
+            brand.className = "startup-brand";
+            var mark = document.createElement("img");
+            mark.className = "startup-brand-mark";
+            mark.src = "/favicon.svg?v=3";
+            mark.width = 40;
+            mark.height = 40;
+            mark.alt = "";
+            var name = document.createElement("span");
+            name.textContent = "LifeOS";
+            brand.appendChild(mark);
+            brand.appendChild(name);
+            content.appendChild(brand);
+            shell.appendChild(content);
+            root.appendChild(shell);
+          }
           reported = true;
           var box = document.getElementById("startup-diagnostic");
           if (!box) {

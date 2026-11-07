@@ -5,6 +5,7 @@ pic-test/
 AGENTS.md
 docs/changelog.md
 docs/todo.md
+docs/收藏模块-设计方案.md
 .workbuddy/
 # AI 的工作记忆（含真实微信号、群名、聊天统计等私人内容），不进公开仓库。
 .workbuddy-ai/

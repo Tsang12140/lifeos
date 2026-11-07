@@ -20,6 +20,7 @@ import { nowInstant } from "./field-validate.js";
 import { assertTimeZone, datesBetween, filterDate, filterDateRange, sortTimeline } from "./timeline-query.js";
 import { buildManualDaySummary, buildOfflineDaySummary, createDaySummaryProvider, resolveDaySummaries } from "./summary.js";
 import { recordSummaryAttemptFailure } from "./assistant-attempt-log.js";
+import { recordSummarySourceRevision, resolveCalendarRecordSummaries } from "./record-summaries.js";
 import {
   createExportBundle,
   exportRecordMarkdown,
@@ -33,6 +34,22 @@ import { POOL_SOURCE_ID } from "./storage-pool.js";
 
 const RECORD_KINDS: readonly RecordKind[] = ["journal", "task", "event", "note"];
 const TASK_STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done", "cancelled"];
+const RECORD_SUMMARY_TIME_ZONE = "Asia/Shanghai";
+
+function updatePendingRecordSummary(repository: RouteContext["repository"], before: RecordView | null, after: RecordView): void {
+  const eligible = after.kind === "journal" && after.isPrivate !== true && !isDreamRecord(after)
+    && (after.body.edited ?? after.body.original).trim() !== "";
+  if (!eligible) {
+    repository.removePendingRecordSummary(after.id);
+    return;
+  }
+  const afterRevision = recordSummarySourceRevision(after, RECORD_SUMMARY_TIME_ZONE);
+  const beforeEligible = before !== null && before.kind === "journal" && before.isPrivate !== true && !isDreamRecord(before)
+    && (before.body.edited ?? before.body.original).trim() !== "";
+  if (!beforeEligible || recordSummarySourceRevision(before, RECORD_SUMMARY_TIME_ZONE) !== afterRevision) {
+    repository.queueRecordSummary(after.id, afterRevision, new Date().toISOString());
+  }
+}
 
 export const handleRecordsRoutes: RouteHandler = async (
   ctx: RouteContext,
@@ -59,6 +76,28 @@ export const handleRecordsRoutes: RouteHandler = async (
     const dates = datesBetween(from, to);
     if (dates.length > 42) throw new HttpError(400, "invalid_range", "range must not exceed 42 days");
     const items = await ctx.calendarDays.resolve(dates, new Date(), url.searchParams.get("hideDemo") === "1");
+    setJson(res, 200, { items });
+    return true;
+  }
+  if (pathname === "/api/calendar/record-summaries" && req.method === "GET") {
+    const from = parseDateQuery(url.searchParams.get("from"), "from");
+    const to = parseDateQuery(url.searchParams.get("to"), "to");
+    if (from === undefined || to === undefined || from > to) throw new HttpError(400, "invalid_range", "from and to are required");
+    if (datesBetween(from, to).length > 7) throw new HttpError(400, "invalid_range", "record summaries are limited to one week");
+    const timeZone = url.searchParams.get("timeZone") || "Asia/Shanghai";
+    assertTimeZone(timeZone);
+    const ids = [...new Set(url.searchParams.getAll("id").map((id) => id.trim()))];
+    if (ids.length > 21 || ids.some((id) => id === "" || id.length > 200)) {
+      throw new HttpError(400, "invalid_records", "record IDs are limited to 21 week-card entries");
+    }
+    const hideDemo = url.searchParams.get("hideDemo") === "1";
+    const records = ids.flatMap((id) => {
+      const record = repository.findById(id);
+      if (record === null || record.isPrivate === true || record.kind === "task" || record.kind === "note" || isDreamRecord(record) || (hideDemo && record.isDemo === true)) return [];
+      const date = dateForTime(record.occurredAt ?? record.createdAt, timeZone);
+      return date >= from && date <= to ? [record] : [];
+    });
+    const items = await resolveCalendarRecordSummaries(config, repository, records, timeZone);
     setJson(res, 200, { items });
     return true;
   }
@@ -307,6 +346,7 @@ export const handleRecordsRoutes: RouteHandler = async (
     repository.insert(record);
     const view = repository.findById(record.id);
     if (view === null) throw new Error("Inserted record could not be read back");
+    updatePendingRecordSummary(repository, null, view);
     setJson(res, 201, view);
     // An entry carrying pictures just landed: read the words off them, behind this
     // response rather than inside it. Whether there is anything worth reading is not
@@ -329,6 +369,7 @@ export const handleRecordsRoutes: RouteHandler = async (
     if (result !== "restored") throw new HttpError(409, result === "expired" ? "undo_expired" : "revision_conflict", result === "expired" ? "撤销时间已结束" : "记录已变化，请刷新后查看");
     const restored = repository.findById(id);
     if (!restored) throw new HttpError(409, "revision_conflict", "记录已变化，请刷新后查看");
+    updatePendingRecordSummary(repository, null, restored);
     setJson(res, 200, restored); return true;
   }
   const recordMatch = /^\/api\/records\/([^/]+)$/.exec(pathname);
@@ -360,6 +401,7 @@ export const handleRecordsRoutes: RouteHandler = async (
         if (latest === null) throw new HttpError(404, "not_found", "Record not found");
         throw new HttpError(409, "revision_conflict", "Record was changed; reload before deleting");
       }
+      repository.removePendingRecordSummary(id);
       if (input.undoable === true) { setJson(res, 200, repository.deletionReceipt(id)); return true; }
       setEmpty(res, 204);
       return true;
@@ -375,6 +417,7 @@ export const handleRecordsRoutes: RouteHandler = async (
     }
     const updated = repository.findById(id);
     if (updated === null) throw new Error("Updated record could not be read back");
+    updatePendingRecordSummary(repository, current, updated);
     setJson(res, 200, updated);
     // Photos are usually attached to an entry that already exists — one at a time, over
     // several saves. Each save nudges; the trigger collapses the burst (see PhotoTextTrigger).

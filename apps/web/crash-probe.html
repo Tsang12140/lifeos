@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- Not a product page. A throwaway surface for .review/probe-blank-screen.mjs:
+     it throws during render so the crash boundary can be checked without editing
+     real code. Vite only serves it in dev; `vite build` ignores it. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>crash probe</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { createElement } from "react";
+      import { createRoot } from "react-dom/client";
+      import { AppCrashBoundary } from "/src/app-crash.tsx";
+      import "/src/styles.css";
+      function Exploding() {
+        throw new Error("probe: 一条坏数据让渲染抛错");
+      }
+      createRoot(document.getElementById("root")).render(
+        createElement(AppCrashBoundary, null, createElement(Exploding))
+      );
+    </script>
+  </body>
+</html>

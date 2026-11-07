@@ -65,7 +65,8 @@ const QUICK_PICKS: readonly { readonly label: string; readonly at: (today: strin
   { label: "一个月后", at: (today) => shiftMonth(today, 1) },
 ];
 
-export function TaskScheduleField({ start, end, onStartChange, onEndChange, className = "composer-date-control", label = "任务时间" }: {
+export function TaskScheduleField({ sheet = false, start, end, onStartChange, onEndChange, className = "composer-date-control", label = "任务时间" }: {
+  readonly sheet?: boolean;
   readonly start: string;
   readonly end: string;
   readonly onStartChange: (value: string) => void;
@@ -205,14 +206,14 @@ export function TaskScheduleField({ start, end, onStartChange, onEndChange, clas
     onEndChange(combineDateTime(date, time));
   };
 
-  return <div className={`task-schedule ${className} ${open ? "is-open" : ""}`} ref={rootRef} data-task-schedule="on" data-range-start={start} data-range-end={end}>
+  return <div className={`task-schedule ${className} ${open ? "is-open" : ""} ${sheet ? "mobile-date-field" : ""}`} ref={rootRef} data-task-schedule="on" data-range-start={start} data-range-end={end}>
     <button type="button" className="task-schedule-trigger" onClick={openPanel} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}：开始 ${startDate === "" ? "未设置" : `${dayLabel(startDate)} ${timePartOf(start) || "全天"}`}，结束 ${endDate === "" ? "未设置" : `${dayLabel(endDate)} ${timePartOf(end) || "全天"}`}`}>
-      <CalendarRange size={15} strokeWidth={1.8} aria-hidden="true" />
+      <CalendarRange size={15} strokeWidth={1.8} aria-hidden="true" />{sheet ? <span className="mobile-field-label">计划时间</span> : null}
       <span className="task-schedule-part">{startDate === "" ? "开始" : dayLabel(startDate)}<span className="task-schedule-clock">{startDate ? timePartOf(start) || "全天" : ""}</span></span>
       <ArrowRight className="task-schedule-arrow" size={14} strokeWidth={1.8} aria-hidden="true" />
       <span className={`task-schedule-part ${endDate === "" ? "is-blank" : ""}`}>{endDate === "" ? "结束" : dayLabel(endDate)}<span className="task-schedule-clock">{endDate ? timePartOf(end) || "全天" : ""}</span></span>
     </button>
-    {open ? createPortal(<div ref={panelRef} className="task-schedule-panel date-control-popover" role="dialog" aria-label={`${label}选择器`}>
+    {open ? createPortal(<div ref={panelRef} data-mobile-sheet={sheet || undefined} className="task-schedule-panel date-control-popover" role="dialog" aria-label={`${label}选择器`}>
       {/* Always-on month paging. The single-day picker hides its month grid
           behind the header, which is what made crossing a month boundary a
           two-step errand; here the arrows are part of the panel. */}

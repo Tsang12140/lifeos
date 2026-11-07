@@ -29,6 +29,7 @@ import {
   type CycleIntimacyModuleConfig,
   type CycleIntimacyModuleData,
   type DaySummary,
+  type RecordSummary,
   type Entity,
   type EntityKind,
   type LifeTime,
@@ -420,6 +421,15 @@ export interface AssistantConversationRow {
   readonly batchId: string | null;
   readonly messageCount: number;
   readonly preview: string;
+}
+
+/** One confirmed personal phrase: the shorthand the owner writes, and what it means. */
+export interface TermNote {
+  /** Lower-cased key used for matching; `displayTerm` keeps what the owner typed. */
+  readonly term: string;
+  readonly displayTerm: string;
+  readonly meaning: string;
+  readonly confirmedAt: string;
 }
 
 export interface AssistantMessageRow {
@@ -827,6 +837,21 @@ export class SqliteRecordRepository {
         fingerprint TEXT NOT NULL,
         value_json TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS record_summaries (
+        record_id TEXT PRIMARY KEY NOT NULL,
+        fingerprint TEXT NOT NULL,
+        value_json TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS record_summary_pending (
+        record_id TEXT PRIMARY KEY NOT NULL,
+        source_revision TEXT NOT NULL,
+        queued_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS record_summary_automation (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        enabled_since TEXT NOT NULL,
+        last_attempted_date TEXT
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS cycle_intimacy_module (
         id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
         config_json TEXT NOT NULL
@@ -1084,6 +1109,13 @@ export class SqliteRecordRepository {
     this.#migrateLegacyDemoLabels();
     this.journalMemory = new JournalMemoryStore(this.#db);
     this.#db.exec("CREATE TABLE IF NOT EXISTS page_preferences (id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT");
+    // The owner's own vocabulary, kept deliberately tiny: one row per confirmed
+    // phrase, read only when the current message touches it. A full glossary in
+    // every prompt is the thing this table exists to avoid.
+    this.#db.exec("CREATE TABLE IF NOT EXISTS assistant_term_notes (term TEXT PRIMARY KEY, display_term TEXT NOT NULL, meaning TEXT NOT NULL, confirmed_at TEXT NOT NULL) STRICT");
+    // Asking is rate-limited per phrase per day, so a shortcut the model already
+    // asked about today is shown once and then left alone.
+    this.#db.exec("CREATE TABLE IF NOT EXISTS assistant_term_asks (term TEXT NOT NULL, asked_on TEXT NOT NULL, PRIMARY KEY (term, asked_on)) STRICT");
   }
 
   /**
@@ -1322,8 +1354,10 @@ export class SqliteRecordRepository {
     return cycleEventRevision(this.cycleIntimacyModule().events);
   }
 
-  /** Save the mobile editor's desired set for one date in one SQLite transaction. */
-  public editCycleIntimacyDay(date: string, kinds: readonly MobileCycleEventKind[], expectedRevision: string): CycleDayEditResult {
+  /** Save the mobile editor's desired set for one date in one SQLite transaction.
+   *  `periodStartDate` is the optional back-filled start for this very period: the
+   *  owner marked only its end, so the start is written in the same transaction. */
+  public editCycleIntimacyDay(date: string, kinds: readonly MobileCycleEventKind[], expectedRevision: string, periodStartDate?: string): CycleDayEditResult {
     if (new Set(kinds).size !== kinds.length || kinds.some((kind) => !isMobileCycleEventKind(kind))) {
       throw new Error("Invalid mobile cycle event set");
     }
@@ -1347,12 +1381,21 @@ export class SqliteRecordRepository {
       }
       nextEvents = [...nextEvents, ...additions];
 
+      // A back-filled start has to be in place before the end looks for its span,
+      // exactly like a same-day start above: otherwise the end closes nothing and
+      // gets drawn as the tail of the previous period.
+      if (periodStartDate !== undefined && !nextEvents.some((event) => event.kind === "period_start" && event.date === periodStartDate)) {
+        nextEvents = [...nextEvents, { id: randomUUID(), date: periodStartDate, kind: "period_start" }];
+      }
+
       // Add a same-day start before finding the end's span. If both endpoints
       // are chosen on one date, that new start begins a new run and must keep
       // the prior run's end instead of moving it.
       if (desired.has("period_end") && !currentKinds.has("period_end")) {
         const span = periodEndSpan(nextEvents, date);
-        if (span !== undefined) {
+        // An empty span means this end closes no recorded period; taking other
+        // ends away with it would erase a real one.
+        if (span.from !== undefined || span.until !== undefined) {
           nextEvents = nextEvents.filter((other) => other.kind !== "period_end"
             || (span.from !== undefined && other.date < span.from)
             || (span.until !== undefined && other.date >= span.until));
@@ -1533,19 +1576,30 @@ export class SqliteRecordRepository {
    * Otherwise a second end just accumulates — the calendar takes the first end after
    * the start and never draws the other, while the panel and the right-click menu,
    * which read the rows themselves, keep ticking it on its own day.
+   *
+   * `periodStartDate` back-fills the start of a period whose only marker is the
+   * end (the owner skipped the month's beginning). It is written first so the end
+   * has something to close; without it the end is an orphan and closes nothing.
    */
-  public addCycleIntimacyEvent(event: CycleIntimacyEvent): CycleIntimacyModuleData {
+  public addCycleIntimacyEvent(event: CycleIntimacyEvent, periodStartDate?: string): CycleIntimacyModuleData {
     const existing = this.cycleIntimacyModule();
-    const span = event.kind === "period_end" ? periodEndSpan(existing.events, event.date) : undefined;
-    const superseded = span === undefined ? [] : existing.events.filter((other) => other.kind === "period_end"
+    const backfilled: CycleIntimacyEvent | undefined = periodStartDate !== undefined
+      && !existing.events.some((other) => other.kind === "period_start" && other.date === periodStartDate)
+      ? { id: randomUUID(), date: periodStartDate, kind: "period_start" }
+      : undefined;
+    const span = event.kind === "period_end" ? periodEndSpan(backfilled === undefined ? existing.events : [...existing.events, backfilled], event.date) : undefined;
+    const hasSpan = span !== undefined && (span.from !== undefined || span.until !== undefined);
+    const superseded = span === undefined || !hasSpan ? [] : existing.events.filter((other) => other.kind === "period_end"
       && (span.from === undefined || other.date >= span.from)
       && (span.until === undefined || other.date < span.until));
-    assertValidCycleIntimacyModuleData({ config: existing.config, events: [...existing.events.filter((other) => !superseded.includes(other)), event] });
+    assertValidCycleIntimacyModuleData({ config: existing.config, events: [...existing.events.filter((other) => !superseded.includes(other)), ...(backfilled === undefined ? [] : [backfilled]), event] });
     this.#db.exec("BEGIN IMMEDIATE");
     try {
       const remove = this.#db.prepare("DELETE FROM cycle_intimacy_events WHERE id = ?");
       for (const other of superseded) remove.run(other.id);
-      this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)").run(event.id, event.date, event.kind);
+      const insert = this.#db.prepare("INSERT INTO cycle_intimacy_events (id, date, kind) VALUES (?, ?, ?)");
+      if (backfilled !== undefined) insert.run(backfilled.id, backfilled.date, backfilled.kind);
+      insert.run(event.id, event.date, event.kind);
       this.#db.exec("COMMIT");
     } catch (error) {
       this.#db.exec("ROLLBACK");
@@ -2175,6 +2229,36 @@ export class SqliteRecordRepository {
   }
 
   /**
+   * The whole table is small by construction (one row per phrase the owner
+   * bothered to explain), so reading it whole is cheaper than maintaining a
+   * second index. What must stay small is what reaches the prompt, and that is
+   * decided by `assistantTermContext`, not here.
+   */
+  public listTermNotes(): readonly TermNote[] {
+    return this.#db.prepare("SELECT term, display_term, meaning, confirmed_at FROM assistant_term_notes ORDER BY term").all()
+      .map(row => ({ term: String(row.term), displayTerm: String(row.display_term), meaning: String(row.meaning), confirmedAt: String(row.confirmed_at) }));
+  }
+
+  /** Re-confirming a phrase overwrites it: a wrong meaning must be fixable by saying it again. */
+  public saveTermNote(note: { term: string; displayTerm: string; meaning: string; at: string }): TermNote {
+    this.#db.prepare("INSERT INTO assistant_term_notes (term, display_term, meaning, confirmed_at) VALUES (?, ?, ?, ?) ON CONFLICT(term) DO UPDATE SET display_term=excluded.display_term, meaning=excluded.meaning, confirmed_at=excluded.confirmed_at")
+      .run(note.term, note.displayTerm, note.meaning, note.at);
+    return { term: note.term, displayTerm: note.displayTerm, meaning: note.meaning, confirmedAt: note.at };
+  }
+
+  public deleteTermNote(term: string): boolean {
+    return Number(this.#db.prepare("DELETE FROM assistant_term_notes WHERE term = ?").run(term).changes) > 0;
+  }
+
+  public recordTermAsk(term: string, day: string): void {
+    this.#db.prepare("INSERT OR IGNORE INTO assistant_term_asks (term, asked_on) VALUES (?, ?)").run(term, day);
+  }
+
+  public termsAskedOn(day: string): readonly string[] {
+    return this.#db.prepare("SELECT term FROM assistant_term_asks WHERE asked_on = ?").all(day).map(row => String(row.term));
+  }
+
+  /**
    * Every record's identity, recycle bin included — the live half of a time
    * machine comparison.
    *
@@ -2734,6 +2818,69 @@ export class SqliteRecordRepository {
    */
   public deleteDaySummary(date: string): void {
     this.#db.prepare("DELETE FROM day_summaries WHERE date = ?").run(date);
+  }
+
+  /** Per-record summaries are separate derived rows keyed by record identity. */
+  public readRecordSummary(recordId: string): RecordSummary | null {
+    if (appTargetLocked('calendar') || appTargetLocked('tasks') || appTargetLocked('dreams') || appTargetLocked('notes') || appTargetLocked('privacy-display')) return null;
+    const row = this.#db.prepare("SELECT value_json FROM record_summaries WHERE record_id = ?").get(recordId);
+    if (row === undefined) return null;
+    return parseJson<RecordSummary>(textColumn(row, "value_json"), "record_summaries.value_json");
+  }
+
+  public writeRecordSummary(summary: RecordSummary): void {
+    this.#db.prepare(`
+      INSERT INTO record_summaries (record_id, fingerprint, value_json) VALUES (?, ?, ?)
+      ON CONFLICT(record_id) DO UPDATE SET fingerprint = excluded.fingerprint, value_json = excluded.value_json
+    `).run(summary.recordId, summary.sourceRevision, JSON.stringify(summary));
+  }
+
+  public deleteRecordSummary(recordId: string): void {
+    this.#db.prepare("DELETE FROM record_summaries WHERE record_id = ?").run(recordId);
+  }
+
+  public queueRecordSummary(recordId: string, sourceRevision: string, queuedAt: string): void {
+    this.#db.prepare(`
+      INSERT INTO record_summary_pending (record_id, source_revision, queued_at) VALUES (?, ?, ?)
+      ON CONFLICT(record_id) DO UPDATE SET source_revision = excluded.source_revision, queued_at = excluded.queued_at
+    `).run(recordId, sourceRevision, queuedAt);
+  }
+
+  public listPendingRecordSummaries(): readonly { recordId: string; sourceRevision: string; queuedAt: string }[] {
+    return this.#db.prepare("SELECT record_id, source_revision, queued_at FROM record_summary_pending ORDER BY queued_at, record_id").all().map(row => ({
+      recordId: textColumn(row, "record_id"),
+      sourceRevision: textColumn(row, "source_revision"),
+      queuedAt: textColumn(row, "queued_at"),
+    }));
+  }
+
+  public removePendingRecordSummary(recordId: string, sourceRevision?: string): void {
+    if (sourceRevision === undefined) {
+      this.#db.prepare("DELETE FROM record_summary_pending WHERE record_id = ?").run(recordId);
+    } else {
+      this.#db.prepare("DELETE FROM record_summary_pending WHERE record_id = ? AND source_revision = ?").run(recordId, sourceRevision);
+    }
+  }
+
+  /**
+   * Persist the activation timestamp and once-per-local-day automation marker.
+   * Each tenant owns its own repository, so these dates cannot leak across spaces.
+   */
+  public initializeRecordSummaryAutomation(enabledSince: string): { enabledSince: string; lastAttemptedDate: string | null } {
+    this.#db.prepare(`
+      INSERT OR IGNORE INTO record_summary_automation (id, enabled_since, last_attempted_date)
+      VALUES (1, ?, NULL)
+    `).run(enabledSince);
+    const row = this.#db.prepare("SELECT enabled_since, last_attempted_date FROM record_summary_automation WHERE id = 1").get();
+    if (row === undefined) throw new Error("record summary automation state was not initialized");
+    return {
+      enabledSince: textColumn(row, "enabled_since"),
+      lastAttemptedDate: nullableTextColumn(row, "last_attempted_date"),
+    };
+  }
+
+  public markRecordSummarySweepAttempted(date: string): void {
+    this.#db.prepare("UPDATE record_summary_automation SET last_attempted_date = ? WHERE id = 1").run(date);
   }
 
   #referenceRecordIds(column: "entity_refs_json" | "asset_refs_json", key: string, value: string): readonly string[] {

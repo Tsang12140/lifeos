@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApiConfig } from "./config.js";
+import { imdbCatalogStatus, type ImdbCatalogStatus } from "./imdb-catalog.js";
 
 /** Runtime values are private to the API process. Never return this object to a client. */
 export interface RuntimeMovieConfig {
@@ -18,6 +19,11 @@ export interface MovieConfigStatus {
   readonly hasKey: boolean;
   readonly source: RuntimeMovieConfig["source"];
   readonly apiBaseUrl: string;
+  /**
+   * 本地 IMDb 片库。有它就**不需要任何 TMDb Key 也能搜片** —— 界面上「配置
+   * Key」这件事已经从「前提」降级成「可选增强」（见 `docs/todo.md` §43）。
+   */
+  readonly catalog: ImdbCatalogStatus;
 }
 
 interface StoredMovieConfig {
@@ -100,6 +106,7 @@ export function publicMovieConfig(config: ApiConfig): MovieConfigStatus {
     hasKey: runtime.apiKey !== undefined,
     source: runtime.source,
     apiBaseUrl: runtime.apiBaseUrl,
+    catalog: imdbCatalogStatus(config),
   };
 }
 

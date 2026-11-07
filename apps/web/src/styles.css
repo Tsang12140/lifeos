@@ -8190,7 +8190,8 @@ button.relation-chip {
   color: #3c4a54;
 }
 
-.mention-chip.is-place svg {
+.mention-chip.is-place svg,
+.mention-chip.is-movie svg {
   display: inline-block;
   width: 0.9em;
   height: 0.9em;
@@ -8201,6 +8202,12 @@ button.relation-chip {
 .mention-chip.is-place:hover {
   background: #dce6ee;
 }
+
+/* A title in prose: same capsule as any other mention, Film icon is the only
+   distinction. 2026-11-07 the owner dropped the warm-brown tint — three capsule
+   colours in one paragraph read as noise. Do not re-add a per-type background
+   here without asking; `.is-movie` stays as the hook for the icon rule and the
+   acceptance script. */
 
 .mention-suggest {
   display: flex;
@@ -8903,7 +8910,7 @@ button.mention-review-context { cursor: pointer; }
  * told the owner nothing and stole the room the thumbnail needed.
  *
  * Size comes from the record text, not from the column: a grid square is five lines
- * tall, a lone photo nine. That is the proportions Moments lands on, and it keeps the
+ * tall, a lone photo six. Keeping the unit tied to the type scale is what stops the
  * grid from swallowing the whole screen the way a column-filling grid did.
  */
 .record-photo-grid {
@@ -8921,18 +8928,30 @@ button.mention-review-context { cursor: pointer; }
 }
 
 /*
- * A lone photo keeps its own proportions and is capped at nine lines tall. The cell
- * has to shrink to the picture instead of stretching to the column: a block-level
- * button is 669px wide behind a 175px portrait, and it paints its grey placeholder as
- * a band beside the image — after which the hover outline draws a box around the band.
- * `width: fit-content` on the cell is what makes it follow the image. A percentage
- * max-width on the image cannot do the same job, because the cell's shrink-to-fit
- * width would be derived from that very image.
+ * A lone photo — or a lone clip — is capped in both directions: six lines of
+ * record text tall, two thirds of the column wide. It used to be nine lines,
+ * picked to match Moments' proportions, but next to a one- or two-line entry
+ * that read as a banner with a caption: the picture taller than the card had
+ * any business being, the text a strip above it. Six lines is about the height
+ * the text itself reaches once the entry says a full sentence, so short and
+ * long entries land on either side of the same picture instead of one of them
+ * losing the argument.
+ *
+ * Scaling to fit, never cropping: a tall portrait stays narrow rather than
+ * being cut to fill a box, and a photo smaller than the cap stays at its
+ * natural size, because blowing it up would only make it soft.
+ *
+ * `video` has to be named here too. The cell sizes itself from its child, so a
+ * clip without this cap renders at its intrinsic 720x1280 (measured 2026-11-02:
+ * the cell was 400x711 in a 442px column) and takes over the whole card.
  */
 .record-photo-grid[data-shown="1"] {
   display: block;
   width: fit-content;
-  max-width: 100%;
+  /* The width cap lives on the grid, not on the child: the cell is
+     shrink-to-fit, so a percentage max-width on the image would be resolved
+     against a width that was itself derived from that image. */
+  max-width: 66%;
 }
 
 .record-photo-cell {
@@ -8955,6 +8974,15 @@ button.mention-review-context { cursor: pointer; }
   border-radius: 10px;
 }
 
+.record-photo-grid[data-shown="1"] .record-photo-cell img,
+.record-photo-grid[data-shown="1"] .record-photo-cell video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(6 * var(--record-line, 1.617rem));
+}
+
 .record-photo-cell:hover,
 .record-photo-cell:focus-visible {
   outline: 2px solid var(--primary);
@@ -8966,17 +8994,6 @@ button.mention-review-context { cursor: pointer; }
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-/* Scaled to fit, never cropped and never enlarged: a tall portrait does not run the
-   column off screen, and a photo smaller than nine lines stays at its natural size,
-   because blowing it up would only make it soft. */
-.record-photo-grid[data-shown="1"] .record-photo-cell img {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: calc(9 * var(--record-line, 1.617rem));
 }
 
 /* The ninth square says how many it is standing in for. */
@@ -10110,9 +10127,7 @@ button.mention-review-context { cursor: pointer; }
   display: none;
 }
 
-.movie-settings-actions,
-.movie-resolve-form,
-.movie-add-selected {
+.movie-settings-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -10261,112 +10276,206 @@ button.mention-review-context { cursor: pointer; }
   white-space: nowrap;
 }
 
+/* 与地点搜索同一套外形：白卡 + 单行胶囊 + 无框行 + 底栏细线。
+   暖棕那层皮肤（#fffcf7 / #e5d8c5 / #ddcfb9 / #82633c）作废，颜色只取中性控件变量。 */
 .movie-add-panel {
-  display: grid;
-  gap: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 10px;
-  padding: 13px;
-  border: 1px solid #e5d8c5;
-  border-radius: 13px;
-  background: #fffcf7;
+  padding: 6px;
+  border: 1px solid var(--control-line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--control-ink);
 }
 
 .movie-add-panel.is-compact {
-  margin-top: 10px;
-  padding: 10px;
+  gap: 6px;
 }
 
-.movie-add-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.movie-add-heading > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.movie-add-heading strong {
-  color: #5f4a2e;
-  font-size: 0.82rem;
-}
-
-.movie-add-heading small {
-  color: var(--muted);
-  font-size: 0.69rem;
-}
-
-.movie-resolve-form input {
-  flex: 1 1 220px;
-  min-width: 0;
-  min-height: 36px;
-  padding: 0 10px;
-  border: 1px solid #ddcfb9;
-  border-radius: 9px;
-  color: var(--ink);
+/* 浮层形态：与地点面板同一个壳（.place-popover 定位 + 6px 内衬），但更窄 ——
+   一行只有「海报 + 片名 + 年份」，340 足够。它原先挂在 footer 上方当整条长条，
+   宽度跟着输入框一路撑到 600+，把「搜一部片」画得比整条记录还重。
+   壳已经画了卡片，里面的 .movie-add-panel 不能再画第二张（卡片套卡片）。 */
+.place-popover.movie-popover {
+  width: min(340px, calc(100vw - 24px));
+  max-height: none;
+  padding: 6px;
+  border: 1px solid var(--control-line);
+  border-radius: 12px;
   background: #fff;
-  outline: none;
-  font-size: 0.78rem;
+  box-shadow: var(--control-float-shadow, 0 2px 5px #18243d0e, 0 10px 28px #18243d17);
+  z-index: 80;
+  animation: movie-popover-enter 180ms cubic-bezier(.2, 0, 0, 1);
 }
 
-.movie-resolve-form input:focus {
-  border-color: #caa66e;
-  box-shadow: 0 0 0 3px rgb(180 139 76 / 0.13);
+.place-popover.movie-popover .movie-add-panel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+@keyframes movie-popover-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .place-popover.movie-popover { animation: none; }
+}
+
+.movie-add-panel .movie-resolve-form {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 2px 3px 2px 10px;
+  border: 1px solid var(--control-line);
+  border-radius: 22px;
+  background: #fff;
+}
+
+.movie-add-panel .movie-resolve-form > svg {
+  flex: 0 0 auto;
+  color: #78828c;
+}
+
+.movie-add-panel .movie-resolve-form:focus-within {
+  border-color: #9aa6b2;
+}
+
+.movie-add-panel .movie-resolve-form input {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  box-shadow: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.movie-add-panel .movie-resolve-form input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.movie-add-panel .movie-resolve-submit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 0;
+  color: var(--control-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.movie-add-panel .movie-resolve-submit::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 18px;
+  transform: translateY(-50%);
+  background: var(--control-line);
+}
+
+.movie-add-panel .movie-resolve-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.movie-add-panel .movie-search-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #636b74;
+  background: transparent;
+  cursor: pointer;
+}
+
+.movie-add-panel :is(.movie-panel-muted, .movie-panel-message, .movie-panel-error) {
+  margin: 4px 8px;
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 .movie-candidates {
   display: grid;
-  gap: 5px;
-  max-height: 260px;
+  gap: 0;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 240px;
   overflow-y: auto;
-}
-
-.movie-candidates-hint {
-  margin: 0 0 2px;
-  color: var(--muted);
-  font-size: 0.69rem;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd0d4 transparent;
 }
 
 .movie-candidate {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   min-width: 0;
-  padding: 7px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  color: var(--ink-soft);
-  background: rgb(255 255 255 / 0.72);
+  margin: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
   cursor: pointer;
   text-align: left;
 }
 
-.movie-candidate:hover,
 .movie-candidate.is-selected {
-  border-color: #cbaa74;
-  background: #fff8ed;
+  background: #eceeef;
 }
 
 .movie-candidate img,
 .movie-candidate-fallback {
   display: grid;
-  width: 38px;
-  height: 52px;
+  width: 34px;
+  height: 46px;
   place-items: center;
   overflow: hidden;
-  border-radius: 6px;
-  color: #927044;
-  background: #f1e4d1;
+  border-radius: 5px;
+  color: #8a929b;
+  background: #f1f2f3;
   object-fit: cover;
 }
 
-.movie-candidate > span:last-child {
+.movie-candidate > span:not(.movie-candidate-fallback) {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -10381,15 +10490,14 @@ button.mention-review-context { cursor: pointer; }
 
 .movie-candidate-kind {
   flex: 0 0 auto;
-  padding: 1px 5px;
-  border: 1px solid #d8c6a8;
+  padding: 0 5px;
   border-radius: 5px;
-  color: #7a5a2e;
-  background: #faf3e7;
-  font-size: 0.6rem;
+  color: var(--control-muted);
+  background: #f1f2f3;
+  font-size: 0.625rem;
   font-style: normal;
-  font-weight: 700;
-  line-height: 1.5;
+  font-weight: 600;
+  line-height: 1.6;
 }
 
 .movie-candidate strong,
@@ -10402,32 +10510,109 @@ button.mention-review-context { cursor: pointer; }
 
 .movie-candidate strong {
   min-width: 0;
-  color: var(--ink);
-  font-size: 0.78rem;
+  color: inherit;
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 20px;
 }
 
 .movie-candidate small {
-  color: var(--muted);
-  font-size: 0.68rem;
+  color: #78828c;
+  font-size: 0.75rem;
+  line-height: 18px;
 }
 
 .movie-candidate em {
-  color: #73716b;
-  font-size: 0.68rem;
+  color: #8a929b;
+  font-size: 0.75rem;
   font-style: normal;
+  line-height: 18px;
+}
+
+/* 年份占最右一列，跟地点行的「丽江市」同位同色。 */
+.movie-candidate > .movie-candidate-year {
+  flex: 0 0 auto;
+  justify-self: end;
+  max-width: 6em;
+  color: #8a929b;
+  font-size: 0.75rem;
+  font-weight: 300;
+  line-height: 20px;
+  text-align: right;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .movie-candidate:hover {
+    background: #eceeef;
+  }
+
+  .movie-add-panel :is(.movie-search-close, .movie-panel-suppress):hover:not(:disabled) {
+    background: #eceeef;
+  }
+}
+
+/* 底栏与地点面板同法：一条细线把操作区隔开，左边文本按钮、右边主操作。 */
+.movie-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--control-line);
+}
+
+.movie-add-panel .movie-panel-suppress {
+  flex: 0 0 auto;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: #78828c;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
 }
 
 .movie-add-selected {
-  justify-content: space-between;
-  padding-top: 4px;
-  color: var(--ink-soft);
-  font-size: 0.74rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--control-ink);
+  font-size: 0.8125rem;
 }
 
-.movie-add-selected .primary-button {
+/* 底栏是「左说明 / 右主操作」：说明吃掉剩余宽度，按钮才贴到最右缘——
+   不给 flex-grow 的话按钮紧跟在片名后面，看着像浮在中间。 */
+.movie-add-selected > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.movie-add-panel .movie-add-selected .primary-button {
+  flex: 0 0 auto;
   min-height: 34px;
-  padding: 0 11px;
-  background: #82633c;
+  margin: 0;
+  padding: 0 13px;
+  border: 1px solid var(--control-ink);
+  border-radius: 999px;
+  color: #fff;
+  background: var(--control-ink);
+  box-shadow: none;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.movie-add-panel .movie-add-selected .primary-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .movie-ref-chip {
@@ -10478,60 +10663,52 @@ button.mention-review-context { cursor: pointer; }
   margin-left: 5px;
 }
 
+/* Same capsule as the title chip it sits next to. The dashed underline it used
+   to wear made one word look like a broken link, and it only appeared when the
+   prose literally said 电影. */
 .movie-prompt-trigger {
-  padding: 0 1px;
-  border-bottom: 1px dashed #ad9069;
-  color: #80633e;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24em;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--chip);
+  color: var(--chip-ink);
+  font-family: inherit;
+  font-size: 0.94em;
+  font-weight: 620;
+  line-height: inherit;
+  white-space: nowrap;
   cursor: pointer;
-  font: inherit;
+}
+
+.movie-prompt-trigger svg {
+  width: 0.9em;
+  height: 0.9em;
 }
 
 .movie-prompt-trigger:hover,
 .movie-prompt-trigger:focus-visible {
-  color: #5e4529;
-  border-bottom-style: solid;
+  background: var(--chip-hover);
 }
 
+/* 浮层只负责定位：卡片、边框、阴影全交给面板自己，避免卡片套卡片两层边。 */
 .movie-prompt-popover {
   position: absolute;
   top: calc(100% + 7px);
   left: 0;
   z-index: 44;
-  display: grid;
+  display: block;
   width: min(360px, calc(100vw - 48px));
-  padding: 9px;
-  border: 1px solid var(--line-strong);
-  border-radius: 11px;
-  background: var(--surface);
-  box-shadow: 0 12px 30px rgb(24 36 61 / 0.14);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
-.movie-prompt-actions {
-  display: flex;
-  gap: 7px;
-}
-
-.movie-prompt-actions button {
-  min-height: 31px;
-  padding: 0 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink-soft);
-  background: var(--surface-soft);
-  cursor: pointer;
-  font-size: 0.73rem;
-  font-weight: 680;
-}
-
-.movie-prompt-actions button:first-child {
-  border-color: #decfb9;
-  color: #6b5436;
-  background: #fff8ed;
-}
-
-.movie-prompt-actions button:hover {
-  border-color: #c9b38f;
+.movie-prompt-popover .movie-add-panel {
+  margin-top: 0;
+  box-shadow: var(--control-float-shadow);
 }
 
 .movie-card-dialog {
@@ -12930,7 +13107,7 @@ dialog.asset-preview.has-photo-information { grid-template-columns: minmax(0, 1f
    会渲染成一个白色实心方块，看着像停止按钮；而缩略图本身就是首帧，说不清它是什么。
    能不能播由放大后的播放键回答，不在这里重复。 */
 .record-photo-cell > video { display: block; width: 100%; height: 100%; object-fit: cover; }
-.record-video-duration { position: absolute; right: 6px; bottom: 5px; padding: 1px 4px; border-radius: 4px; color: #fff; background: rgb(0 0 0 / .62); font-size: 11px; line-height: 1.3; }
+.record-video-duration { position: absolute; right: 6px; bottom: 5px; padding: 1px 4px; border-radius: 4px; color: #fff; background: rgb(0 0 0 / .62); font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1.3; }
 
 .startup-screen {
   display: grid;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Check, Film, LoaderCircle, PlugZap, Search, Star, X } from "lucide-react";
+import { findEntityCandidates, type Entity, type TextEntityDecision } from "@lifeos/core";
 import {
   apiRequest,
   type MovieEntity,
@@ -159,7 +160,16 @@ function normalizeStatus(payload: unknown): MovieModuleStatus {
   const connected = typeof nestedStatus.connected === "boolean" ? nestedStatus.connected : typeof nestedStatus.available === "boolean" ? nestedStatus.available : typeof root.connected === "boolean" ? root.connected : configured;
   const provider = stringValue(nestedStatus.provider) ?? stringValue(root.provider) ?? stringValue(root.source);
   const message = stringValue(nestedStatus.message) ?? stringValue(root.message);
-  return { enabled, configured, keyConfigured, connected, ...(provider === undefined ? {} : { provider }), ...(message === undefined ? {} : { message }) };
+  // 本地片库的状态白名单式拷一遍：不回显 path 之外的东西，也不让脏字段漏进 UI。
+  const rawCatalog = isRecord(nestedStatus.catalog) ? nestedStatus.catalog : isRecord(root.catalog) ? root.catalog : undefined;
+  const catalog = rawCatalog === undefined ? undefined : {
+    available: rawCatalog.available === true,
+    path: typeof rawCatalog.path === "string" ? rawCatalog.path : "",
+    titles: typeof rawCatalog.titles === "number" ? rawCatalog.titles : 0,
+    terms: typeof rawCatalog.terms === "number" ? rawCatalog.terms : 0,
+    sizeMb: typeof rawCatalog.sizeMb === "number" ? rawCatalog.sizeMb : 0,
+  };
+  return { enabled, configured, keyConfigured, connected, ...(provider === undefined ? {} : { provider }), ...(message === undefined ? {} : { message }), ...(catalog === undefined ? {} : { catalog }) };
 }
 
 export async function fetchMovieModuleStatus(signal?: AbortSignal): Promise<MovieModuleStatus> {
@@ -194,6 +204,42 @@ export async function upsertMovie(movie: MovieEntity): Promise<MovieEntity> {
 
 export function movieRef(movie: MovieEntity): MovieEntityRef {
   return { entityType: "movie", entityId: movie.id, label: movie.name };
+}
+
+/**
+ * Naming the film *is* the mark. Picking a title in the panel means the words
+ * that made you search for it — or the ones the prose already spells out — now
+ * point at that film, so they get a decision on the spot instead of waiting in
+ * 「检查标记」 for a second confirmation. Same rule the composer already applies
+ * to a person or place created from a selection (`markCreatedEntity`).
+ *
+ * Returns `null` when there is nothing to mark, so callers can tell "already
+ * done" from "wrote a decision".
+ */
+export function movieMentionDecisions(
+  content: string,
+  entities: readonly Entity[],
+  decisions: readonly TextEntityDecision[],
+  entity: Entity,
+  selection?: { readonly start: number; readonly end: number; readonly text: string } | null,
+): readonly TextEntityDecision[] | null {
+  if (entity.type !== "movie") return null;
+  const vocabulary = entities.some((item) => item.id === entity.id) ? entities : [...entities, entity];
+  const ranges: { start: number; end: number; text: string }[] = findEntityCandidates(content, vocabulary)
+    .filter((candidate) => candidate.entities.some((item) => item.id === entity.id))
+    .map((candidate) => ({ start: candidate.start, end: candidate.end, text: candidate.text }));
+  // The selection may be the author's own wording rather than the catalogue
+  // title (搜「盗梦空间」拿到 Inception) — that occurrence is exactly the one he
+  // pointed at, so it is marked as it stands.
+  if (selection !== undefined && selection !== null && selection.text.length > 0
+    && content.slice(selection.start, selection.end) === selection.text
+    && !ranges.some((range) => range.start < selection.end && selection.start < range.end)) {
+    ranges.push({ start: selection.start, end: selection.end, text: selection.text });
+  }
+  const fresh = ranges.filter((range) => !decisions.some((decision) => decision.start === range.start && decision.end === range.end));
+  if (fresh.length === 0) return null;
+  return [...decisions, ...fresh.map((range) => ({ ...range, entityId: entity.id, entityType: "movie" as const }))]
+    .sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
 function movieMeta(movie: Pick<MovieEntity, "originalTitle" | "releaseYear">): string {
@@ -246,7 +292,7 @@ export function MovieSettingsCard({ statusState, onChanged, onRetry }: { readonl
   const confirmedLabel = status === null ? null : !status.enabled ? "已关闭" : status.connected ? "已连接" : status.keyConfigured ? "待测试" : "未配置";
   const stateLabel = statusState.phase === "ready" ? testPassed ? "测试通过" : confirmedLabel : statusState.phase === "loading" ? status === null ? "正在读取状态…" : "正在刷新状态…" : status === null ? "状态暂时不可读取" : "状态读取失败";
   return <div className="settings-card movie-settings-card" data-movie-settings>
-    <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选，TMDb 仅用于识别，豆瓣链接只保存为外部 ID</small></div><span className={`settings-status ${statusState.phase === "ready" && (testPassed || (status?.enabled && status.connected)) ? "is-ready" : ""}`} data-movie-status-phase={statusState.phase} data-movie-test-result={testPassed ? "passed" : undefined}>{stateLabel}</span></div>
+    <div className="movie-settings-head"><div className="settings-card-icon movie-icon"><Film size={18} aria-hidden="true" /></div><div className="settings-card-copy"><strong>观影模块</strong><small>可选。先用本地 IMDb 片库离线识别，查不到才问 TMDb；豆瓣链接只存成外部 ID</small></div><span className={`settings-status ${statusState.phase === "ready" && (testPassed || (status?.enabled && status.connected)) ? "is-ready" : ""}`} data-movie-status-phase={statusState.phase} data-movie-test-result={testPassed ? "passed" : undefined}>{stateLabel}</span></div>
     {statusState.phase === "failed" ? <div className="movie-settings-read-error" role="alert"><span>{statusState.error}</span>{status === null ? null : <small>上次确认：{confirmedLabel}（模块{status.enabled ? "已启用" : "已关闭"}）</small>}<button className="secondary-button" type="button" onClick={onRetry}>重试读取</button></div> : null}
     <div className="movie-settings-fields">
       {/* 这一行**只能**吃 `.movie-enabled-toggle`（原生 checkbox + 文字的一整行）。
@@ -256,10 +302,11 @@ export function MovieSettingsCard({ statusState, onChanged, onRetry }: { readonl
           ⇒ 一个可勾的东西都没有；「启用观影模块」七个字挤进 22px 宽、竖着堆成 8 行（高 96px）、
           上下各溢出 28px。守它的是 `.review/verify-movie-toggle-ui.mjs`。 */}
       {status === null ? <p className="movie-settings-unavailable">状态确认后，才能调整观影模块或提交配置。</p> : <label className="movie-enabled-toggle"><input type="checkbox" checked={enabled} disabled={!statusReady} onChange={(event) => setEnabled(event.target.checked)} aria-label="启用观影模块" /><span aria-hidden="true" /><strong>启用观影模块</strong></label>}
-      <label><span>TMDb Key{status?.keyConfigured ? "（留空保留已保存的密钥）" : ""}</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => { setApiKey(event.target.value); setTestPassed(false); }} autoComplete="new-password" /></label>
+      <label><span>TMDb Key（可选）{status?.keyConfigured ? "（留空保留已保存的密钥）" : ""}</span><input type="password" value={apiKey} disabled={!statusReady} onChange={(event) => { setApiKey(event.target.value); setTestPassed(false); }} autoComplete="new-password" /></label>
     </div>
     <div className="movie-settings-actions"><button className="icon-text-button" type="button" onClick={() => void test()} disabled={!statusReady || busy || testing}>{testing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <PlugZap size={15} aria-hidden="true" />}<span>{testing ? "测试中…" : "测试连接"}</span></button><button className="primary-button" type="button" onClick={() => void save()} disabled={!statusReady || busy || testing}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}<span>{busy ? "保存中…" : "保存配置"}</span></button></div>
     {message ? <p className="settings-inline-success" role="status">{message}</p> : null}{error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
+    {status?.catalog !== undefined && status.catalog.available ? <p className="movie-settings-note" data-movie-catalog="ready">本地片库 {status.catalog.titles.toLocaleString()} 部 · {status.catalog.sizeMb} MB，不联网也能搜片。</p> : status?.catalog !== undefined ? <p className="movie-settings-note" data-movie-catalog="missing">还没有本地片库：在项目根目录跑 node scripts/imdb-catalog.mjs --download，再跑 --build。没有它就只能靠 TMDb。</p> : null}
     <p className="movie-settings-note">Key 只提交到 API 服务端，不进入 localStorage，也不会回显。</p>
   </div>;
 }
@@ -276,15 +323,35 @@ interface MovieAddPanelProps {
    * asking the same question twice.
    */
   readonly initialQuery?: string;
+  /**
+   * Only the in-timeline prompt passes this. The composer's panel has no
+   * "不再提示" to offer — there is nothing there to suppress.
+   */
+  readonly onSuppress?: () => void;
 }
 
-export function MovieAddPanel({ enabled, onAttach, onClose, compact = false, initialQuery }: MovieAddPanelProps) {
+export function MovieAddPanel({ enabled, onAttach, onClose, compact = false, initialQuery, onSuppress }: MovieAddPanelProps) {
   const [query, setQuery] = useState(initialQuery?.trim() ?? "");
   const [candidates, setCandidates] = useState<readonly MovieResolveCandidate[]>([]);
   const [selected, setSelected] = useState<MovieResolveCandidate | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // 只有浮层形态（桌面输入区）需要「点外面收起」：手机端它是底部弹层，关不关由
+  // 外层那个 sheet 决定，传进来的 onClose 是 undefined。跳两级到锚点容器，
+  // 是为了让点影片按钮本身不算 outside —— 否则按下就关、抬起又开，按钮看着像失灵。
+  useEffect(() => {
+    if (onClose === undefined) return undefined;
+    const outside = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (!(event.target instanceof Node)) return;
+      if (root?.contains(event.target) === true || root?.parentElement?.parentElement?.contains(event.target) === true) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", outside, true);
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [onClose]);
   // `runResolve` takes its term as an argument so the same path serves both the
   // form and the auto-search below — one code path, so a bug cannot live in only
   // one of the two ways into the panel.
@@ -321,13 +388,22 @@ export function MovieAddPanel({ enabled, onAttach, onClose, compact = false, ini
     catch (cause) { setError(cause instanceof Error ? cause.message : "影片保存失败，请重试"); }
     finally { setBusy(false); }
   };
-  return <div className={`movie-add-panel ${compact ? "is-compact" : ""}`} data-movie-add-panel>
-    <div className="movie-add-heading"><div><strong>添加电影</strong><small>豆瓣链接、IMDb tt、TMDb ID 或片名</small></div>{onClose ? <button type="button" className="icon-button compact-icon-button" onClick={onClose} aria-label="关闭添加电影"><X size={15} aria-hidden="true" /></button> : null}</div>
+  return <div className={`movie-add-panel ${compact ? "is-compact" : ""}`} data-movie-add-panel ref={rootRef}>
     {!enabled ? <p className="movie-panel-muted">请先在设置中启用观影模块。</p> : <>
-      <form className="movie-resolve-form" onSubmit={resolve}><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="电影识别内容" autoFocus={!compact} /><button className="secondary-button" type="submit" disabled={!query.trim() || busy}>{busy ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Search size={15} aria-hidden="true" />}<span>{busy ? "识别中…" : "识别"}</span></button></form>
-      {candidates.length > 0 ? <div className="movie-candidates" role="listbox" aria-label="电影候选"><p className="movie-candidates-hint">找到 {candidates.length} 个候选，请点选后添加</p>{candidates.map((candidate) => { const meta = movieMeta(candidate); const kind = mediaTypeLabel(candidate.mediaType); return <button className={`movie-candidate ${selected?.id === candidate.id ? "is-selected" : ""}`} data-movie-candidate={candidate.id} type="button" role="option" aria-selected={selected?.id === candidate.id} key={candidate.id} onClick={() => setSelected(candidate)}>{moviePoster(candidate) ? <img src={moviePoster(candidate)} alt="" loading="lazy" /> : <span className="movie-candidate-fallback" aria-hidden="true"><Film size={16} /></span>}<span><span className="movie-candidate-title"><strong>{candidate.name}</strong>{kind ? <i className="movie-candidate-kind" data-movie-kind={candidate.mediaType}>{kind}</i> : null}</span>{meta ? <small>{meta}</small> : null}{candidate.overview ? <em>{candidate.overview}</em> : null}</span></button>; })}</div> : null}
-      {selected ? <div className="movie-add-selected"><span>已选择：{selected.name}</span><button className="primary-button" type="button" onClick={() => void attach()} disabled={busy}>{busy ? "保存中…" : "添加到记录"}</button></div> : null}
+      {/* 一条胶囊顶掉原来的标题+副标题：豆瓣／IMDb／TMDb 的用法改成占位提示，
+          不再常驻两行说明（DESIGN §1、§2）。关闭键留在胶囊右端，位置与地点的定位键一致。 */}
+      <form className="movie-resolve-form" role="search" onSubmit={resolve}>
+        <Search size={16} strokeWidth={1.8} aria-hidden="true" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="电影识别内容" autoFocus={!compact} placeholder="片名、豆瓣或 IMDb 链接" />
+        <button className="movie-resolve-submit" type="submit" disabled={!query.trim() || busy}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null}<span>{busy ? "识别中…" : "识别"}</span></button>
+        {onClose ? <button className="movie-search-close" type="button" onClick={onClose} aria-label="关闭添加电影"><X size={15} aria-hidden="true" /></button> : null}
+      </form>
+      {candidates.length > 0 ? <div className="movie-candidates" role="listbox" aria-label="电影候选">{candidates.map((candidate) => { const kind = mediaTypeLabel(candidate.mediaType); // 原名与片名相同（中文片很常见）时不再重复印一遍。
+        const originalTitle = candidate.originalTitle?.trim() ?? ""; const original = originalTitle !== "" && originalTitle.toLocaleLowerCase() !== candidate.name.trim().toLocaleLowerCase() ? originalTitle : null; const year = candidate.releaseYear === undefined ? null : String(candidate.releaseYear); return <button className={`movie-candidate ${selected?.id === candidate.id ? "is-selected" : ""}`} data-movie-candidate={candidate.id} type="button" role="option" aria-selected={selected?.id === candidate.id} key={candidate.id} onClick={() => setSelected(candidate)}>{moviePoster(candidate) ? <img src={moviePoster(candidate)} alt="" loading="lazy" /> : <span className="movie-candidate-fallback" aria-hidden="true"><Film size={15} /></span>}<span><span className="movie-candidate-title"><strong>{candidate.name}</strong>{kind ? <i className="movie-candidate-kind" data-movie-kind={candidate.mediaType}>{kind}</i> : null}</span>{original ? <small>{original}</small> : null}{candidate.overview ? <em>{candidate.overview}</em> : null}</span>{year ? <small className="movie-candidate-year">{year}</small> : null}</button>; })}</div> : null}
       {message ? <p className="movie-panel-message" role="status">{message}</p> : null}{error ? <p className="movie-panel-error" role="alert">{error}</p> : null}
+      {/* 底栏：左「以后不再提示」（借用地点面板底栏的文本按钮外形），右主操作。
+          两者都没有时不画那条分隔线。 */}
+      {selected || onSuppress ? <div className="movie-panel-footer">{onSuppress ? <button className="movie-panel-suppress" type="button" onClick={onSuppress}>以后不再提示</button> : null}{selected ? <div className="movie-add-selected"><span>已选择：{selected.name}</span><button className="primary-button" type="button" onClick={() => void attach()} disabled={busy}>{busy ? "保存中…" : "添加到记录"}</button></div> : null}</div> : null}
     </>}
   </div>;
 }
@@ -363,18 +439,24 @@ export function MovieCardDialog({ entity, onClose, onSaved }: { readonly entity:
   </dialog>;
 }
 
-export function MoviePrompt({ enabled, onAttach, onSuppress }: { readonly enabled: boolean; readonly onAttach: (movie: MovieEntity) => void; readonly onSuppress: () => void }) {
+/**
+ * The in-timeline way in. It used to be an underlined "电影" word behind a
+ * two-step popover, and it only ever appeared when the prose literally said
+ * 「电影」 — in 93 records that condition matched once. Now it is the same capsule
+ * the title itself would wear, one click from the panel, and it carries the
+ * title from 《…》 straight into the search box.
+ */
+export function MoviePrompt({ enabled, initialQuery, onAttach, onSuppress }: { readonly enabled: boolean; readonly initialQuery?: string; readonly onAttach: (movie: MovieEntity) => void; readonly onSuppress: () => void }) {
   const [open, setOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
   const promptRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!open) return;
     const dismiss = (event: PointerEvent) => {
-      if (event.target instanceof Node && !promptRef.current?.contains(event.target)) { setOpen(false); setAddOpen(false); }
+      if (event.target instanceof Node && !promptRef.current?.contains(event.target)) setOpen(false);
     };
     document.addEventListener("pointerdown", dismiss);
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [open]);
   if (!enabled) return null;
-  return <span ref={promptRef} className="movie-prompt-wrap"><button className="movie-prompt-trigger" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>电影</button>{open ? <span className="movie-prompt-popover" role="dialog" aria-label="添加影片提示"><span className="movie-prompt-actions"><button type="button" onClick={() => setAddOpen(true)}>添加影片</button><button type="button" onClick={() => { onSuppress(); setOpen(false); }}>不再提示</button></span>{addOpen ? <MovieAddPanel enabled={enabled} compact onAttach={(movie) => { onAttach(movie); setAddOpen(false); setOpen(false); }} onClose={() => setAddOpen(false)} /> : null}</span> : null}</span>;
+  return <span ref={promptRef} className="movie-prompt-wrap"><button className="movie-prompt-trigger" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-label={initialQuery ? `识别影片：${initialQuery}` : "添加这部影片"}><Film size={13} strokeWidth={1.9} aria-hidden="true" />{initialQuery ? "识别影片" : "添加影片"}</button>{open ? <span className="movie-prompt-popover" role="dialog" aria-label="识别影片"><MovieAddPanel enabled={enabled} compact initialQuery={initialQuery} onAttach={(movie) => { onAttach(movie); setOpen(false); }} onClose={() => setOpen(false)} onSuppress={() => { onSuppress(); setOpen(false); }} /></span> : null}</span>;
 }

@@ -1,0 +1,16 @@
+Huiwen Mincho complete font for the mobile week-card summary
+
+Source: the local Huiwen-mincho Regular font, version 1.00. The source font's name
+table labels its licensing notice as "Public Domain" (name ID 0). The source has one
+Regular face; this asset contains no fabricated bold face.
+
+Source SHA-256: 1ea5d0450c0d034c3e4077f2b533d74fbd1bf1f14d938477389338e64d3d8d9c
+Source best-cmap coverage: 14,051 code points, including U+9955 (饕) and U+992E (餮).
+
+The WOFF2 file is a full-font conversion, not a character subset.
+Output: calendar-summary-huiwen-e7356421.woff2
+Output size: 8,021,800 bytes
+Output SHA-256: e7356421580e007d116b199d2a52713eba7c4503fe6d0ce3becc691c61b8e168
+
+This font is used only by the mobile week-card summary. The local source TTF is not
+copied into the repository; the distributed WOFF2 is the complete Public Domain face.

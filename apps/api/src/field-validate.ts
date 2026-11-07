@@ -83,8 +83,8 @@ export function cycleIntimacyConfig(input: JsonObject): CycleIntimacyModuleConfi
   });
 }
 
-export function cycleIntimacyEvent(input: JsonObject): CycleIntimacyEvent {
-  hasOnlyKeys(input, ["date", "kind"]);
+export function cycleIntimacyEvent(input: JsonObject, extraKeys: readonly string[] = []): CycleIntimacyEvent {
+  hasOnlyKeys(input, ["date", "kind", ...extraKeys]);
   const date = parseDateQuery(stringField(input.date, "date"), "date");
   if (date === undefined) throw new HttpError(400, "invalid_date", "date is required");
   const event: CycleIntimacyEvent = { id: randomUUID(), date, kind: enumField(input.kind, CYCLE_INTIMACY_EVENT_KINDS, "kind") };

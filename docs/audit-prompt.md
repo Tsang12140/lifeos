@@ -59,6 +59,8 @@
 
 ### 第 1 轮 · 模式库扫捕（已知坑的同类实例）
 
+- **租户故障不能越过账号边界**：查启动阶段`listAccounts`循环中`appFor/createApp`失败是否被外层catch升级为整站启动失败；批量后台扫描的`lstatSync/new DatabaseSync`是否位于单账号try之外，使一次打开失败中断所有健康账号队列。用隔离库构造坏成员数据库、不可打开路径，分别验证owner仍能启动、健康复制仍推进；共享池真实错账与资源总额度应继续保护，不因账号隔离而绕过。现有证据`.review/tenant-blast-radius-reproduction.txt`，复现`node .review/verify-tenant-blast-radius.mjs`；只处理自建临时数据，不停用真实账号或触碰生产库。
+
 - **原生弹窗初始焦点与恢复不能靠验收脚本补齐**：React在隐藏输入上的autoFocus可能早于showModal，原生初始焦点会落到前面的关闭按钮；必须在弹出后、不点击或调用focus的前提下直接键入验证。取消与成功不可无条件复用焦点返回：输PIN把交互模态切成键盘，鼠标开启的开关被强制focus后会出现意外focus-visible轮廓。保留真正Tab导航的可见焦点，不能全局隐藏outline。computed outlineWidth非零不代表可见，须同时查outlineStyle、颜色、boxShadow。参考.review/verify-app-lock-focus.mjs及app-lock-focus-before.txt。
 - **CDP按键模拟要区分真实键盘与测试错误**：Input.dispatchKeyEvent修饰位为Alt=1、Ctrl=2、Meta=4、Shift=8；把1当Shift会被应用正确的Alt组合键保护挡住，不能据此误改产品快捷键。Ctrl+A带KeyA及虚拟键码65；错误后聚焦在下一帧恢复，须等焦点条件再断言。PIN自动提交验证输入事件、防重复互斥及关闭／Tab路径，不能用脚本调用submit冒充第四位输入。参考.review/verify-app-lock-pin.mjs。
 - **预览重启前不能把权限过滤统计当完整索引覆盖**：AI memory/status会过滤当前锁定板块；底层25块、可见24块可以同时正确。按后台索引器的全部合格记录和当前内容hash核对覆盖，确认无待生成，再对比向量字节；不因数量差直接触发重索引或修改保护项目。共享serve-pids.json可能被另一个隔离档案实例占用，重启前须独立核对目标端口的完整命令、父子进程、数据路径；保留另一实例的PID元数据，不能按该文件停止非目标树。参考.review/lib/pin-preview-coverage.mjs及reload-app-lock-pin-preview.mjs的前置守卫；该更新器不是验收脚本，不为审计反复执行。

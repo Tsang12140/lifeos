@@ -14,6 +14,16 @@ export function useDatePopover(open: boolean, anchor: RefObject<HTMLDivElement |
       const y = viewport?.offsetTop ?? 0;
       const width = viewport?.width ?? window.innerWidth;
       const height = viewport?.height ?? window.innerHeight;
+      if (element.dataset.mobileSheet === "true") {
+        const panelWidth = Math.max(1, Math.min(width - 24, 480));
+        element.style.width = `${panelWidth}px`;
+        element.style.maxHeight = `${Math.max(1, height - 24)}px`;
+        const panelHeight = element.getBoundingClientRect().height;
+        element.style.left = `${x + (width - panelWidth) / 2}px`;
+        element.style.top = `${y + Math.max(12, height - panelHeight - 12)}px`;
+        element.dataset.placement = "above";
+        return;
+      }
       const box = trigger.getBoundingClientRect();
       const panelWidth = Math.min(width - 24, wide && width > 700 ? 480 : 320);
       const above = Math.max(0, box.top - y - 20);
